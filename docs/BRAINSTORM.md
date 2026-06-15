@@ -154,8 +154,40 @@ dit" · link naar officiële bron · 👎-correctieknop (voedt override-laag).
 ### Notificaties
 Push alleen bij 🔴 Hoog · wekelijkse digest · in-app badge. Drempel instelbaar.
 
-## 11. Open deep-dives (nog te doen)
+## 12. GraphRAG + card-database (deep-dive — uitgewerkt)
 
-2. Kosten & hosting. ← volgende mogelijk
-3. Scraping-aanpak + standaard community-bronnen.
-4. Datamodel (concrete tabellen).
+Pure vector-RAG vindt losse regeltekst; TCG-vragen gaan vaak over **interacties**
+(kaart + keyword + timing). Daarom: graph + vector samen, gevoed door de
+card-database.
+
+### Graph gevoed door card-DB (Piltover Archive / Riftcodex / cards.json)
+**Knopen:** `Card` (id, naam, type, domains, energy, might, abilities) ·
+`Keyword`/`Mechanic` · `RuleSection` (met vector-embedding) · `Erratum` ·
+`BanEntry` · `Ruling/Correction` (= override-laag) · `Set`.
+
+**Randen:**
+```
+Card  ──has_keyword──►  Keyword  ──defined_by──►  RuleSection
+Card  ──has_errata──►   Erratum  ──supersedes──►  Card.printed_text
+Card  ──banned_in──►    BanEntry ──source──►      RuleSection/Announcement
+Card  ──from_set──►     Set      ──patch_notes──► RuleSection
+Ruling ──applies_to──►  Card / Keyword
+```
+Elke edge draagt bron + datum → "officieel verslaat community" en "errata
+supersedes print" worden regels over de graph.
+
+### Hybride retrieval-flow
+```
+Vraag (tekst/voice/foto)
+  ├─ entiteiten herkennen (foto: vision → Card-node)
+  ├─ VECTOR-zoek over RuleSection-chunks → top regelteksten
+  ├─ GRAPH-traversal vanaf Card-nodes → errata, bans, keywords,
+  │   gekoppelde regelsecties, rulings
+  └─ Claude krijgt vector-hits + graph-feiten → antwoord MÉT citaten
+      (trust-rank lost conflicten op)
+```
+
+### Beslissing
+- **Graph-DB:** Neo4j (echte graph-database) voor diepe multi-hop
+  interactie-queries + visualisatie. Naast pgvector voor de RuleSection-embeddings.
+  (Alternatief was graph-lite in Postgres; bewust voor Neo4j gekozen.)
