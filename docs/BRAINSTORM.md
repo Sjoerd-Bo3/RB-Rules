@@ -116,9 +116,46 @@ policy respecteren.
 - **Fase 3** — Foto: kaart/bord herkennen → errata/rulings ophalen.
 - **Fase 4** — Voice + feedback-/correctie-loop.
 
-## 10. Open deep-dives (nog te doen)
+## 10. Change-tracker (deep-dive #1 — uitgewerkt)
 
-1. Change-tracker concreet (dashboard/UX per scan). ← volgende
-2. Kosten & hosting.
+### Scan-pipeline (per bron, per run)
+1. **Fetch** (HTML / PDF / JSON-API)
+2. **Hash** + "last updated"-datum vergelijken → ongewijzigd = gratis stoppen
+3. **Extract** → schone tekst, opgedeeld in secties (bv. 601.2.d)
+4. **Diff** sectie-voor-sectie (toegevoegd / verwijderd / gewijzigd)
+5. **Classify** → AI labelt type + ernst + mensentaal-uitleg
+6. **Conflict** → check tegenstrijdigheden met andere bronnen
+7. **Store** met provenance · 8. **Notify** bij relevante wijziging
+
+> Hash-check vooraf houdt 95% van de runs gratis; alleen echte wijzigingen
+> kosten LLM-tokens.
+
+### Dashboard-views
+- **"Wat is er veranderd"** — feed van wijzigingskaarten, filters (bron/ernst/
+  type/periode), badge "X nieuw sinds je laatste bezoek".
+- **Bronnen-health** — per bron status + trust/rank; hier voeg je bronnen toe.
+- **Conflicten-inbox** — gedetecteerde tegenstrijdigheden die review vragen.
+
+### Wijzigingskaart toont
+Type · ernst · bron + trust + datum · AI-samenvatting · diff · "wat betekent
+dit" · link naar officiële bron · 👎-correctieknop (voedt override-laag).
+
+### Classificatie
+- **Type:** ban · errata · core-rule · tournament-rule · set-release · redactioneel
+- **Ernst:** 🔴 Hoog (verandert legaliteit/interactie) · 🟡 Midden (verduidelijking)
+  · ⚪ Laag (redactioneel)
+
+### Beslissingen (deep-dive #1)
+- **AI-duiding:** rijke AI-uitleg per wijziging (samenvatting + "wat betekent dit").
+- **Conflict-detectie:** beide types actief —
+  (a) community loopt achter op officieel; (b) inhoudelijk conflict tussen bronnen,
+  met officieel-wint-logica (trust-rank) + flag in Conflicten-inbox.
+
+### Notificaties
+Push alleen bij 🔴 Hoog · wekelijkse digest · in-app badge. Drempel instelbaar.
+
+## 11. Open deep-dives (nog te doen)
+
+2. Kosten & hosting. ← volgende mogelijk
 3. Scraping-aanpak + standaard community-bronnen.
 4. Datamodel (concrete tabellen).
