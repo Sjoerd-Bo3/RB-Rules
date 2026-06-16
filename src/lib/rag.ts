@@ -57,6 +57,34 @@ export async function buildIndex(): Promise<{ source: string; chunks: number }[]
   return out;
 }
 
+/** Vind kaarten waarvan de naam in de vraag voorkomt; lever feiten als context. */
+async function cardFacts(question: string): Promise<string[]> {
+  const q = question.toLowerCase();
+  const { rows } = await pool.query<{
+    name: string;
+    type: string | null;
+    supertype: string | null;
+    rarity: string | null;
+    domains: string[];
+    energy: number | null;
+    might: number | null;
+    set_label: string | null;
+    text_plain: string | null;
+  }>(
+    `SELECT name, type, supertype, rarity, domains, energy, might, set_label, text_plain FROM card`,
+  );
+  return rows
+    .filter((r) => r.name.length >= 3 && q.includes(r.name.toLowerCase()))
+    .slice(0, 5)
+    .map(
+      (r) =>
+        `${r.name} — ${[r.supertype, r.type].filter(Boolean).join(" ")} (${r.set_label ?? "?"}` +
+        `${r.rarity ? `, ${r.rarity}` : ""}). Domains: ${r.domains.join(", ") || "—"}. ` +
+        `Energy ${r.energy ?? "—"}, Might ${r.might ?? "—"}.` +
+        (r.text_plain ? ` Tekst: ${r.text_plain.slice(0, 240)}` : ""),
+    );
+}
+
 export interface RagCitation {
   n: number;
   name: string;
@@ -116,11 +144,17 @@ export async function ask(
     )
     .join("\n\n");
 
+  const cards = await cardFacts(question);
+  const cardBlock = cards.length
+    ? `\n\nKaartgegevens (kaartdatabase, gezaghebbend voor stats/domains):\n` +
+      cards.map((c) => `- ${c}`).join("\n")
+    : "";
+
   const { askClaude } = await import("@/lib/ai");
   const answer = await askClaude({
     task: "cheap",
     system: RAG_SYSTEM,
-    prompt: `Context-fragmenten:\n${context}\n\nVraag: ${question}`,
+    prompt: `Context-fragmenten:\n${context}${cardBlock}\n\nVraag: ${question}`,
   });
 
   return { answer, sources };

@@ -121,6 +121,9 @@ export default function AdminDashboard() {
         <strong>Acties</strong>
         <div className="action-row">
           <button onClick={() => scan()}>Scan bronnen</button>
+          <button onClick={() => action("Kaarten synchroniseren", "/api/admin/cards")}>
+            Kaarten synchroniseren
+          </button>
           <button onClick={() => action("Index opbouwen", "/api/admin/embed")}>
             Index opbouwen (embeddings)
           </button>

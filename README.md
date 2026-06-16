@@ -56,11 +56,18 @@ daarna is `/admin` de bron van waarheid.
 - **`/conflicts`** — tegenstrijdigheden tussen officieel en community
   (tegenstrijdig / loopt-achter), gedetecteerd met AI.
 
+## Kaart-database
+Kaarten worden ingelezen via de [Riftcodex API](https://riftcodex.com) (open, geen
+auth) en zijn **update-bestendig**: nieuwe sets/errata komen automatisch mee via
+upsert. Cron: `npm run sync:cards`. Details + Riot-fallback: [`docs/CARD_INGEST.md`](docs/CARD_INGEST.md).
+De Q&A gebruikt deze kaartgegevens al naast de regeltekst.
+
 ## Vanuit `/admin` te triggeren
 - **Scan bronnen** (change-tracker)
+- **Kaarten synchroniseren** (Riftcodex → `card`-tabel; nieuwe sets/updates)
 - **Index opbouwen** (chunk + Voyage-embeddings → pgvector, voor Q&A)
 - **Conflicten checken** (officieel vs. community)
-- **Graph sync** (RuleSection-knopen → Neo4j; basis voor GraphRAG)
+- **Graph sync** (RuleSection- én Card-knopen → Neo4j; basis voor GraphRAG)
 
 ## AI-classificatie
 Bij een gedetecteerde wijziging classificeert Claude automatisch **type + ernst +

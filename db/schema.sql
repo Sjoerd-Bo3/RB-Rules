@@ -64,3 +64,33 @@ CREATE TABLE IF NOT EXISTS correction (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   verified_at TIMESTAMPTZ
 );
+
+-- ─── Kaart-database (Riftcodex; update-bestendig via upsert) ───────────────
+CREATE TABLE IF NOT EXISTS card_set (
+  set_id       TEXT PRIMARY KEY,            -- 'OGN'
+  name         TEXT NOT NULL,
+  published_on DATE,
+  card_count   INTEGER,
+  synced_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS card (
+  riftbound_id     TEXT PRIMARY KEY,         -- 'ogn-011-298'
+  name             TEXT NOT NULL,
+  type             TEXT,
+  supertype        TEXT,
+  rarity           TEXT,
+  domains          TEXT[] NOT NULL DEFAULT '{}',
+  energy           INTEGER,
+  might            INTEGER,
+  power            INTEGER,
+  set_id           TEXT,
+  set_label        TEXT,
+  collector_number INTEGER,
+  text_plain       TEXT,
+  image_url        TEXT,
+  tags             TEXT[] NOT NULL DEFAULT '{}',
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS card_name_idx ON card (lower(name));
+CREATE INDEX IF NOT EXISTS card_set_idx ON card (set_id);
