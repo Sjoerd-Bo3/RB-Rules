@@ -98,3 +98,14 @@ CREATE INDEX IF NOT EXISTS card_set_idx ON card (set_id);
 -- Correctie-embedding (voor terugkoppeling in Q&A): gevuld bij verificatie.
 ALTER TABLE correction ADD COLUMN IF NOT EXISTS embedding vector;
 ALTER TABLE correction ADD COLUMN IF NOT EXISTS question TEXT;
+
+-- ─── Run-log (zichtbaar in /admin/logs) ───────────────────────────────────
+CREATE TABLE IF NOT EXISTS run_log (
+  id         BIGSERIAL PRIMARY KEY,
+  kind       TEXT NOT NULL,            -- scan | cards | embed | conflicts | graph
+  ref        TEXT,                     -- bron-id of vrij veld
+  status     TEXT NOT NULL,            -- ok | changed | new | unchanged | error | info
+  detail     TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS run_log_created_idx ON run_log(created_at DESC);

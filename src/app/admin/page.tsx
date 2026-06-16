@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 interface Source {
@@ -131,6 +132,9 @@ export default function AdminDashboard() {
         <h1>Beheer — bronnen</h1>
         <div>
           <button onClick={() => scan()}>Scan alles</button>
+          <Link href="/admin/logs">
+            <button className="ghost">Logs</button>
+          </Link>
           <button onClick={logout} className="ghost">
             Uitloggen
           </button>

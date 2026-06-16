@@ -18,8 +18,13 @@ export async function GET() {
 export async function POST() {
   try {
     const { detectConflicts } = await import("@/ingest/conflicts");
-    return NextResponse.json(await detectConflicts());
+    const { logRun } = await import("@/lib/runlog");
+    const r = await detectConflicts();
+    await logRun("conflicts", null, r.note ? "info" : "ok", r.note ?? `${r.created} gevonden`);
+    return NextResponse.json(r);
   } catch (e) {
+    const { logRun } = await import("@/lib/runlog");
+    await logRun("conflicts", null, "error", e);
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 }
