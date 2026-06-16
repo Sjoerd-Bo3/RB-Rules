@@ -3,10 +3,10 @@
 import "dotenv/config";
 import { pool } from "@/lib/db";
 import { ingestSource } from "@/ingest/runner";
-import { SOURCES } from "../config/sources";
+import { loadSources } from "@/lib/source-store";
 
 async function main() {
-  const enabled = SOURCES.filter((s) => s.enabled);
+  const enabled = await loadSources(true);
   console.log(`Scan van ${enabled.length} bronnen…`);
 
   for (const src of enabled) {

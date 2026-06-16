@@ -44,6 +44,18 @@ Cron op de host:
 0 7 * * *  cd /pad/naar/RB-Rules && /usr/local/bin/npm run ingest >> ingest.log 2>&1
 ```
 
+## Beheer (`/admin`)
+Bronnen toevoegen/beheren (trust-tier, rang, cadans, aan/uit), verwijderen, en
+**handmatig scannen**. Beveiligd met `ADMIN_PASSWORD` uit `.env` (niet ingesteld =
+volledig vergrendeld). De bronnen-config (`config/sources.ts`) is alleen de seed;
+daarna is `/admin` de bron van waarheid.
+
+## AI-classificatie
+Bij een gedetecteerde wijziging classificeert Claude automatisch **type + ernst +
+uitleg ("wat betekent dit")** — mits AI-auth is geconfigureerd (zie
+[`docs/AI_AUTH.md`](docs/AI_AUTH.md)). Zonder auth blijft de tracker gewoon werken
+(kale diff, type "unknown").
+
 ## Mappen
 - `config/sources.ts` — bronnen-register (trust-tier + rang); toevoegen = data-wijziging.
 - `db/schema.sql` — Postgres-schema.

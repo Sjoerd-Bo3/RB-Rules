@@ -11,18 +11,17 @@ async function main() {
   await pool.query(schema);
   console.log("✓ schema toegepast");
 
+  // Seed alleen: bestaande bronnen niet overschrijven, zodat beheer via /admin
+  // de bron van waarheid blijft.
   for (const s of SOURCES) {
     await pool.query(
       `INSERT INTO source (id, name, url, type, trust_tier, rank, parser, cadence, enabled)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name, url = EXCLUDED.url, type = EXCLUDED.type,
-         trust_tier = EXCLUDED.trust_tier, rank = EXCLUDED.rank,
-         parser = EXCLUDED.parser, cadence = EXCLUDED.cadence, enabled = EXCLUDED.enabled`,
+       ON CONFLICT (id) DO NOTHING`,
       [s.id, s.name, s.url, s.type, s.trust_tier, s.rank, s.parser, s.cadence, s.enabled],
     );
   }
-  console.log(`✓ ${SOURCES.length} bronnen gesynct`);
+  console.log(`✓ ${SOURCES.length} bronnen geseed (bestaande ongemoeid)`);
   await pool.end();
 }
 

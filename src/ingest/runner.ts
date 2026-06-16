@@ -54,10 +54,31 @@ export async function ingestSource(src: SourceDef): Promise<IngestResult> {
 
     const isNew = lastHash === null;
     if (!isNew) {
+      const diff = lineDiff(oldText, text);
+
+      // AI-classificatie (rijke uitleg + type/ernst). Lazy import zodat de
+      // Agent SDK alleen geladen wordt als er auth is geconfigureerd.
+      let cls = null as Awaited<ReturnType<typeof import("./classify").classifyChange>> | null;
+      if (process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY) {
+        try {
+          const { classifyChange } = await import("./classify");
+          cls = await classifyChange(src.name, diff);
+        } catch {
+          cls = null;
+        }
+      }
+
       await pool.query(
-        `INSERT INTO change (source_id, change_type, severity, diff)
-         VALUES ($1, 'unknown', 'medium', $2)`,
-        [src.id, lineDiff(oldText, text)],
+        `INSERT INTO change (source_id, change_type, severity, summary, meaning, diff)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          src.id,
+          cls?.change_type ?? "unknown",
+          cls?.severity ?? "medium",
+          cls?.summary ?? null,
+          cls?.meaning ?? null,
+          diff,
+        ],
       );
     }
 

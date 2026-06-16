@@ -9,6 +9,7 @@ interface ChangeRow {
   change_type: string;
   severity: string;
   summary: string | null;
+  meaning: string | null;
   diff: string | null;
   detected_at: string;
 }
@@ -17,7 +18,7 @@ async function getChanges(): Promise<ChangeRow[]> {
   try {
     const { rows } = await pool.query<ChangeRow>(
       `SELECT c.id, s.name AS source_name, s.trust_tier, c.change_type,
-              c.severity, c.summary, c.diff, c.detected_at
+              c.severity, c.summary, c.meaning, c.diff, c.detected_at
          FROM change c JOIN source s ON s.id = c.source_id
         ORDER BY c.detected_at DESC
         LIMIT 50`,
@@ -55,6 +56,11 @@ export default async function ChangesPage() {
             </div>
             <div className="meta">{new Date(c.detected_at).toLocaleString("nl-NL")}</div>
             {c.summary && <p>{c.summary}</p>}
+            {c.meaning && (
+              <p className="meaning">
+                <strong>Wat betekent dit:</strong> {c.meaning}
+              </p>
+            )}
             {c.diff && <pre className="diff">{c.diff}</pre>}
           </article>
         ))
