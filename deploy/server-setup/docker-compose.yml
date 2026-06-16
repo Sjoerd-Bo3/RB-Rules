@@ -27,6 +27,9 @@ services:
       # Externe fetches: kaart-bron + optionele proxy voor Cloudflare-geblokkeerde IP's
       CARD_SOURCE: ${CARD_SOURCE:-auto}
       OUTBOUND_PROXY: ${OUTBOUND_PROXY:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@bo3.dev}
     depends_on:
       postgres:
         condition: service_healthy

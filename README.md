@@ -52,6 +52,18 @@ Cron op de host:
 0 7 * * *  cd /pad/naar/RB-Rules && /usr/local/bin/npm run ingest >> ingest.log 2>&1
 ```
 
+## Notificaties (push + digest)
+PWA-pushnotificaties bij **belangrijke (🔴) wijzigingen**, plus een **wekelijkse
+digest**. Zet 'm aan met de 🔔-knop op de wijzigingen-pagina.
+1. Genereer VAPID-sleutels: `npx web-push generate-vapid-keys`
+2. Zet `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` in `.env`.
+3. Wekelijkse digest via cron: `npm run digest`.
+Test vanuit `/admin` → "Testnotificatie sturen".
+
+## Native iOS/Android
+Een Capacitor-schil rond de gehoste PWA — zie [`docs/NATIVE.md`](docs/NATIVE.md)
+(`npx cap add ios/android` op je Mac).
+
 ## Beheer (`/admin`)
 Bronnen toevoegen/beheren (trust-tier, rang, cadans, aan/uit), verwijderen, en
 **handmatig scannen**. Beveiligd met `ADMIN_PASSWORD` uit `.env` (niet ingesteld =

@@ -1,4 +1,5 @@
 import { pool } from "@/lib/db";
+import NotifyButton from "@/components/NotifyButton";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +35,10 @@ export default async function ChangesPage() {
 
   return (
     <>
-      <h1>Wat is er veranderd</h1>
+      <div className="admin-head">
+        <h1>Wat is er veranderd</h1>
+        <NotifyButton />
+      </div>
       <p className="subtitle">
         Automatisch gedetecteerde wijzigingen in de gevolgde regelbronnen, nieuwste eerst.
       </p>
