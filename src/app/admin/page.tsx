@@ -15,6 +15,15 @@ interface Source {
   enabled: boolean;
 }
 
+interface Correction {
+  id: number;
+  text: string;
+  question: string | null;
+  provenance: string | null;
+  status: string;
+  created_at: string;
+}
+
 const EMPTY = {
   id: "",
   name: "",
@@ -30,6 +39,7 @@ const EMPTY = {
 export default function AdminDashboard() {
   const router = useRouter();
   const [sources, setSources] = useState<Source[]>([]);
+  const [corrections, setCorrections] = useState<Correction[]>([]);
   const [form, setForm] = useState<Record<string, unknown>>({ ...EMPTY });
   const [status, setStatus] = useState("");
 
@@ -37,11 +47,22 @@ export default function AdminDashboard() {
     const res = await fetch("/api/admin/sources");
     if (res.status === 401) return router.push("/admin/login");
     setSources(await res.json());
+    const cr = await fetch("/api/admin/corrections");
+    if (cr.ok) setCorrections(await cr.json());
   }
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function correction(id: number, action: "verify" | "delete") {
+    await fetch("/api/admin/corrections", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, action }),
+    });
+    load();
+  }
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -203,6 +224,31 @@ export default function AdminDashboard() {
           ))}
         </tbody>
       </table>
+
+      <h2 style={{ marginTop: 28 }}>Correcties (self-learning)</h2>
+      {corrections.length === 0 ? (
+        <p className="meta">Nog geen correcties ingestuurd.</p>
+      ) : (
+        corrections.map((c) => (
+          <div className="card" key={c.id}>
+            <div className="card-head">
+              <span className={`badge ${c.status === "verified" ? "sev-low" : "sev-medium"}`}>
+                {c.status}
+              </span>
+              {c.question && <span className="meta">vraag: {c.question}</span>}
+            </div>
+            <p>{c.text}</p>
+            <div className="row-actions">
+              {c.status !== "verified" && (
+                <button onClick={() => correction(c.id, "verify")}>Verifiëren</button>
+              )}
+              <button onClick={() => correction(c.id, "delete")} className="danger">
+                Verwijderen
+              </button>
+            </div>
+          </div>
+        ))
+      )}
 
       <h2 style={{ marginTop: 28 }}>Bron toevoegen</h2>
       <form onSubmit={add} className="card add-form">

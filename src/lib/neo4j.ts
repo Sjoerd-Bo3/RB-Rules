@@ -115,3 +115,119 @@ export async function syncCardGraph(): Promise<{ cards: number }> {
     await session.close();
   }
 }
+
+/**
+ * Bouw de "intelligente" edges die GraphRAG mogelijk maken:
+ *  - Keyword -[:DEFINED_BY]-> RuleSection  (keyword genoemd in regeltekst)
+ *  - Card    -[:BANNED_IN]->  BanEntry     (kaartnaam in een ban-context, officieel)
+ * Heuristisch maar bron-gebaseerd; draait na graphSync/syncCardGraph.
+ */
+export async function syncGraphLinks(): Promise<{ defined: number; banned: number }> {
+  // 1. Keyword → RuleSection
+  const kw = await pool.query<{ name: string }>(
+    `SELECT DISTINCT unnest(tags) AS name FROM card`,
+  );
+  const chunks = await pool.query<{ section_code: string; text: string }>(
+    `SELECT section_code, lower(text) AS text FROM rule_chunk WHERE section_code IS NOT NULL`,
+  );
+
+  const session = driver().session();
+  let defined = 0;
+  let banned = 0;
+  try {
+    for (const k of kw.rows) {
+      const needle = k.name.toLowerCase();
+      if (needle.length < 3) continue;
+      const sections = new Set<string>();
+      for (const c of chunks.rows) {
+        if (c.text.includes(needle)) sections.add(c.section_code);
+      }
+      if (sections.size === 0) continue;
+      await session.run(
+        `MATCH (k:Keyword {name: $name})
+         UNWIND $sections AS code
+         MERGE (rs:RuleSection {code: code})
+         MERGE (k)-[:DEFINED_BY]->(rs)`,
+        { name: k.name, sections: [...sections].slice(0, 25) },
+      );
+      defined += Math.min(sections.size, 25);
+    }
+
+    // 2. Card → BanEntry (officiële docs, zinnen met 'ban' + kaartnaam)
+    const docs = await pool.query<{ content: string }>(
+      `SELECT d.content FROM document d JOIN source s ON s.id = d.source_id
+        WHERE s.trust_tier = 1
+        ORDER BY d.retrieved_at DESC LIMIT 10`,
+    );
+    const cards = await pool.query<{ riftbound_id: string; name: string }>(
+      `SELECT riftbound_id, name FROM card`,
+    );
+    const bannedIds = new Set<string>();
+    for (const d of docs.rows) {
+      const sentences = d.content.split(/(?<=\.)\s+/);
+      for (const sent of sentences) {
+        if (!/ban/i.test(sent)) continue;
+        const low = sent.toLowerCase();
+        for (const c of cards.rows) {
+          if (c.name.length >= 4 && low.includes(c.name.toLowerCase())) {
+            bannedIds.add(c.riftbound_id);
+          }
+        }
+      }
+    }
+    if (bannedIds.size) {
+      await session.run(`MERGE (:BanEntry {format: 'constructed'})`);
+      for (const id of bannedIds) {
+        await session.run(
+          `MATCH (card:Card {id: $id}), (b:BanEntry {format: 'constructed'})
+           MERGE (card)-[:BANNED_IN]->(b)`,
+          { id },
+        );
+        banned++;
+      }
+    }
+    return { defined, banned };
+  } finally {
+    await session.close();
+  }
+}
+
+/** Graph-traversal: feiten over de gegeven kaarten (voor GraphRAG-context). */
+export async function cardGraphContext(ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const session = driver().session();
+  try {
+    const out: string[] = [];
+    for (const id of ids.slice(0, 3)) {
+      const r = await session.run(
+        `MATCH (c:Card {id: $id})
+         OPTIONAL MATCH (c)-[:HAS_DOMAIN]->(dom:Domain)
+         OPTIONAL MATCH (c)-[:HAS_KEYWORD]->(k:Keyword)
+         OPTIONAL MATCH (k)-[:DEFINED_BY]->(rs:RuleSection)
+         OPTIONAL MATCH (c)-[:BANNED_IN]->(b:BanEntry)
+         RETURN c.name AS name,
+                collect(DISTINCT dom.name) AS domains,
+                collect(DISTINCT k.name) AS keywords,
+                collect(DISTINCT rs.code) AS sections,
+                count(b) > 0 AS banned`,
+        { id },
+      );
+      const rec = r.records[0];
+      if (!rec) continue;
+      const name = rec.get("name") as string;
+      const domains = (rec.get("domains") as string[]).filter(Boolean);
+      const keywords = (rec.get("keywords") as string[]).filter(Boolean);
+      const sections = (rec.get("sections") as string[]).filter(Boolean);
+      const bannedVal = rec.get("banned");
+      const banned = typeof bannedVal === "boolean" ? bannedVal : Boolean(bannedVal);
+      out.push(
+        `${name}: domains ${domains.join(", ") || "—"}; keywords ${keywords.join(", ") || "—"}` +
+          (sections.length ? `; relevante regelsecties ${sections.join(", ")}` : "") +
+          (banned ? "; ⚠ STAAT OP DE BANLIJST (constructed)" : ""),
+      );
+    }
+    return out;
+  } finally {
+    await session.close();
+  }
+}

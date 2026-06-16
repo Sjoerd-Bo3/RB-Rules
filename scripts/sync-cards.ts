@@ -3,7 +3,7 @@
 import "dotenv/config";
 import { pool } from "@/lib/db";
 import { syncCards } from "@/ingest/cards";
-import { driver, graphPing, syncCardGraph } from "@/lib/neo4j";
+import { driver, graphPing, syncCardGraph, syncGraphLinks } from "@/lib/neo4j";
 
 async function main() {
   console.log("Kaart-sync (Riftcodex)…");
@@ -12,7 +12,8 @@ async function main() {
 
   if (await graphPing()) {
     const g = await syncCardGraph();
-    console.log(`✓ graph: ${g.cards} Card-knopen`);
+    const l = await syncGraphLinks();
+    console.log(`✓ graph: ${g.cards} Card-knopen, ${l.defined} keyword→regel, ${l.banned} ban-edges`);
     await driver().close();
   } else {
     console.log("· Neo4j niet bereikbaar — graph overgeslagen");

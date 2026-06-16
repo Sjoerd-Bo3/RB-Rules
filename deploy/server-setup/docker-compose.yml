@@ -20,6 +20,9 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-ollama}
+      OLLAMA_URL: http://rb-rules-ollama:11434
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
     depends_on:
       postgres:
@@ -60,6 +63,17 @@ services:
       NEO4J_server_memory_pagecache_size: 384m
     volumes:
       - /mnt/data/neo4j/rb-rules:/data
+    networks:
+      - internal
+
+  # Lokaal embedding-model (gratis; vervangt Voyage). Trek het model eenmalig:
+  #   docker compose --project-name rb-rules exec ollama ollama pull nomic-embed-text
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rb-rules-ollama
+    restart: unless-stopped
+    volumes:
+      - /mnt/data/ollama/rb-rules:/root/.ollama
     networks:
       - internal
 

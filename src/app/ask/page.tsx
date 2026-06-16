@@ -16,6 +16,9 @@ export default function AskPage() {
   const [sources, setSources] = useState<Citation[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [asked, setAsked] = useState("");
+  const [fix, setFix] = useState("");
+  const [fixDone, setFixDone] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -34,9 +37,23 @@ export default function AskPage() {
     if (res.ok) {
       setAnswer(j.answer ?? "");
       setSources(j.sources ?? []);
+      setAsked(question);
+      setFix("");
+      setFixDone(false);
     } else {
       setError(j.error ?? "Er ging iets mis");
     }
+  }
+
+  async function submitFix(e: React.FormEvent) {
+    e.preventDefault();
+    if (!fix.trim()) return;
+    const res = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: asked, text: fix }),
+    });
+    if (res.ok) setFixDone(true);
   }
 
   return (
@@ -81,6 +98,30 @@ export default function AskPage() {
               </ol>
             </>
           )}
+
+          <div className="fix-box">
+            {fixDone ? (
+              <p className="meta">
+                Bedankt — je correctie is opgeslagen en wordt na verificatie meegenomen.
+              </p>
+            ) : (
+              <form onSubmit={submitFix}>
+                <label className="meta" htmlFor="fix">
+                  Klopt dit niet? Geef de juiste ruling (gaat naar verificatie):
+                </label>
+                <textarea
+                  id="fix"
+                  rows={2}
+                  value={fix}
+                  onChange={(e) => setFix(e.target.value)}
+                  placeholder="Bijv.: Volgens de errata van 30-3 mag dit juist wél, omdat…"
+                />
+                <button type="submit" className="ghost" style={{ marginTop: 8 }}>
+                  Correctie insturen
+                </button>
+              </form>
+            )}
+          </div>
         </article>
       )}
     </>
