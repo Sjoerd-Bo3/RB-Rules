@@ -1,0 +1,33 @@
+{
+  "name": "rb-rules",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Riftbound Rules Companion — onofficiële, altijd-actuele regelbron met change-tracking.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "db:init": "tsx scripts/db-init.ts",
+    "ingest": "tsx scripts/ingest.ts",
+    "sync:cards": "tsx scripts/sync-cards.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.178",
+    "neo4j-driver": "^5.28.1",
+    "next": "^15.5.4",
+    "pg": "^8.13.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "dotenv": "^16.4.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

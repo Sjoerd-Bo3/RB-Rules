@@ -1,0 +1,6 @@
+# Automatische HTTPS (Let's Encrypt) → proxy naar de Next.js-app.
+# DOMAIN komt uit .env (compose injecteert het).
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+}

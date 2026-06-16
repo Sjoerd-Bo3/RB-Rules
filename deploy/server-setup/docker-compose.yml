@@ -1,0 +1,70 @@
+# RB-Rules op de bestaande Server-setup VM — achter de centrale Caddy,
+# image uit GHCR (Watchtower auto-update). Volgt je compose/<service>-patroon.
+#
+#   docker compose --project-name rb-rules up -d                 # app + postgres
+#   docker compose --project-name rb-rules --profile graph up -d # + Neo4j (Fase 2)
+#
+# Caddy bereikt de app via het gedeelde externe netwerk op rb-rules-web:3000.
+services:
+  app:
+    image: ghcr.io/sjoerd-bo3/rb-rules:latest
+    container_name: rb-rules-web
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true" # Watchtower auto-pull
+    environment:
+      DATABASE_URL: postgres://rbrules:${POSTGRES_PASSWORD}@rb-rules-postgres:5432/rbrules
+      NEO4J_URI: bolt://rb-rules-neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-rbrules-neo4j}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+      - caddy
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: rb-rules-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rbrules
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rbrules
+    volumes:
+      - /mnt/data/postgres/rb-rules:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rbrules"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # Neo4j is optioneel (alleen voor de GraphRAG-laag). Behind 'graph'-profiel om
+  # RAM te sparen op de gedeelde VM; conservatief geheugen.
+  neo4j:
+    image: neo4j:5-community
+    container_name: rb-rules-neo4j
+    restart: unless-stopped
+    profiles: ["graph"]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-rbrules-neo4j}
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 384m
+    volumes:
+      - /mnt/data/neo4j/rb-rules:/data
+    networks:
+      - internal
+
+networks:
+  internal:
+  caddy:
+    external: true
+    name: ${CADDY_NETWORK}

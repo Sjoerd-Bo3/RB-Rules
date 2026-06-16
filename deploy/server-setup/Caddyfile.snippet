@@ -1,0 +1,8 @@
+# Voeg dit blok toe aan je bestaande compose/caddy/Caddyfile en herlaad Caddy:
+#   docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+# (rb-rules-web moet op hetzelfde externe netwerk zitten als Caddy.)
+
+riftbound.bo3.dev {
+	encode gzip
+	reverse_proxy rb-rules-web:3000
+}
