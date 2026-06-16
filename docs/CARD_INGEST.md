@@ -27,13 +27,23 @@ daarna per set alle kaarten, en **upsert** ze (`ON CONFLICT … DO UPDATE`) in d
   ```
 - Of vanuit **`/admin` → "Kaarten synchroniseren"** (en daarna "Graph sync").
 
-## Bron 2 (authoritatief, fallback): Riot card-gallery
+## Bron 2 (authoritatief, fallback): Riot card-gallery — geïmplementeerd
 Riot's eigen data zit in de Next.js-build van de officiële site:
 `https://riftbound.leagueoflegends.com/_next/data/{BUILD_ID}/en-us/card-gallery.json`
-Het `BUILD_ID` is dynamisch — detecteer het uit de HTML van de card-gallery-pagina
-(`/_next/static/{BUILD_ID}/`), dan de JSON ophalen. Meest gezaghebbend (trust 1),
-maar fragieler (build-id verandert). We gebruiken Riftcodex als primair en kunnen
-dit later als cross-check/override toevoegen (zelfde upsert-doel).
+Het `BUILD_ID` wordt automatisch gedetecteerd uit de HTML van de card-gallery-pagina.
+`src/ingest/riot.ts` parseert alle ~957 kaarten (velden: type, rarity, domains via
+`domain.values`, energy/might, set, tags, tekst) en upsert ze in dezelfde tabellen.
+
+**Cloudflare op datacenter-IP's.** Vanaf de Azure-VM blokkeert Cloudflare
+`api.riftcodex.com`. Daarom: `CARD_SOURCE=auto` (default) probeert Riftcodex en valt
+bij een fout automatisch terug op de Riot-gallery (die datacenter-IP's niet blokkeert).
+Forceer met `CARD_SOURCE=riot` of `=riftcodex`.
+
+## Cloudflare-geblokkeerde bronnen (proxy)
+Bronnen die datacenter-IP's blokkeren (bv. de Mobalytics ban-mirror) bereik je via
+`OUTBOUND_PROXY` (vorm `http://user:pass@host:port`) — alle externe fetches lopen er
+dan doorheen. De Mobalytics-bron staat daarom **standaard uit**; officiële bans komen
+al via de Rules Hub (trust 1).
 
 ## Van DB naar graph
 `src/lib/neo4j.ts → syncCardGraph()` bouwt uit de `card`-tabel:
