@@ -30,13 +30,21 @@ bronvermelding.
    ```bash
    npm run ingest              # cron'baar, bv. dagelijks
    ```
-4. **Start de app**
+4. **Embeddings-model trekken** (lokaal, gratis — voor Q&A)
+   ```bash
+   docker compose exec ollama ollama pull nomic-embed-text
+   ```
+5. **Start de app**
    ```bash
    npm run dev                 # http://localhost:3000
    ```
 
 > Voor PWA-camera/mic in productie is HTTPS nodig — bij self-hosting thuis is
 > **Cloudflare Tunnel** (gratis) een makkelijke route die je IP/poorten afschermt.
+
+### Embeddings: lokaal of cloud
+Default draaien embeddings **lokaal via Ollama** (`nomic-embed-text`, gratis, geen
+key). Wil je Voyage gebruiken: zet `EMBEDDINGS_PROVIDER=voyage` + `VOYAGE_API_KEY`.
 
 ### Dagelijkse scan automatiseren
 Cron op de host:
@@ -51,10 +59,18 @@ volledig vergrendeld). De bronnen-config (`config/sources.ts`) is alleen de seed
 daarna is `/admin` de bron van waarheid.
 
 ## Vraag & Conflicten
-- **`/ask`** — stel een regelvraag; vector-RAG haalt relevante regeltekst op en
-  Claude antwoordt **mét citaten** naar de bron (officieel > community).
+- **`/ask`** — stel een regelvraag; **GraphRAG**: vector-zoek over regeltekst +
+  graph-traversal over herkende kaarten (domains, keywords→regelsecties, ban-status)
+  → Claude antwoordt **mét citaten** (officieel > community). Onder elk antwoord kun
+  je een **correctie insturen**.
 - **`/conflicts`** — tegenstrijdigheden tussen officieel en community
   (tegenstrijdig / loopt-achter), gedetecteerd met AI.
+
+## Self-learning (correcties)
+Spelers sturen onder een antwoord een correctie in → komt binnen als `unverified`.
+Een judge/beheerder **verifieert** 'm in `/admin` → de correctie wordt geëmbed en
+voortaan als **gezaghebbende ruling** meegenomen in toekomstige antwoorden. Zo wordt
+het systeem beter zonder fine-tunen.
 
 ## Kaart-database
 Kaarten worden ingelezen via de [Riftcodex API](https://riftcodex.com) (open, geen

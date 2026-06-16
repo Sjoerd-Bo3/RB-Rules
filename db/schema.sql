@@ -94,3 +94,7 @@ CREATE TABLE IF NOT EXISTS card (
 );
 CREATE INDEX IF NOT EXISTS card_name_idx ON card (lower(name));
 CREATE INDEX IF NOT EXISTS card_set_idx ON card (set_id);
+
+-- Correctie-embedding (voor terugkoppeling in Q&A): gevuld bij verificatie.
+ALTER TABLE correction ADD COLUMN IF NOT EXISTS embedding vector;
+ALTER TABLE correction ADD COLUMN IF NOT EXISTS question TEXT;

@@ -41,10 +41,15 @@ docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 → https://riftbound.bo3.dev (beheer op `/admin`).
 
-**7. Eerste vulling.**
+**7. Lokaal embedding-model trekken** (gratis; nodig voor Q&A):
+```bash
+docker compose --project-name rb-rules exec ollama ollama pull nomic-embed-text
+```
+
+**8. Eerste vulling.**
 ```bash
 docker compose --project-name rb-rules run --rm app npm run ingest
-docker compose --project-name rb-rules run --rm app npm run sync:cards
+docker compose --project-name rb-rules run --rm app npm run sync:cards   # + card-graph
 ```
 
 ## Cron (op de VM)

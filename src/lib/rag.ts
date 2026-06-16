@@ -85,6 +85,27 @@ async function cardFacts(question: string): Promise<string[]> {
     );
 }
 
+/** GraphRAG: herken kaarten in de vraag en haal hun graph-feiten op (als Neo4j er is). */
+async function cardGraphBlock(question: string): Promise<string> {
+  const q = question.toLowerCase();
+  const { rows } = await pool.query<{ riftbound_id: string; name: string }>(
+    `SELECT riftbound_id, name FROM card`,
+  );
+  const ids = rows
+    .filter((r) => r.name.length >= 3 && q.includes(r.name.toLowerCase()))
+    .slice(0, 3)
+    .map((r) => r.riftbound_id);
+  if (ids.length === 0) return "";
+
+  const { graphPing, cardGraphContext } = await import("@/lib/neo4j");
+  if (!(await graphPing())) return "";
+  const facts = await cardGraphContext(ids);
+  return facts.length
+    ? `\n\nGraph-feiten (kaart-relaties, gezaghebbend):\n` +
+        facts.map((f) => `- ${f}`).join("\n")
+    : "";
+}
+
 export interface RagCitation {
   n: number;
   name: string;
@@ -94,10 +115,11 @@ export interface RagCitation {
 }
 
 const RAG_SYSTEM = `Je bent een Riftbound TCG regels-assistent. Beantwoord de vraag
-UITSLUITEND op basis van de meegegeven context-fragmenten. Citeer je bronnen met
-[n] verwijzend naar de fragmentnummers. Als de context het antwoord niet bevat,
-zeg dat eerlijk. Officiële bronnen (lagere trust-tier = betrouwbaarder) gaan vóór
-community-bronnen; benoem tegenstrijdigheden expliciet. Antwoord in het Nederlands.`;
+op basis van de meegegeven context-fragmenten. Citeer je bronnen met [n] verwijzend
+naar de fragmentnummers. Als de context het antwoord niet bevat, zeg dat eerlijk.
+Officiële bronnen (lagere trust-tier = betrouwbaarder) gaan vóór community-bronnen;
+benoem tegenstrijdigheden expliciet. GEVERIFIEERDE RULINGS (indien meegegeven) zijn
+gezaghebbend en gaan vóór alles — volg ze. Antwoord in het Nederlands.`;
 
 /** Vector-RAG vraag→antwoord met citaten. */
 export async function ask(
@@ -150,11 +172,22 @@ export async function ask(
       cards.map((c) => `- ${c}`).join("\n")
     : "";
 
+  // Self-learning: gezaghebbende geverifieerde correcties (override-laag).
+  const { relevantCorrections } = await import("@/lib/corrections");
+  const corr = await relevantCorrections(question).catch(() => [] as string[]);
+  const corrBlock = corr.length
+    ? `\n\nGEVERIFIEERDE RULINGS (gezaghebbend, gaan vóór alles):\n` +
+      corr.map((c) => `- ${c}`).join("\n")
+    : "";
+
+  // GraphRAG: relateer herkende kaarten via Neo4j (domains/keywords→regels/ban).
+  const graphBlock = await cardGraphBlock(question).catch(() => "");
+
   const { askClaude } = await import("@/lib/ai");
   const answer = await askClaude({
     task: "cheap",
     system: RAG_SYSTEM,
-    prompt: `Context-fragmenten:\n${context}${cardBlock}\n\nVraag: ${question}`,
+    prompt: `Context-fragmenten:\n${context}${cardBlock}${graphBlock}${corrBlock}\n\nVraag: ${question}`,
   });
 
   return { answer, sources };
