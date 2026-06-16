@@ -13,6 +13,7 @@
     "ingest": "tsx scripts/ingest.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.178",
     "neo4j-driver": "^5.28.1",
     "next": "^15.5.4",
     "pg": "^8.13.1",
