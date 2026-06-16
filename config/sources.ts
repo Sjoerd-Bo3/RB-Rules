@@ -50,6 +50,9 @@ export const SOURCES: SourceDef[] = [
     enabled: true,
   },
   {
+    // Cloudflare blokkeert datacenter-IP's (bv. de Azure-VM). Officiële bans komen
+    // al via de Rules Hub (trust 1); zet OUTBOUND_PROXY + enabled via /admin als je
+    // deze cross-check toch wilt.
     id: "mobalytics-bans",
     name: "Banned Cards (Mobalytics, community)",
     url: "https://mobalytics.gg/riftbound/guides/banned-cards",
@@ -58,6 +61,6 @@ export const SOURCES: SourceDef[] = [
     rank: 40,
     parser: "html",
     cadence: "weekly",
-    enabled: true,
+    enabled: false,
   },
 ];

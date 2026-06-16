@@ -6,9 +6,9 @@ import { syncCards } from "@/ingest/cards";
 import { driver, graphPing, syncCardGraph, syncGraphLinks } from "@/lib/neo4j";
 
 async function main() {
-  console.log("Kaart-sync (Riftcodex)…");
+  console.log("Kaart-sync…");
   const r = await syncCards();
-  console.log(`✓ ${r.sets} sets, ${r.cards} kaarten gesynct`);
+  console.log(`✓ ${r.sets} sets, ${r.cards} kaarten gesynct (bron: ${r.source})`);
 
   if (await graphPing()) {
     const g = await syncCardGraph();

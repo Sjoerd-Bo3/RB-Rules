@@ -24,6 +24,9 @@ services:
       OLLAMA_URL: http://rb-rules-ollama:11434
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # Externe fetches: kaart-bron + optionele proxy voor Cloudflare-geblokkeerde IP's
+      CARD_SOURCE: ${CARD_SOURCE:-auto}
+      OUTBOUND_PROXY: ${OUTBOUND_PROXY:-}
     depends_on:
       postgres:
         condition: service_healthy

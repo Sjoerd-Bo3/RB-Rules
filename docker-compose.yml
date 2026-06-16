@@ -46,6 +46,8 @@ services:
       EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-ollama}
       OLLAMA_URL: http://ollama:11434
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      CARD_SOURCE: ${CARD_SOURCE:-auto}
+      OUTBOUND_PROXY: ${OUTBOUND_PROXY:-}
       # AI (Fase 2) — via Claude-abonnement (OAuth) of API-key; zie docs/AI_AUTH.md
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

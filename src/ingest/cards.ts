@@ -1,7 +1,10 @@
 import { pool } from "@/lib/db";
+import { browserFetch } from "@/lib/fetch";
 
 // Kaart-ingest via de Riftcodex API (open, geen auth). Update-bestendig: nieuwe
 // sets verschijnen in /sets en worden vanzelf meegenomen; kaarten worden geüpsert.
+// Fallback op de officiële Riot card-gallery wanneer Riftcodex onbereikbaar is
+// (bv. Cloudflare blokkeert datacenter-IP's).
 const BASE = process.env.RIFTCODEX_BASE ?? "https://api.riftcodex.com";
 const MAX_PAGES = 200;
 
@@ -26,9 +29,7 @@ interface RcCard {
 }
 
 async function getJson(url: string): Promise<unknown> {
-  const r = await fetch(url, {
-    headers: { "user-agent": "RB-Rules-Companion/0.1 (community fan project)" },
-  });
+  const r = await browserFetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status} ${url}`);
   return r.json();
 }
@@ -112,10 +113,31 @@ export async function syncCardsForSet(setId: string): Promise<number> {
   return count;
 }
 
-/** Volledige sync: alle sets + hun kaarten. Idempotent en update-bestendig. */
-export async function syncCards(): Promise<{ sets: number; cards: number }> {
+async function syncViaRiftcodex(): Promise<{ sets: number; cards: number }> {
   const sets = await syncSets();
   let cards = 0;
   for (const setId of sets) cards += await syncCardsForSet(setId);
   return { sets: sets.length, cards };
+}
+
+/**
+ * Volledige sync: alle sets + hun kaarten. Idempotent en update-bestendig.
+ * CARD_SOURCE = auto (default) | riftcodex | riot. 'auto' probeert Riftcodex en
+ * valt bij een fout terug op de officiële Riot card-gallery.
+ */
+export async function syncCards(): Promise<{ sets: number; cards: number; source: string }> {
+  const pref = process.env.CARD_SOURCE ?? "auto";
+
+  if (pref === "riot") {
+    const { syncCardsFromRiot } = await import("./riot");
+    return { ...(await syncCardsFromRiot()), source: "riot" };
+  }
+
+  try {
+    return { ...(await syncViaRiftcodex()), source: "riftcodex" };
+  } catch (e) {
+    if (pref === "riftcodex") throw e;
+    const { syncCardsFromRiot } = await import("./riot");
+    return { ...(await syncCardsFromRiot()), source: "riot (fallback)" };
+  }
 }

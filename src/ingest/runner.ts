@@ -1,4 +1,5 @@
 import { pool } from "@/lib/db";
+import { browserFetch } from "@/lib/fetch";
 import { htmlToText, lineDiff, sha256 } from "@/lib/text";
 import type { SourceDef } from "../../config/sources";
 
@@ -15,10 +16,7 @@ export interface IngestResult {
  */
 export async function ingestSource(src: SourceDef): Promise<IngestResult> {
   try {
-    const res = await fetch(src.url, {
-      headers: { "user-agent": "RB-Rules-Companion/0.1 (community fan project)" },
-      redirect: "follow",
-    });
+    const res = await browserFetch(src.url);
     if (!res.ok) {
       await touch(src.id);
       return { sourceId: src.id, status: "error", detail: `HTTP ${res.status}` };

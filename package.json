@@ -19,7 +19,8 @@
     "next": "^15.5.4",
     "pg": "^8.13.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "undici": "^7.28.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
