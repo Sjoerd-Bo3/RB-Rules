@@ -27,7 +27,12 @@ export async function askClaude(opts: {
     },
   };
 
-  let out = "";
+  // De Agent SDK levert dezelfde tekst twee keer: als streaming 'assistant'-
+  // berichten én als afsluitend 'result'-bericht. Tel ze NIET op (dat gaf een
+  // dubbel antwoord). Verzamel beide apart en geef het 'result' terug; val
+  // alleen terug op de assistant-tekst als er geen result is.
+  let assistantText = "";
+  let resultText = "";
   for await (const message of query(arg as Parameters<typeof query>[0])) {
     const m = message as {
       type: string;
@@ -37,13 +42,13 @@ export async function askClaude(opts: {
     };
     if (m.type === "assistant" && Array.isArray(m.message?.content)) {
       for (const block of m.message!.content!) {
-        if (block.type === "text" && block.text) out += block.text;
+        if (block.type === "text" && block.text) assistantText += block.text;
       }
     } else if (m.type === "text" && m.text) {
-      out += m.text;
+      assistantText += m.text;
     } else if (m.type === "result" && m.result) {
-      out += m.result;
+      resultText += m.result;
     }
   }
-  return out.trim();
+  return (resultText || assistantText).trim();
 }
