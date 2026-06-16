@@ -88,6 +88,17 @@ export default function AdminDashboard() {
     load();
   }
 
+  async function action(label: string, path: string) {
+    setStatus(`${label}…`);
+    const res = await fetch(path, { method: "POST" });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setStatus(`${label}: fout — ${j.error ?? res.status}`);
+      return;
+    }
+    setStatus(`${label}: ${JSON.stringify(j.results ?? j)}`);
+  }
+
   async function logout() {
     await fetch("/api/admin/login", { method: "DELETE" });
     router.push("/admin/login");
@@ -105,6 +116,22 @@ export default function AdminDashboard() {
         </div>
       </div>
       {status && <p className="meta">{status}</p>}
+
+      <div className="card actions">
+        <strong>Acties</strong>
+        <div className="action-row">
+          <button onClick={() => scan()}>Scan bronnen</button>
+          <button onClick={() => action("Index opbouwen", "/api/admin/embed")}>
+            Index opbouwen (embeddings)
+          </button>
+          <button onClick={() => action("Conflicten checken", "/api/admin/conflicts")}>
+            Conflicten checken
+          </button>
+          <button onClick={() => action("Graph sync", "/api/admin/graph")}>
+            Graph sync (Neo4j)
+          </button>
+        </div>
+      </div>
 
       <table>
         <thead>

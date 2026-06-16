@@ -50,6 +50,18 @@ Bronnen toevoegen/beheren (trust-tier, rang, cadans, aan/uit), verwijderen, en
 volledig vergrendeld). De bronnen-config (`config/sources.ts`) is alleen de seed;
 daarna is `/admin` de bron van waarheid.
 
+## Vraag & Conflicten
+- **`/ask`** — stel een regelvraag; vector-RAG haalt relevante regeltekst op en
+  Claude antwoordt **mét citaten** naar de bron (officieel > community).
+- **`/conflicts`** — tegenstrijdigheden tussen officieel en community
+  (tegenstrijdig / loopt-achter), gedetecteerd met AI.
+
+## Vanuit `/admin` te triggeren
+- **Scan bronnen** (change-tracker)
+- **Index opbouwen** (chunk + Voyage-embeddings → pgvector, voor Q&A)
+- **Conflicten checken** (officieel vs. community)
+- **Graph sync** (RuleSection-knopen → Neo4j; basis voor GraphRAG)
+
 ## AI-classificatie
 Bij een gedetecteerde wijziging classificeert Claude automatisch **type + ernst +
 uitleg ("wat betekent dit")** — mits AI-auth is geconfigureerd (zie

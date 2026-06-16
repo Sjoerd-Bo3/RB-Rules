@@ -22,6 +22,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </Link>
           <nav>
             <Link href="/">Wijzigingen</Link>
+            <Link href="/ask">Vraag</Link>
+            <Link href="/conflicts">Conflicten</Link>
             <Link href="/sources">Bronnen</Link>
             <Link href="/admin">Beheer</Link>
           </nav>
