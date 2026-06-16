@@ -109,3 +109,14 @@ CREATE TABLE IF NOT EXISTS rule_chunk (
   embedding    vector
 );
 CREATE INDEX IF NOT EXISTS rule_chunk_source_idx ON rule_chunk(source_id);
+
+-- ─── Run-log (zichtbaar in /admin/logs) ───────────────────────────────────
+CREATE TABLE IF NOT EXISTS run_log (
+  id         BIGSERIAL PRIMARY KEY,
+  kind       TEXT NOT NULL,            -- scan | cards | embed | conflicts | graph
+  ref        TEXT,                     -- bron-id of vrij veld
+  status     TEXT NOT NULL,            -- ok | changed | new | unchanged | error | info
+  detail     TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS run_log_created_idx ON run_log(created_at DESC);

@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db";
 import { browserFetch } from "@/lib/fetch";
+import { logRun } from "@/lib/runlog";
 import { htmlToText, lineDiff, sha256 } from "@/lib/text";
 import type { SourceDef } from "../../config/sources";
 
@@ -15,6 +16,12 @@ export interface IngestResult {
  * De hash-check zorgt dat ongewijzigde bronnen ~gratis zijn (geen LLM/embedding).
  */
 export async function ingestSource(src: SourceDef): Promise<IngestResult> {
+  const r = await ingestSourceInner(src);
+  await logRun("scan", src.id, r.status, r.detail);
+  return r;
+}
+
+async function ingestSourceInner(src: SourceDef): Promise<IngestResult> {
   try {
     const res = await browserFetch(src.url);
     if (!res.ok) {
