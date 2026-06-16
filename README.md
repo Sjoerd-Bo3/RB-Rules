@@ -1,1 +1,52 @@
-# RB-Rules
+# Riftbound Rules Companion
+
+Een **onofficieel** community-hulpmiddel dat de versnipperde Riftbound-regels
+(Core Rules, Tournament Rules, errata, rulings, bans, changelogs) samenbrengt in
+één doorzoekbare, altijd-actuele bron — met automatische **change-tracking** en
+bronvermelding.
+
+> Status: **MVP — change-tracker**. Q&A (GraphRAG), foto- en voice-lookup volgen.
+> Zie [`docs/BRAINSTORM.md`](docs/BRAINSTORM.md) voor het volledige plan.
+
+## Stack
+- **Frontend:** Next.js (App Router) PWA — web + installeerbaar op telefoon.
+- **Kennisbank:** Postgres + `pgvector` (relationeel + embeddings).
+- **Graph (Fase 2):** Neo4j — kaart ↔ regel ↔ errata ↔ ban.
+- **LLM (Fase 2):** Claude (Opus/Sonnet/Haiku) + Voyage embeddings.
+
+## Self-host (Mac mini of VM) — vrijwel gratis
+
+1. **Start de databases**
+   ```bash
+   cp .env.example .env
+   docker compose up -d        # Postgres (+pgvector) en Neo4j
+   ```
+2. **Installeer & initialiseer**
+   ```bash
+   npm install
+   npm run db:init             # schema + bronnen-register
+   ```
+3. **Eerste scan (change-tracker)**
+   ```bash
+   npm run ingest              # cron'baar, bv. dagelijks
+   ```
+4. **Start de app**
+   ```bash
+   npm run dev                 # http://localhost:3000
+   ```
+
+> Voor PWA-camera/mic in productie is HTTPS nodig — bij self-hosting thuis is
+> **Cloudflare Tunnel** (gratis) een makkelijke route die je IP/poorten afschermt.
+
+### Dagelijkse scan automatiseren
+Cron op de host:
+```
+0 7 * * *  cd /pad/naar/RB-Rules && /usr/local/bin/npm run ingest >> ingest.log 2>&1
+```
+
+## Mappen
+- `config/sources.ts` — bronnen-register (trust-tier + rang); toevoegen = data-wijziging.
+- `db/schema.sql` — Postgres-schema.
+- `src/ingest/` — scan-pipeline (fetch → hash → diff → opslaan).
+- `src/app/` — PWA: wijzigingen-feed + bronnen-overzicht.
+- `docs/` — plan, kosten, scraping, datamodel.

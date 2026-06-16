@@ -1,0 +1,36 @@
+# Self-host stack voor de Riftbound Rules Companion.
+# Draait identiek op een Mac mini of een (voldoende ruime) VM.
+# Start: docker compose up -d
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: rbrules
+      POSTGRES_PASSWORD: rbrules
+      POSTGRES_DB: rbrules
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rbrules"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Graph-laag (Fase 2). Community Edition = gratis.
+  # Op de krappe Azure free-tier VM (1GB RAM) kun je dit voorlopig uitlaten.
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/rbrules-neo4j
+      NEO4J_server_memory_heap_max__size: 512m
+    ports:
+      - "7474:7474" # browser UI
+      - "7687:7687" # bolt
+    volumes:
+      - neo4jdata:/data
+
+volumes:
+  pgdata:
+  neo4jdata:
