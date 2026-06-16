@@ -191,3 +191,9 @@ Vraag (tekst/voice/foto)
 - **Graph-DB:** Neo4j (echte graph-database) voor diepe multi-hop
   interactie-queries + visualisatie. Naast pgvector voor de RuleSection-embeddings.
   (Alternatief was graph-lite in Postgres; bewust voor Neo4j gekozen.)
+
+## 13. Uitgewerkte deep-dives (losse docs)
+
+- **#2 Kosten & hosting** → [`COSTS_AND_HOSTING.md`](COSTS_AND_HOSTING.md)
+- **#3 Scraping-/ingestie-aanpak** → [`SCRAPING.md`](SCRAPING.md)
+- **#4 Datamodel (Postgres + Neo4j)** → [`DATAMODEL.md`](DATAMODEL.md)
