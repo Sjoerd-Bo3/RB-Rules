@@ -99,6 +99,17 @@ CREATE INDEX IF NOT EXISTS card_set_idx ON card (set_id);
 ALTER TABLE correction ADD COLUMN IF NOT EXISTS embedding vector;
 ALTER TABLE correction ADD COLUMN IF NOT EXISTS question TEXT;
 
+-- Vector-index over regeltekst (RAG retrieval) — gechunkte documenten + embeddings
+CREATE TABLE IF NOT EXISTS rule_chunk (
+  id           BIGSERIAL PRIMARY KEY,
+  document_id  BIGINT NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+  source_id    TEXT NOT NULL REFERENCES source(id),
+  section_code TEXT,
+  text         TEXT NOT NULL,
+  embedding    vector
+);
+CREATE INDEX IF NOT EXISTS rule_chunk_source_idx ON rule_chunk(source_id);
+
 -- ─── Run-log (zichtbaar in /admin/logs) ───────────────────────────────────
 CREATE TABLE IF NOT EXISTS run_log (
   id         BIGSERIAL PRIMARY KEY,

@@ -17,6 +17,7 @@ export function chunkText(text: string, size = 900, overlap = 120): string[] {
       if (dot > i + size * 0.5) end = dot + 1;
     }
     chunks.push(clean.slice(i, end).trim());
+    if (end >= clean.length) break;
     i = end - overlap;
   }
   return chunks.filter(Boolean);
