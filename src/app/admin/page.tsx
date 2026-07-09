@@ -158,6 +158,9 @@ export default function AdminDashboard() {
           <button onClick={() => action("Graph sync", "/api/admin/graph")}>
             Graph sync (Neo4j)
           </button>
+          <button onClick={() => action("Testnotificatie", "/api/admin/push")}>
+            Testnotificatie sturen
+          </button>
         </div>
       </div>
 

@@ -85,6 +85,20 @@ async function ingestSourceInner(src: SourceDef): Promise<IngestResult> {
           diff,
         ],
       );
+
+      // Push-notificatie bij belangrijke (AI-geclassificeerde) wijzigingen.
+      if (cls?.severity === "high") {
+        try {
+          const { sendPush } = await import("@/lib/push");
+          await sendPush({
+            title: `Belangrijke wijziging: ${cls.change_type}`,
+            body: cls.summary || `Nieuwe wijziging bij ${src.name}.`,
+            url: "/",
+          });
+        } catch {
+          /* push mag de scan nooit breken */
+        }
+      }
     }
 
     await pool.query(

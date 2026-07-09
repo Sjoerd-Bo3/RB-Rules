@@ -52,10 +52,20 @@ docker compose --project-name rb-rules run --rm app npm run ingest
 docker compose --project-name rb-rules run --rm app npm run sync:cards   # + card-graph
 ```
 
+## Push-notificaties (optioneel)
+Genereer VAPID-sleutels en zet ze in `.env` (`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`
+/ `VAPID_SUBJECT`):
+```bash
+docker compose --project-name rb-rules run --rm app npx web-push generate-vapid-keys
+```
+Daarna `docker compose --project-name rb-rules up -d`. Spelers zetten push aan met
+de 🔔-knop; test via /admin → "Testnotificatie sturen".
+
 ## Cron (op de VM)
 ```
 0 7 * * *  cd ~/compose/rb-rules && docker compose --project-name rb-rules run --rm app npm run ingest     >> ~/rb-ingest.log 2>&1
 0 6 * * 1  cd ~/compose/rb-rules && docker compose --project-name rb-rules run --rm app npm run sync:cards  >> ~/rb-cards.log 2>&1
+0 8 * * 1  cd ~/compose/rb-rules && docker compose --project-name rb-rules run --rm app npm run digest      >> ~/rb-digest.log 2>&1
 ```
 
 ## Updaten

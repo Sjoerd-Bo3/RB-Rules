@@ -120,3 +120,11 @@ CREATE TABLE IF NOT EXISTS run_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS run_log_created_idx ON run_log(created_at DESC);
+
+-- ─── Web-push abonnementen (PWA-notificaties) ─────────────────────────────
+CREATE TABLE IF NOT EXISTS push_subscription (
+  endpoint   TEXT PRIMARY KEY,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
