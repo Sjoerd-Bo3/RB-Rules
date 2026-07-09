@@ -12,3 +12,7 @@ next-env.d.ts
 /ios/
 /android/
 .capacitor/
+
+# v2
+rb-web/.svelte-kit/
+rb-web/build/

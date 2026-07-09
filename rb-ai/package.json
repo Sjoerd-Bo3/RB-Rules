@@ -1,0 +1,19 @@
+{
+  "name": "rb-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI-sidecar: Claude Agent SDK op abonnement (classify/answer). Interne service — niet publiek exposen.",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.178",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  }
+}
