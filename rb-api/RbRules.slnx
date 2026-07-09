@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="RbRules.Api/RbRules.Api.csproj" />
+  <Project Path="RbRules.Domain/RbRules.Domain.csproj" />
+  <Project Path="RbRules.Infrastructure/RbRules.Infrastructure.csproj" />
+  <Project Path="RbRules.Tests/RbRules.Tests.csproj" />
+</Solution>

@@ -1,0 +1,10 @@
+// Server-side proxy naar rb-api. In compose: http://rb-api:8080.
+import { env } from '$env/dynamic/private';
+
+const BASE = env.RB_API_URL ?? 'http://localhost:8080';
+
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+	const res = await fetch(`${BASE}${path}`, init);
+	if (!res.ok) throw new Error(`rb-api ${res.status}: ${path}`);
+	return res.json() as Promise<T>;
+}

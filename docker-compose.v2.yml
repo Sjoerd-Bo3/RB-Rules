@@ -1,0 +1,75 @@
+# v2-stack (lokale dev): rb-api (.NET) + rb-web (SvelteKit) + rb-ai (sidecar)
+# + postgres/neo4j/ollama. Start: docker compose -f docker-compose.v2.yml up -d --build
+services:
+  rb-api:
+    build: ./rb-api
+    environment:
+      DATABASE_URL: Host=postgres;Database=rbrules;Username=rbrules;Password=rbrules
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-rbrules-neo4j}
+      RB_AI_URL: http://rb-ai:8090
+      OLLAMA_URL: http://ollama:11434
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  rb-web:
+    build: ./rb-web
+    environment:
+      RB_API_URL: http://rb-api:8080
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - rb-api
+
+  rb-ai:
+    build: ./rb-ai
+    environment:
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # geen ports: alleen intern bereikbaar
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: rbrules
+      POSTGRES_PASSWORD: rbrules
+      POSTGRES_DB: rbrules
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata_v2:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rbrules"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Audit-fix: de graph is een kernonderdeel van de engine — altijd aan.
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-rbrules-neo4j}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-1g}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-512m}
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4jdata_v2:/data
+
+  # Meertalig embeddingmodel (NL↔EN): docker compose exec ollama ollama pull bge-m3
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollamadata_v2:/root/.ollama
+
+volumes:
+  pgdata_v2:
+  neo4jdata_v2:
+  ollamadata_v2:
