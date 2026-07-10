@@ -16,6 +16,10 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
 
     public async Task<CardSyncResult> SyncAsync(CancellationToken ct = default)
     {
+        // Opruimen: set-facetten die eerdere versies per abuis als kaart
+        // importeerden (id zonder '-', bijv. 'VEN'/'OGN').
+        await db.Cards.Where(c => !c.RiftboundId.Contains('-')).ExecuteDeleteAsync(ct);
+
         var mode = Environment.GetEnvironmentVariable("CARD_SOURCE") ?? "auto";
         if (mode == "riot") return await SyncFromRiotAsync(ct);
         try

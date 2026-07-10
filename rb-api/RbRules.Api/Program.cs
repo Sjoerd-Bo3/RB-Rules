@@ -313,14 +313,25 @@ admin.MapPost("/scan", async (string? sourceId, IngestService ingest) =>
 
 admin.MapPost("/cards/sync", async (CardSyncService cards, RbRulesDbContext db) =>
 {
-    var r = await cards.SyncAsync();
-    db.RunLogs.Add(new RunLog
+    try
     {
-        Kind = "cards", Ref = r.Source, Status = "ok",
-        Detail = $"{r.Sets} sets, {r.Cards} kaarten",
-    });
-    await db.SaveChangesAsync();
-    return Results.Ok(r);
+        var r = await cards.SyncAsync();
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "cards", Ref = r.Source, Status = "ok",
+            Detail = $"{r.Sets} sets, {r.Cards} kaarten",
+        });
+        await db.SaveChangesAsync();
+        return Results.Ok(r);
+    }
+    catch (Exception ex)
+    {
+        // Nooit een kale 500 — de fout hoort zichtbaar te zijn in admin/logs.
+        db.ChangeTracker.Clear();
+        db.RunLogs.Add(new RunLog { Kind = "cards", Ref = "sync", Status = "error", Detail = ex.Message });
+        await db.SaveChangesAsync();
+        return Results.Problem(title: "Kaarten-sync mislukt", detail: ex.Message, statusCode: 502);
+    }
 });
 
 admin.MapPost("/cards/embed", async (
