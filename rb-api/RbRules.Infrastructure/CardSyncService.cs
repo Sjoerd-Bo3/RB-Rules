@@ -12,7 +12,7 @@ public record CardSyncResult(int Sets, int Cards, string Source);
 public class CardSyncService(RbRulesDbContext db, HttpClient http)
 {
     private const string RiftcodexBase = "https://api.riftcodex.com";
-    private const string RiotGallery = "https://riftbound.leagueoflegends.com/en-us/card-gallery/";
+    private const string RiotGallery = "https://playriftbound.com/en-us/card-gallery/";
 
     public async Task<CardSyncResult> SyncAsync(CancellationToken ct = default)
     {
@@ -73,7 +73,7 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         var buildId = RiotCardMapper.ExtractBuildId(html)
             ?? throw new InvalidOperationException("Riot build-id niet gevonden");
         var json = await GetJsonAsync(
-            $"https://riftbound.leagueoflegends.com/_next/data/{buildId}/en-us/card-gallery.json", ct);
+            $"https://playriftbound.com/_next/data/{buildId}/en-us/card-gallery.json", ct);
         var cards = RiotCardMapper.ParseGallery(json?["pageProps"] ?? new JsonObject());
 
         var setIds = new HashSet<string>();

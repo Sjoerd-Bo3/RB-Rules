@@ -87,6 +87,19 @@ public class PdfDiscoveryTests
     }
 
     [Fact]
+    public void FindPdfUrl_MatchesAnchorTextWhenUrlIsOpaqueHash()
+    {
+        // Regressie: Riot serveert PDF's als anonieme Sanity-CDN-hashes; het
+        // keyword staat alleen in de linktekst (live-vorm van playriftbound.com).
+        var html = """
+            <a target="_blank" href="https://cmsassets.rgpub.io/sanity/files/x/live/861747d1.pdf">Core Rules</a> (last updated: 3/30/26)
+            <a target="_blank" href="https://cmsassets.rgpub.io/sanity/files/x/live/e7086661.pdf">Tournament Rules</a> (last updated: 4/29/26)
+            """;
+        Assert.Contains("861747d1", PdfDiscovery.FindPdfUrl(html, "core", Hub)!);
+        Assert.Contains("e7086661", PdfDiscovery.FindPdfUrl(html, "tournament", Hub)!);
+    }
+
+    [Fact]
     public void FindPdfUrl_NullWhenNoMatchAmongMultiple()
     {
         var html = """<a href="/a.pdf">A</a><a href="/b.pdf">B</a>""";

@@ -15,21 +15,21 @@ public static class SourceSeed
             // de actuele PDF-link wordt per run van de hub geplukt.
             Id = "core-rules-pdf",
             Name = "Core Rules PDF (officieel)",
-            Url = "https://riftbound.leagueoflegends.com/en-us/rules-hub/",
+            Url = "https://playriftbound.com/en-us/rules-hub/",
             Type = "official", TrustTier = 1, Rank = 110, Parser = "pdf", Cadence = "daily",
         },
         new()
         {
             Id = "tournament-rules-pdf",
             Name = "Tournament Rules PDF (officieel)",
-            Url = "https://riftbound.leagueoflegends.com/en-us/rules-hub/",
+            Url = "https://playriftbound.com/en-us/rules-hub/",
             Type = "official", TrustTier = 1, Rank = 105, Parser = "pdf", Cadence = "daily",
         },
         new()
         {
             Id = "rules-hub",
             Name = "Riftbound Rules Hub (officieel)",
-            Url = "https://riftbound.leagueoflegends.com/en-us/rules-hub/",
+            Url = "https://playriftbound.com/en-us/rules-hub/",
             Type = "official", TrustTier = 1, Rank = 100, Parser = "html", Cadence = "daily",
         },
         new()
