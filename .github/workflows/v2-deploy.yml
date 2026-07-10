@@ -1,0 +1,116 @@
+name: v2 deploy to VM
+
+# Deployt de v2-stack naar de Server-setup VM. Twee modi:
+#  - update (default): compose syncen + pull + up — draait na elke publish.
+#  - bootstrap (workflow_dispatch met bootstrap=true): EERSTE deploy —
+#    schrijft .env uit secrets, ontdekt het Caddy-netwerk, start de stack,
+#    pullt bge-m3, voegt de Caddy-route toe en trapt de kaart-sync af.
+#
+# Vereiste secrets:
+#   DEPLOY_SSH_KEY   — private key voor sjoerd@20.123.137.64 (altijd)
+#   POSTGRES_PASSWORD, ADMIN_PASSWORD, CLAUDE_CODE_OAUTH_TOKEN — voor bootstrap
+# Zonder DEPLOY_SSH_KEY wordt de job netjes overgeslagen.
+# DNS (riftbound-v2.bo3.dev → VM-IP) blijft handmatig bij de registrar.
+on:
+  workflow_run:
+    workflows: ["v2 CI & publish"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: "Eerste deploy: .env + Caddy-route + model + kickoff"
+        type: boolean
+        default: false
+
+env:
+  VM_HOST: 20.123.137.64
+  VM_USER: sjoerd
+  VM_PATH: /home/sjoerd/compose/rb-rules-v2
+  DOMAIN: riftbound-v2.bo3.dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secret
+        id: check
+        run: |
+          if [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DEPLOY_SSH_KEY ontbreekt — deploy overgeslagen (voeg het secret toe om push-to-deploy te activeren)"
+          fi
+
+      - name: Set up SSH
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "SSHCMD=ssh -i ~/.ssh/id_deploy $VM_USER@$VM_HOST" >> "$GITHUB_ENV"
+
+      - name: "Bootstrap: schrijf .env uit secrets"
+        if: steps.check.outputs.enabled == 'true' && inputs.bootstrap == true
+        run: |
+          for s in POSTGRES_PASSWORD ADMIN_PASSWORD; do
+            if [ -z "${!s:-}" ]; then echo "::error::secret $s ontbreekt (nodig voor bootstrap)"; exit 1; fi
+          done
+          # Caddy-netwerknaam op de VM ontdekken (niet raden)
+          CADDY_NETWORK=$($SSHCMD "docker inspect caddy -f '{{range \$k, \$v := .NetworkSettings.Networks}}{{\$k}} {{end}}'" | awk '{print $1}')
+          if [ -z "$CADDY_NETWORK" ]; then echo "::error::Caddy-netwerk niet gevonden op de VM"; exit 1; fi
+          echo "Caddy-netwerk: $CADDY_NETWORK"
+
+          cat > env.tmp <<EOF
+          CADDY_NETWORK=$CADDY_NETWORK
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          NEO4J_PASSWORD=rbrules-neo4j
+          NEO4J_HEAP_MAX=512m
+          NEO4J_PAGECACHE=384m
+          ADMIN_PASSWORD=$ADMIN_PASSWORD
+          CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN
+          ANTHROPIC_API_KEY=
+          EOF
+          $SSHCMD "mkdir -p $VM_PATH"
+          scp -i ~/.ssh/id_deploy env.tmp "$VM_USER@$VM_HOST:$VM_PATH/.env"
+          rm env.tmp
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+      - name: Sync compose file
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          $SSHCMD "mkdir -p $VM_PATH"
+          scp -i ~/.ssh/id_deploy \
+            deploy/server-setup-v2/docker-compose.yml \
+            "$VM_USER@$VM_HOST:$VM_PATH/docker-compose.yml"
+
+      - name: Pull & (re)start stack
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          # Docker maakt de /mnt/data bind-mount-mappen zelf aan (daemon = root).
+          $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 pull -q && docker compose --project-name rb-rules-v2 up -d && docker compose --project-name rb-rules-v2 ps"
+
+      - name: "Bootstrap: embeddings-model, Caddy-route, kickoff"
+        if: steps.check.outputs.enabled == 'true' && inputs.bootstrap == true
+        run: |
+          # 1. Meertalig embeddingmodel (idempotent)
+          $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 exec -T ollama ollama pull bge-m3"
+
+          # 2. Caddy-route toevoegen als die er nog niet staat + reload
+          $SSHCMD "grep -q '$DOMAIN' ~/compose/caddy/Caddyfile || printf '\n%s {\n\tencode gzip\n\treverse_proxy rb-v2-web:3000\n}\n' '$DOMAIN' >> ~/compose/caddy/Caddyfile"
+          $SSHCMD "docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
+
+          # 3. Kickoff: kaart-sync (secret komt uit de .env op de VM, niet uit
+          #    de commandline van de runner). Daarna doet de scheduler de rest.
+          $SSHCMD "cd $VM_PATH && . ./.env && docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS -m 300 -X POST -H \"X-Admin-Key: \$ADMIN_PASSWORD\" http://rb-v2-api:8080/api/admin/cards/sync" || echo "::warning::kaart-sync-kickoff faalde — kan later via /admin"
+
+          # 4. Health-check
+          $SSHCMD "docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS http://rb-v2-api:8080/health && docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS -o /dev/null -w '%{http_code}\n' http://rb-v2-web:3000/"

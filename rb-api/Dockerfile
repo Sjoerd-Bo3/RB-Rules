@@ -1,7 +1,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
-RUN dotnet restore RbRules.sln
+# Geen expliciete solution-arg: .NET 10 genereert RbRules.slnx en
+# restore/test vinden die zelf (expliciet 'RbRules.sln' brak de image-build).
+RUN dotnet restore
 RUN dotnet test --no-restore
 RUN dotnet publish RbRules.Api/RbRules.Api.csproj -c Release -o /app/publish --no-restore
 
