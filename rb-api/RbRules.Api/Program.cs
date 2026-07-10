@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Neo4j.Driver;
+using Pgvector.EntityFrameworkCore;
 using RbRules.Api;
 using RbRules.Domain;
 using RbRules.Infrastructure;
@@ -27,6 +28,12 @@ builder.Services.AddHttpClient<RbAiClient>(c =>
 });
 builder.Services.AddHttpClient<IngestService>(c => c.Timeout = TimeSpan.FromSeconds(60));
 builder.Services.AddHttpClient<CardSyncService>(c => c.Timeout = TimeSpan.FromSeconds(120));
+builder.Services.AddHttpClient<EmbeddingService>(c =>
+{
+    c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434");
+    c.Timeout = TimeSpan.FromMinutes(5);
+});
+builder.Services.AddScoped<CardEmbeddingPipeline>();
 builder.Services.AddHostedService<ScanScheduler>();
 
 builder.Services.AddOpenApi();
@@ -87,6 +94,55 @@ app.MapGet("/api/cards", async (string? q, RbRulesDbContext db) =>
         .ToListAsync();
 });
 
+// ── Semantisch kaartzoeken (S1) ────────────────────────────────
+app.MapGet("/api/cards/search", async (
+    string q, string? domain, string? type, int? maxEnergy, int? limit,
+    RbRulesDbContext db, EmbeddingService embeddings) =>
+{
+    if (string.IsNullOrWhiteSpace(q))
+        return Results.BadRequest(new { error = "q is verplicht" });
+
+    var queryVector = await embeddings.EmbedOneAsync(q);
+    var cards = db.Cards.Where(c => c.Embedding != null);
+    if (!string.IsNullOrWhiteSpace(domain)) cards = cards.Where(c => c.Domains.Contains(domain));
+    if (!string.IsNullOrWhiteSpace(type)) cards = cards.Where(c => c.Type == type);
+    if (maxEnergy is not null) cards = cards.Where(c => c.Energy != null && c.Energy <= maxEnergy);
+
+    var results = await cards
+        .OrderBy(c => c.Embedding!.CosineDistance(queryVector))
+        .Take(Math.Clamp(limit ?? 20, 1, 60))
+        .Select(c => new
+        {
+            c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
+            c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+            Distance = c.Embedding!.CosineDistance(queryVector),
+        })
+        .ToListAsync();
+    return Results.Ok(results);
+});
+
+app.MapGet("/api/cards/{id}/similar", async (
+    string id, int? limit, RbRulesDbContext db) =>
+{
+    var card = await db.Cards.FindAsync(id);
+    if (card is null) return Results.NotFound();
+    if (card.Embedding is null)
+        return Results.BadRequest(new { error = "kaart heeft nog geen embedding" });
+
+    var anchor = card.Embedding;
+    var results = await db.Cards
+        .Where(c => c.Embedding != null && c.RiftboundId != id)
+        .OrderBy(c => c.Embedding!.CosineDistance(anchor))
+        .Take(Math.Clamp(limit ?? 10, 1, 30))
+        .Select(c => new
+        {
+            c.RiftboundId, c.Name, c.Type, c.Domains, c.Energy, c.Might, c.ImageUrl,
+            Distance = c.Embedding!.CosineDistance(anchor),
+        })
+        .ToListAsync();
+    return Results.Ok(results);
+});
+
 // ── Beheer (X-Admin-Key) ───────────────────────────────────────
 var admin = app.MapGroup("/api/admin").AddEndpointFilter<AdminAuthFilter>();
 
@@ -105,6 +161,28 @@ admin.MapPost("/cards/sync", async (CardSyncService cards, RbRulesDbContext db) 
     });
     await db.SaveChangesAsync();
     return Results.Ok(r);
+});
+
+admin.MapPost("/cards/embed", async (
+    bool? force, CardEmbeddingPipeline pipeline, RbRulesDbContext db) =>
+{
+    try
+    {
+        var r = await pipeline.RunAsync(force ?? false);
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "embed", Ref = "cards", Status = "ok",
+            Detail = $"{r.Embedded} geembed, {r.Skipped} al actueel",
+        });
+        await db.SaveChangesAsync();
+        return Results.Ok(r);
+    }
+    catch (Exception ex)
+    {
+        db.RunLogs.Add(new RunLog { Kind = "embed", Ref = "cards", Status = "error", Detail = ex.Message });
+        await db.SaveChangesAsync();
+        return Results.Problem(ex.Message);
+    }
 });
 
 admin.MapGet("/logs", async (string? kind, RbRulesDbContext db) =>

@@ -36,6 +36,20 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                     logger.LogInformation("Kaart-sync: {Sets} sets, {Cards} kaarten via {Source}",
                         r.Sets, r.Cards, r.Source);
                 }
+
+                // Embed kaarten die het nodig hebben (nieuw/tekst gewijzigd).
+                // Best-effort: Ollama-uitval mag de scheduler niet stoppen.
+                try
+                {
+                    var pipeline = scope.ServiceProvider.GetRequiredService<CardEmbeddingPipeline>();
+                    var e = await pipeline.RunAsync(ct: ct);
+                    if (e.Embedded > 0)
+                        logger.LogInformation("Embeddings: {Count} kaarten geembed", e.Embedded);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Embed-pijplijn overgeslagen (Ollama onbereikbaar?)");
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

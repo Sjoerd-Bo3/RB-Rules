@@ -134,12 +134,17 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         existing.SetId = card.SetId;
         existing.SetLabel = card.SetLabel;
         existing.CollectorNumber = card.CollectorNumber;
+        // Tekstwijziging (errata!) invalideert de embedding → de embed-pijplijn
+        // pakt de kaart automatisch opnieuw op.
+        if (existing.TextPlain != card.TextPlain)
+        {
+            existing.Embedding = null;
+            existing.EmbeddingModel = null;
+        }
         existing.TextPlain = card.TextPlain;
         existing.ImageUrl = card.ImageUrl;
         existing.Tags = card.Tags;
         existing.UpdatedAt = DateTimeOffset.UtcNow;
-        // Embedding blijft staan; her-embed gebeurt in de embed-pijplijn (S1)
-        // wanneer text_plain wijzigt.
     }
 
     private async Task UpsertSetAsync(string setId, string name, int? cardCount, CancellationToken ct)
