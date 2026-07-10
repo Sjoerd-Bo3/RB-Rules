@@ -1,42 +1,18 @@
-import { createHash } from 'node:crypto';
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { env } from '$env/dynamic/private';
-
-const API = env.RB_API_URL ?? 'http://localhost:8080';
-const COOKIE = 'rb_admin';
-
-const token = () =>
-	env.ADMIN_PASSWORD ? createHash('sha256').update(`${env.ADMIN_PASSWORD}::rb-v2`).digest('hex') : null;
-
-const authed = (cookies: { get(name: string): string | undefined }) => {
-	const t = token();
-	return t !== null && cookies.get(COOKIE) === t;
-};
-
-async function adminApi<T>(path: string, init: RequestInit = {}): Promise<T> {
-	const res = await fetch(`${API}${path}`, {
-		...init,
-		headers: {
-			'content-type': 'application/json',
-			'X-Admin-Key': env.ADMIN_PASSWORD ?? '',
-			...(init.headers ?? {})
-		}
-	});
-	if (!res.ok) throw new Error(`rb-api ${res.status}: ${path}`);
-	return res.json() as Promise<T>;
-}
+import { ADMIN_COOKIE, adminApi, adminToken, authed } from '$lib/server/admin';
 
 export const load: PageServerLoad = async ({ cookies }) => {
-	if (!authed(cookies)) return { authed: false, sources: [], logs: [] };
+	if (!authed(cookies)) return { authed: false, sources: [], status: null };
 	try {
-		const [sources, logs] = await Promise.all([
+		const [sources, status] = await Promise.all([
 			adminApi<unknown[]>('/api/sources'),
-			adminApi<unknown[]>('/api/admin/logs')
+			adminApi<unknown>('/api/admin/status')
 		]);
-		return { authed: true, sources, logs, apiDown: false };
+		return { authed: true, sources, status, apiDown: false };
 	} catch {
-		return { authed: true, sources: [], logs: [], apiDown: true };
+		return { authed: true, sources: [], status: null, apiDown: true };
 	}
 };
 
@@ -46,7 +22,7 @@ export const actions: Actions = {
 		if (!env.ADMIN_PASSWORD || form.get('password') !== env.ADMIN_PASSWORD) {
 			return fail(401, { error: 'Onjuist wachtwoord' });
 		}
-		cookies.set(COOKIE, token()!, {
+		cookies.set(ADMIN_COOKIE, adminToken()!, {
 			path: '/',
 			httpOnly: true,
 			sameSite: 'lax',
@@ -55,18 +31,19 @@ export const actions: Actions = {
 		return { ok: true };
 	},
 	logout: async ({ cookies }) => {
-		cookies.delete(COOKIE, { path: '/' });
+		cookies.delete(ADMIN_COOKIE, { path: '/' });
 		return { ok: true };
 	},
-	scan: async ({ cookies }) => {
+	job: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
-		const results = await adminApi<unknown[]>('/api/admin/scan', { method: 'POST' });
-		return { scanned: results };
-	},
-	cardsync: async ({ cookies }) => {
-		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
-		const result = await adminApi<unknown>('/api/admin/cards/sync', { method: 'POST' });
-		return { cardsync: result };
+		const form = await request.formData();
+		const name = String(form.get('name') ?? '');
+		try {
+			await adminApi(`/api/admin/jobs/${encodeURIComponent(name)}`, { method: 'POST' });
+			return { started: name };
+		} catch (e) {
+			return fail(409, { error: e instanceof Error ? e.message : String(e) });
+		}
 	},
 	toggle: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });

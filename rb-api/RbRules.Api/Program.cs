@@ -40,6 +40,7 @@ builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
 builder.Services.AddScoped<BanErrataSyncService>();
 builder.Services.AddScoped<InteractionService>();
+builder.Services.AddSingleton<JobRunner>();
 builder.Services.AddHostedService<ScanScheduler>();
 
 builder.Services.AddOpenApi();
@@ -80,11 +81,24 @@ app.MapGet("/api/sources", async (RbRulesDbContext db) =>
         .OrderBy(s => s.TrustTier).ThenByDescending(s => s.Rank)
         .ToListAsync());
 
-app.MapGet("/api/changes", async (RbRulesDbContext db) =>
-    await db.Changes
+app.MapGet("/api/changes", async (
+    string? severity, string? type, string? source, RbRulesDbContext db) =>
+{
+    var query = db.Changes.AsQueryable();
+    if (!string.IsNullOrWhiteSpace(severity)) query = query.Where(c => c.Severity == severity);
+    if (!string.IsNullOrWhiteSpace(type)) query = query.Where(c => c.ChangeType == type);
+    if (!string.IsNullOrWhiteSpace(source)) query = query.Where(c => c.SourceId == source);
+    return await query
         .OrderByDescending(c => c.DetectedAt)
         .Take(50)
-        .ToListAsync());
+        .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
+        {
+            c.Id, c.SourceId, c.ChangeType, c.Severity,
+            c.Summary, c.Meaning, c.Diff, c.DetectedAt,
+            SourceName = s.Name, SourceUrl = s.Url, s.TrustTier,
+        })
+        .ToListAsync();
+});
 
 app.MapGet("/api/cards", async (
     string? q, string? domain, string? type, string? set, string? rarity,
@@ -231,17 +245,62 @@ app.MapGet("/api/cards/{id}/similar", async (
         return Results.BadRequest(new { error = "kaart heeft nog geen embedding" });
 
     var anchor = card.Embedding;
-    var results = await db.Cards
+    var rows = await db.Cards
         .Where(c => c.Embedding != null && c.RiftboundId != id)
         .OrderBy(c => c.Embedding!.CosineDistance(anchor))
         .Take(Math.Clamp(limit ?? 10, 1, 30))
         .Select(c => new
         {
-            c.RiftboundId, c.Name, c.Type, c.Domains, c.Energy, c.Might, c.ImageUrl,
+            c.RiftboundId, c.Name, c.Type, c.Domains, c.Mechanics,
+            c.Energy, c.Might, c.ImageUrl,
             Distance = c.Embedding!.CosineDistance(anchor),
         })
         .ToListAsync();
+
+    // "Waarom vergelijkbaar": gedeelde facetten + tekst-gelijkenis expliciet maken.
+    var results = rows.Select(c => new
+    {
+        c.RiftboundId, c.Name, c.Type, c.Domains, c.Energy, c.Might, c.ImageUrl,
+        Similarity = Math.Round((1 - c.Distance) * 100),
+        SharedMechanics = (c.Mechanics ?? []).Intersect(card.Mechanics ?? []).ToArray(),
+        SharedDomains = c.Domains.Intersect(card.Domains).ToArray(),
+        SameType = c.Type != null && c.Type == card.Type,
+    });
     return Results.Ok(results);
+});
+
+// Regels & errata die bij deze kaart horen (voor de kaartpagina).
+app.MapGet("/api/cards/{id}/rules", async (string id, RbRulesDbContext db) =>
+{
+    var card = await db.Cards.FindAsync(id);
+    if (card is null) return Results.NotFound();
+
+    var errata = await db.Errata
+        .Where(e => e.CardRiftboundId == id)
+        .OrderByDescending(e => e.DetectedAt)
+        .Select(e => new { e.NewText, e.SourceUrl, e.DetectedAt })
+        .ToListAsync();
+
+    // Relevante regelsecties via de kaart-embedding (semantisch dichtstbij).
+    object relevantRules = Array.Empty<object>();
+    if (card.Embedding is not null)
+    {
+        var anchor = card.Embedding;
+        relevantRules = await db.RuleChunks
+            .Where(c => c.Embedding != null && c.SectionCode != null)
+            .OrderBy(c => c.Embedding!.CosineDistance(anchor))
+            .Take(3)
+            .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
+            {
+                Section = c.SectionCode,
+                Snippet = c.Text.Substring(0, Math.Min(c.Text.Length, 260)),
+                SourceName = s.Name,
+                s.Url,
+            })
+            .ToListAsync();
+    }
+
+    return Results.Ok(new { Errata = errata, RelevantRules = relevantRules });
 });
 
 // ── Beheer (X-Admin-Key) ───────────────────────────────────────
@@ -254,14 +313,25 @@ admin.MapPost("/scan", async (string? sourceId, IngestService ingest) =>
 
 admin.MapPost("/cards/sync", async (CardSyncService cards, RbRulesDbContext db) =>
 {
-    var r = await cards.SyncAsync();
-    db.RunLogs.Add(new RunLog
+    try
     {
-        Kind = "cards", Ref = r.Source, Status = "ok",
-        Detail = $"{r.Sets} sets, {r.Cards} kaarten",
-    });
-    await db.SaveChangesAsync();
-    return Results.Ok(r);
+        var r = await cards.SyncAsync();
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "cards", Ref = r.Source, Status = "ok",
+            Detail = $"{r.Sets} sets, {r.Cards} kaarten",
+        });
+        await db.SaveChangesAsync();
+        return Results.Ok(r);
+    }
+    catch (Exception ex)
+    {
+        // Nooit een kale 500 — de fout hoort zichtbaar te zijn in admin/logs.
+        db.ChangeTracker.Clear();
+        db.RunLogs.Add(new RunLog { Kind = "cards", Ref = "sync", Status = "error", Detail = ex.Message });
+        await db.SaveChangesAsync();
+        return Results.Problem(title: "Kaarten-sync mislukt", detail: ex.Message, statusCode: 502);
+    }
 });
 
 admin.MapPost("/cards/embed", async (
@@ -367,6 +437,83 @@ admin.MapPost("/interactions/mine", async (
     return Results.Ok(r);
 });
 
+// ── Levendige admin: async jobs + live status ──────────────────
+admin.MapPost("/jobs/{name}", (string name, JobRunner jobs) =>
+{
+    Func<IServiceProvider, CancellationToken, Task<string>>? work = name switch
+    {
+        "scan" => async (sp, ct) =>
+        {
+            var r = await sp.GetRequiredService<IngestService>().ScanAsync(onlyDue: false, ct: ct);
+            return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
+        },
+        "cards" => async (sp, ct) =>
+        {
+            var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(ct);
+            return $"{r.Sets} sets, {r.Cards} kaarten via {r.Source}";
+        },
+        "embed" => async (sp, ct) =>
+        {
+            var r = await sp.GetRequiredService<CardEmbeddingPipeline>().RunAsync(ct: ct);
+            return $"{r.Embedded} kaarten geembed, {r.Skipped} al actueel";
+        },
+        "mine" => async (sp, ct) =>
+        {
+            var r = await sp.GetRequiredService<MechanicMiningService>().RunAsync(ct: ct);
+            return $"{r.Mined} kaarten gemined, {r.Remaining} resterend";
+        },
+        "rules" => async (sp, ct) =>
+        {
+            var r = await sp.GetRequiredService<RuleChunkPipeline>().RunAsync(ct);
+            return $"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen";
+        },
+        "bans" => async (sp, ct) =>
+        {
+            var r = await sp.GetRequiredService<BanErrataSyncService>().SyncAsync(ct);
+            return $"{r.Bans} bans, {r.Errata} errata gestructureerd";
+        },
+        "graph" => async (sp, ct) =>
+        {
+            var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
+            return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics";
+        },
+        "interactions" => async (sp, ct) =>
+        {
+            var r = await sp.GetRequiredService<InteractionService>().MineAsync(ct: ct);
+            return $"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd";
+        },
+        _ => null,
+    };
+    if (work is null) return Results.NotFound(new { error = $"onbekende job '{name}'" });
+    return jobs.TryStart(name, work)
+        ? Results.Accepted("/api/admin/status", new { started = name })
+        : Results.Conflict(new { error = "er draait al een job — wacht tot die klaar is" });
+});
+
+admin.MapGet("/status", async (JobRunner jobs, RbRulesDbContext db) =>
+{
+    var (running, last) = jobs.Snapshot();
+    return Results.Ok(new
+    {
+        Running = running,
+        LastJob = last,
+        Counts = new
+        {
+            Sources = await db.Sources.CountAsync(s => s.Enabled),
+            Changes = await db.Changes.CountAsync(),
+            Cards = await db.Cards.CountAsync(),
+            CardsEmbedded = await db.Cards.CountAsync(c => c.Embedding != null),
+            CardsMined = await db.Cards.CountAsync(c => c.Mechanics != null),
+            RuleChunks = await db.RuleChunks.CountAsync(),
+            Bans = await db.BanEntries.CountAsync(),
+            Errata = await db.Errata.CountAsync(),
+            Interactions = await db.CardInteractions.CountAsync(),
+            OpenCorrections = await db.Corrections.CountAsync(c => c.Status == "unverified"),
+        },
+        Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
+    });
+});
+
 admin.MapGet("/logs", async (string? kind, RbRulesDbContext db) =>
 {
     var query = db.RunLogs.AsQueryable();
@@ -405,6 +552,16 @@ admin.MapDelete("/sources/{id}", async (string id, RbRulesDbContext db) =>
     await db.Documents.Where(d => d.SourceId == id).ExecuteDeleteAsync();
     await db.Changes.Where(c => c.SourceId == id).ExecuteDeleteAsync();
     db.Sources.Remove(src);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true });
+});
+
+// Feed-curatie: ruis (bijv. oude flip-flop-spam) handmatig kunnen opruimen.
+admin.MapDelete("/changes/{id:long}", async (long id, RbRulesDbContext db) =>
+{
+    var c = await db.Changes.FindAsync(id);
+    if (c is null) return Results.NotFound();
+    db.Changes.Remove(c);
     await db.SaveChangesAsync();
     return Results.Ok(new { ok = true });
 });

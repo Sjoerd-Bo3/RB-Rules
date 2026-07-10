@@ -88,6 +88,30 @@
 		</section>
 	{/if}
 
+	{#if data.rules.errata.length || data.rules.relevantRules.length}
+		<section>
+			<h2>Regels & errata voor deze kaart</h2>
+			{#each data.rules.errata as e (e.detectedAt)}
+				<div class="rulebox errata-box">
+					<span class="badge">ERRATA</span>
+					<p>{e.newText}</p>
+					<p class="meta">
+						{new Date(e.detectedAt).toLocaleDateString('nl-NL')}
+						{#if e.sourceUrl}· <a href={e.sourceUrl} target="_blank" rel="noopener">bron ↗</a>{/if}
+					</p>
+				</div>
+			{/each}
+			{#each data.rules.relevantRules as r (r.section)}
+				<div class="rulebox">
+					<span class="badge rule">§ {r.section}</span>
+					<p>{r.snippet}…</p>
+					<p class="meta"><a href={r.url} target="_blank" rel="noopener">{r.sourceName} ↗</a></p>
+				</div>
+			{/each}
+			<p class="meta small">Regelsecties zijn semantisch gematcht op de kaarttekst — de meest relevante paragrafen uit de officiële rules.</p>
+		</section>
+	{/if}
+
 	{#if data.similar.length}
 		<section>
 			<h2>Vergelijkbare kaarten</h2>
@@ -95,10 +119,16 @@
 				{#each data.similar as s (s.riftboundId)}
 					<a class="mini" href="/cards/{s.riftboundId}">
 						{#if s.imageUrl}<img src={s.imageUrl} alt={s.name} loading="lazy" />{/if}
-						<span>{s.name}</span>
+						<span class="mini-name">{s.name} <span class="pct">{s.similarity}%</span></span>
+						<span class="why">
+							{#each s.sharedMechanics as m (m)}<span class="chip mech sm">{m}</span>{/each}
+							{#each s.sharedDomains as d (d)}<span class="chip domain sm">{d}</span>{/each}
+							{#if s.sameType}<span class="chip sm">zelfde type</span>{/if}
+						</span>
 					</a>
 				{/each}
 			</div>
+			<p class="meta small">Het percentage is tekst-gelijkenis (embedding); de chips tonen wat de kaarten concreet delen.</p>
 		</section>
 	{/if}
 </main>
@@ -133,6 +163,16 @@
 	.chip.kind-synergy { color: #f3c469; }
 	.chip.kind-nonbo { color: #9fb0cc; }
 	.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-	.mini { color: inherit; text-decoration: none; font-size: 0.85rem; }
+	.mini { color: inherit; text-decoration: none; font-size: 0.85rem; display: flex; flex-direction: column; gap: 3px; }
 	.mini img { width: 100%; border-radius: 10px; border: 1px solid #243551; }
+	.mini-name { font-weight: 600; }
+	.pct { color: #d98a4e; font-weight: 700; font-size: 0.78rem; }
+	.why .chip.sm { font-size: 0.68rem; padding: 1px 7px; margin: 0 4px 4px 0; }
+	.rulebox { background: #16233b; border: 1px solid #243551; border-radius: 10px; padding: 10px 14px; margin-bottom: 10px; }
+	.rulebox.errata-box { border-color: #d98a4e; }
+	.rulebox p { margin: 6px 0 2px; }
+	.badge { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em; background: #d98a4e2e; color: #f3c469; border-radius: 999px; padding: 2px 9px; }
+	.badge.rule { background: #58c08a22; color: #7fd1a8; }
+	.small { font-size: 0.78rem; }
+	.meta a { color: #9fb0cc; }
 </style>

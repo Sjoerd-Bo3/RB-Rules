@@ -81,6 +81,17 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
             var hash = TextUtils.Sha256(text);
             if (src.LastHash == hash) return new(src.Id, "unchanged");
 
+            // Flip-flop-suppressie: sommige pagina's (Rules Hub) wisselen per
+            // request de volgorde van gerelateerde-artikellinks. Is deze exacte
+            // inhoud al eerder gezien, dan is het geen echte wijziging.
+            var seenBefore = await db.Documents
+                .AnyAsync(d => d.SourceId == src.Id && d.ContentHash == hash, ct);
+            if (seenBefore)
+            {
+                src.LastHash = hash;
+                return new(src.Id, "unchanged", "flip-flop: inhoud eerder gezien");
+            }
+
             var prevDoc = await db.Documents
                 .Where(d => d.SourceId == src.Id)
                 .OrderByDescending(d => d.RetrievedAt)
@@ -92,6 +103,12 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
             if (!isNew)
             {
                 var diff = DiffUtils.LineDiff(prevDoc?.Content ?? "", text);
+                if (string.IsNullOrWhiteSpace(diff))
+                {
+                    // Zelfde zinnen, andere volgorde — ruis, geen change-item.
+                    src.LastHash = hash;
+                    return new(src.Id, "unchanged", "alleen herordening");
+                }
                 var cls = await ClassifyAsync(src.Name, diff, ct);
                 db.Changes.Add(new Change
                 {

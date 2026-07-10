@@ -52,6 +52,21 @@ public class RiotCardMapperTests
     }
 
     [Fact]
+    public void ParseGallery_SkipsSetFacetItems()
+    {
+        // De live gallery-JSON bevat set-facetten in dezelfde items-vorm
+        // ({id:'VEN', name:'Vendetta', collectorNumberMax}) — geen kaarten.
+        var pageProps = JsonNode.Parse(
+            "{\"blades\": [{\"filters\": {\"items\": [" +
+            "{\"id\": \"VEN\", \"name\": \"Vendetta\", \"collectorNumberMax\": 300}," +
+            "{\"id\": \"OGN\", \"name\": \"Origins\", \"collectorNumberMax\": 298}]}}," +
+            "{\"cards\": {\"items\": [" + SampleCard + "]}}]}")!;
+        var cards = RiotCardMapper.ParseGallery(pageProps);
+        var card = Assert.Single(cards);
+        Assert.Contains('-', card.RiftboundId);
+    }
+
+    [Fact]
     public void ExtractBuildId_FromStaticPath()
     {
         var id = RiotCardMapper.ExtractBuildId(

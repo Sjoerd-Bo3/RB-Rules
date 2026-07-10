@@ -40,6 +40,15 @@ interface SimilarCard {
 	energy: number | null;
 	might: number | null;
 	imageUrl: string | null;
+	similarity: number;
+	sharedMechanics: string[];
+	sharedDomains: string[];
+	sameType: boolean;
+}
+
+interface CardRules {
+	errata: { newText: string; sourceUrl: string | null; detectedAt: string }[];
+	relevantRules: { section: string; snippet: string; sourceName: string; url: string }[];
 }
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -65,5 +74,12 @@ export const load: PageServerLoad = async ({ params }) => {
 	} catch {
 		// nog geen interacties gemined
 	}
-	return { card, similar, interactions };
+
+	let rules: CardRules = { errata: [], relevantRules: [] };
+	try {
+		rules = await api<CardRules>(`/api/cards/${encodeURIComponent(params.id)}/rules`);
+	} catch {
+		// regels-index nog niet gedraaid — sectie gewoon verbergen
+	}
+	return { card, similar, interactions, rules };
 };

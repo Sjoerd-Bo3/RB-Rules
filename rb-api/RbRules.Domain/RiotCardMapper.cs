@@ -42,6 +42,10 @@ public static partial class RiotCardMapper
                     {
                         if (item is JsonObject o && o["id"] is not null && o["name"] is not null)
                         {
+                            // De gallery-JSON bevat ook set-facetten ({id:'OGN',
+                            // name:'Origins', collectorNumberMax}) — geen kaarten.
+                            var id = o["id"]!.GetValue<string>();
+                            if (!id.Contains('-')) continue;
                             var card = MapCard(o);
                             found[card.RiftboundId] = card;
                         }

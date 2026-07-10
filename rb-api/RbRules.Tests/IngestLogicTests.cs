@@ -26,6 +26,17 @@ public class DiffUtilsTests
     {
         Assert.Equal("", DiffUtils.LineDiff("Same text.", "Same text."));
     }
+
+    [Fact]
+    public void LineDiff_EmptyWhenOnlyReordered()
+    {
+        // Rules Hub wisselt de volgorde van gerelateerde-artikellinks per
+        // request; herordening zonder tekstwijziging mag geen change opleveren.
+        var diff = DiffUtils.LineDiff(
+            "The Vendetta Begins. The Vendetta Overview.",
+            "The Vendetta Overview. The Vendetta Begins.");
+        Assert.Equal("", diff);
+    }
 }
 
 public class BoilerplateTests
