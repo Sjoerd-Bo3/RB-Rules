@@ -1,0 +1,59 @@
+name: v2 deploy to VM
+
+# Deployt de v2-stack naar de Server-setup VM zodra de images gepubliceerd zijn
+# (of handmatig via workflow_dispatch). Vereist één repo-secret:
+#   DEPLOY_SSH_KEY — private key met toegang tot sjoerd@20.123.137.64
+# Zonder dat secret wordt de job netjes overgeslagen.
+#
+# Eerste deploy blijft handmatig (.env, data-dirs, Caddy-route) — zie
+# deploy/server-setup-v2/README.md. Deze workflow doet de updates daarna:
+# compose-bestand syncen + pull + up (sneller dan wachten op Watchtower).
+on:
+  workflow_run:
+    workflows: ["v2 CI & publish"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  VM_HOST: 20.123.137.64
+  VM_USER: sjoerd
+  VM_PATH: /home/sjoerd/compose/rb-rules-v2
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secret
+        id: check
+        run: |
+          if [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DEPLOY_SSH_KEY ontbreekt — deploy overgeslagen (voeg het secret toe om push-to-deploy te activeren)"
+          fi
+
+      - name: Set up SSH
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Sync compose file
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          scp -i ~/.ssh/id_deploy \
+            deploy/server-setup-v2/docker-compose.yml \
+            "$VM_USER@$VM_HOST:$VM_PATH/docker-compose.yml"
+
+      - name: Pull & restart stack
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VM_USER@$VM_HOST" \
+            "cd $VM_PATH && docker compose --project-name rb-rules-v2 pull && docker compose --project-name rb-rules-v2 up -d && docker compose --project-name rb-rules-v2 ps"
