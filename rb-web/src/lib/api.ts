@@ -3,8 +3,15 @@ import { env } from '$env/dynamic/private';
 
 const BASE = env.RB_API_URL ?? 'http://localhost:8080';
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(`${BASE}${path}`, init);
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+	const res = await fetch(`${BASE}${path}`, {
+		...init,
+		headers: {
+			// ASP.NET bindt een JSON-body alleen met expliciete content-type (anders 415).
+			...(init.body ? { 'content-type': 'application/json' } : {}),
+			...(init.headers ?? {})
+		}
+	});
 	if (!res.ok) throw new Error(`rb-api ${res.status}: ${path}`);
 	return res.json() as Promise<T>;
 }
