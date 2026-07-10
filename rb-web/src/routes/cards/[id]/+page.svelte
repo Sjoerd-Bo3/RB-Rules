@@ -103,9 +103,12 @@
 			{/each}
 			{#each data.rules.relevantRules as r (r.section)}
 				<div class="rulebox">
-					<span class="badge rule">§ {r.section}</span>
+					<a class="badge rule" href="/rules/{encodeURIComponent(r.section)}">§ {r.section}</a>
 					<p>{r.snippet}…</p>
-					<p class="meta"><a href={r.url} target="_blank" rel="noopener">{r.sourceName} ↗</a></p>
+					<p class="meta">
+						<a href="/rules/{encodeURIComponent(r.section)}">Lees hele sectie →</a>
+						· <a href={r.url} target="_blank" rel="noopener">{r.sourceName} ↗</a>
+					</p>
 				</div>
 			{/each}
 			<p class="meta small">Regelsecties zijn semantisch gematcht op de kaarttekst — de meest relevante paragrafen uit de officiële rules.</p>

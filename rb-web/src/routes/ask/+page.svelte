@@ -42,9 +42,10 @@
 					{#each form.citations as c (c.n)}
 						<li>
 							<a href={c.url} target="_blank" rel="noreferrer">{c.sourceName}</a>
-							<span class="meta">
-								(trust {c.trust}{c.section ? `, §${c.section}` : ''})
-							</span>
+							<span class="meta">(trust {c.trust})</span>
+							{#if c.section}
+								<a class="sec" href="/rules/{encodeURIComponent(c.section)}">§ {c.section}</a>
+							{/if}
 						</li>
 					{/each}
 				</ol>
@@ -75,5 +76,9 @@
 	h2 { font-size: 1rem; color: #d98a4e; margin: 16px 0 6px; }
 	ol { margin: 0; padding-left: 20px; }
 	a { color: #e7eefc; }
+	.sec {
+		color: #7fd1a8; text-decoration: none; font-weight: 600;
+		background: #58c08a1a; border-radius: 999px; padding: 1px 9px; margin-left: 6px;
+	}
 	.warn { color: #ff8b8e; }
 </style>
