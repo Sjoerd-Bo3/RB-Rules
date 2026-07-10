@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260710184227_CardMechanics")]
+    partial class CardMechanics
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -23,56 +26,6 @@ namespace RbRules.Infrastructure.Migrations
 
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("RbRules.Domain.BanEntry", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("CardRiftboundId")
-                        .HasColumnType("text")
-                        .HasColumnName("card_riftbound_id");
-
-                    b.Property<DateTimeOffset>("DetectedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("detected_at");
-
-                    b.Property<DateOnly?>("EffectiveFrom")
-                        .HasColumnType("date")
-                        .HasColumnName("effective_from");
-
-                    b.Property<string>("Format")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("format");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("kind");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("name");
-
-                    b.Property<string>("SourceUrl")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("source_url");
-
-                    b.HasKey("Id")
-                        .HasName("pk_ban_entry");
-
-                    b.HasIndex("CardRiftboundId")
-                        .HasDatabaseName("ix_ban_entry_card_riftbound_id");
-
-                    b.ToTable("ban_entry", (string)null);
-                });
 
             modelBuilder.Entity("RbRules.Domain.Card", b =>
                 {
@@ -179,55 +132,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_card_set_id");
 
                     b.ToTable("card", (string)null);
-                });
-
-            modelBuilder.Entity("RbRules.Domain.CardInteraction", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("CardAId")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("card_a_id");
-
-                    b.Property<string>("CardBId")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("card_b_id");
-
-                    b.Property<DateTimeOffset>("DetectedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("detected_at");
-
-                    b.Property<string>("Explanation")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("explanation");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("kind");
-
-                    b.HasKey("Id")
-                        .HasName("pk_card_interaction");
-
-                    b.HasIndex("CardAId")
-                        .HasDatabaseName("ix_card_interaction_card_a_id");
-
-                    b.HasIndex("CardBId")
-                        .HasDatabaseName("ix_card_interaction_card_b_id");
-
-                    b.HasIndex("CardAId", "CardBId")
-                        .IsUnique()
-                        .HasDatabaseName("ix_card_interaction_card_a_id_card_b_id");
-
-                    b.ToTable("card_interaction", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.CardSet", b =>
@@ -463,47 +367,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_document_source_id_retrieved_at");
 
                     b.ToTable("document", (string)null);
-                });
-
-            modelBuilder.Entity("RbRules.Domain.Erratum", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("CardName")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("card_name");
-
-                    b.Property<string>("CardRiftboundId")
-                        .HasColumnType("text")
-                        .HasColumnName("card_riftbound_id");
-
-                    b.Property<DateTimeOffset>("DetectedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("detected_at");
-
-                    b.Property<string>("NewText")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("new_text");
-
-                    b.Property<string>("SourceUrl")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("source_url");
-
-                    b.HasKey("Id")
-                        .HasName("pk_erratum");
-
-                    b.HasIndex("CardRiftboundId")
-                        .HasDatabaseName("ix_erratum_card_riftbound_id");
-
-                    b.ToTable("erratum", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.PushSubscription", b =>

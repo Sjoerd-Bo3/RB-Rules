@@ -104,6 +104,13 @@ public class Card
     public string? TextPlain { get; set; }
     public string? ImageUrl { get; set; }
     public string[] Tags { get; set; } = [];            // facties/tribes — GEEN mechanieken
+    /// <summary>F3: LLM-geminede spelmechanieken (Accelerate, Tank, …).
+    /// null = nog niet gemined; [] = gemined, niets gevonden.</summary>
+    public string[]? Mechanics { get; set; }
+    /// <summary>F3: genormaliseerde trigger-clausules ("when a unit dies").</summary>
+    public string[]? Triggers { get; set; }
+    /// <summary>F3: genormaliseerde effect-clausules ("kill a unit").</summary>
+    public string[]? Effects { get; set; }
     /// <summary>S1-fundament: kaart-embedding voor semantisch zoeken.</summary>
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }         // provenance (model-wissel-guard)
@@ -140,4 +147,41 @@ public class PushSubscription
     public required string P256dh { get; set; }
     public required string Auth { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Gestructureerde ban-entry (audit-fix: geen "zin bevat 'ban'"-
+/// heuristiek meer). Bron: LLM-extractie uit de officiële Rules Hub.</summary>
+public class BanEntry
+{
+    public long Id { get; set; }
+    public required string Name { get; set; }           // zoals gepubliceerd
+    public string? CardRiftboundId { get; set; }        // gematcht op kaartnaam
+    public required string Kind { get; set; }           // card | battlefield
+    public string Format { get; set; } = "constructed";
+    public DateOnly? EffectiveFrom { get; set; }
+    public required string SourceUrl { get; set; }
+    public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Gestructureerde errata: de actuele (oracle-)tekst van een kaart.</summary>
+public class Erratum
+{
+    public long Id { get; set; }
+    public required string CardName { get; set; }
+    public string? CardRiftboundId { get; set; }
+    public required string NewText { get; set; }
+    public required string SourceUrl { get; set; }
+    public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>S3: LLM-geverifieerde kaart↔kaart-interactie (kandidaten komen uit
+/// trigger↔effect/mechanic-overlap; alleen geverifieerde paren worden bewaard).</summary>
+public class CardInteraction
+{
+    public long Id { get; set; }
+    public required string CardAId { get; set; }
+    public required string CardBId { get; set; }
+    public required string Kind { get; set; }       // combo | synergy | counter | nonbo
+    public required string Explanation { get; set; }
+    public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
 }

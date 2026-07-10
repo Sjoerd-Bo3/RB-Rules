@@ -9,6 +9,7 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-rbrules-neo4j}
       RB_AI_URL: http://rb-ai:8090
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       OLLAMA_URL: http://ollama:11434
     ports:
       - "127.0.0.1:8080:8080"
@@ -20,6 +21,7 @@ services:
     build: ./rb-web
     environment:
       RB_API_URL: http://rb-api:8080
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
