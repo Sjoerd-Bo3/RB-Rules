@@ -36,6 +36,9 @@ builder.Services.AddHttpClient<EmbeddingService>(c =>
 builder.Services.AddScoped<CardEmbeddingPipeline>();
 builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
+builder.Services.AddScoped<RuleChunkPipeline>();
+builder.Services.AddScoped<AskService>();
+builder.Services.AddScoped<BanErrataSyncService>();
 builder.Services.AddHostedService<ScanScheduler>();
 
 builder.Services.AddOpenApi();
@@ -109,16 +112,33 @@ app.MapGet("/api/cards/{id}", async (string id, RbRulesDbContext db) =>
 {
     var c = await db.Cards.AsNoTracking()
         .FirstOrDefaultAsync(x => x.RiftboundId == id);
-    return c is null
-        ? Results.NotFound()
-        : Results.Ok(new
-        {
-            c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
-            c.Energy, c.Might, c.Power, c.SetId, c.SetLabel, c.CollectorNumber,
-            c.TextPlain, c.ImageUrl, c.Tags, c.Mechanics, c.Triggers, c.Effects,
-            c.UpdatedAt,
-        });
+    if (c is null) return Results.NotFound();
+    var banned = await db.BanEntries.AnyAsync(b => b.CardRiftboundId == id);
+    var erratum = await db.Errata
+        .Where(e => e.CardRiftboundId == id)
+        .OrderByDescending(e => e.DetectedAt)
+        .Select(e => e.NewText)
+        .FirstOrDefaultAsync();
+    return Results.Ok(new
+    {
+        c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
+        c.Energy, c.Might, c.Power, c.SetId, c.SetLabel, c.CollectorNumber,
+        c.TextPlain, c.ImageUrl, c.Tags, c.Mechanics, c.Triggers, c.Effects,
+        c.UpdatedAt, Banned = banned, ErrataText = erratum,
+    });
 });
+
+// ── Rulings-Q&A (S2): hybrid retrieval + §-citaten ─────────────
+app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Question))
+        return Results.BadRequest(new { error = "question is verplicht" });
+    var result = await ask.AskAsync(req.Question.Trim());
+    return Results.Ok(result);
+});
+
+app.MapGet("/api/bans", async (RbRulesDbContext db) =>
+    await db.BanEntries.OrderBy(b => b.Kind).ThenBy(b => b.Name).ToListAsync());
 
 // ── Semantisch kaartzoeken (S1) ────────────────────────────────
 app.MapGet("/api/cards/search", async (
@@ -245,6 +265,40 @@ admin.MapPost("/graph/sync", async (GraphSyncService graph, RbRulesDbContext db)
     }
 });
 
+admin.MapPost("/rules/index", async (RuleChunkPipeline pipeline, RbRulesDbContext db) =>
+{
+    try
+    {
+        var results = await pipeline.RunAsync();
+        var total = results.Sum(r => r.Chunks);
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "embed", Ref = "rules", Status = "ok",
+            Detail = $"{results.Count} bronnen, {total} sectie-chunks",
+        });
+        await db.SaveChangesAsync();
+        return Results.Ok(results);
+    }
+    catch (Exception ex)
+    {
+        db.RunLogs.Add(new RunLog { Kind = "embed", Ref = "rules", Status = "error", Detail = ex.Message });
+        await db.SaveChangesAsync();
+        return Results.Problem(ex.Message);
+    }
+});
+
+admin.MapPost("/bans/sync", async (BanErrataSyncService sync, RbRulesDbContext db) =>
+{
+    var r = await sync.SyncAsync();
+    db.RunLogs.Add(new RunLog
+    {
+        Kind = "bans", Ref = null, Status = r.Bans + r.Errata > 0 ? "ok" : "info",
+        Detail = $"{r.Bans} bans, {r.Errata} errata gestructureerd",
+    });
+    await db.SaveChangesAsync();
+    return Results.Ok(r);
+});
+
 admin.MapGet("/logs", async (string? kind, RbRulesDbContext db) =>
 {
     var query = db.RunLogs.AsQueryable();
@@ -314,5 +368,7 @@ app.Run();
 
 public record SourcePatch(
     string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled);
+
+public record AskRequest(string Question);
 
 public partial class Program;

@@ -28,6 +28,29 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                     logger.LogInformation("Scan: {Results}",
                         string.Join(", ", results.Select(r => $"{r.SourceId}={r.Status}")));
 
+                // Bij nieuwe/gewijzigde documenten: her-indexeren (sectie-chunks +
+                // embeddings) en de banlijst/errata opnieuw structureren.
+                // Audit-fix: de index loopt nooit meer stilzwijgend achter op een scan.
+                if (results.Any(r => r.Status is "changed" or "new"))
+                {
+                    try
+                    {
+                        var rules = scope.ServiceProvider.GetRequiredService<RuleChunkPipeline>();
+                        var indexed = await rules.RunAsync(ct);
+                        if (indexed.Count > 0)
+                            logger.LogInformation("Regel-index: {Detail}",
+                                string.Join(", ", indexed.Select(r => $"{r.SourceId}={r.Chunks}")));
+
+                        var bans = scope.ServiceProvider.GetRequiredService<BanErrataSyncService>();
+                        var b = await bans.SyncAsync(ct);
+                        logger.LogInformation("Bans/errata: {Bans}/{Errata}", b.Bans, b.Errata);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Her-index/bans overgeslagen (Ollama/rb-ai onbereikbaar?)");
+                    }
+                }
+
                 if (DateTimeOffset.UtcNow - _lastCardSync >= CardSyncInterval)
                 {
                     var cards = scope.ServiceProvider.GetRequiredService<CardSyncService>();

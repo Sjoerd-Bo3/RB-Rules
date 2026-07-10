@@ -18,6 +18,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<RuleChunk> RuleChunks => Set<RuleChunk>();
     public DbSet<RunLog> RunLogs => Set<RunLog>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
+    public DbSet<BanEntry> BanEntries => Set<BanEntry>();
+    public DbSet<Erratum> Errata => Set<Erratum>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -102,6 +104,18 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("push_subscription");
             e.HasKey(x => x.Endpoint);
+        });
+
+        b.Entity<BanEntry>(e =>
+        {
+            e.ToTable("ban_entry");
+            e.HasIndex(x => x.CardRiftboundId);
+        });
+
+        b.Entity<Erratum>(e =>
+        {
+            e.ToTable("erratum");
+            e.HasIndex(x => x.CardRiftboundId);
         });
     }
 }

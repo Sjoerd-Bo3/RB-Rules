@@ -148,3 +148,28 @@ public class PushSubscription
     public required string Auth { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
+
+/// <summary>Gestructureerde ban-entry (audit-fix: geen "zin bevat 'ban'"-
+/// heuristiek meer). Bron: LLM-extractie uit de officiële Rules Hub.</summary>
+public class BanEntry
+{
+    public long Id { get; set; }
+    public required string Name { get; set; }           // zoals gepubliceerd
+    public string? CardRiftboundId { get; set; }        // gematcht op kaartnaam
+    public required string Kind { get; set; }           // card | battlefield
+    public string Format { get; set; } = "constructed";
+    public DateOnly? EffectiveFrom { get; set; }
+    public required string SourceUrl { get; set; }
+    public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Gestructureerde errata: de actuele (oracle-)tekst van een kaart.</summary>
+public class Erratum
+{
+    public long Id { get; set; }
+    public required string CardName { get; set; }
+    public string? CardRiftboundId { get; set; }
+    public required string NewText { get; set; }
+    public required string SourceUrl { get; set; }
+    public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+}

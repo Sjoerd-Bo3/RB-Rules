@@ -12,6 +12,7 @@
 	<a href="/" class="brand">Riftbound <span>Rules</span></a>
 	<nav>
 		<a href="/">Wijzigingen</a>
+		<a href="/ask">Vraag</a>
 		<a href="/cards">Kaarten</a>
 		<a href="/admin">Beheer</a>
 	</nav>

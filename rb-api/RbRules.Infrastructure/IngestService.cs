@@ -46,13 +46,38 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
             if (!res.IsSuccessStatusCode)
                 return new(src.Id, "error", $"HTTP {(int)res.StatusCode}");
 
-            var raw = await res.Content.ReadAsStringAsync(ct);
-            // Alleen html geïmplementeerd; 'pdf' volgt in S2 met een echte parser
-            // (audit-fix: nooit stilletjes binaire bytes als tekst opslaan).
-            if (src.Parser != "html")
-                return new(src.Id, "error", $"parser '{src.Parser}' nog niet ondersteund");
+            string text;
+            switch (src.Parser)
+            {
+                case "html":
+                {
+                    var raw = await res.Content.ReadAsStringAsync(ct);
+                    text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
+                    break;
+                }
+                case "pdf":
+                {
+                    // src.Url is de ontdek-pagina (Rules Hub); de PDF-link wordt
+                    // per run gevonden (versies wisselen — nooit hardcoden).
+                    var hubHtml = await res.Content.ReadAsStringAsync(ct);
+                    var keyword = src.Id.Contains("tournament", StringComparison.OrdinalIgnoreCase)
+                        ? "tournament" : "core";
+                    var pdfUrl = PdfDiscovery.FindPdfUrl(hubHtml, keyword, new Uri(src.Url));
+                    if (pdfUrl is null)
+                        return new(src.Id, "error", $"geen '{keyword}'-PDF-link gevonden op {src.Url}");
 
-            var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
+                    using var pdfReq = new HttpRequestMessage(HttpMethod.Get, pdfUrl);
+                    pdfReq.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
+                    using var pdfRes = await http.SendAsync(pdfReq, ct);
+                    if (!pdfRes.IsSuccessStatusCode)
+                        return new(src.Id, "error", $"PDF HTTP {(int)pdfRes.StatusCode} ({pdfUrl})");
+                    var bytes = await pdfRes.Content.ReadAsByteArrayAsync(ct);
+                    text = PdfTextExtractor.Extract(bytes);
+                    break;
+                }
+                default:
+                    return new(src.Id, "error", $"parser '{src.Parser}' nog niet ondersteund");
+            }
             var hash = TextUtils.Sha256(text);
             if (src.LastHash == hash) return new(src.Id, "unchanged");
 
