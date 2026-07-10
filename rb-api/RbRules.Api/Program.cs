@@ -34,6 +34,8 @@ builder.Services.AddHttpClient<EmbeddingService>(c =>
     c.Timeout = TimeSpan.FromMinutes(5);
 });
 builder.Services.AddScoped<CardEmbeddingPipeline>();
+builder.Services.AddScoped<MechanicMiningService>();
+builder.Services.AddScoped<GraphSyncService>();
 builder.Services.AddHostedService<ScanScheduler>();
 
 builder.Services.AddOpenApi();
@@ -80,18 +82,42 @@ app.MapGet("/api/changes", async (RbRulesDbContext db) =>
         .Take(50)
         .ToListAsync());
 
-app.MapGet("/api/cards", async (string? q, RbRulesDbContext db) =>
+app.MapGet("/api/cards", async (
+    string? q, string? domain, string? type, string? set, int? page,
+    RbRulesDbContext db) =>
 {
     var query = db.Cards.AsQueryable();
     if (!string.IsNullOrWhiteSpace(q))
         query = query.Where(c => EF.Functions.ILike(c.Name, $"%{q}%"));
-    return await query.OrderBy(c => c.Name).Take(60)
+    if (!string.IsNullOrWhiteSpace(domain)) query = query.Where(c => c.Domains.Contains(domain));
+    if (!string.IsNullOrWhiteSpace(type)) query = query.Where(c => c.Type == type);
+    if (!string.IsNullOrWhiteSpace(set)) query = query.Where(c => c.SetId == set);
+
+    const int pageSize = 60;
+    return await query.OrderBy(c => c.Name)
+        .Skip(Math.Max(0, (page ?? 1) - 1) * pageSize)
+        .Take(pageSize)
         .Select(c => new
         {
-            c.RiftboundId, c.Name, c.Type, c.Rarity, c.Domains,
-            c.Energy, c.Might, c.SetId, c.ImageUrl,
+            c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
+            c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
         })
         .ToListAsync();
+});
+
+app.MapGet("/api/cards/{id}", async (string id, RbRulesDbContext db) =>
+{
+    var c = await db.Cards.AsNoTracking()
+        .FirstOrDefaultAsync(x => x.RiftboundId == id);
+    return c is null
+        ? Results.NotFound()
+        : Results.Ok(new
+        {
+            c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
+            c.Energy, c.Might, c.Power, c.SetId, c.SetLabel, c.CollectorNumber,
+            c.TextPlain, c.ImageUrl, c.Tags, c.Mechanics, c.Triggers, c.Effects,
+            c.UpdatedAt,
+        });
 });
 
 // ── Semantisch kaartzoeken (S1) ────────────────────────────────
@@ -180,6 +206,40 @@ admin.MapPost("/cards/embed", async (
     catch (Exception ex)
     {
         db.RunLogs.Add(new RunLog { Kind = "embed", Ref = "cards", Status = "error", Detail = ex.Message });
+        await db.SaveChangesAsync();
+        return Results.Problem(ex.Message);
+    }
+});
+
+admin.MapPost("/cards/mine", async (
+    int? maxBatches, MechanicMiningService mining, RbRulesDbContext db) =>
+{
+    var r = await mining.RunAsync(Math.Clamp(maxBatches ?? 25, 1, 200));
+    db.RunLogs.Add(new RunLog
+    {
+        Kind = "mine", Ref = "mechanics", Status = r.Failed > 0 ? "info" : "ok",
+        Detail = $"{r.Mined} gemined, {r.Failed} mislukt, {r.Remaining} resterend",
+    });
+    await db.SaveChangesAsync();
+    return Results.Ok(r);
+});
+
+admin.MapPost("/graph/sync", async (GraphSyncService graph, RbRulesDbContext db) =>
+{
+    try
+    {
+        var r = await graph.SyncAsync();
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "graph", Ref = null, Status = "ok",
+            Detail = $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics",
+        });
+        await db.SaveChangesAsync();
+        return Results.Ok(r);
+    }
+    catch (Exception ex)
+    {
+        db.RunLogs.Add(new RunLog { Kind = "graph", Ref = null, Status = "error", Detail = ex.Message });
         await db.SaveChangesAsync();
         return Results.Problem(ex.Message);
     }

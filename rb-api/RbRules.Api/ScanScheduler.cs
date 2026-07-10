@@ -50,6 +50,24 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                 {
                     logger.LogWarning(ex, "Embed-pijplijn overgeslagen (Ollama onbereikbaar?)");
                 }
+
+                // Mine mechanieken voor nieuwe kaarten + sync de graph (best-effort).
+                try
+                {
+                    var mining = scope.ServiceProvider.GetRequiredService<MechanicMiningService>();
+                    var m = await mining.RunAsync(maxBatches: 5, ct);
+                    if (m.Mined > 0)
+                    {
+                        logger.LogInformation("Mechanieken: {Mined} kaarten gemined ({Remaining} resterend)",
+                            m.Mined, m.Remaining);
+                        var graph = scope.ServiceProvider.GetRequiredService<GraphSyncService>();
+                        await graph.SyncAsync(ct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Mining/graph-sync overgeslagen (rb-ai/Neo4j onbereikbaar?)");
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

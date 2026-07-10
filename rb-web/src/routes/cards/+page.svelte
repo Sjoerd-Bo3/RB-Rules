@@ -37,12 +37,15 @@
 
 	{#if data.error}
 		<p class="warn">{data.error}</p>
-	{:else if data.q && data.results.length === 0}
+	{:else if data.results.length === 0}
 		<p class="meta">Geen resultaten.</p>
 	{:else}
+		{#if data.mode === 'browse'}
+			<p class="meta">Bladeren (alfabetisch) — typ een zoekterm voor semantisch zoeken.</p>
+		{/if}
 		<div class="grid">
 			{#each data.results as c (c.riftboundId)}
-				<article class="card">
+				<a class="card" href="/cards/{c.riftboundId}">
 					{#if c.imageUrl}
 						<img src={c.imageUrl} alt={c.name} loading="lazy" />
 					{/if}
@@ -56,7 +59,7 @@
 						</p>
 						{#if c.textPlain}<p class="text">{c.textPlain}</p>{/if}
 					</div>
-				</article>
+				</a>
 			{/each}
 		</div>
 	{/if}
@@ -84,7 +87,9 @@
 	.card {
 		background: #16233b; border: 1px solid #243551; border-radius: 12px;
 		overflow: hidden; display: flex; flex-direction: column;
+		color: inherit; text-decoration: none;
 	}
+	.card:hover { border-color: #d98a4e; }
 	.card img { width: 100%; aspect-ratio: 744 / 1039; object-fit: cover; }
 	.card .body { padding: 10px 12px; }
 	.text { font-size: 0.85rem; color: #cdd9ef; }

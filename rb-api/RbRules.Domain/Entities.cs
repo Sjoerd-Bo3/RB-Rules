@@ -104,6 +104,13 @@ public class Card
     public string? TextPlain { get; set; }
     public string? ImageUrl { get; set; }
     public string[] Tags { get; set; } = [];            // facties/tribes — GEEN mechanieken
+    /// <summary>F3: LLM-geminede spelmechanieken (Accelerate, Tank, …).
+    /// null = nog niet gemined; [] = gemined, niets gevonden.</summary>
+    public string[]? Mechanics { get; set; }
+    /// <summary>F3: genormaliseerde trigger-clausules ("when a unit dies").</summary>
+    public string[]? Triggers { get; set; }
+    /// <summary>F3: genormaliseerde effect-clausules ("kill a unit").</summary>
+    public string[]? Effects { get; set; }
     /// <summary>S1-fundament: kaart-embedding voor semantisch zoeken.</summary>
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }         // provenance (model-wissel-guard)

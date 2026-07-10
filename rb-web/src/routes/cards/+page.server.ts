@@ -21,19 +21,26 @@ export const load: PageServerLoad = async ({ url }) => {
 	const domain = url.searchParams.get('domain') ?? '';
 	const maxEnergy = url.searchParams.get('maxEnergy') ?? '';
 
-	if (!q) return { q, domain, maxEnergy, results: [] as CardHit[], error: null };
-
 	try {
-		const params = new URLSearchParams({ q });
+		if (q) {
+			// Semantisch zoeken (embeddings)
+			const params = new URLSearchParams({ q });
+			if (domain) params.set('domain', domain);
+			if (maxEnergy) params.set('maxEnergy', maxEnergy);
+			const results = await api<CardHit[]>(`/api/cards/search?${params}`);
+			return { q, domain, maxEnergy, results, mode: 'semantic' as const, error: null };
+		}
+		// Browse-modus (alfabetisch, filters)
+		const params = new URLSearchParams();
 		if (domain) params.set('domain', domain);
-		if (maxEnergy) params.set('maxEnergy', maxEnergy);
-		const results = await api<CardHit[]>(`/api/cards/search?${params}`);
-		return { q, domain, maxEnergy, results, error: null };
+		const results = await api<CardHit[]>(`/api/cards?${params}`);
+		return { q, domain, maxEnergy, results, mode: 'browse' as const, error: null };
 	} catch (e) {
 		return {
 			q, domain, maxEnergy,
 			results: [] as CardHit[],
-			error: `Zoeken mislukt — zijn de embeddings al opgebouwd? (${e instanceof Error ? e.message : e})`
+			mode: 'browse' as const,
+			error: `Kaarten laden mislukt (${e instanceof Error ? e.message : e})`
 		};
 	}
 };
