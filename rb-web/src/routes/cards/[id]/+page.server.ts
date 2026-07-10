@@ -21,6 +21,15 @@ export interface CardDetail {
 	mechanics: string[] | null;
 	triggers: string[] | null;
 	effects: string[] | null;
+	banned: boolean;
+	errataText: string | null;
+}
+
+interface Interaction {
+	otherId: string;
+	otherName: string;
+	kind: string;
+	explanation: string;
 }
 
 interface SimilarCard {
@@ -47,5 +56,14 @@ export const load: PageServerLoad = async ({ params }) => {
 	} catch {
 		// geen embeddings? dan gewoon geen 'vergelijkbaar'-sectie
 	}
-	return { card, similar };
+
+	let interactions: Interaction[] = [];
+	try {
+		interactions = await api<Interaction[]>(
+			`/api/cards/${encodeURIComponent(params.id)}/interactions`
+		);
+	} catch {
+		// nog geen interacties gemined
+	}
+	return { card, similar, interactions };
 };

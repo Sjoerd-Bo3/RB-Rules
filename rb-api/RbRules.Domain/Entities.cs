@@ -173,3 +173,15 @@ public class Erratum
     public required string SourceUrl { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
 }
+
+/// <summary>S3: LLM-geverifieerde kaart↔kaart-interactie (kandidaten komen uit
+/// trigger↔effect/mechanic-overlap; alleen geverifieerde paren worden bewaard).</summary>
+public class CardInteraction
+{
+    public long Id { get; set; }
+    public required string CardAId { get; set; }
+    public required string CardBId { get; set; }
+    public required string Kind { get; set; }       // combo | synergy | counter | nonbo
+    public required string Explanation { get; set; }
+    public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+}

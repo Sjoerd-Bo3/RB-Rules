@@ -39,6 +39,7 @@ builder.Services.AddScoped<GraphSyncService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
 builder.Services.AddScoped<BanErrataSyncService>();
+builder.Services.AddScoped<InteractionService>();
 builder.Services.AddHostedService<ScanScheduler>();
 
 builder.Services.AddOpenApi();
@@ -139,6 +140,41 @@ app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
 
 app.MapGet("/api/bans", async (RbRulesDbContext db) =>
     await db.BanEntries.OrderBy(b => b.Kind).ThenBy(b => b.Name).ToListAsync());
+
+// ── Interacties (S3) ───────────────────────────────────────────
+app.MapPost("/api/resolve", async (ResolveRequest req, InteractionService interactions) =>
+{
+    if (req.CardIds is not { Length: >= 2 and <= 3 })
+        return Results.BadRequest(new { error = "geef 2 of 3 card-ids" });
+    var result = await interactions.ResolveAsync(req.CardIds);
+    return result is null
+        ? Results.BadRequest(new { error = "kaarten niet gevonden" })
+        : Results.Ok(result);
+});
+
+app.MapGet("/api/cards/{id}/interactions", async (string id, RbRulesDbContext db) =>
+{
+    var rows = await db.CardInteractions
+        .Where(x => x.CardAId == id || x.CardBId == id)
+        .OrderBy(x => x.Kind)
+        .Take(40)
+        .ToListAsync();
+    var otherIds = rows.Select(r => r.CardAId == id ? r.CardBId : r.CardAId).ToList();
+    var names = await db.Cards
+        .Where(c => otherIds.Contains(c.RiftboundId))
+        .ToDictionaryAsync(c => c.RiftboundId, c => c.Name);
+    return Results.Ok(rows.Select(r =>
+    {
+        var otherId = r.CardAId == id ? r.CardBId : r.CardAId;
+        return new
+        {
+            OtherId = otherId,
+            OtherName = names.GetValueOrDefault(otherId, otherId),
+            r.Kind,
+            r.Explanation,
+        };
+    }));
+});
 
 // ── Semantisch kaartzoeken (S1) ────────────────────────────────
 app.MapGet("/api/cards/search", async (
@@ -299,6 +335,19 @@ admin.MapPost("/bans/sync", async (BanErrataSyncService sync, RbRulesDbContext d
     return Results.Ok(r);
 });
 
+admin.MapPost("/interactions/mine", async (
+    int? max, InteractionService interactions, RbRulesDbContext db) =>
+{
+    var r = await interactions.MineAsync(Math.Clamp(max ?? 60, 1, 300));
+    db.RunLogs.Add(new RunLog
+    {
+        Kind = "mine", Ref = "interactions", Status = "ok",
+        Detail = $"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd",
+    });
+    await db.SaveChangesAsync();
+    return Results.Ok(r);
+});
+
 admin.MapGet("/logs", async (string? kind, RbRulesDbContext db) =>
 {
     var query = db.RunLogs.AsQueryable();
@@ -370,5 +419,7 @@ public record SourcePatch(
     string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled);
 
 public record AskRequest(string Question);
+
+public record ResolveRequest(string[] CardIds);
 
 public partial class Program;

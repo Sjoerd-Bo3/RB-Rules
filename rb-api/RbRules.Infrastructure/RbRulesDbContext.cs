@@ -20,6 +20,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<BanEntry> BanEntries => Set<BanEntry>();
     public DbSet<Erratum> Errata => Set<Erratum>();
+    public DbSet<CardInteraction> CardInteractions => Set<CardInteraction>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -116,6 +117,14 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("erratum");
             e.HasIndex(x => x.CardRiftboundId);
+        });
+
+        b.Entity<CardInteraction>(e =>
+        {
+            e.ToTable("card_interaction");
+            e.HasIndex(x => x.CardAId);
+            e.HasIndex(x => x.CardBId);
+            e.HasIndex(x => new { x.CardAId, x.CardBId }).IsUnique();
         });
     }
 }

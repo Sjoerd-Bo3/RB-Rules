@@ -13,7 +13,10 @@
 			<img class="art" src={c.imageUrl} alt={c.name} />
 		{/if}
 		<div class="info">
-			<h1>{c.name}</h1>
+			<h1>
+				{c.name}
+				{#if c.banned}<span class="banned">⚠ GEBANNED</span>{/if}
+			</h1>
 			<p class="meta">
 				{[c.supertype, c.type].filter(Boolean).join(' ')}
 				· {c.rarity ?? '—'}
@@ -27,7 +30,18 @@
 				{#if c.power !== null}<span class="chip">◆ {c.power}</span>{/if}
 			</p>
 
-			{#if c.textPlain}
+			{#if c.errataText}
+				<section>
+					<h2>Actuele tekst (errata)</h2>
+					<p class="oracle errata">{c.errataText}</p>
+					{#if c.textPlain}
+						<details>
+							<summary class="meta">Gedrukte tekst (achterhaald)</summary>
+							<p class="oracle printed">{c.textPlain}</p>
+						</details>
+					{/if}
+				</section>
+			{:else if c.textPlain}
 				<section>
 					<h2>Kaarttekst</h2>
 					<p class="oracle">{c.textPlain}</p>
@@ -61,6 +75,19 @@
 		</div>
 	</div>
 
+	{#if data.interactions.length}
+		<section>
+			<h2>Interacties (geverifieerd)</h2>
+			{#each data.interactions as x (x.otherId + x.kind)}
+				<div class="interaction">
+					<a href="/cards/{x.otherId}"><strong>{x.otherName}</strong></a>
+					<span class="chip kind-{x.kind}">{x.kind}</span>
+					<p class="meta">{x.explanation}</p>
+				</div>
+			{/each}
+		</section>
+	{/if}
+
 	{#if data.similar.length}
 		<section>
 			<h2>Vergelijkbare kaarten</h2>
@@ -93,6 +120,18 @@
 	.chip.domain { color: #f3c469; }
 	.chip.mech { color: #7fd1a8; }
 	.chip.tag { color: #9fb0cc; }
+	.banned {
+		font-size: 0.8rem; vertical-align: middle; margin-left: 8px;
+		background: #e5484d2e; color: #ff8b8e; border-radius: 999px; padding: 3px 10px;
+	}
+	.oracle.errata { border-color: #d98a4e; }
+	.oracle.printed { opacity: 0.6; }
+	.interaction { border-bottom: 1px solid #243551; padding: 8px 0; }
+	.interaction a { color: #e7eefc; }
+	.chip.kind-combo { color: #7fd1a8; }
+	.chip.kind-counter { color: #ff8b8e; }
+	.chip.kind-synergy { color: #f3c469; }
+	.chip.kind-nonbo { color: #9fb0cc; }
 	.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 	.mini { color: inherit; text-decoration: none; font-size: 0.85rem; }
 	.mini img { width: 100%; border-radius: 10px; border: 1px solid #243551; }
