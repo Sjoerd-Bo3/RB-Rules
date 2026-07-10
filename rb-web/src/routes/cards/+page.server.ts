@@ -16,30 +16,46 @@ export interface CardHit {
 	distance?: number;
 }
 
+export interface Facets {
+	sets: { id: string; label: string }[];
+	types: string[];
+	rarities: string[];
+	domains: string[];
+	mechanics: string[];
+}
+
+const EMPTY_FACETS: Facets = { sets: [], types: [], rarities: [], domains: [], mechanics: [] };
+const FILTER_KEYS = ['domain', 'type', 'set', 'rarity', 'mechanic', 'maxEnergy'] as const;
+
 export const load: PageServerLoad = async ({ url }) => {
 	const q = url.searchParams.get('q')?.trim() ?? '';
-	const domain = url.searchParams.get('domain') ?? '';
-	const maxEnergy = url.searchParams.get('maxEnergy') ?? '';
+	const filters = Object.fromEntries(
+		FILTER_KEYS.map((k) => [k, url.searchParams.get(k) ?? ''])
+	) as Record<(typeof FILTER_KEYS)[number], string>;
+
+	const params = new URLSearchParams();
+	for (const k of FILTER_KEYS) if (filters[k]) params.set(k, filters[k]);
 
 	try {
+		const facetsPromise = api<Facets>('/api/cards/facets').catch(() => EMPTY_FACETS);
+		let results: CardHit[];
+		let mode: 'semantic' | 'browse';
 		if (q) {
-			// Semantisch zoeken (embeddings)
-			const params = new URLSearchParams({ q });
-			if (domain) params.set('domain', domain);
-			if (maxEnergy) params.set('maxEnergy', maxEnergy);
-			const results = await api<CardHit[]>(`/api/cards/search?${params}`);
-			return { q, domain, maxEnergy, results, mode: 'semantic' as const, error: null };
+			params.set('q', q);
+			results = await api<CardHit[]>(`/api/cards/search?${params}`);
+			mode = 'semantic';
+		} else {
+			results = await api<CardHit[]>(`/api/cards?${params}`);
+			mode = 'browse';
 		}
-		// Browse-modus (alfabetisch, filters)
-		const params = new URLSearchParams();
-		if (domain) params.set('domain', domain);
-		const results = await api<CardHit[]>(`/api/cards?${params}`);
-		return { q, domain, maxEnergy, results, mode: 'browse' as const, error: null };
+		return { q, filters, results, mode, facets: await facetsPromise, error: null };
 	} catch (e) {
 		return {
-			q, domain, maxEnergy,
+			q,
+			filters,
 			results: [] as CardHit[],
 			mode: 'browse' as const,
+			facets: EMPTY_FACETS,
 			error: `Kaarten laden mislukt (${e instanceof Error ? e.message : e})`
 		};
 	}

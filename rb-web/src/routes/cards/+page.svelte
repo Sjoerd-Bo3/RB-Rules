@@ -1,15 +1,17 @@
 <script lang="ts">
+	import { navigating } from '$app/state';
+
 	let { data } = $props();
 
-	const DOMAINS = ['', 'Fury', 'Calm', 'Mind', 'Body', 'Order', 'Chaos', 'Colorless'];
+	const busy = $derived(navigating.to?.url.pathname === '/cards');
 </script>
 
-<svelte:head><title>Kaarten zoeken — RB Rules</title></svelte:head>
+<svelte:head><title>Kaarten — RB Rules</title></svelte:head>
 
 <main>
-	<h1>Semantisch <span>kaartzoeken</span></h1>
+	<h1>Kaarten <span>zoeken</span></h1>
 	<p class="subtitle">
-		Zoek op wat een kaart <em>doet</em> — bijv. “goedkope antwoorden op Hidden units”.
+		Typ wat een kaart <em>doet</em> voor semantisch zoeken, of laat leeg en filter om te bladeren.
 	</p>
 
 	<form method="GET" class="search">
@@ -17,32 +19,58 @@
 			type="search"
 			name="q"
 			value={data.q}
-			placeholder="Bijv.: kaarten die units verplaatsen tussen battlefields"
+			placeholder="Bijv.: cheap answers to hidden units"
 		/>
-		<select name="domain" value={data.domain}>
-			{#each DOMAINS as d (d)}
-				<option value={d}>{d || 'Alle domains'}</option>
-			{/each}
-		</select>
-		<input
-			type="number"
-			name="maxEnergy"
-			value={data.maxEnergy}
-			placeholder="Max energy"
-			min="0"
-			max="12"
-		/>
-		<button type="submit">Zoek</button>
+		<div class="filters">
+			<select name="domain" value={data.filters.domain}>
+				<option value="">Domain</option>
+				{#each data.facets.domains as d (d)}<option value={d}>{d}</option>{/each}
+			</select>
+			<select name="type" value={data.filters.type}>
+				<option value="">Type</option>
+				{#each data.facets.types as t (t)}<option value={t}>{t}</option>{/each}
+			</select>
+			<select name="set" value={data.filters.set}>
+				<option value="">Set</option>
+				{#each data.facets.sets as s (s.id)}<option value={s.id}>{s.label}</option>{/each}
+			</select>
+			<select name="rarity" value={data.filters.rarity}>
+				<option value="">Rarity</option>
+				{#each data.facets.rarities as r (r)}<option value={r}>{r}</option>{/each}
+			</select>
+			<select name="mechanic" value={data.filters.mechanic}>
+				<option value="">Mechaniek</option>
+				{#each data.facets.mechanics as m (m)}<option value={m}>{m}</option>{/each}
+			</select>
+			<input
+				type="number"
+				name="maxEnergy"
+				value={data.filters.maxEnergy}
+				placeholder="Max ⚡"
+				min="0"
+				max="12"
+			/>
+			<button type="submit" disabled={busy}>
+				{busy ? 'Zoeken…' : 'Zoek'}
+			</button>
+			<a href="/cards" class="reset">Reset</a>
+		</div>
 	</form>
 
-	{#if data.error}
+	{#if busy}
+		<div class="loading">
+			<span class="spinner"></span>
+			{data.q ? 'Semantisch zoeken (embeddings)…' : 'Kaarten laden…'}
+		</div>
+	{:else if data.error}
 		<p class="warn">{data.error}</p>
 	{:else if data.results.length === 0}
 		<p class="meta">Geen resultaten.</p>
 	{:else}
-		{#if data.mode === 'browse'}
-			<p class="meta">Bladeren (alfabetisch) — typ een zoekterm voor semantisch zoeken.</p>
-		{/if}
+		<p class="meta">
+			{data.results.length} kaarten
+			{data.mode === 'semantic' ? '· gesorteerd op relevantie' : '· alfabetisch'}
+		</p>
 		<div class="grid">
 			{#each data.results as c (c.riftboundId)}
 				<a class="card" href="/cards/{c.riftboundId}">
@@ -69,17 +97,30 @@
 	main { max-width: 1080px; margin: 0 auto; padding: 24px 20px; }
 	h1 span { color: #d98a4e; }
 	.subtitle, .meta { color: #9fb0cc; }
-	.search { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
-	.search input[type='search'] { flex: 1; min-width: 260px; }
+	.search { margin-bottom: 20px; }
+	.search input[type='search'] { width: 100%; margin-bottom: 8px; }
+	.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 	input, select {
 		background: #0b1322; color: #e7eefc;
 		border: 1px solid #243551; border-radius: 8px; padding: 9px 11px;
 	}
-	input[type='number'] { width: 110px; }
+	input[type='number'] { width: 90px; }
 	button {
 		background: #d98a4e; color: #1a1206; border: 0; border-radius: 8px;
 		padding: 9px 16px; font-weight: 600; cursor: pointer;
 	}
+	button:disabled { opacity: 0.6; cursor: wait; }
+	.reset { color: #9fb0cc; font-size: 0.85rem; }
+	.loading {
+		display: flex; align-items: center; gap: 10px;
+		color: #9fb0cc; padding: 30px 0;
+	}
+	.spinner {
+		width: 18px; height: 18px; border-radius: 50%;
+		border: 2px solid #243551; border-top-color: #d98a4e;
+		animation: spin 0.8s linear infinite;
+	}
+	@keyframes spin { to { transform: rotate(360deg); } }
 	.grid {
 		display: grid; gap: 14px;
 		grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

@@ -87,15 +87,14 @@ app.MapGet("/api/changes", async (RbRulesDbContext db) =>
         .ToListAsync());
 
 app.MapGet("/api/cards", async (
-    string? q, string? domain, string? type, string? set, int? page,
+    string? q, string? domain, string? type, string? set, string? rarity,
+    string? mechanic, int? maxEnergy, int? page,
     RbRulesDbContext db) =>
 {
     var query = db.Cards.AsQueryable();
     if (!string.IsNullOrWhiteSpace(q))
         query = query.Where(c => EF.Functions.ILike(c.Name, $"%{q}%"));
-    if (!string.IsNullOrWhiteSpace(domain)) query = query.Where(c => c.Domains.Contains(domain));
-    if (!string.IsNullOrWhiteSpace(type)) query = query.Where(c => c.Type == type);
-    if (!string.IsNullOrWhiteSpace(set)) query = query.Where(c => c.SetId == set);
+    query = ApplyCardFilters(query, domain, type, set, rarity, mechanic, maxEnergy);
 
     const int pageSize = 60;
     return await query.OrderBy(c => c.Name)
@@ -107,6 +106,26 @@ app.MapGet("/api/cards", async (
             c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
         })
         .ToListAsync();
+});
+
+// Filteropties voor de kaart-browser (à la Piltover Archive), incl. onze
+// geminede mechanieken als extra facet.
+app.MapGet("/api/cards/facets", async (RbRulesDbContext db) =>
+{
+    var rows = await db.Cards
+        .Select(c => new { c.SetId, c.SetLabel, c.Type, c.Rarity, c.Domains, c.Mechanics })
+        .ToListAsync();
+    return Results.Ok(new
+    {
+        Sets = rows.Where(r => r.SetId != null)
+            .GroupBy(r => r.SetId!)
+            .Select(g => new { Id = g.Key, Label = g.Select(x => x.SetLabel).FirstOrDefault(l => l != null) ?? g.Key })
+            .OrderBy(s => s.Id),
+        Types = rows.Select(r => r.Type).OfType<string>().Distinct().Order(),
+        Rarities = rows.Select(r => r.Rarity).OfType<string>().Distinct().Order(),
+        Domains = rows.SelectMany(r => r.Domains).Distinct().Order(),
+        Mechanics = rows.SelectMany(r => r.Mechanics ?? []).Distinct().Order(),
+    });
 });
 
 app.MapGet("/api/cards/{id}", async (string id, RbRulesDbContext db) =>
@@ -178,17 +197,17 @@ app.MapGet("/api/cards/{id}/interactions", async (string id, RbRulesDbContext db
 
 // ── Semantisch kaartzoeken (S1) ────────────────────────────────
 app.MapGet("/api/cards/search", async (
-    string q, string? domain, string? type, int? maxEnergy, int? limit,
+    string q, string? domain, string? type, string? set, string? rarity,
+    string? mechanic, int? maxEnergy, int? limit,
     RbRulesDbContext db, EmbeddingService embeddings) =>
 {
     if (string.IsNullOrWhiteSpace(q))
         return Results.BadRequest(new { error = "q is verplicht" });
 
     var queryVector = await embeddings.EmbedOneAsync(q);
-    var cards = db.Cards.Where(c => c.Embedding != null);
-    if (!string.IsNullOrWhiteSpace(domain)) cards = cards.Where(c => c.Domains.Contains(domain));
-    if (!string.IsNullOrWhiteSpace(type)) cards = cards.Where(c => c.Type == type);
-    if (maxEnergy is not null) cards = cards.Where(c => c.Energy != null && c.Energy <= maxEnergy);
+    var cards = ApplyCardFilters(
+        db.Cards.Where(c => c.Embedding != null),
+        domain, type, set, rarity, mechanic, maxEnergy);
 
     var results = await cards
         .OrderBy(c => c.Embedding!.CosineDistance(queryVector))
@@ -414,6 +433,21 @@ admin.MapDelete("/corrections/{id:long}", async (long id, RbRulesDbContext db) =
 });
 
 app.Run();
+
+static IQueryable<RbRules.Domain.Card> ApplyCardFilters(
+    IQueryable<RbRules.Domain.Card> query,
+    string? domain, string? type, string? set, string? rarity,
+    string? mechanic, int? maxEnergy)
+{
+    if (!string.IsNullOrWhiteSpace(domain)) query = query.Where(c => c.Domains.Contains(domain));
+    if (!string.IsNullOrWhiteSpace(type)) query = query.Where(c => c.Type == type);
+    if (!string.IsNullOrWhiteSpace(set)) query = query.Where(c => c.SetId == set);
+    if (!string.IsNullOrWhiteSpace(rarity)) query = query.Where(c => c.Rarity == rarity);
+    if (!string.IsNullOrWhiteSpace(mechanic))
+        query = query.Where(c => c.Mechanics != null && c.Mechanics.Contains(mechanic));
+    if (maxEnergy is not null) query = query.Where(c => c.Energy != null && c.Energy <= maxEnergy);
+    return query;
+}
 
 public record SourcePatch(
     string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled);

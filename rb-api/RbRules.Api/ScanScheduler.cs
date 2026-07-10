@@ -9,7 +9,9 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
     : BackgroundService
 {
     private static readonly TimeSpan Tick = TimeSpan.FromHours(1);
-    private static readonly TimeSpan CardSyncInterval = TimeSpan.FromDays(7);
+    // Dagelijks: nieuwe sets/reveals verschijnen in Riot's gallery en komen zo
+    // binnen een dag automatisch binnen (incl. embeddings + mining via de tick).
+    private static readonly TimeSpan CardSyncInterval = TimeSpan.FromDays(1);
     private DateTimeOffset _lastCardSync = DateTimeOffset.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
