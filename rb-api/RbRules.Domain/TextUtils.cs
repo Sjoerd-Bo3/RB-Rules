@@ -13,6 +13,16 @@ public static partial class TextUtils
         return Convert.ToHexStringLower(bytes);
     }
 
+    /// <summary>Audit-fix: strip boilerplate (nav/header/footer/aside) vóór
+    /// hash/diff, zodat menu-wijzigingen geen spurious change-events geven.</summary>
+    public static string StripBoilerplate(string html)
+    {
+        var text = html;
+        foreach (var tag in new[] { "nav", "header", "footer", "aside" })
+            text = Regex.Replace(text, $@"<{tag}[\s\S]*?</{tag}>", " ", RegexOptions.IgnoreCase);
+        return text;
+    }
+
     /// <summary>Eenvoudige HTML→tekst: strip scripts/styles/tags, decodeer de
     /// gangbare entities, normaliseer whitespace.</summary>
     public static string HtmlToText(string html)

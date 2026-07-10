@@ -16,6 +16,7 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-rbrules-neo4j}
       RB_AI_URL: http://rb-v2-ai:8090
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       OLLAMA_URL: http://rb-v2-ollama:11434
     depends_on:
       postgres:
@@ -30,6 +31,7 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
     environment:
       RB_API_URL: http://rb-v2-api:8080
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     depends_on: [rb-api]
     networks: [internal, caddy]
 
