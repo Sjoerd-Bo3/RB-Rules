@@ -189,11 +189,15 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         existing.SetLabel = card.SetLabel;
         existing.CollectorNumber = card.CollectorNumber;
         // Tekstwijziging (errata!) invalideert de embedding → de embed-pijplijn
-        // pakt de kaart automatisch opnieuw op.
+        // pakt de kaart automatisch opnieuw op. Gecachete gelijkenis-uitleg
+        // over deze kaart is dan ook achterhaald.
         if (existing.TextPlain != card.TextPlain)
         {
             existing.Embedding = null;
             existing.EmbeddingModel = null;
+            await db.SimilarityExplanations
+                .Where(e => e.CardAId == card.RiftboundId || e.CardBId == card.RiftboundId)
+                .ExecuteDeleteAsync(ct);
         }
         existing.TextPlain = card.TextPlain;
         existing.ImageUrl = card.ImageUrl;

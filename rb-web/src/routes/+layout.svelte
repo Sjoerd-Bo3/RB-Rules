@@ -10,6 +10,7 @@
 		{ href: '/rules', label: 'Regels' },
 		{ href: '/ask', label: 'Vraag' },
 		{ href: '/cards', label: 'Kaarten' },
+		{ href: '/graph', label: 'Graph' },
 		{ href: '/admin', label: 'Beheer' }
 	];
 

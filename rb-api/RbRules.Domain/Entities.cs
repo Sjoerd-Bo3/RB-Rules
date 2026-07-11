@@ -144,6 +144,18 @@ public class RunLog
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Gecachete LLM-uitleg waarom twee kaarten op elkaar lijken (#30).
+/// Paar is geordend (CardAId &lt; CardBId); cache invalideert bij tekstwijziging.</summary>
+public class SimilarityExplanation
+{
+    public long Id { get; set; }
+    public required string CardAId { get; set; }
+    public required string CardBId { get; set; }
+    public required string Text { get; set; }
+    public string? Model { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public class PushSubscription
 {
     public required string Endpoint { get; set; }

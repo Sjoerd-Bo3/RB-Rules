@@ -1,6 +1,23 @@
 <script lang="ts">
 	let { data } = $props();
 	const c = $derived(data.card);
+
+	// LLM-uitleg per vergelijkbaar paar (#30), lazy en server-side gecachet.
+	let explanations = $state<Record<string, string>>({});
+	let explaining = $state<string | null>(null);
+	async function explain(otherId: string) {
+		if (explanations[otherId] || explaining) return;
+		explaining = otherId;
+		try {
+			const r = await fetch(`/cards/${encodeURIComponent(c.riftboundId)}/explain/${encodeURIComponent(otherId)}`);
+			const body = await r.json();
+			explanations[otherId] = r.ok ? body.explanation : 'Uitleg tijdelijk niet beschikbaar.';
+		} catch {
+			explanations[otherId] = 'Uitleg tijdelijk niet beschikbaar.';
+		} finally {
+			explaining = null;
+		}
+	}
 </script>
 
 <svelte:head><title>{c.name} — RB Rules</title></svelte:head>
@@ -137,18 +154,27 @@
 
 	{#if data.similar.length}
 		<section>
-			<h2>Vergelijkbare kaarten</h2>
+			<h2>Vergelijkbare kaarten <a class="graph-link" href="/graph?card={c.riftboundId}">Bekijk in graph →</a></h2>
 			<div class="grid">
 				{#each data.similar as s (s.riftboundId)}
-					<a class="mini" href="/cards/{s.riftboundId}">
-						{#if s.imageUrl}<img src={s.imageUrl} alt={s.name} loading="lazy" />{/if}
-						<span class="mini-name">{s.name} <span class="pct">{s.similarity}%</span></span>
+					<div class="mini">
+						<a href="/cards/{s.riftboundId}">
+							{#if s.imageUrl}<img src={s.imageUrl} alt={s.name} loading="lazy" />{/if}
+							<span class="mini-name">{s.name} <span class="pct">{s.similarity}%</span></span>
+						</a>
 						<span class="why">
 							{#each s.sharedMechanics as m (m)}<span class="chip mech sm">{m}</span>{/each}
 							{#each s.sharedDomains as d (d)}<span class="chip domain sm">{d}</span>{/each}
 							{#if s.sameType}<span class="chip sm">zelfde type</span>{/if}
 						</span>
-					</a>
+						{#if explanations[s.riftboundId]}
+							<p class="explain">{explanations[s.riftboundId]}</p>
+						{:else}
+							<button class="why-btn" disabled={explaining !== null} onclick={() => explain(s.riftboundId)}>
+								{explaining === s.riftboundId ? 'Analyseren…' : 'Waarom vergelijkbaar?'}
+							</button>
+						{/if}
+					</div>
 				{/each}
 			</div>
 			<p class="meta small">Het percentage is tekst-gelijkenis (embedding); de chips tonen wat de kaarten concreet delen.</p>
@@ -198,8 +224,18 @@
 	.chip.kind-synergy { color: var(--warn); }
 	.chip.kind-nonbo { color: var(--muted); }
 	.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-	.mini { color: inherit; text-decoration: none; font-size: 0.85rem; display: flex; flex-direction: column; gap: 3px; }
+	.mini { color: inherit; font-size: 0.85rem; display: flex; flex-direction: column; gap: 3px; }
+	.mini > a { color: inherit; text-decoration: none; display: flex; flex-direction: column; gap: 3px; }
 	.mini img { width: 100%; border-radius: 10px; border: 1px solid var(--border); }
+	.graph-link { font-size: 0.8rem; font-weight: 400; color: var(--muted); margin-left: 10px; text-decoration: none; }
+	.graph-link:hover { color: var(--accent); }
+	.why-btn {
+		background: transparent; color: var(--muted); border: 1px solid var(--border);
+		border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; cursor: pointer; align-self: flex-start;
+	}
+	.why-btn:hover { color: var(--text); border-color: var(--border-strong); }
+	.why-btn:disabled { opacity: 0.5; }
+	.explain { margin: 2px 0 0; font-size: 0.78rem; color: var(--muted); font-style: italic; }
 	.mini-name { font-weight: 600; }
 	.pct { color: var(--accent); font-weight: 700; font-size: 0.78rem; }
 	.why .chip.sm { font-size: 0.68rem; padding: 1px 7px; margin: 0 4px 4px 0; }

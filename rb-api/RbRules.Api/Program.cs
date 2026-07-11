@@ -300,6 +300,94 @@ app.MapGet("/api/cards/{id}/similar", async (
     return Results.Ok(results);
 });
 
+// Waarom lijken twee kaarten op elkaar? LLM-uitleg met cache (#30).
+app.MapGet("/api/cards/{id}/similar/{otherId}/explain", async (
+    string id, string otherId, RbRulesDbContext db, RbAiClient ai) =>
+{
+    var (a, b) = string.CompareOrdinal(id, otherId) < 0 ? (id, otherId) : (otherId, id);
+    var cached = await db.SimilarityExplanations
+        .FirstOrDefaultAsync(e => e.CardAId == a && e.CardBId == b);
+    if (cached is not null) return Results.Ok(new { explanation = cached.Text, cached = true });
+
+    var cardA = await db.Cards.FindAsync(id);
+    var cardB = await db.Cards.FindAsync(otherId);
+    if (cardA is null || cardB is null) return Results.NotFound();
+
+    string Describe(RbRules.Domain.Card c) =>
+        $"{c.Name} ({c.Supertype} {c.Type}, {string.Join("/", c.Domains)}, energy {c.Energy?.ToString() ?? "—"})" +
+        (c.Mechanics is { Length: > 0 } m ? $", mechanieken: {string.Join(", ", m)}" : "") +
+        (c.TextPlain is null ? "" : $"\nTekst: {c.TextPlain}");
+
+    var raw = await ai.AskAsync(
+        $"Kaart 1: {Describe(cardA)}\n\nKaart 2: {Describe(cardB)}",
+        """
+        Je legt in één of twee Nederlandse zinnen uit op welk semantisch vlak twee
+        Riftbound-kaarten op elkaar lijken: welk gedrag, welke rol of welk
+        spelplan delen ze? Wees concreet ("beide sturen units terug naar de
+        base") en noem geen voor de hand liggende metadata zoals set of rarity.
+        Antwoord met alleen die uitleg, zonder inleiding.
+        """);
+    if (raw is null)
+        return Results.Problem(title: "AI niet beschikbaar", statusCode: 503);
+
+    db.SimilarityExplanations.Add(new SimilarityExplanation
+    {
+        CardAId = a, CardBId = b, Text = raw.Trim(), Model = "rb-ai",
+    });
+    try { await db.SaveChangesAsync(); }
+    catch (DbUpdateException) { /* race met parallel verzoek — cache bestaat al */ }
+    return Results.Ok(new { explanation = raw.Trim(), cached = false });
+});
+
+// Graph-verkenner (#29): buren van een kaart via gedeelde mechanieken,
+// domeinen en geverifieerde interacties.
+app.MapGet("/api/graph/neighbors", async (string card, RbRulesDbContext db) =>
+{
+    var center = await db.Cards.FindAsync(card);
+    if (center is null) return Results.NotFound();
+
+    var mechanics = center.Mechanics ?? [];
+    var mechanicGroups = new List<object>();
+    foreach (var m in mechanics.Take(6))
+    {
+        var sharing = await db.Cards
+            .Where(c => c.RiftboundId != card && c.VariantOf == null &&
+                        c.Mechanics != null && c.Mechanics.Contains(m))
+            .OrderBy(c => c.Name)
+            .Take(6)
+            .Select(c => new { c.RiftboundId, c.Name, c.ImageUrl })
+            .ToListAsync();
+        mechanicGroups.Add(new { Mechanic = m, Cards = sharing });
+    }
+
+    var interactions = await db.CardInteractions
+        .Where(x => x.CardAId == card || x.CardBId == card)
+        .Take(12)
+        .ToListAsync();
+    var otherIds = interactions
+        .Select(x => x.CardAId == card ? x.CardBId : x.CardAId)
+        .ToList();
+    var names = await db.Cards
+        .Where(c => otherIds.Contains(c.RiftboundId))
+        .ToDictionaryAsync(c => c.RiftboundId, c => c.Name);
+
+    return Results.Ok(new
+    {
+        Center = new { center.RiftboundId, center.Name, center.ImageUrl, center.Domains },
+        Mechanics = mechanicGroups,
+        Interactions = interactions.Select(x =>
+        {
+            var otherId = x.CardAId == card ? x.CardBId : x.CardAId;
+            return new
+            {
+                OtherId = otherId,
+                OtherName = names.GetValueOrDefault(otherId, otherId),
+                x.Kind,
+            };
+        }),
+    });
+});
+
 // Regels & errata die bij deze kaart horen (voor de kaartpagina).
 app.MapGet("/api/cards/{id}/rules", async (string id, RbRulesDbContext db) =>
 {
