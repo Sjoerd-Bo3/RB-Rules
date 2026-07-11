@@ -68,14 +68,21 @@ async function* userMessage(prompt: string, images: AskImage[]) {
   };
 }
 
-/** Stuur één prompt (optioneel met afbeeldingen) naar Claude. */
+/** Stuur één prompt (optioneel met afbeeldingen) naar Claude.
+ *
+ * Met `onDelta` (#31, streaming) levert de Agent SDK naast de gewone
+ * berichten ook partial-message-events (`includePartialMessages`); elke
+ * text-delta gaat direct naar de callback zodat de aanroeper het antwoord
+ * woord-voor-woord kan doorsturen. De return-waarde blijft in beide gevallen
+ * het volledige eindantwoord — de niet-streamende route verandert niet. */
 export async function askClaude(opts: {
   prompt: string;
   system?: string;
   task?: Task;
   images?: AskImage[];
+  onDelta?: (text: string) => void | Promise<void>;
 }): Promise<string> {
-  const { prompt, system, task = "cheap", images = [] } = opts;
+  const { prompt, system, task = "cheap", images = [], onDelta } = opts;
   const research = task === "research";
 
   const systemPrompt = research
@@ -105,6 +112,9 @@ export async function askClaude(opts: {
         }
       : {}),
     ...(systemPrompt ? { systemPrompt } : {}),
+    // Streaming (#31): partial messages alleen aanzetten als er een
+    // delta-afnemer is — anders blijft het berichtenverkeer zoals het was.
+    ...(onDelta ? { includePartialMessages: true } : {}),
   };
 
   const arg = {
@@ -124,8 +134,21 @@ export async function askClaude(opts: {
         text?: string;
         result?: string;
         message?: { content?: Array<{ type: string; text?: string }> };
+        event?: { type?: string; delta?: { type?: string; text?: string } };
       };
-      if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+      if (m.type === "stream_event") {
+        // Partial-message-event: alleen echte text-deltas doorgeven; het
+        // volledige antwoord komt daarnaast gewoon als assistant/result
+        // binnen (dus hier NIET aan assistantText/resultText toevoegen).
+        const ev = m.event;
+        if (
+          onDelta &&
+          ev?.type === "content_block_delta" &&
+          ev.delta?.type === "text_delta" &&
+          ev.delta.text
+        )
+          await onDelta(ev.delta.text);
+      } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
         for (const block of m.message.content) {
           if (block.type === "text" && block.text) assistantText += block.text;
         }

@@ -40,8 +40,35 @@ const server = createServer(async (req, res) => {
       return send(200, { answer });
     }
 
+    if (req.method === "POST" && req.url === "/ask/stream") {
+      // Streaming-variant (#31): NDJSON — één JSON-object per regel. Chunked
+      // is het eenvoudigste dat node:http én de Agent SDK van nature doen;
+      // geen SSE-framing nodig omdat de afnemer (rb-api) geen EventSource is.
+      // Frames: {type:"delta",text} … {type:"done",answer} | {type:"error",error}.
+      const parsed = parseAskRequest(await readJson(req));
+      if (!parsed.ok) return send(400, { error: parsed.error });
+      res.writeHead(200, { "content-type": "application/x-ndjson" });
+      const frame = (obj: unknown) => res.write(JSON.stringify(obj) + "\n");
+      try {
+        const answer = await askClaude({
+          ...parsed.request,
+          onDelta: (text) => {
+            frame({ type: "delta", text });
+          },
+        });
+        frame({ type: "done", answer });
+      } catch (e) {
+        // Uitval mídden in de stream: de 200 is al weg, dus de fout gaat als
+        // frame mee — de aanroeper (rb-api) degradeert daarop netjes.
+        frame({ type: "error", error: String(e) });
+      }
+      return res.end();
+    }
+
     return send(404, { error: "not found" });
   } catch (e) {
+    // Na writeHead kan er geen JSON-foutstatus meer; dan alleen netjes sluiten.
+    if (res.headersSent) return res.end();
     return send(500, { error: String(e) });
   }
 });
