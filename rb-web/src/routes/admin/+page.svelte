@@ -21,6 +21,7 @@
 	}
 
 	const JOBS: { name: string; label: string; hint: string }[] = [
+		{ name: 'all', label: 'Alles bijwerken', hint: 'alle stappen in de juiste volgorde' },
 		{ name: 'scan', label: 'Bronnen scannen', hint: 'regels en changelogs ophalen en vergelijken' },
 		{ name: 'cards', label: 'Kaarten synchroniseren', hint: 'nieuwe sets en reveals binnenhalen' },
 		{ name: 'embed', label: 'Embeddings berekenen', hint: 'voedt het semantisch zoeken' },
@@ -137,8 +138,18 @@
 
 		<!-- Acties -->
 		<h2>Acties</h2>
+		<form method="POST" action="?/job" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }} class="job panel job-all">
+			<input type="hidden" name="name" value="all" />
+			<div class="job-info">
+				<strong>Alles bijwerken</strong>
+				<span class="hint">kaarten → scan → regels → bans → embeddings → mechanieken → graph → interacties; een haperende stap stopt de rest niet</span>
+			</div>
+			<button disabled={running !== null}>
+				{running?.name === 'all' ? 'Bezig' : 'Start alles'}
+			</button>
+		</form>
 		<div class="jobs">
-			{#each JOBS as j (j.name)}
+			{#each JOBS.filter((j) => j.name !== 'all') as j (j.name)}
 				<form method="POST" action="?/job" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }} class="job panel">
 					<input type="hidden" name="name" value={j.name} />
 					<div class="job-info">
@@ -258,6 +269,7 @@
 	.tile .num { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 	.tile .lbl { color: var(--muted); font-size: 0.76rem; }
 	.jobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+	.job-all { border-color: var(--accent); margin-bottom: 10px; }
 	.job { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
 	.job-info { flex: 1; display: flex; flex-direction: column; }
 	.job-info .hint { color: var(--muted); font-size: 0.78rem; }

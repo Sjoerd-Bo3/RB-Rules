@@ -780,6 +780,66 @@ admin.MapPost("/jobs/{name}", (string name, JobRunner jobs) =>
 {
     Func<IServiceProvider, Action<string>, CancellationToken, Task<string>>? work = name switch
     {
+        // Eén knop voor alles: elke stap best-effort in de juiste volgorde —
+        // een haperende stap (Ollama/LLM even weg) stopt de rest niet.
+        "all" => async (sp, report, ct) =>
+        {
+            var results = new List<string>();
+            async Task Step(string label, Func<Task<string>> run)
+            {
+                report($"{results.Count + 1}/8 · {label}");
+                try { results.Add($"{label}: {await run()}"); }
+                catch (Exception ex) { results.Add($"{label}: FOUT — {ex.Message}"); }
+            }
+
+            await Step("kaarten", async () =>
+            {
+                var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(
+                    p => report($"1/8 · kaarten — {p}"), ct);
+                return $"{r.Cards} kaarten via {r.Source}";
+            });
+            await Step("bronnen scannen", async () =>
+            {
+                var r = await sp.GetRequiredService<IngestService>().ScanAsync(
+                    onlyDue: false, progress: p => report($"2/8 · scan — {p}"), ct: ct);
+                return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
+            });
+            await Step("regels indexeren", async () =>
+            {
+                var r = await sp.GetRequiredService<RuleChunkPipeline>().RunAsync(
+                    force: false, p => report($"3/8 · regels — {p}"), ct);
+                return $"{r.Sum(x => x.Chunks)} chunks";
+            });
+            await Step("bans/errata", async () =>
+            {
+                var r = await sp.GetRequiredService<BanErrataSyncService>().SyncAsync(ct);
+                return $"{r.Bans} bans, {r.Errata} errata";
+            });
+            await Step("embeddings", async () =>
+            {
+                var r = await sp.GetRequiredService<CardEmbeddingPipeline>().RunAsync(
+                    progress: p => report($"5/8 · embeddings — {p}"), ct: ct);
+                return $"{r.Embedded} geembed";
+            });
+            await Step("mechanieken", async () =>
+            {
+                var r = await sp.GetRequiredService<MechanicMiningService>().RunAsync(
+                    progress: p => report($"6/8 · mechanieken — {p}"), ct: ct);
+                return $"{r.Mined} gemined, {r.Remaining} resterend";
+            });
+            await Step("graph", async () =>
+            {
+                var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
+                return $"{r.Cards} cards";
+            });
+            await Step("interacties", async () =>
+            {
+                var r = await sp.GetRequiredService<InteractionService>().MineAsync(
+                    progress: p => report($"8/8 · interacties — {p}"), ct: ct);
+                return $"{r.Verified} geverifieerd";
+            });
+            return string.Join(" · ", results);
+        },
         "scan" => async (sp, report, ct) =>
         {
             var scanStart = DateTimeOffset.UtcNow;
