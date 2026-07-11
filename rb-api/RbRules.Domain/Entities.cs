@@ -86,6 +86,9 @@ public class CardSet
     public required string SetId { get; set; }          // 'OGN'
     public required string Name { get; set; }
     public DateOnly? PublishedOn { get; set; }
+    /// <summary>Vanaf wanneer de set legal is in constructed (#22);
+    /// null = nog niet aangekondigd/bekend (reveal-fase).</summary>
+    public DateOnly? LegalFrom { get; set; }
     public int? CardCount { get; set; }
     public DateTimeOffset SyncedAt { get; set; } = DateTimeOffset.UtcNow;
 }
