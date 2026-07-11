@@ -1,20 +1,37 @@
-# RB-Rules v2 op de Server-setup VM — achter de centrale Caddy, images uit GHCR
-# (Watchtower auto-update). Draait NAAST de PoP tot pariteit; wissel dan de
-# Caddy-route om.
+# RB-Rules v2 op de Server-setup VM — achter de centrale Caddy, images uit GHCR.
+# Updates komen uitsluitend via push-to-deploy (v2-deploy.yml); Watchtower staat
+# op deze services expliciet UIT (enable=false) zodat er één updatemechanisme is
+# en pull/up nooit racet met een Watchtower-update (issue #45, punt 3).
 #
 #   docker compose --project-name rb-rules-v2 up -d
+#
+# Ops-hardening (issue #45):
+#  - memory-limits per service: op de 8GB B2ms kiest de host-OOM-killer anders
+#    willekeurig; caps localiseren een piek in de veroorzakende container.
+#    Budget: api 1.5g + web 512m + ai 1g + postgres 1g + neo4j 1.5g (heap 512m
+#    + pagecache 384m uit .env + JVM-overhead) + ollama 2.5g (bge-m3 geladen).
+#  - healthchecks op alle services + log-rotatie (json-file groeit anders
+#    onbegrensd).
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   rb-api:
     image: ghcr.io/sjoerd-bo3/rb-rules-rb-api:latest
     container_name: rb-v2-api
     restart: unless-stopped
+    logging: *default-logging
     labels:
-      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
-      DATABASE_URL: Host=rb-v2-postgres;Database=rbrules;Username=rbrules;Password=${POSTGRES_PASSWORD}
+      DATABASE_URL: Host=rb-v2-postgres;Database=rbrules;Username=rbrules;Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD ontbreekt in .env}
       NEO4J_URI: bolt://rb-v2-neo4j:7687
       NEO4J_USER: neo4j
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-rbrules-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD ontbreekt in .env}
       RB_AI_URL: http://rb-v2-ai:8090
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       OLLAMA_URL: http://rb-v2-ollama:11434
@@ -24,40 +41,80 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      neo4j:
+        condition: service_started
+      ollama:
+        condition: service_started
+    healthcheck:
+      # De aspnet-image heeft geen curl/wget, wel bash — HTTP-check via /dev/tcp.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s # EF-migraties bij opstart kunnen even duren
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
     networks: [internal]
 
   rb-web:
     image: ghcr.io/sjoerd-bo3/rb-rules-rb-web:latest
     container_name: rb-v2-web
     restart: unless-stopped
+    logging: *default-logging
     labels:
-      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       RB_API_URL: http://rb-v2-api:8080
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Board-state-foto's bij rulings-vragen (adapter-node default is 512K)
       BODY_SIZE_LIMIT: 10M
     depends_on: [rb-api]
+    healthcheck:
+      # node:22-alpine heeft geen curl, wel node met fetch. Statisch asset,
+      # zodat de check niet meelift op de gezondheid van rb-api.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/manifest.webmanifest').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
     networks: [internal, caddy]
 
   rb-ai:
     image: ghcr.io/sjoerd-bo3/rb-rules-rb-ai:latest
     container_name: rb-v2-ai
     restart: unless-stopped
+    logging: *default-logging
     labels:
-      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     networks: [internal]
 
   postgres:
     image: pgvector/pgvector:pg17
     container_name: rb-v2-postgres
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: rbrules
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD ontbreekt in .env}
       POSTGRES_DB: rbrules
     volumes:
       - /mnt/data/postgres/rb-rules-v2:/var/lib/postgresql/data
@@ -66,6 +123,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     networks: [internal]
 
   # Audit-fix: graph is kernonderdeel — altijd aan (geen optioneel profiel).
@@ -73,12 +134,24 @@ services:
     image: neo4j:5-community
     container_name: rb-v2-neo4j
     restart: unless-stopped
+    logging: *default-logging
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-rbrules-neo4j}
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD ontbreekt in .env}
       NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-512m}
       NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-384m}
     volumes:
       - /mnt/data/neo4j/rb-rules-v2:/data
+    healthcheck:
+      # wget zit in de officiële neo4j-image; 7474 antwoordt zodra de server op is.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:7474 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
     networks: [internal]
 
   # Meertalig embeddingmodel: docker compose -p rb-rules-v2 exec ollama ollama pull bge-m3
@@ -86,8 +159,18 @@ services:
     image: ollama/ollama:latest
     container_name: rb-v2-ollama
     restart: unless-stopped
-    volumes:
-      - /mnt/data/ollama/rb-rules-v2:/root/.ollama
+    logging: *default-logging
+    healthcheck:
+      # 'ollama ls' praat met de eigen API op 11434 — geen curl nodig.
+      test: ["CMD", "ollama", "ls"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2560m
     networks: [internal]
 
 networks:
