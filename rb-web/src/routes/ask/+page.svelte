@@ -179,6 +179,7 @@
 				await invalidateAll();
 			}
 			await applyAction(result);
+			announce = result.type === 'success' ? 'Antwoord compleet.' : 'Antwoord mislukt.';
 		} catch (e) {
 			await applyAction({
 				type: 'failure',
@@ -251,8 +252,20 @@
 				return;
 			}
 			if (!res.ok || !res.body) {
-				// Nette foutstatus vóór het streamen (proxy 502 e.d.): rb-api is
-				// niet aan een antwoord begonnen — automatische terugval kan.
+				// Nette foutstatus vóór het streamen. De proxy markeert met
+				// retry:true dat rb-api al aan het werk kán zijn (verbinding brak
+				// i.p.v. geweigerd) — dan expliciete knop, geen stille terugval.
+				let retry = false;
+				try {
+					retry = Boolean(((await res.json()) as { retry?: boolean }).retry);
+				} catch {
+					// geen JSON-body — behandel als veilige terugval
+				}
+				if (retry) {
+					retryPending = { fd: formData, clearQuestion };
+					announce = 'Antwoord mislukt.';
+					return;
+				}
 				await fallbackAsk(formData, clearQuestion);
 				return;
 			}

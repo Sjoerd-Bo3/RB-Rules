@@ -22,10 +22,26 @@ export const POST: RequestHandler = async ({ request, getClientAddress, cookies 
 			body: await request.text()
 		});
 	} catch (e) {
-		// rb-api onbereikbaar vóór de eerste byte: nette JSON-fout — de client
-		// valt dan terug op de niet-streamende route (er zijn nog geen
-		// LLM-kosten gemaakt).
-		return json({ error: `rb-api onbereikbaar (${e instanceof Error ? e.message : e})` }, { status: 502 });
+		// De fetch naar rb-api faalde vóór de eerste flush. Cruciaal verschil
+		// (review #31): bij een gewéigerde verbinding (rb-api down) is er
+		// zeker niets gestart en mag de client automatisch terugvallen; bij
+		// elke andere breuk (reset terwijl rb-api al aan het werk was, in het
+		// venster vóór het meta-frame) kan er al een LLM-call lopen — dan
+		// signaleert `retry: true` dat de client een expliciete
+		// "Opnieuw proberen"-knop moet tonen i.p.v. stil dubbel te betalen.
+		const codes: string[] = [];
+		let cause: unknown = e;
+		for (let depth = 0; cause && depth < 5; depth++) {
+			const err = cause as { code?: string; errors?: { code?: string }[]; cause?: unknown };
+			if (err.code) codes.push(err.code);
+			for (const sub of err.errors ?? []) if (sub.code) codes.push(sub.code);
+			cause = err.cause;
+		}
+		const refused = codes.includes('ECONNREFUSED') || codes.includes('ENOTFOUND');
+		return json(
+			{ error: `rb-api onbereikbaar (${e instanceof Error ? e.message : e})`, retry: !refused },
+			{ status: 502 }
+		);
 	}
 	if (!upstream.ok || !upstream.body) {
 		// Status doorgeven (o.a. 429/401/403 van rate-limit en quota-poort)
