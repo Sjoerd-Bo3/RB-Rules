@@ -333,6 +333,31 @@ app.MapGet("/api/cards/{id}/rules", async (string id, RbRulesDbContext db) =>
     return Results.Ok(new { Errata = errata, RelevantRules = relevantRules });
 });
 
+// ── Feedback op antwoorden (self-learning, #24) ────────────────
+app.MapPost("/api/corrections", async (CorrectionSubmit body, RbRulesDbContext db) =>
+{
+    if (string.IsNullOrWhiteSpace(body.Question) || body.Question.Length > 2000)
+        return Results.BadRequest(new { error = "question ontbreekt of is te lang" });
+    if (body.Verdict is not ("up" or "down"))
+        return Results.BadRequest(new { error = "verdict moet 'up' of 'down' zijn" });
+    var text = string.IsNullOrWhiteSpace(body.Text)
+        ? (body.Verdict == "up" ? "Door gebruiker als juist bevestigd." : "Door gebruiker als onjuist gemarkeerd.")
+        : body.Text.Trim();
+    if (text.Length > 4000)
+        return Results.BadRequest(new { error = "correctie is te lang (max 4000 tekens)" });
+
+    db.Corrections.Add(new Correction
+    {
+        Scope = "answer",
+        Ref = body.Verdict,
+        Text = text,
+        Question = body.Question.Trim(),
+        Provenance = "web-feedback",
+    });
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true });
+});
+
 // ── Regels-browser ─────────────────────────────────────────────
 app.MapGet("/api/rules/toc", async (RbRulesDbContext db) =>
 {
@@ -678,13 +703,22 @@ admin.MapDelete("/changes/{id:long}", async (long id, RbRulesDbContext db) =>
 admin.MapGet("/corrections", async (RbRulesDbContext db) =>
     await db.Corrections.OrderByDescending(c => c.CreatedAt).Take(200).ToListAsync());
 
-admin.MapPost("/corrections/{id:long}/verify", async (long id, RbRulesDbContext db) =>
+admin.MapPost("/corrections/{id:long}/verify", async (
+    long id, RbRulesDbContext db, EmbeddingService embeddings) =>
 {
     var c = await db.Corrections.FindAsync(id);
     if (c is null) return Results.NotFound();
     c.Status = "verified";
     c.VerifiedAt = DateTimeOffset.UtcNow;
-    // Embedding volgt in de S1-embed-pijplijn (bge-m3) — status is leidend.
+    try
+    {
+        // Embedding op vraag+correctie zodat /ask de ruling semantisch vindt.
+        c.Embedding = await embeddings.EmbedOneAsync($"{c.Question}\n{c.Text}");
+    }
+    catch
+    {
+        // Ollama tijdelijk weg — verificatie telt, embedding volgt bij her-verify.
+    }
     await db.SaveChangesAsync();
     return Results.Ok(c);
 });
@@ -721,5 +755,7 @@ public record SourcePatch(
 public record AskRequest(string Question);
 
 public record ResolveRequest(string[] CardIds);
+
+public record CorrectionSubmit(string Question, string Verdict, string? Text);
 
 public partial class Program;

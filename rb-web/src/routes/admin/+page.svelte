@@ -31,7 +31,14 @@
 		{ name: 'interactions', label: 'Interacties minen', hint: 'kandidaten zoeken en LLM-verifiëren' }
 	];
 
+	interface Correction {
+		id: number; scope: string; ref: string; text: string;
+		question: string | null; status: string; createdAt: string;
+	}
+
 	const sources = $derived(data.sources as Source[]);
+	const corrections = $derived((data.corrections ?? []) as Correction[]);
+	const openCorrections = $derived(corrections.filter((c) => c.status === 'unverified'));
 	// svelte-ignore state_referenced_locally
 	let live = $state<Status | null>(data.status as Status | null);
 	const running = $derived(live?.running ?? null);
@@ -145,6 +152,33 @@
 			{/each}
 		</div>
 
+		<!-- Reviewqueue (self-learning) -->
+		{#if openCorrections.length}
+			<h2>Reviewqueue <span class="meta">({openCorrections.length} open — geverifieerde correcties sturen toekomstige antwoorden)</span></h2>
+			{#each openCorrections as c (c.id)}
+				<div class="correction panel">
+					<div class="correction-body">
+						{#if c.question}<p class="q">{c.question}</p>{/if}
+						<p class="t">{c.text}</p>
+						<p class="meta">
+							{c.ref === 'down' ? 'Gemeld als onjuist' : c.ref === 'up' ? 'Bevestigd als juist' : c.ref}
+							· {new Date(c.createdAt).toLocaleString('nl-NL')}
+						</p>
+					</div>
+					<div class="correction-actions">
+						<form method="POST" action="?/verifyCorrection" use:enhance>
+							<input type="hidden" name="id" value={c.id} />
+							<button title="Maakt dit een gezaghebbende ruling voor toekomstige antwoorden">Verifieer</button>
+						</form>
+						<form method="POST" action="?/deleteCorrection" use:enhance>
+							<input type="hidden" name="id" value={c.id} />
+							<button class="ghost small">Verwijder</button>
+						</form>
+					</div>
+				</div>
+			{/each}
+		{/if}
+
 		<!-- Bronnen -->
 		<h2>Bronnen</h2>
 		<table>
@@ -227,6 +261,11 @@
 	.job { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
 	.job-info { flex: 1; display: flex; flex-direction: column; }
 	.job-info .hint { color: var(--muted); font-size: 0.78rem; }
+	.correction { display: flex; gap: 14px; padding: 12px 14px; margin-bottom: 8px; }
+	.correction-body { flex: 1; }
+	.correction .q { margin: 0 0 4px; color: var(--muted); font-size: 0.88rem; }
+	.correction .t { margin: 0 0 4px; }
+	.correction-actions { display: flex; flex-direction: column; gap: 6px; }
 	table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
 	th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 	th { color: var(--muted); font-size: 0.82rem; font-weight: 600; }

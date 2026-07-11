@@ -6,6 +6,7 @@
 	let busy = $state(false);
 	let phase = $state(0);
 	let question = $state('');
+	let correcting = $state(false);
 
 	const EXAMPLES = [
 		'Wanneer mag ik een unit moven, en wat telt niet als move?',
@@ -56,6 +57,7 @@
 
 	<form
 		method="POST"
+		action="?/ask"
 		use:enhance={({ formData }) => {
 			busy = true;
 			const q = String(formData.get('question') ?? '').trim();
@@ -107,6 +109,37 @@
 					{/each}
 				</ol>
 			{/if}
+
+			<!-- Self-learning: feedback wordt beoordeeld en stuurt daarna antwoorden -->
+			<div class="feedback">
+				{#if form?.feedbackSent}
+					<p class="meta">
+						{form.feedbackSent === 'up'
+							? 'Bedankt voor de bevestiging.'
+							: 'Bedankt — je correctie staat in de reviewqueue en stuurt na verificatie toekomstige antwoorden.'}
+					</p>
+				{:else}
+					<span class="meta">Was dit antwoord juist?</span>
+					<form method="POST" action="?/feedback" use:enhance class="fb-inline">
+						<input type="hidden" name="question" value={form?.question ?? ''} />
+						<input type="hidden" name="answer" value={form?.answer ?? ''} />
+						<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
+						<input type="hidden" name="verdict" value="up" />
+						<button class="fb">Ja</button>
+					</form>
+					<button class="fb" type="button" onclick={() => (correcting = !correcting)}>Nee, corrigeer</button>
+				{/if}
+			</div>
+			{#if correcting && !form?.feedbackSent}
+				<form method="POST" action="?/feedback" use:enhance={() => async ({ update }) => { correcting = false; await update(); }} class="correct-form">
+					<input type="hidden" name="question" value={form?.question ?? ''} />
+					<input type="hidden" name="answer" value={form?.answer ?? ''} />
+					<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
+					<input type="hidden" name="verdict" value="down" />
+					<textarea name="text" rows="3" placeholder="Wat is het juiste antwoord? Verwijs waar mogelijk naar een §-sectie."></textarea>
+					<button type="submit">Verstuur correctie</button>
+				</form>
+			{/if}
 		</article>
 	{/if}
 
@@ -152,6 +185,25 @@
 	.sec {
 		color: var(--ok); text-decoration: none; font-weight: 600;
 		background: var(--ok-soft); border-radius: 999px; padding: 1px 9px; margin-left: 6px;
+	}
+	.feedback {
+		display: flex; align-items: center; gap: 10px;
+		border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px;
+	}
+	.fb {
+		background: transparent; color: var(--muted); border: 1px solid var(--border);
+		border-radius: 8px; padding: 4px 12px; font-size: 0.85rem; cursor: pointer;
+	}
+	.fb:hover { color: var(--text); border-color: var(--border-strong); }
+	.fb-inline { display: inline; }
+	.correct-form { margin-top: 10px; }
+	.correct-form textarea {
+		width: 100%; background: var(--surface-deep); color: var(--text);
+		border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+	}
+	.correct-form button {
+		margin-top: 8px; background: var(--accent); color: var(--accent-ink); border: 0;
+		border-radius: 8px; padding: 7px 14px; font-weight: 600; cursor: pointer;
 	}
 	.hist-title { margin-top: 26px; }
 	.history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
