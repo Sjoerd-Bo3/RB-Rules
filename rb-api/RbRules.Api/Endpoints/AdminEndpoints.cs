@@ -257,7 +257,7 @@ public static class AdminEndpoints
                 },
                 "graph" => async (sp, report, ct) =>
                 {
-                    report("kaarten, domeinen, tags en mechanieken naar Neo4j schrijven");
+                    report("canonieke kaarten, domeinen, tags en mechanieken naar Neo4j schrijven (variant-knopen worden opgeruimd)");
                     var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
                     return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics";
                 },
