@@ -1,6 +1,17 @@
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
+import { userHeaders } from '$lib/server/user';
+
+// Quota-fouten van rb-api (#42) vertaald naar een bruikbare melding — de
+// api()-helper geeft alleen de status door.
+function quotaError(msg: string, fallback: string): string {
+	if (msg.includes('429'))
+		return 'Limiet bereikt: te veel vragen in korte tijd of je dagquotum is op. Probeer het later opnieuw — of log in via Account voor een ruimer quotum.';
+	if (msg.includes('401')) return 'Je sessie is verlopen — log opnieuw in via Account.';
+	if (msg.includes('403')) return 'Dit account is geblokkeerd door de beheerder.';
+	return fallback;
+}
 
 export interface AskStats {
 	count: number;
@@ -69,7 +80,7 @@ interface AskResult {
 }
 
 export const actions: Actions = {
-	ask: async ({ request, getClientAddress }) => {
+	ask: async ({ request, getClientAddress, cookies }) => {
 		const form = await request.formData();
 		const question = String(form.get('question') ?? '').trim();
 		if (!question) return fail(400, { error: 'Stel eerst een vraag.' });
@@ -97,7 +108,9 @@ export const actions: Actions = {
 		try {
 			const result = await api<AskResult>('/api/ask', {
 				method: 'POST',
-				headers: { 'x-client-ip': getClientAddress() },
+				// Ingelogd (#42): sessietoken mee — dan telt de vraag tegen het
+				// eigen dagquotum in plaats van de anonieme IP-limiet.
+				headers: { 'x-client-ip': getClientAddress(), ...userHeaders(cookies) },
 				body: JSON.stringify({
 					question,
 					images,
@@ -106,8 +119,9 @@ export const actions: Actions = {
 			});
 			return { question, history, hadPhoto: Boolean(images), ...result };
 		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
 			return fail(500, {
-				error: `Vraag mislukt (${e instanceof Error ? e.message : e})`,
+				error: quotaError(msg, `Vraag mislukt (${msg})`),
 				question,
 				history
 			});
@@ -115,7 +129,7 @@ export const actions: Actions = {
 	},
 	// Self-learning (#24): feedback wordt een correctie in de reviewqueue;
 	// na verificatie door de beheerder stuurt hij toekomstige antwoorden.
-	feedback: async ({ request, getClientAddress }) => {
+	feedback: async ({ request, getClientAddress, cookies }) => {
 		const form = await request.formData();
 		const question = String(form.get('question') ?? '').trim();
 		const verdict = String(form.get('verdict') ?? '');
@@ -139,13 +153,14 @@ export const actions: Actions = {
 		try {
 			await api('/api/corrections', {
 				method: 'POST',
-				headers: { 'x-client-ip': getClientAddress() },
+				headers: { 'x-client-ip': getClientAddress(), ...userHeaders(cookies) },
 				body: JSON.stringify({ question, verdict, text })
 			});
 			return { question, answer, citations, cards, claims, feedbackSent: verdict };
 		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
 			return fail(500, {
-				error: `Feedback versturen mislukt (${e instanceof Error ? e.message : e})`,
+				error: quotaError(msg, `Feedback versturen mislukt (${msg})`),
 				question,
 				answer,
 				citations,
