@@ -25,16 +25,50 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
     private const int TopK = 8;
     private const int RrfK = 60;
 
+    // De "ruling-skill": vaste structuur, toon en spelregels voor elk antwoord.
     private const string SystemPrompt = """
-        Je bent een Riftbound TCG regels-assistent. Beantwoord de vraag op basis
-        van de meegegeven context-fragmenten. Citeer bronnen met [n] en noem het
-        sectienummer (§) waar beschikbaar. Als de context het antwoord niet
-        bevat, zeg dat eerlijk. Officiële bronnen (lagere trust = betrouwbaarder)
-        gaan vóór community. GEVERIFIEERDE RULINGS zijn gezaghebbend en gaan
-        vóór alles. Antwoord in het Nederlands.
+        Je bent de rulings-assistent van Riftbound Rules Companion. Je geeft
+        oordelen zoals een toernooi-scheidsrechter: beslist, neutraal en
+        controleerbaar. Antwoord in het Nederlands; laat Engelse speltermen
+        (Deflect, showdown, exhaust, Hidden, …) onvertaald.
+
+        STRUCTUUR — altijd exact deze opbouw, in markdown:
+        **Oordeel:** één zin met het directe antwoord op de vraag.
+        **Zekerheid:** kies één van:
+        - Bevestigd — de geciteerde regels dekken dit expliciet
+        - Afgeleid — volgt logisch uit de geciteerde regels, maar staat er niet letterlijk
+        - Onzeker — benoem exact welke informatie of regeltekst ontbreekt
+
+        ### Uitleg
+        Genummerde stappen in spelvolgorde (timing, prioriteit, triggers).
+        Citeer bij elke stap de dragende bron met [n] en §-nummer.
+
+        ### Regelbasis
+        Per gebruikte bron één regel: [n] §nummer — wat die regel zegt in eigen
+        woorden. Alleen bronnen die het oordeel echt dragen.
+
+        ### Let op
+        Alleen indien relevant: randgevallen, veelgemaakte misvattingen, actieve
+        errata of banlijst-status van betrokken kaarten. Weglaten als leeg.
+
+        REGELS:
+        - Baseer je uitsluitend op de meegegeven context-fragmenten en
+          kaartgegevens. Ontbreekt het antwoord daarin: Zekerheid = Onzeker,
+          en zeg wat er nodig is. Nooit gokken zonder dat label.
+        - Officiële bronnen (lagere trust = betrouwbaarder) gaan vóór community.
+          GEVERIFIEERDE RULINGS zijn gezaghebbend en gaan vóór alles.
+        - Kaartgegevens in de context zijn gezaghebbend voor stats/mechanieken.
+        - Kort is beter: geen inleiding, geen herhaling van de vraag.
+
+        Bij een meegestuurde foto (board state): begin de Uitleg met stap 1 =
+        een feitelijke beschrijving van wat je op de foto ziet (welke kaarten,
+        zones, exhausted/ready) en benoem expliciet wat je NIET zeker kunt
+        lezen; betrek daarna alleen zekere waarnemingen in het oordeel.
         """;
 
-    public async Task<AskResult> AskAsync(string question, CancellationToken ct = default)
+    public async Task<AskResult> AskAsync(
+        string question, IReadOnlyList<RbAiClient.AiImage>? images = null,
+        CancellationToken ct = default)
     {
         // 1. Vector-kanaal
         var qv = await embeddings.EmbedOneAsync(question, ct);
@@ -115,9 +149,11 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             : "\n\nGEVERIFIEERDE RULINGS (gezaghebbend):\n" +
               string.Join("\n", rulings.Select(r => $"- {r}"));
 
+        // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
         var answer = await ai.AskAsync(
             $"Context-fragmenten:\n{context}{cardBlock}{rulingBlock}\n\nVraag: {question}",
-            SystemPrompt, ct: ct)
+            SystemPrompt, task: images is { Count: > 0 } ? "hard" : "cheap",
+            images: images, ct: ct)
             ?? "AI is niet beschikbaar — probeer het later opnieuw.";
 
         // Betrokken kaarten (herkend in vraag én antwoord) voor de kaart-

@@ -4,21 +4,50 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 // Laat ANTHROPIC_API_KEY leeg bij abonnementsgebruik — die wint stilletjes.
 export type Task = "cheap" | "hard";
 
+export interface AskImage {
+  mediaType: string; // image/jpeg | image/png | image/webp | image/gif
+  data: string; // base64
+}
+
 const MODEL: Record<Task, string> = {
   cheap: "claude-sonnet-4-6",
   hard: "claude-opus-4-8",
 };
 
-/** Stuur één prompt naar Claude en geef de tekst terug. */
+/** Streaming-input met content-blocks — nodig zodra er afbeeldingen meegaan. */
+async function* userMessage(prompt: string, images: AskImage[]) {
+  yield {
+    type: "user" as const,
+    message: {
+      role: "user" as const,
+      content: [
+        ...images.map((img) => ({
+          type: "image" as const,
+          source: {
+            type: "base64" as const,
+            media_type: img.mediaType,
+            data: img.data,
+          },
+        })),
+        { type: "text" as const, text: prompt },
+      ],
+    },
+    parent_tool_use_id: null,
+    session_id: "rb-ai",
+  };
+}
+
+/** Stuur één prompt (optioneel met afbeeldingen) naar Claude. */
 export async function askClaude(opts: {
   prompt: string;
   system?: string;
   task?: Task;
+  images?: AskImage[];
 }): Promise<string> {
-  const { prompt, system, task = "cheap" } = opts;
+  const { prompt, system, task = "cheap", images = [] } = opts;
 
   const arg = {
-    prompt,
+    prompt: images.length > 0 ? userMessage(prompt, images) : prompt,
     options: {
       model: MODEL[task],
       maxTurns: 1,

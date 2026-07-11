@@ -36,12 +36,24 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const question = String(form.get('question') ?? '').trim();
 		if (!question) return fail(400, { error: 'Stel eerst een vraag.' });
+
+		// Optionele board-state-foto — client verkleint al, dit is de vangrail.
+		let images: { mediaType: string; data: string }[] | undefined;
+		const photo = form.get('photo');
+		if (photo instanceof File && photo.size > 0) {
+			if (photo.size > 6_000_000) {
+				return fail(400, { error: 'Foto is te groot (max 6 MB).', question });
+			}
+			const buf = Buffer.from(await photo.arrayBuffer());
+			images = [{ mediaType: photo.type || 'image/jpeg', data: buf.toString('base64') }];
+		}
+
 		try {
 			const result = await api<AskResult>('/api/ask', {
 				method: 'POST',
-				body: JSON.stringify({ question })
+				body: JSON.stringify({ question, images })
 			});
-			return { question, ...result };
+			return { question, hadPhoto: Boolean(images), ...result };
 		} catch (e) {
 			return fail(500, {
 				error: `Vraag mislukt (${e instanceof Error ? e.message : e})`,

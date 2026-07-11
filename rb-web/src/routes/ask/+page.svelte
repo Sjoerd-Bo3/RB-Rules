@@ -9,6 +9,35 @@
 	let question = $state('');
 	let correcting = $state(false);
 
+	// Board-state-foto: client verkleint naar max 1600px JPEG vóór upload.
+	let photoInput = $state<HTMLInputElement | null>(null);
+	let photoPreview = $state<string | null>(null);
+
+	async function downscale(file: File): Promise<Blob> {
+		const bitmap = await createImageBitmap(file);
+		const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+		if (scale === 1 && file.size < 1_500_000) return file;
+		const canvas = document.createElement('canvas');
+		canvas.width = Math.round(bitmap.width * scale);
+		canvas.height = Math.round(bitmap.height * scale);
+		canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+		return new Promise((resolve) =>
+			canvas.toBlob((b) => resolve(b ?? file), 'image/jpeg', 0.85)
+		);
+	}
+
+	function onPhotoChange() {
+		const f = photoInput?.files?.[0];
+		if (photoPreview) URL.revokeObjectURL(photoPreview);
+		photoPreview = f ? URL.createObjectURL(f) : null;
+	}
+
+	function clearPhoto() {
+		if (photoInput) photoInput.value = '';
+		if (photoPreview) URL.revokeObjectURL(photoPreview);
+		photoPreview = null;
+	}
+
 	const EXAMPLES = [
 		'Wanneer mag ik een unit moven, en wat telt niet als move?',
 		'Wat doet Deflect tegen een spell die meerdere targets kiest?',
@@ -59,12 +88,17 @@
 	<form
 		method="POST"
 		action="?/ask"
-		use:enhance={({ formData }) => {
+		enctype="multipart/form-data"
+		use:enhance={async ({ formData }) => {
 			busy = true;
 			const q = String(formData.get('question') ?? '').trim();
 			if (q) remember(q);
+			const f = photoInput?.files?.[0];
+			if (f) formData.set('photo', await downscale(f), 'board.jpg');
+			else formData.delete('photo');
 			return async ({ update }) => {
 				busy = false;
+				clearPhoto();
 				await update();
 			};
 		}}
@@ -76,7 +110,30 @@
 			placeholder="Beschrijf de situatie of stel je regelvraag…"
 			bind:value={question}
 		></textarea>
-		<button type="submit" disabled={busy}>{busy ? 'Bezig…' : 'Vraag'}</button>
+		<div class="form-row">
+			<button type="submit" disabled={busy}>{busy ? 'Bezig…' : 'Vraag'}</button>
+			<input
+				bind:this={photoInput}
+				type="file"
+				name="photo"
+				accept="image/*"
+				capture="environment"
+				class="hidden-input"
+				onchange={onPhotoChange}
+			/>
+			<button type="button" class="fb" onclick={() => photoInput?.click()}>
+				{photoPreview ? 'Andere foto' : 'Foto van de tafel toevoegen'}
+			</button>
+			{#if photoPreview}
+				<span class="photo-chip">
+					<img src={photoPreview} alt="Board state" />
+					<button type="button" class="fb" onclick={clearPhoto}>Verwijder</button>
+				</span>
+			{/if}
+		</div>
+		{#if photoPreview}
+			<p class="meta small">De foto gaat mee als board state — de ruling benoemt eerst wat er zichtbaar is.</p>
+		{/if}
 	</form>
 
 	{#if busy}
@@ -209,10 +266,17 @@
 		resize: vertical;
 	}
 	button[type='submit'] {
-		margin-top: 10px; background: var(--accent); color: var(--accent-ink); border: 0;
+		background: var(--accent); color: var(--accent-ink); border: 0;
 		border-radius: 8px; padding: 9px 18px; font-weight: 600; cursor: pointer;
 	}
 	button[type='submit']:disabled { opacity: 0.55; }
+	.form-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+	.hidden-input { display: none; }
+	.photo-chip { display: inline-flex; align-items: center; gap: 8px; }
+	.photo-chip img {
+		height: 44px; border-radius: 6px; border: 1px solid var(--border);
+	}
+	.small { font-size: 0.78rem; margin: 8px 0 0; }
 	.waiting { display: flex; gap: 14px; align-items: center; padding: 16px; margin-bottom: 16px; }
 	.phase { margin: 0 0 2px; font-weight: 600; }
 	.waiting .meta { margin: 0; font-size: 0.85rem; }

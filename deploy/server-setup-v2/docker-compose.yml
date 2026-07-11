@@ -35,6 +35,8 @@ services:
     environment:
       RB_API_URL: http://rb-v2-api:8080
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Board-state-foto's bij rulings-vragen (adapter-node default is 512K)
+      BODY_SIZE_LIMIT: 10M
     depends_on: [rb-api]
     networks: [internal, caddy]
 

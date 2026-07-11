@@ -203,7 +203,17 @@ app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
 {
     if (string.IsNullOrWhiteSpace(req.Question))
         return Results.BadRequest(new { error = "question is verplicht" });
-    var result = await ask.AskAsync(req.Question.Trim());
+    // Optionele board-state-foto('s): max 2, alleen gangbare beeldformaten.
+    var images = (req.Images ?? [])
+        .Where(i => !string.IsNullOrWhiteSpace(i.Data))
+        .Take(2)
+        .Select(i => new RbAiClient.AiImage(i.MediaType, i.Data))
+        .ToList();
+    if (images.Any(i => i.MediaType is not ("image/jpeg" or "image/png" or "image/webp" or "image/gif")))
+        return Results.BadRequest(new { error = "afbeeldingstype niet ondersteund" });
+    if (images.Any(i => i.Data.Length > 8_000_000))
+        return Results.BadRequest(new { error = "afbeelding te groot (max ~6 MB)" });
+    var result = await ask.AskAsync(req.Question.Trim(), images.Count > 0 ? images : null);
     return Results.Ok(result);
 });
 
@@ -933,7 +943,9 @@ static IQueryable<RbRules.Domain.Card> ApplyCardFilters(
 public record SourcePatch(
     string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled);
 
-public record AskRequest(string Question);
+public record AskRequest(string Question, List<AskImageDto>? Images = null);
+
+public record AskImageDto(string MediaType, string Data);
 
 public record ResolveRequest(string[] CardIds);
 
