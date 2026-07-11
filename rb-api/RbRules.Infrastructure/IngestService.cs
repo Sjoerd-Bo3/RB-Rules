@@ -6,9 +6,17 @@ namespace RbRules.Infrastructure;
 public record IngestResult(string SourceId, string Status, string? Detail = null);
 
 /// <summary>Scan-pipeline (port van de PoP-runner, met audit-fixes):
-/// fetch → boilerplate-strip → hash → diff → AI-classify → store + log.</summary>
-public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
+/// fetch → boilerplate-strip → hash → diff → AI-classify → store + log.
+/// Sluit af met een naclassificatie-ronde voor changes die eerder zonder
+/// samenvatting zijn opgeslagen (#58).</summary>
+public class IngestService(
+    RbRulesDbContext db, HttpClient http, RbAiClient ai, ChangeClassificationService classifier)
 {
+    /// <summary>Retry-venster voor naclassificatie: oud genoeg om een paar
+    /// dagen rb-ai-uitval te overbruggen, jong genoeg om de scan goedkoop te
+    /// houden (oudere gevallen pakt de handmatige classify-job op).</summary>
+    public static readonly TimeSpan ReclassifyWindow = TimeSpan.FromDays(14);
+
     public const string BrowserUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -36,6 +44,36 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
             db.RunLogs.Add(new RunLog { Kind = "scan", Ref = src.Id, Status = r.Status, Detail = r.Detail });
             await db.SaveChangesAsync(ct);
         }
+
+        // Naclassificatie (#58): changes die bij een eerdere scan zonder
+        // classificatie zijn opgeslagen (rb-ai-uitval) krijgen alsnog een kans
+        // — de diff staat immers opgeslagen. Best-effort: uitval hier raakt de
+        // scan-resultaten niet.
+        try
+        {
+            var r = await classifier.ClassifyPendingAsync(
+                since: now - ReclassifyWindow,
+                progress: p => progress?.Invoke($"naclassificatie — {p}"), ct: ct);
+            if (r.Attempted > 0)
+            {
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = "classify", Ref = "scan-retry",
+                    Status = r.Failed > 0 ? "info" : "ok",
+                    Detail = $"{r.Classified} changes alsnog geclassificeerd, {r.Failed} mislukt",
+                });
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "classify", Ref = "scan-retry", Status = "error", Detail = ex.Message,
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
         return results;
     }
 
