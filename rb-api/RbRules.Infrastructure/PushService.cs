@@ -47,7 +47,14 @@ public class PushService(ILogger<PushService> logger)
                 logger.LogWarning(ex, "Push naar {Endpoint} mislukt", s.Endpoint[..Math.Min(40, s.Endpoint.Length)]);
             }
         }
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Abonnement is ondertussen al (elders) verwijderd — prima.
+        }
         return sent;
     }
 }

@@ -40,25 +40,29 @@ export const actions: Actions = {
 		const verdict = String(form.get('verdict') ?? '');
 		const text = String(form.get('text') ?? '').trim() || undefined;
 		const answer = String(form.get('answer') ?? '');
-		const citations = form.get('citations');
+		let citations: Citation[] = [];
+		try {
+			citations = JSON.parse(String(form.get('citations') ?? '[]'));
+		} catch {
+			citations = [];
+		}
+		// Ook bij fouten antwoord+citaties teruggeven, anders verdwijnt het
+		// zojuist gegeven antwoord van de pagina.
 		if (!question || !['up', 'down'].includes(verdict)) {
-			return fail(400, { error: 'Ongeldige feedback.' });
+			return fail(400, { error: 'Ongeldige feedback.', question, answer, citations });
 		}
 		try {
 			await api('/api/corrections', {
 				method: 'POST',
 				body: JSON.stringify({ question, verdict, text })
 			});
-			return {
-				question,
-				answer,
-				citations: citations ? JSON.parse(String(citations)) : [],
-				feedbackSent: verdict
-			};
+			return { question, answer, citations, feedbackSent: verdict };
 		} catch (e) {
 			return fail(500, {
 				error: `Feedback versturen mislukt (${e instanceof Error ? e.message : e})`,
-				question
+				question,
+				answer,
+				citations
 			});
 		}
 	}

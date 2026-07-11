@@ -182,11 +182,17 @@ app.MapGet("/api/cards/{id}", async (string id, RbRulesDbContext db) =>
             x.RiftboundId, x.SetId, x.SetLabel, x.Rarity, x.CollectorNumber, x.ImageUrl,
         })
         .ToListAsync();
+    // Mining draait alleen op canonieke printings — varianten tonen de
+    // analyse van hun canonieke kaart (zelfde tekst, zelfde spel-gedrag).
+    var canonical = c.VariantOf is null ? null : await db.Cards.FindAsync(c.VariantOf);
     return Results.Ok(new
     {
         c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
         c.Energy, c.Might, c.Power, c.SetId, c.SetLabel, c.CollectorNumber,
-        c.TextPlain, c.ImageUrl, c.Tags, c.Mechanics, c.Triggers, c.Effects,
+        c.TextPlain, c.ImageUrl, c.Tags,
+        Mechanics = c.Mechanics ?? canonical?.Mechanics,
+        Triggers = c.Triggers ?? canonical?.Triggers,
+        Effects = c.Effects ?? canonical?.Effects,
         c.UpdatedAt, Banned = banned, ErrataText = erratum,
         c.VariantOf, Versions = versions,
     });
@@ -271,8 +277,17 @@ app.MapGet("/api/cards/{id}/similar", async (
 {
     var card = await db.Cards.FindAsync(id);
     if (card is null) return Results.NotFound();
-    if (card.Embedding is null)
+    // Varianten hebben geen eigen embedding — anker op de canonieke printing,
+    // met als vangnet elke printing van dezelfde naam die wél geëmbed is.
+    var anchorCard = card;
+    if (anchorCard.Embedding is null && card.VariantOf is not null)
+        anchorCard = await db.Cards.FindAsync(card.VariantOf) ?? card;
+    if (anchorCard.Embedding is null)
+        anchorCard = await db.Cards
+            .FirstOrDefaultAsync(c => c.Name == card.Name && c.Embedding != null) ?? anchorCard;
+    if (anchorCard.Embedding is null)
         return Results.BadRequest(new { error = "kaart heeft nog geen embedding" });
+    card = anchorCard;
 
     var anchor = card.Embedding;
     var rows = await db.Cards
@@ -401,10 +416,14 @@ app.MapGet("/api/cards/{id}/rules", async (string id, RbRulesDbContext db) =>
         .ToListAsync();
 
     // Relevante regelsecties via de kaart-embedding (semantisch dichtstbij).
+    // Varianten lenen de embedding van hun canonieke printing.
+    var embeddingSource = card;
+    if (embeddingSource.Embedding is null && card.VariantOf is not null)
+        embeddingSource = await db.Cards.FindAsync(card.VariantOf) ?? card;
     object relevantRules = Array.Empty<object>();
-    if (card.Embedding is not null)
+    if (embeddingSource.Embedding is not null)
     {
-        var anchor = card.Embedding;
+        var anchor = embeddingSource.Embedding;
         relevantRules = await db.RuleChunks
             .Where(c => c.Embedding != null && c.SectionCode != null)
             .OrderBy(c => c.Embedding!.CosineDistance(anchor))
@@ -433,6 +452,12 @@ app.MapPost("/api/push/subscribe", async (PushSubscribe body, RbRulesDbContext d
     if (string.IsNullOrWhiteSpace(body.Endpoint) ||
         string.IsNullOrWhiteSpace(body.P256dh) || string.IsNullOrWhiteSpace(body.Auth))
         return Results.BadRequest(new { error = "endpoint, p256dh en auth zijn verplicht" });
+    // SSRF-guard: alleen echte https-push-endpoints, geen interne adressen.
+    if (!Uri.TryCreate(body.Endpoint, UriKind.Absolute, out var uri) ||
+        uri.Scheme != "https" || uri.IsLoopback ||
+        System.Net.IPAddress.TryParse(uri.Host, out _))
+        return Results.BadRequest(new { error = "ongeldig push-endpoint" });
+
     var existing = await db.PushSubscriptions.FindAsync(body.Endpoint);
     if (existing is null)
     {
@@ -446,7 +471,8 @@ app.MapPost("/api/push/subscribe", async (PushSubscribe body, RbRulesDbContext d
         existing.P256dh = body.P256dh;
         existing.Auth = body.Auth;
     }
-    await db.SaveChangesAsync();
+    try { await db.SaveChangesAsync(); }
+    catch (DbUpdateException) { /* dubbele gelijktijdige subscribe — al geregistreerd */ }
     return Results.Ok(new { ok = true });
 });
 
@@ -468,6 +494,9 @@ app.MapPost("/api/corrections", async (CorrectionSubmit body, RbRulesDbContext d
         : body.Text.Trim();
     if (text.Length > 4000)
         return Results.BadRequest(new { error = "correctie is te lang (max 4000 tekens)" });
+    // Spam-rem: de reviewqueue is handwerk — cap de open items.
+    if (await db.Corrections.CountAsync(c => c.Status == "unverified") >= 500)
+        return Results.StatusCode(429);
 
     db.Corrections.Add(new Correction
     {
@@ -695,8 +724,25 @@ admin.MapPost("/jobs/{name}", (string name, JobRunner jobs) =>
     {
         "scan" => async (sp, report, ct) =>
         {
+            var scanStart = DateTimeOffset.UtcNow;
             var r = await sp.GetRequiredService<IngestService>()
                 .ScanAsync(onlyDue: false, progress: report, ct: ct);
+            // Ook handmatige scans sturen pushmeldingen bij high-severity.
+            try
+            {
+                var db = sp.GetRequiredService<RbRulesDbContext>();
+                var push = sp.GetRequiredService<PushService>();
+                var important = await db.Changes
+                    .Where(c => c.DetectedAt >= scanStart && c.Severity == "high")
+                    .ToListAsync(ct);
+                foreach (var c in important)
+                    await push.SendToAllAsync(db, "Belangrijke Riftbound-wijziging",
+                        c.Summary ?? c.ChangeType, "https://riftbound-v2.bo3.dev/", ct);
+            }
+            catch
+            {
+                // push is best-effort
+            }
             return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
         },
         "cards" => async (sp, report, ct) =>

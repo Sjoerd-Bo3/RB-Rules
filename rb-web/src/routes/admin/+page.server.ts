@@ -49,14 +49,22 @@ export const actions: Actions = {
 	verifyCorrection: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
 		const form = await request.formData();
-		await adminApi(`/api/admin/corrections/${form.get('id')}/verify`, { method: 'POST' });
-		return { ok: true };
+		try {
+			await adminApi(`/api/admin/corrections/${form.get('id')}/verify`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
 	},
 	deleteCorrection: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
 		const form = await request.formData();
-		await adminApi(`/api/admin/corrections/${form.get('id')}`, { method: 'DELETE' });
-		return { ok: true };
+		try {
+			await adminApi(`/api/admin/corrections/${form.get('id')}`, { method: 'DELETE' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
 	},
 	toggle: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });

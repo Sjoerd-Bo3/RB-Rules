@@ -5,6 +5,13 @@
 	// LLM-uitleg per vergelijkbaar paar (#30), lazy en server-side gecachet.
 	let explanations = $state<Record<string, string>>({});
 	let explaining = $state<string | null>(null);
+	// Component wordt hergebruikt bij client-side navigatie tussen kaarten;
+	// uitleg hoort bij het paar, dus resetten zodra de kaart wisselt.
+	$effect(() => {
+		void c.riftboundId;
+		explanations = {};
+		explaining = null;
+	});
 	async function explain(otherId: string) {
 		if (explanations[otherId] || explaining) return;
 		explaining = otherId;

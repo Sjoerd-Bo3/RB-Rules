@@ -99,7 +99,8 @@
 						stroke="#263650" stroke-width="1.4"
 						stroke-dasharray={e.dashed ? '5 5' : undefined} />
 				{/each}
-				{#each layout.nodes as n (n.id + n.kind)}
+				<!-- Index-key: dezelfde kaart mag in meerdere groepen voorkomen -->
+				{#each layout.nodes as n, i (i)}
 					{#if n.kind === 'mechanic'}
 						<a href="/cards?mechanic={encodeURIComponent(n.label)}">
 							<rect x={n.x - 54} y={n.y - 15} width="108" height="30" rx="15"

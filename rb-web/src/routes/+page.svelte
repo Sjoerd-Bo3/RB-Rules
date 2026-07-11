@@ -49,7 +49,7 @@
 				applicationServerKey: b64ToBytes(publicKey)
 			});
 			const raw = sub.toJSON();
-			await fetch('/push', {
+			const res = await fetch('/push', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
@@ -59,6 +59,12 @@
 					auth: raw.keys?.auth
 				})
 			});
+			if (!res.ok) {
+				// Server heeft de registratie niet — browser-abonnement terugdraaien.
+				await sub.unsubscribe().catch(() => {});
+				pushState = 'off';
+				return;
+			}
 			pushState = 'on';
 		} catch {
 			pushState = prev === 'busy' ? 'off' : prev;
