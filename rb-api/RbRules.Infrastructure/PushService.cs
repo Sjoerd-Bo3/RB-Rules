@@ -17,6 +17,26 @@ public class PushService(ILogger<PushService> logger)
 
     public bool Enabled => !string.IsNullOrEmpty(PublicKey) && !string.IsNullOrEmpty(_privateKey);
 
+    /// <summary>Meld high-severity wijzigingen sinds een tijdstip aan alle
+    /// abonnees (review-fix #44: bestond dubbel in scheduler en scan-job).</summary>
+    public async Task NotifyHighSeverityAsync(
+        RbRulesDbContext db, DateTimeOffset since, CancellationToken ct = default)
+    {
+        if (!Enabled) return;
+        var important = await db.Changes.AsNoTracking()
+            .Where(c => c.DetectedAt >= since && c.Severity == "high")
+            .ToListAsync(ct);
+        foreach (var c in important)
+        {
+            var sent = await SendToAllAsync(db,
+                "Belangrijke Riftbound-wijziging",
+                c.Summary ?? c.ChangeType,
+                "https://riftbound-v2.bo3.dev/", ct);
+            if (sent > 0)
+                logger.LogInformation("Push: {Sent} meldingen voor change {Id}", sent, c.Id);
+        }
+    }
+
     public async Task<int> SendToAllAsync(
         RbRulesDbContext db, string title, string body, string url, CancellationToken ct = default)
     {

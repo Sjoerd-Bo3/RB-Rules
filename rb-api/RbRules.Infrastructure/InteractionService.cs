@@ -19,8 +19,16 @@ public class InteractionService(
         int maxCandidates = 60, Action<string>? progress = null, CancellationToken ct = default)
     {
         progress?.Invoke("kandidaat-paren zoeken op gedeelde mechanieken");
-        var cards = await db.Cards
-            .Where(c => c.Mechanics != null)
+        // Canoniek + projectie zonder embedding-vectoren (#43/#57).
+        var cards = await db.Cards.AsNoTracking()
+            .Where(c => c.Mechanics != null && c.VariantOf == null)
+            .Select(c => new Card
+            {
+                RiftboundId = c.RiftboundId, Name = c.Name, Type = c.Type,
+                Supertype = c.Supertype, Domains = c.Domains,
+                Mechanics = c.Mechanics, Triggers = c.Triggers, Effects = c.Effects,
+                Energy = c.Energy, Might = c.Might, TextPlain = c.TextPlain,
+            })
             .ToListAsync(ct);
 
         // Al beoordeelde paren niet opnieuw (geverifieerd of afgewezen doen we
@@ -33,13 +41,8 @@ public class InteractionService(
             .ToHashSet();
 
         var candidates = InteractionMiner.FindCandidates(cards, maxCandidates * 3)
-            .Where(c =>
-            {
-                var key = string.CompareOrdinal(c.A.RiftboundId, c.B.RiftboundId) < 0
-                    ? (c.A.RiftboundId, c.B.RiftboundId)
-                    : (c.B.RiftboundId, c.A.RiftboundId);
-                return !knownSet.Contains(key);
-            })
+            .Where(c => !knownSet.Contains(
+                CardText.OrderedPair(c.A.RiftboundId, c.B.RiftboundId)))
             .Take(maxCandidates)
             .ToList();
 
@@ -56,7 +59,7 @@ public class InteractionService(
 
             foreach (var v in InteractionMiner.ParseVerified(raw))
             {
-                var (a, b) = string.CompareOrdinal(v.AId, v.BId) < 0 ? (v.AId, v.BId) : (v.BId, v.AId);
+                var (a, b) = CardText.OrderedPair(v.AId, v.BId);
                 db.CardInteractions.Add(new CardInteraction
                 {
                     CardAId = a, CardBId = b, Kind = v.Kind, Explanation = v.Explanation,
@@ -109,13 +112,12 @@ public class InteractionService(
             .Where(e => cardIds.Contains(e.CardRiftboundId!))
             .ToListAsync(ct);
 
+        // Uniforme prompt-beschrijving (#44) — post-errata-tekst is leidend en
+        // icon-tokens gaan gehumaniseerd naar het model.
         var cardBlock = string.Join("\n", cards.Select(c =>
-        {
-            var text = errata.FirstOrDefault(e => e.CardRiftboundId == c.RiftboundId)?.NewText
-                       ?? c.TextPlain ?? "(geen tekst)";
-            var mech = c.Mechanics is { Length: > 0 } m ? $" Mechanieken: {string.Join(", ", m)}." : "";
-            return $"- {c.Name}: {text}{mech}";
-        }));
+            "- " + CardText.DescribeForPrompt(c,
+                effectiveText: errata.FirstOrDefault(e => e.CardRiftboundId == c.RiftboundId)?.NewText
+                               ?? c.TextPlain)));
 
         // Relevante regelsecties: zoek op de gecombineerde mechanieken + teksten.
         var searchText = string.Join(" ", cards.SelectMany(c => c.Mechanics ?? [])

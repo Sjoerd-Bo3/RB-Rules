@@ -55,4 +55,25 @@ public static partial class CardText
     /// (provenance-guard: model-wissel = expliciete her-embed).</summary>
     public static bool NeedsEmbedding(Card c) =>
         c.Embedding is null || c.EmbeddingModel != EmbeddingConfig.Model;
+
+    /// <summary>Canonieke groeps-id van een kaart (variantgroepering).</summary>
+    public static string CanonicalId(Card c) => c.VariantOf ?? c.RiftboundId;
+
+    /// <summary>Uniforme kaartbeschrijving voor LLM-prompts (review-fix #44:
+    /// bestond op drie plekken met inconsistent resultaat, o.a. rauwe
+    /// icon-tokens richting het model).</summary>
+    public static string DescribeForPrompt(Card c, bool banned = false, string? effectiveText = null)
+    {
+        var text = effectiveText ?? c.TextPlain;
+        return $"{c.Name} — {string.Join(" ", new[] { c.Supertype, c.Type }.Where(s => s != null))}. " +
+               $"Domains: {string.Join(", ", c.Domains)}. " +
+               $"Energy {c.Energy?.ToString() ?? "—"}, Might {c.Might?.ToString() ?? "—"}. " +
+               (c.Mechanics is { Length: > 0 } m ? $"Mechanieken: {string.Join(", ", m)}. " : "") +
+               (banned ? "STAAT OP DE BANLIJST. " : "") +
+               (text is null ? "" : $"Tekst: {HumanizeIcons(text[..Math.Min(text.Length, 240)])}");
+    }
+
+    /// <summary>Geordend kaartpaar (a &lt; b) — voor interacties en uitleg-cache.</summary>
+    public static (string A, string B) OrderedPair(string idA, string idB) =>
+        string.CompareOrdinal(idA, idB) < 0 ? (idA, idB) : (idB, idA);
 }

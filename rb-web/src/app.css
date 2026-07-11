@@ -36,6 +36,16 @@ body {
 
 img { max-width: 100%; height: auto; }
 
+/* iOS zoomt in op form-controls met font-size < 16px (#56) — op smalle
+   schermen dus altijd minimaal 16px. */
+@media (max-width: 740px) {
+	input,
+	select,
+	textarea {
+		font-size: 16px;
+	}
+}
+
 /* Brede inhoud (tabellen) krijgt zijn eigen horizontale scroll. */
 .table-wrap {
 	overflow-x: auto;

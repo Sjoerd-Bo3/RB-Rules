@@ -16,13 +16,18 @@ public class CardEmbeddingPipeline(RbRulesDbContext db, EmbeddingService embeddi
         bool force = false, Action<string>? progress = null, CancellationToken ct = default)
     {
         // Varianten (alt-art/promo) slaan we over: identieke tekst, en zo
-        // blijven 'vergelijkbare kaarten' vrij van duplicaten.
-        var cards = await db.Cards
-            .Where(c => c.VariantOf == null)
+        // blijven 'vergelijkbare kaarten' vrij van duplicaten. Alleen de
+        // te-embedden kaarten laden (review-fix #43: niet elk uur alle
+        // 1024-dim vectoren naar de client trekken om te filteren).
+        var model = EmbeddingConfig.Model;
+        var baseQuery = db.Cards.Where(c => c.VariantOf == null);
+        var total = await baseQuery.CountAsync(ct);
+        var todo = await (force
+                ? baseQuery
+                : baseQuery.Where(c => c.Embedding == null || c.EmbeddingModel != model))
             .OrderBy(c => c.RiftboundId)
             .ToListAsync(ct);
-        var todo = force ? cards : [.. cards.Where(CardText.NeedsEmbedding)];
-        var skipped = cards.Count - todo.Count;
+        var skipped = total - todo.Count;
 
         for (var i = 0; i < todo.Count; i += BatchSize)
         {

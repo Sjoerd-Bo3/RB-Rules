@@ -7,6 +7,9 @@ namespace RbRules.Infrastructure;
 /// Best-effort: AI-uitval mag een scan nooit breken.</summary>
 public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
 {
+    /// <summary>Gedeelde fallback-tekst bij AI-uitval (één plek, #44).</summary>
+    public const string UnavailableAnswer = "AI is niet beschikbaar — probeer het later opnieuw.";
+
     public record AiImage(string MediaType, string Data);
 
     public async Task<string?> AskAsync(

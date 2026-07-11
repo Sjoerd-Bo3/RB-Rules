@@ -215,14 +215,8 @@ public static class AdminEndpoints
                     // Ook handmatige scans sturen pushmeldingen bij high-severity.
                     try
                     {
-                        var db = sp.GetRequiredService<RbRulesDbContext>();
-                        var push = sp.GetRequiredService<PushService>();
-                        var important = await db.Changes
-                            .Where(c => c.DetectedAt >= scanStart && c.Severity == "high")
-                            .ToListAsync(ct);
-                        foreach (var c in important)
-                            await push.SendToAllAsync(db, "Belangrijke Riftbound-wijziging",
-                                c.Summary ?? c.ChangeType, "https://riftbound-v2.bo3.dev/", ct);
+                        await sp.GetRequiredService<PushService>().NotifyHighSeverityAsync(
+                            sp.GetRequiredService<RbRulesDbContext>(), scanStart, ct);
                     }
                     catch
                     {

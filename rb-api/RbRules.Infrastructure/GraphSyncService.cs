@@ -14,7 +14,19 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
 {
     public async Task<GraphSyncResult> SyncAsync(CancellationToken ct = default)
     {
-        var cards = await db.Cards.AsNoTracking().ToListAsync(ct);
+        // Alleen canonieke printings (#57): alt-arts zijn dezelfde kaart in
+        // het spel en horen niet als losse knopen in de graph. Projectie
+        // zonder embedding-vectoren (#43).
+        var cards = await db.Cards.AsNoTracking()
+            .Where(c => c.VariantOf == null)
+            .Select(c => new Card
+            {
+                RiftboundId = c.RiftboundId, Name = c.Name, Type = c.Type,
+                Rarity = c.Rarity, Domains = c.Domains, Tags = c.Tags,
+                Mechanics = c.Mechanics, Energy = c.Energy, Might = c.Might,
+                SetId = c.SetId, SetLabel = c.SetLabel,
+            })
+            .ToListAsync(ct);
 
         var cardRows = cards.Select(c => (object)new Dictionary<string, object?>
         {
@@ -33,6 +45,15 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         var mechanicPairs = Pairs(cards, c => c.Mechanics ?? []);
 
         await using var session = driver.AsyncSession();
+
+        // Eerder gesyncte variant-knopen opruimen (#57) — de graph is vóór
+        // de variantgroepering gevuld.
+        await session.RunAsync(
+            "MATCH (c:Card) WHERE NOT c.id IN $ids DETACH DELETE c",
+            new Dictionary<string, object>
+            {
+                ["ids"] = cards.Select(c => (object)c.RiftboundId).ToList(),
+            });
 
         await session.RunAsync(
             """

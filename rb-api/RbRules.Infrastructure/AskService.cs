@@ -70,14 +70,12 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         CancellationToken ct = default)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        // 0. Kaartnamenlijst één keer per request (review-fix: werd 3× geladen)
+        // 0. Naam-match in SQL (review-fix #43: geen full-table naar de client)
         // + interne router: vraagtype stuurt structuur en bronnen-bias.
-        var cardNames = await db.Cards.AsNoTracking()
-            .Where(c => c.VariantOf == null)
-            .Select(c => new CardName(c.RiftboundId, c.Name))
-            .ToListAsync(ct);
         var qLower = question.ToLowerInvariant();
-        var mentionsCard = cardNames.Any(n => Matches(qLower, n.Name));
+        var mentionsCard = await db.Cards
+            .AnyAsync(c => c.VariantOf == null && c.Name.Length >= 4 &&
+                           qLower.Contains(c.Name.ToLower()), ct);
         var type = QuestionRouter.Classify(question, mentionsCard);
 
         // 1. Vector-kanaal
@@ -182,7 +180,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
         // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
         // regels het keyword niet expliciet definiëren.
-        var cardContext = await CardContextAsync(question, qLower, qv, cardNames, ct);
+        var cardContext = await CardContextAsync(question, qLower, qv, ct);
         var cardBlock = cardContext.Block;
 
         // 4b. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend blok.
@@ -225,11 +223,11 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}",
             task: images is { Count: > 0 } ? "hard" : "cheap",
             images: images, ct: ct);
-        var answer = aiAnswer ?? "AI is niet beschikbaar — probeer het later opnieuw.";
+        var answer = aiAnswer ?? RbAiClient.UnavailableAnswer;
 
         // Betrokken kaarten (herkend in vraag én antwoord) voor de kaart-
         // uitklap op de ruling-pagina.
-        var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", cardNames, ct);
+        var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", ct);
         sw.Stop();
 
         // Denkstappen-trace voor het beheer (#40) — best-effort.
@@ -270,33 +268,20 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         return new(answer, citations, cards, type.ToString(), Ok: aiAnswer is not null);
     }
 
-    private sealed record CardName(string RiftboundId, string Name);
-
-    /// <summary>Kaartnaam-match: substring op lowercase, minimaal 4 tekens
-    /// (review-fix: één matcher voor alle drie de kanalen).</summary>
-    private static bool Matches(string lowerText, string cardName) =>
-        cardName.Length >= 4 && lowerText.Contains(cardName.ToLowerInvariant());
-
-    private async Task<List<AskCard>> MatchCardsAsync(
-        string lowerText, List<CardName> names, CancellationToken ct)
+    private async Task<List<AskCard>> MatchCardsAsync(string lowerText, CancellationToken ct)
     {
-        var hits = names
-            .Where(c => Matches(lowerText, c.Name))
-            .Select(c => c.RiftboundId)
-            .Take(6)
-            .ToList();
-        if (hits.Count == 0) return [];
-
+        // Naam-match in SQL (#43); ban-status per variantgroep (#44).
         var cards = await db.Cards.AsNoTracking()
-            .Where(c => hits.Contains(c.RiftboundId))
+            .Where(c => c.VariantOf == null && c.Name.Length >= 4 &&
+                        lowerText.Contains(c.Name.ToLower()))
+            .Take(6)
             .ToListAsync(ct);
-        var banned = await db.BanEntries
-            .Where(b => b.CardRiftboundId != null && hits.Contains(b.CardRiftboundId))
-            .Select(b => b.CardRiftboundId!)
-            .ToListAsync(ct);
+        if (cards.Count == 0) return [];
+
+        var banned = await BanLookup.BannedCanonicalIdsAsync(db, ct);
         return [.. cards.Select(c => new AskCard(
             c.RiftboundId, c.Name, c.Type, c.Supertype, c.Domains, c.Energy, c.Might,
-            c.TextPlain, c.Mechanics, c.ImageUrl, banned.Contains(c.RiftboundId)))];
+            c.TextPlain, c.Mechanics, c.ImageUrl, BanLookup.IsBanned(banned, c)))];
     }
 
     private sealed record CardContextResult(
@@ -307,14 +292,15 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
     /// semantische buren van de vraag. Zo is er áltijd kaart-bewijs, ook als
     /// de regels-PDF een keyword niet expliciet definieert.</summary>
     private async Task<CardContextResult> CardContextAsync(
-        string question, string qLower, Vector qv, List<CardName> names, CancellationToken ct)
+        string question, string qLower, Vector qv, CancellationToken ct)
     {
-        // 1. Exacte naam-matches (gezaghebbend voor de genoemde kaarten).
-        var nameHits = names
-            .Where(c => Matches(qLower, c.Name))
+        // 1. Exacte naam-matches, in SQL (#43).
+        var nameHits = await db.Cards
+            .Where(c => c.VariantOf == null && c.Name.Length >= 4 &&
+                        qLower.Contains(c.Name.ToLower()))
             .Take(3)
             .Select(c => c.RiftboundId)
-            .ToList();
+            .ToListAsync(ct);
 
         // 2. Mechaniek-keywords in de vraag → voorbeeldkaarten + telling.
         var allMechanics = (await db.Cards
@@ -357,23 +343,16 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var ids = nameHits.Concat(mechanicCardIds).Concat(semanticIds).Distinct().Take(8).ToList();
         if (ids.Count == 0) return new("", matchedMechanics, []);
 
-        var cards = await db.Cards.Where(c => ids.Contains(c.RiftboundId)).ToListAsync(ct);
-        var bannedIds = await db.BanEntries
-            .Where(b => b.CardRiftboundId != null && ids.Contains(b.CardRiftboundId))
-            .Select(b => b.CardRiftboundId!)
+        var cards = await db.Cards.AsNoTracking()
+            .Where(c => ids.Contains(c.RiftboundId))
             .ToListAsync(ct);
+        var banned = await BanLookup.BannedCanonicalIdsAsync(db, ct);
 
         var cardsById = cards.ToDictionary(c => c.RiftboundId);
         var lines = ids
             .Where(cardsById.ContainsKey)
             .Select(id => cardsById[id])
-            .Select(c =>
-                $"- {c.Name} — {string.Join(" ", new[] { c.Supertype, c.Type }.Where(s => s != null))}. " +
-                $"Domains: {string.Join(", ", c.Domains)}. Energy {c.Energy?.ToString() ?? "—"}, Might {c.Might?.ToString() ?? "—"}. " +
-                (c.Mechanics is { Length: > 0 } m ? $"Mechanieken: {string.Join(", ", m)}. " : "") +
-                (bannedIds.Contains(c.RiftboundId) ? "STAAT OP DE BANLIJST. " : "") +
-                (c.TextPlain is null ? "" :
-                    $"Tekst: {CardText.HumanizeIcons(c.TextPlain[..Math.Min(c.TextPlain.Length, 240)])}"));
+            .Select(c => "- " + CardText.DescribeForPrompt(c, BanLookup.IsBanned(banned, c)));
 
         var header = mechanicBlocks.Count > 0
             ? string.Join("\n", mechanicBlocks) + "\n"

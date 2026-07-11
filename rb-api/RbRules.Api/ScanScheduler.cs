@@ -38,20 +38,10 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                 {
                     try
                     {
-                        var db = scope.ServiceProvider.GetRequiredService<RbRulesDbContext>();
-                        var push = scope.ServiceProvider.GetRequiredService<PushService>();
-                        var important = await db.Changes
-                            .Where(c => c.DetectedAt >= tickStart && c.Severity == "high")
-                            .ToListAsync(ct);
-                        foreach (var c in important)
-                        {
-                            var sent = await push.SendToAllAsync(db,
-                                "Belangrijke Riftbound-wijziging",
-                                c.Summary ?? c.ChangeType,
-                                "https://riftbound-v2.bo3.dev/", ct);
-                            if (sent > 0)
-                                logger.LogInformation("Push: {Sent} meldingen voor change {Id}", sent, c.Id);
-                        }
+                        await scope.ServiceProvider.GetRequiredService<PushService>()
+                            .NotifyHighSeverityAsync(
+                                scope.ServiceProvider.GetRequiredService<RbRulesDbContext>(),
+                                tickStart, ct);
                     }
                     catch (Exception ex)
                     {
