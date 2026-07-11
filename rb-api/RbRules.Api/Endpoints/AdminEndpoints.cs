@@ -176,6 +176,7 @@ public static class AdminEndpoints
                     Knowledge = await db.KnowledgeDocs.CountAsync(),
                     Claims = await db.Claims.CountAsync(),
                     MechanicCandidates = await db.MechanicKeywords.CountAsync(k => k.Status == "candidate"),
+                    OpenProposals = await db.SourceProposals.CountAsync(p => p.Status == "proposed"),
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
             });
@@ -349,6 +350,21 @@ public static class AdminEndpoints
         admin.MapGet("/overview/claims", async (
                 string? status, int? page, AdminOverviewService overview) =>
             Results.Ok(await overview.ClaimsAsync(status, page ?? 1)));
+
+        admin.MapGet("/overview/proposals", async (
+                string? status, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.ProposalsAsync(status, page ?? 1)));
+
+        // Bronvoorstellen-review (#63): accepteren zet de bron uitgeschakeld
+        // in het register (veilige defaults — de beheerder zet hem daarna
+        // bewust aan); verwerpen houdt de URL uit volgende scout-runs.
+        admin.MapPost("/proposals/{id:long}/accept", async (
+                long id, SourceScoutService scout) =>
+            await scout.AcceptAsync(id) is { } r ? Results.Ok(r) : Results.NotFound());
+
+        admin.MapPost("/proposals/{id:long}/reject", async (
+                long id, SourceScoutService scout) =>
+            await scout.RejectAsync(id) is { } r ? Results.Ok(r) : Results.NotFound());
 
         // Claims-review (#50): accepteren maakt een claim retrieval-baar
         // (het /ask-kanaal zelf is #51); verwerpen houdt hem uit beeld.

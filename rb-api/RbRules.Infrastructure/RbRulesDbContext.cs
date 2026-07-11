@@ -28,6 +28,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<Claim> Claims => Set<Claim>();
     public DbSet<ClaimSource> ClaimSources => Set<ClaimSource>();
     public DbSet<MechanicKeyword> MechanicKeywords => Set<MechanicKeyword>();
+    public DbSet<SourceProposal> SourceProposals => Set<SourceProposal>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -189,6 +190,15 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("mechanic_keyword");
             e.HasIndex(x => x.Term).IsUnique();
+            e.HasIndex(x => x.Status);
+        });
+
+        b.Entity<SourceProposal>(e =>
+        {
+            e.ToTable("source_proposal");
+            // Eén voorstel per URL — dedupe over runs heen (de service
+            // vergelijkt genormaliseerd; de index borgt het hard).
+            e.HasIndex(x => x.Url).IsUnique();
             e.HasIndex(x => x.Status);
         });
     }

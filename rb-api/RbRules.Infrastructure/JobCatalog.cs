@@ -35,8 +35,9 @@ public static class JobCatalog
             new("interactions", InteractionsAsync),
             // Bronnenjacht (#63, stap 2): rb-ai doorzoekt het web (task
             // "research", #64) naar nieuwe regel-/uitlegbronnen. Vondsten
-            // worden alleen als voorstel gelogd (run_log, kind "scout") —
-            // opname in het register blijft een beheerdersbeslissing.
+            // komen als SourceProposal in de reviewqueue (beheer →
+            // Bronvoorstellen) — opname in het register blijft een
+            // beheerdersbeslissing.
             new("scout", ScoutAsync),
             // Backfill (#58): álle changes zonder samenvatting/duiding of met
             // type "unknown" alsnog classificeren — de scan-retry pakt alleen

@@ -18,6 +18,8 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	primer: null,
 	// Claims (#50): status-chips; leeg = alle statussen.
 	claims: { allowed: ['unreviewed', 'accepted', 'rejected', 'superseded'], fallback: '' },
+	// Bronvoorstellen uit de scout (#63): zelfde chip-patroon als claims.
+	voorstellen: { allowed: ['proposed', 'accepted', 'rejected'], fallback: '' },
 	gaten: null
 };
 
@@ -68,6 +70,11 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 				const qs = new URLSearchParams({ page: String(page) });
 				if (filter) qs.set('status', filter);
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/claims?${qs}`) };
+			}
+			case 'voorstellen': {
+				const qs = new URLSearchParams({ page: String(page) });
+				if (filter) qs.set('status', filter);
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/proposals?${qs}`) };
 			}
 			case 'gaten':
 				// Kennis-gaten-rapport (#52): vers berekend bij elke aanvraag.
@@ -169,6 +176,29 @@ export const actions: Actions = {
 		const form = await request.formData();
 		try {
 			await adminApi(`/api/admin/claims/${form.get('id')}/reject`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Bronvoorstellen (#63): accepteren zet de bron uitgeschakeld in het
+	// register (aanzetten gaat daarna bewust via de bronnen-tabel);
+	// verwerpen houdt de URL uit volgende scout-runs.
+	acceptProposal: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/proposals/${form.get('id')}/accept`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	rejectProposal: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/proposals/${form.get('id')}/reject`, { method: 'POST' });
 			return { ok: true };
 		} catch (e) {
 			return fail(502, { error: e instanceof Error ? e.message : String(e) });

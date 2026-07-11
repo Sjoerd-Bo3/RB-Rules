@@ -229,4 +229,126 @@ public class SourceScoutTests
         Assert.NotNull(r);
         Assert.Equal("https://example.com/goed", Assert.Single(r).Url);
     }
+
+    [Fact]
+    public void Parse_NewProposals_StartUnreviewed()
+    {
+        // De vondst ís het reviewqueue-item: status "proposed", nog niet
+        // beoordeeld — accepteren/verwerpen is aan de beheerder.
+        var r = SourceScout.Parse(
+            """{"proposals": [{"url": "https://example.com/guide", "name": "x", "type": "community", "motivation": "x"}]}""");
+        Assert.NotNull(r);
+        var p = Assert.Single(r);
+        Assert.Equal("proposed", p.Status);
+        Assert.Null(p.ReviewedAt);
+    }
+
+    // ── Backfill (#63): run_log-regels van vóór de reviewqueue ────────────
+
+    [Fact]
+    public void FromRunLog_WellFormedDetail_ReconstructsAllFields()
+    {
+        var foundAt = new DateTimeOffset(2026, 7, 11, 10, 0, 0, TimeSpan.Zero);
+        var p = SourceScout.FromRunLog(
+            "https://example.com/judge-faq",
+            "https://example.com/judge-faq — Judge FAQ (example.com) (community): Verzameling judge-antwoorden.",
+            foundAt);
+        Assert.Equal("https://example.com/judge-faq", p.Url);
+        // Greedy: haakjes in de naam zelf verwarren de type-extractie niet.
+        Assert.Equal("Judge FAQ (example.com)", p.Name);
+        Assert.Equal("community", p.Type);
+        Assert.Equal("Verzameling judge-antwoorden.", p.Motivation);
+        Assert.Equal(foundAt, p.FoundAt);
+        Assert.Equal("proposed", p.Status);
+    }
+
+    [Fact]
+    public void FromRunLog_PartnerType_IsPreserved()
+    {
+        var p = SourceScout.FromRunLog(
+            "https://uvsgames.com/op-guide",
+            "https://uvsgames.com/op-guide — OP Guide (partner): Toernooiprocedures.",
+            DateTimeOffset.UtcNow);
+        Assert.Equal("partner", p.Type);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("iets zonder het verwachte formaat")]
+    public void FromRunLog_UnparsableDetail_DegradesToHostAndCommunity(string? detail)
+    {
+        // Nooit een trust-upgrade door een parse-gok: onherkenbaar detail
+        // wordt community, met de host als naam.
+        var p = SourceScout.FromRunLog("https://example.com/guide", detail, DateTimeOffset.UtcNow);
+        Assert.Equal("example.com", p.Name);
+        Assert.Equal("community", p.Type);
+        Assert.Equal(detail ?? "", p.Motivation);
+    }
+
+    [Fact]
+    public void FromRunLog_UnknownTypeLabel_DegradesToCommunity()
+    {
+        var p = SourceScout.FromRunLog(
+            "https://example.com/guide",
+            "https://example.com/guide — Gids (fansite): Uitleg.",
+            DateTimeOffset.UtcNow);
+        Assert.Equal("community", p.Type);
+    }
+
+    // ── Accepteren (#63): veilige register-defaults ───────────────────────
+
+    private static SourceProposal Proposal(string url, string type = "community") => new()
+    {
+        Url = url, Name = "Testbron", Type = type, Motivation = "x",
+    };
+
+    [Fact]
+    public void ToSource_SafeDefaults_NeverEnabled()
+    {
+        var src = SourceScout.ToSource(Proposal("https://example.com/rules-guide"));
+        // De kern van de kennislagen-regel: niets gaat automatisch aan.
+        Assert.False(src.Enabled);
+        Assert.Equal("weekly", src.Cadence);
+        Assert.Equal("html", src.Parser);
+        Assert.Equal("https://example.com/rules-guide", src.Url);
+        Assert.Equal("Testbron", src.Name);
+    }
+
+    [Theory]
+    [InlineData("https://uvsgames.com/uploads/how-to-play.pdf", "pdf")]
+    [InlineData("https://uvsgames.com/uploads/HOW-TO-PLAY.PDF", "pdf")]
+    [InlineData("https://example.com/download.pdf?v=2", "pdf")]
+    [InlineData("https://example.com/pdf-uitleg", "html")]     // ".pdf" alleen als pad-einde
+    [InlineData("https://example.com/guide", "html")]
+    public void ToSource_ParserFollowsFileType(string url, string expected) =>
+        Assert.Equal(expected, SourceScout.ToSource(Proposal(url)).Parser);
+
+    [Theory]
+    [InlineData("official", 1, "official")]
+    [InlineData("partner", 2, "partner")]
+    [InlineData("community", 3, "community")]
+    [InlineData("fansite", 3, "community")]    // onbekend label degradeert
+    public void ToSource_TrustFollowsTypeEstimate_NeverTier1ForNonOfficial(
+        string type, int expectedTier, string expectedType)
+    {
+        var src = SourceScout.ToSource(Proposal("https://example.com/guide", type));
+        Assert.Equal((short)expectedTier, src.TrustTier);
+        Assert.Equal(expectedType, src.Type);
+    }
+
+    [Theory]
+    [InlineData("https://www.riftbound.gg/judge-faq/", "riftbound-gg-judge-faq")]
+    [InlineData("https://example.com/uploads/How_to-Play.pdf", "example-com-how-to-play")]
+    [InlineData("https://example.com/", "example-com")]
+    public void SlugForUrl_IsReadableAndSanitized(string url, string expected) =>
+        Assert.Equal(expected, SourceScout.SlugForUrl(url));
+
+    [Fact]
+    public void SlugForUrl_CapsLength()
+    {
+        var slug = SourceScout.SlugForUrl(
+            $"https://example.com/{new string('a', 120)}");
+        Assert.True(slug.Length <= 60);
+    }
 }
