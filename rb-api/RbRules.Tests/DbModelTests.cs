@@ -40,6 +40,44 @@ public class DbModelTests
         Assert.Equal(expectedTable, entityType!.GetTableName());
     }
 
+    /// <summary>Vertaalbaarheids-net voor de nieuwe aggregaties van #42
+    /// (conventie: LINQ dat naar SQL moet, is bewezen vertaalbaar). Dit is de
+    /// query-vorm van AdminOverviewService.UsersAsync en
+    /// UserAccountService.UsageTodayAsync; ToQueryString dwingt de vertaling
+    /// af zonder database.</summary>
+    [Fact]
+    public void UserUsageAggregates_TranslateToSql()
+    {
+        using var db = CreateContext();
+        var since = DateTimeOffset.UtcNow.AddDays(-7);
+
+        var perUser = db.AskMetrics.AsNoTracking()
+            .Where(m => m.CreatedAt >= since)
+            .GroupBy(m => m.UserId)
+            .Select(g => new
+            {
+                UserId = g.Key,
+                Questions = g.Count(),
+                Photos = g.Count(m => m.HadImage),
+                Hard = g.Count(m => m.Model == "hard" || (m.Model == null && m.HadImage)),
+                Failed = g.Count(m => !m.Ok),
+                AvgMs = (int)g.Average(m => m.DurationMs),
+            });
+        Assert.Contains("GROUP BY", perUser.ToQueryString(), StringComparison.OrdinalIgnoreCase);
+
+        var usageToday = db.AskMetrics.AsNoTracking()
+            .Where(m => m.UserId == 1 && m.CreatedAt >= since)
+            .GroupBy(m => 1)
+            .Select(g => new { Questions = g.Count(), Photos = g.Count(m => m.HadImage) });
+        Assert.NotEmpty(usageToday.ToQueryString());
+
+        // Sessie → gebruiker via de navigatie (UserQuotaFilter-pad).
+        var resolve = db.UserSessions.AsNoTracking()
+            .Where(s => s.TokenHash == "x" && s.ExpiresAt > since)
+            .Select(s => s.User);
+        Assert.Contains("JOIN", resolve.ToQueryString(), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void VectorColumns_AreTypedWithFixedDimension()
     {
