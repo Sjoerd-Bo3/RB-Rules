@@ -26,6 +26,7 @@ interface Citation {
 	text: string | null;
 	pdfUrl: string | null;
 	page: number | null;
+	parents: { code: string; text: string }[] | null;
 }
 export interface AskCard {
 	riftboundId: string;

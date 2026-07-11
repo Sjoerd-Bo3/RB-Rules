@@ -4,16 +4,17 @@ import { env } from '$env/dynamic/private';
 import { ADMIN_COOKIE, adminApi, adminToken, authed } from '$lib/server/admin';
 
 export const load: PageServerLoad = async ({ cookies }) => {
-	if (!authed(cookies)) return { authed: false, sources: [], status: null, corrections: [] };
+	if (!authed(cookies)) return { authed: false, sources: [], status: null, corrections: [], askTraces: [] };
 	try {
-		const [sources, status, corrections] = await Promise.all([
+		const [sources, status, corrections, askTraces] = await Promise.all([
 			adminApi<unknown[]>('/api/sources'),
 			adminApi<unknown>('/api/admin/status'),
-			adminApi<unknown[]>('/api/admin/corrections').catch(() => [])
+			adminApi<unknown[]>('/api/admin/corrections').catch(() => []),
+			adminApi<unknown[]>('/api/admin/asktraces').catch(() => [])
 		]);
-		return { authed: true, sources, status, corrections, apiDown: false };
+		return { authed: true, sources, status, corrections, askTraces, apiDown: false };
 	} catch {
-		return { authed: true, sources: [], status: null, corrections: [], apiDown: true };
+		return { authed: true, sources: [], status: null, corrections: [], askTraces: [], apiDown: true };
 	}
 };
 

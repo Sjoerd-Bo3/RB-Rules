@@ -357,6 +357,13 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
+        // Denkstappen-traces van de vraag-pipeline (#40).
+        admin.MapGet("/asktraces", async (RbRulesDbContext db) =>
+            await db.AskTraces.AsNoTracking()
+                .OrderByDescending(t => t.CreatedAt)
+                .Take(30)
+                .ToListAsync());
+
         // Projectie zonder Embedding — 1024 floats per rij horen niet in JSON.
         admin.MapGet("/corrections", async (RbRulesDbContext db) =>
             await db.Corrections.AsNoTracking()

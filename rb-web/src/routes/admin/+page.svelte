@@ -37,9 +37,19 @@
 		question: string | null; status: string; createdAt: string;
 	}
 
+	interface AskTrace {
+		id: number; question: string; questionType: string | null;
+		sourceBias: string | null; mentionsCard: boolean;
+		mechanicMatches: string | null; sections: string | null;
+		contextCards: string | null; verifiedRulings: number;
+		model: string | null; hadImage: boolean; durationMs: number;
+		ok: boolean; createdAt: string;
+	}
+
 	const sources = $derived(data.sources as Source[]);
 	const corrections = $derived((data.corrections ?? []) as Correction[]);
 	const openCorrections = $derived(corrections.filter((c) => c.status === 'unverified'));
+	const askTraces = $derived((data.askTraces ?? []) as AskTrace[]);
 	// svelte-ignore state_referenced_locally
 	let live = $state<Status | null>(data.status as Status | null);
 	const running = $derived(live?.running ?? null);
@@ -215,6 +225,30 @@
 		</table>
 		</div>
 
+		<!-- Vraag-traces (#40): denkstappen van de ask-pipeline -->
+		{#if askTraces.length}
+			<h2>Vraag-traces <span class="meta">(laatste {askTraces.length} — de route die elke vraag door de pipeline nam)</span></h2>
+			{#each askTraces as t (t.id)}
+				<details class="trace panel">
+					<summary>
+						<span class="badge {t.ok ? 'ok-b' : 'err'}">{t.questionType ?? '?'}</span>
+						<span class="trace-q">{t.question}</span>
+						<span class="meta">{(t.durationMs / 1000).toFixed(1)}s{t.hadImage ? ' · foto' : ''} · {new Date(t.createdAt).toLocaleTimeString('nl-NL')}</span>
+					</summary>
+					<dl>
+						<dt>Router</dt>
+						<dd>type {t.questionType} · bron-bias {t.sourceBias ?? 'geen'} · kaartnaam herkend: {t.mentionsCard ? 'ja' : 'nee'}{t.mechanicMatches ? ` · mechanieken: ${t.mechanicMatches}` : ''}</dd>
+						<dt>Regelsecties</dt>
+						<dd>{t.sections || '—'}</dd>
+						<dt>Kaartcontext</dt>
+						<dd>{t.contextCards || '—'}</dd>
+						<dt>Overig</dt>
+						<dd>{t.verifiedRulings} geverifieerde rulings · model {t.model} · {t.ok ? 'geslaagd' : 'AI niet beschikbaar'}</dd>
+					</dl>
+				</details>
+			{/each}
+		{/if}
+
 		<!-- Live logs -->
 		<h2>Recente activiteit <span class="meta live-tag">live</span></h2>
 		<div class="table-wrap">
@@ -277,6 +311,12 @@
 	.job { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
 	.job-info { flex: 1; display: flex; flex-direction: column; }
 	.job-info .hint { color: var(--muted); font-size: 0.78rem; }
+	.trace { padding: 10px 14px; margin-bottom: 6px; }
+	.trace summary { cursor: pointer; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+	.trace-q { flex: 1; min-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.trace dl { margin: 10px 0 2px; }
+	.trace dt { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 8px; }
+	.trace dd { margin: 2px 0 0; font-size: 0.9rem; }
 	.correction { display: flex; gap: 14px; padding: 12px 14px; margin-bottom: 8px; }
 	.correction-body { flex: 1; }
 	.correction .q { margin: 0 0 4px; color: var(--muted); font-size: 0.88rem; }

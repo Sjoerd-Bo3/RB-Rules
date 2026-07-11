@@ -76,6 +76,13 @@ public class RuleSectionParserTests
     [InlineData("601", "601")]
     public void NormalizeCode_Works(string input, string expected) =>
         Assert.Equal(expected, RuleSectionParser.NormalizeCode(input));
+
+    [Theory]
+    [InlineData("466.2.c", new[] { "466", "466.2" })]
+    [InlineData("466.2", new[] { "466" })]
+    [InlineData("466", new string[0])]
+    public void ParentCodes_BuildsChain(string code, string[] expected) =>
+        Assert.Equal(expected, RuleSectionParser.ParentCodes(code));
 }
 
 public class PdfDiscoveryTests

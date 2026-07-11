@@ -23,6 +23,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<CardInteraction> CardInteractions => Set<CardInteraction>();
     public DbSet<SimilarityExplanation> SimilarityExplanations => Set<SimilarityExplanation>();
     public DbSet<AskMetric> AskMetrics => Set<AskMetric>();
+    public DbSet<AskTrace> AskTraces => Set<AskTrace>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -138,6 +139,12 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         b.Entity<AskMetric>(e =>
         {
             e.ToTable("ask_metric");
+            e.HasIndex(x => x.CreatedAt);
+        });
+
+        b.Entity<AskTrace>(e =>
+        {
+            e.ToTable("ask_trace");
             e.HasIndex(x => x.CreatedAt);
         });
     }

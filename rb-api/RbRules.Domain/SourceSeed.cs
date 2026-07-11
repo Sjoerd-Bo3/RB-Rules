@@ -34,6 +34,22 @@ public static class SourceSeed
         },
         new()
         {
+            // Officiële learn-to-play-inhoud (het "boekje" in webvorm) —
+            // basisvoer voor de spelbegrip-laag (docs/KNOWLEDGE.md).
+            Id = "how-to-play",
+            Name = "How to Play – Quick Start Guide (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/how-to-play-get-started/",
+            Type = "official", TrustTier = 1, Rank = 95, Parser = "html", Cadence = "weekly",
+        },
+        new()
+        {
+            Id = "gameplay-guide",
+            Name = "Gameplay Guide – Core Rules (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/gameplay-guide-core-rules/",
+            Type = "official", TrustTier = 1, Rank = 94, Parser = "html", Cadence = "weekly",
+        },
+        new()
+        {
             Id = "tr-changelog",
             Name = "Tournament Rules Update & Changelog (officieel)",
             Url = "https://riftbound.leagueoflegends.com/en-us/news/announcements/april-2026-tournament-rules-update-changelog/",

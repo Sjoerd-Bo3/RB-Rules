@@ -37,6 +37,18 @@
 
 	<h1>§ {s.code} <span class="src">{s.sourceName}</span></h1>
 
+	{#if s.parents.length}
+		<!-- Bovenliggende regels als context boven de subregel -->
+		<div class="parents">
+			{#each s.parents as par (par.code)}
+				<p class="parent">
+					<a href="/rules/{encodeURIComponent(par.code)}?source={s.sourceId}">§ {par.code}</a>
+					{par.text}
+				</p>
+			{/each}
+		</div>
+	{/if}
+
 	<article class="card">
 		<p class="text">{s.text}</p>
 	</article>
@@ -69,8 +81,15 @@
 	.crumbs a:hover { color: #d98a4e; }
 	h1 { margin: 10px 0 14px; }
 	.src { color: #d98a4e; font-size: 1rem; font-weight: 600; margin-left: 10px; }
+	.parents {
+		border-left: 2px solid var(--border);
+		padding-left: 12px; margin-bottom: 12px;
+	}
+	.parent { margin: 6px 0; color: var(--muted); font-size: 0.9rem; }
+	.parent a { color: var(--muted); font-weight: 700; text-decoration: none; }
+	.parent a:hover { color: var(--accent); }
 	.card {
-		background: #16233b; border: 1px solid #243551;
+		background: var(--surface); border: 1px solid var(--border);
 		border-radius: 12px; padding: 18px 20px;
 	}
 	.text { white-space: pre-wrap; margin: 0; line-height: 1.65; }

@@ -173,6 +173,29 @@ public class AskMetric
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Denkstappen-trace per rulings-vraag (#40, admin-only): welke
+/// route nam de vraag door de pipeline en met welke context.</summary>
+public class AskTrace
+{
+    public long Id { get; set; }
+    public required string Question { get; set; }
+    public string? QuestionType { get; set; }
+    public string? SourceBias { get; set; }
+    public bool MentionsCard { get; set; }
+    /// <summary>Herkende mechaniek-keywords, komma-gescheiden.</summary>
+    public string? MechanicMatches { get; set; }
+    /// <summary>§-codes van de meegegeven citaties, in RRF-volgorde.</summary>
+    public string? Sections { get; set; }
+    /// <summary>Kaartnamen die als context meegingen.</summary>
+    public string? ContextCards { get; set; }
+    public int VerifiedRulings { get; set; }
+    public string? Model { get; set; }                  // cheap|hard
+    public bool HadImage { get; set; }
+    public int DurationMs { get; set; }
+    public bool Ok { get; set; } = true;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public class PushSubscription
 {
     public required string Endpoint { get; set; }
