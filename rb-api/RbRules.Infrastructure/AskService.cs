@@ -1,4 +1,6 @@
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Pgvector;
 using Pgvector.EntityFrameworkCore;
 using RbRules.Domain;
 
@@ -126,8 +128,10 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var context = string.Join("\n\n", ordered.Select((c, i) =>
             $"[{i + 1}] ({c.Name}, trust {c.TrustTier}{(c.SectionCode is null ? "" : $", §{c.SectionCode}")})\n{c.Text}"));
 
-        // 4. Kaartfeiten (incl. mechanieken en ban-status) voor herkende kaarten
-        var cardBlock = await CardFactsAsync(question, ct);
+        // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
+        // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
+        // regels het keyword niet expliciet definiëren.
+        var cardBlock = await CardContextAsync(question, qv, ct);
 
         // 4b. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend blok.
         var banBlock = "";
@@ -211,33 +215,87 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             c.TextPlain, c.Mechanics, c.ImageUrl, banned.Contains(c.RiftboundId)))];
     }
 
-    private async Task<string> CardFactsAsync(string question, CancellationToken ct)
+    /// <summary>Kaartcontext via drie kanalen: exacte naam-matches, herkende
+    /// mechaniek-keywords ("wat is Deflect?" → kaarten mét Deflect) en
+    /// semantische buren van de vraag. Zo is er áltijd kaart-bewijs, ook als
+    /// de regels-PDF een keyword niet expliciet definieert.</summary>
+    private async Task<string> CardContextAsync(string question, Vector qv, CancellationToken ct)
     {
         var q = question.ToLowerInvariant();
+
+        // 1. Exacte naam-matches (gezaghebbend voor de genoemde kaarten).
         var names = await db.Cards
+            .Where(c => c.VariantOf == null)
             .Select(c => new { c.RiftboundId, c.Name })
             .ToListAsync(ct);
-        var hits = names
-            .Where(c => c.Name.Length >= 3 && q.Contains(c.Name.ToLowerInvariant()))
+        var nameHits = names
+            .Where(c => c.Name.Length >= 4 && q.Contains(c.Name.ToLowerInvariant()))
             .Take(3)
             .Select(c => c.RiftboundId)
             .ToList();
-        if (hits.Count == 0) return "";
 
-        var cards = await db.Cards.Where(c => hits.Contains(c.RiftboundId)).ToListAsync(ct);
-        var bannedNames = await db.BanEntries
-            .Where(b => hits.Contains(b.CardRiftboundId!))
-            .Select(b => b.CardRiftboundId)
+        // 2. Mechaniek-keywords in de vraag → voorbeeldkaarten + telling.
+        var allMechanics = (await db.Cards
+                .Where(c => c.Mechanics != null && c.VariantOf == null)
+                .Select(c => c.Mechanics!)
+                .ToListAsync(ct))
+            .SelectMany(m => m)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var matchedMechanics = allMechanics
+            .Where(m => m.Length >= 3 && Regex.IsMatch(
+                question, $@"\b{Regex.Escape(m)}\b", RegexOptions.IgnoreCase))
+            .Take(2)
+            .ToList();
+
+        var mechanicBlocks = new List<string>();
+        var mechanicCardIds = new List<string>();
+        foreach (var m in matchedMechanics)
+        {
+            var count = await db.Cards.CountAsync(
+                c => c.VariantOf == null && c.Mechanics != null && c.Mechanics.Contains(m), ct);
+            var examples = await db.Cards
+                .Where(c => c.VariantOf == null && c.Mechanics != null && c.Mechanics.Contains(m))
+                .OrderBy(c => c.RiftboundId)
+                .Take(4)
+                .Select(c => c.RiftboundId)
+                .ToListAsync(ct);
+            mechanicCardIds.AddRange(examples);
+            mechanicBlocks.Add($"Mechaniek '{m}' komt voor op {count} kaarten; voorbeelden hieronder.");
+        }
+
+        // 3. Semantische buren van de vraag (altijd, als vangnet).
+        var semanticIds = await db.Cards
+            .Where(c => c.Embedding != null && c.VariantOf == null)
+            .OrderBy(c => c.Embedding!.CosineDistance(qv))
+            .Take(4)
+            .Select(c => c.RiftboundId)
             .ToListAsync(ct);
 
-        var lines = cards.Select(c =>
-            $"- {c.Name} — {string.Join(" ", new[] { c.Supertype, c.Type }.Where(s => s != null))}. " +
-            $"Domains: {string.Join(", ", c.Domains)}. Energy {c.Energy?.ToString() ?? "—"}, Might {c.Might?.ToString() ?? "—"}. " +
-            (c.Mechanics is { Length: > 0 } m ? $"Mechanieken: {string.Join(", ", m)}. " : "") +
-            (bannedNames.Contains(c.RiftboundId) ? "⚠ STAAT OP DE BANLIJST. " : "") +
-            (c.TextPlain is null ? "" :
-                $"Tekst: {CardText.HumanizeIcons(c.TextPlain[..Math.Min(c.TextPlain.Length, 240)])}"));
+        var ids = nameHits.Concat(mechanicCardIds).Concat(semanticIds).Distinct().Take(8).ToList();
+        if (ids.Count == 0) return "";
 
-        return "\n\nKaartgegevens (gezaghebbend voor stats/mechanieken):\n" + string.Join("\n", lines);
+        var cards = await db.Cards.Where(c => ids.Contains(c.RiftboundId)).ToListAsync(ct);
+        var bannedIds = await db.BanEntries
+            .Where(b => b.CardRiftboundId != null && ids.Contains(b.CardRiftboundId))
+            .Select(b => b.CardRiftboundId!)
+            .ToListAsync(ct);
+
+        var lines = ids
+            .Select(id => cards.First(c => c.RiftboundId == id))
+            .Select(c =>
+                $"- {c.Name} — {string.Join(" ", new[] { c.Supertype, c.Type }.Where(s => s != null))}. " +
+                $"Domains: {string.Join(", ", c.Domains)}. Energy {c.Energy?.ToString() ?? "—"}, Might {c.Might?.ToString() ?? "—"}. " +
+                (c.Mechanics is { Length: > 0 } m ? $"Mechanieken: {string.Join(", ", m)}. " : "") +
+                (bannedIds.Contains(c.RiftboundId) ? "STAAT OP DE BANLIJST. " : "") +
+                (c.TextPlain is null ? "" :
+                    $"Tekst: {CardText.HumanizeIcons(c.TextPlain[..Math.Min(c.TextPlain.Length, 240)])}"));
+
+        var header = mechanicBlocks.Count > 0
+            ? string.Join("\n", mechanicBlocks) + "\n"
+            : "";
+        return "\n\nKaartgegevens (gezaghebbend voor stats/mechanieken; " +
+               "kaartteksten zijn bewijs voor hoe keywords werken):\n" +
+               header + string.Join("\n", lines);
     }
 }

@@ -161,6 +161,18 @@ public class SimilarityExplanation
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Duurmeting per rulings-vraag — voedt de "gemiddeld ±Xs"-indicatie
+/// op de vraagpagina met echte cijfers i.p.v. een schatting.</summary>
+public class AskMetric
+{
+    public long Id { get; set; }
+    public int DurationMs { get; set; }
+    public string? QuestionType { get; set; }
+    public bool HadImage { get; set; }
+    public bool Ok { get; set; } = true;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public class PushSubscription
 {
     public required string Endpoint { get; set; }

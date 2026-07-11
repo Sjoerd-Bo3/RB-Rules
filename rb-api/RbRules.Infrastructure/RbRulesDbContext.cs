@@ -22,6 +22,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<Erratum> Errata => Set<Erratum>();
     public DbSet<CardInteraction> CardInteractions => Set<CardInteraction>();
     public DbSet<SimilarityExplanation> SimilarityExplanations => Set<SimilarityExplanation>();
+    public DbSet<AskMetric> AskMetrics => Set<AskMetric>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -132,6 +133,12 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("similarity_explanation");
             e.HasIndex(x => new { x.CardAId, x.CardBId }).IsUnique();
+        });
+
+        b.Entity<AskMetric>(e =>
+        {
+            e.ToTable("ask_metric");
+            e.HasIndex(x => x.CreatedAt);
         });
     }
 }

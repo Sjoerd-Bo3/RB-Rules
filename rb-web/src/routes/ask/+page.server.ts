@@ -1,6 +1,21 @@
 import { fail } from '@sveltejs/kit';
-import type { Actions } from './$types';
+import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
+
+export interface AskStats {
+	count: number;
+	avgMs?: number;
+	medianMs?: number;
+	p90Ms?: number;
+}
+
+export const load: PageServerLoad = async () => {
+	try {
+		return { stats: await api<AskStats>('/api/ask/stats') };
+	} catch {
+		return { stats: { count: 0 } as AskStats };
+	}
+};
 
 interface Citation {
 	n: number;
