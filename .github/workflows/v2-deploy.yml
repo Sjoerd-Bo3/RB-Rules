@@ -6,6 +6,17 @@ name: v2 deploy to VM
 #    schrijft .env uit secrets, ontdekt het Caddy-netwerk, start de stack,
 #    pullt bge-m3, voegt de Caddy-route toe en trapt de kaart-sync af.
 #
+# Image-pinning (issue #45, :latest-race): twee parallelle publishes kunnen
+# :latest in de verkeerde volgorde zetten (PR #83 miste daardoor tijdelijk op
+# productie). Daarom pint deze workflow bij een workflow_run-trigger de
+# :<commit-SHA>-tag van precies de publish die hem triggerde
+# (workflow_run.head_sha; v2-ci.yml pusht die tag naast :latest). Route: één
+# IMAGE_TAG-env, geëxporteerd op het SSH-commando — bewust NIET in de VM-.env
+# geschreven, zodat die stateless blijft en handmatig `docker compose up -d`
+# op de VM gewoon op :latest (compose-default) blijft draaien.
+# Bij workflow_dispatch: input image_tag (default latest) — 'latest' voor de
+# oude flow, of een commit-SHA om een specifieke build te (her)deployen.
+#
 # Vereiste secrets:
 #   DEPLOY_SSH_KEY   — private key voor sjoerd@20.123.137.64 (altijd)
 #   POSTGRES_PASSWORD, NEO4J_PASSWORD, ADMIN_PASSWORD,
@@ -23,6 +34,10 @@ on:
         description: "Eerste deploy: .env + Caddy-route + model + kickoff"
         type: boolean
         default: false
+      image_tag:
+        description: "Image-tag om te deployen (latest of een commit-SHA die v2-ci gepubliceerd heeft)"
+        type: string
+        default: "latest"
 
 # Serialiseer deploys: vijf snelle merges gaven vijf racende runs met
 # containernaam-conflicten op de VM (issue #45). Nieuwe runs wachten netjes
@@ -36,6 +51,9 @@ env:
   VM_USER: sjoerd
   VM_PATH: /home/sjoerd/compose/rb-rules-v2
   DOMAIN: riftbound-v2.bo3.dev
+  # workflow_run → pin de commit-SHA van de triggerende publish;
+  # workflow_dispatch → de image_tag-input (default latest).
+  IMAGE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.image_tag || 'latest' }}
 
 jobs:
   deploy:
@@ -43,6 +61,16 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
+
+      - name: Valideer image-tag
+        run: |
+          # De tag belandt in een SSH-commando; alleen geldige Docker-tagtekens
+          # toestaan (vangt ook een typefout in de dispatch-input vroeg af).
+          if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$'; then
+            echo "::error::ongeldige image-tag '$IMAGE_TAG'"
+            exit 1
+          fi
+          echo "Deploy pint image-tag: $IMAGE_TAG (trigger: ${{ github.event_name }})"
 
       - name: Check secret
         id: check
@@ -108,7 +136,10 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         run: |
           # Docker maakt de /mnt/data bind-mount-mappen zelf aan (daemon = root).
-          $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 pull -q && docker compose --project-name rb-rules-v2 up -d && docker compose --project-name rb-rules-v2 ps"
+          # IMAGE_TAG via export op het SSH-commando: shell-env wint van de
+          # .env-file bij compose-substitutie, dus pull én up gebruiken exact
+          # de gepinde tag zonder dat er iets op de VM achterblijft.
+          $SSHCMD "cd $VM_PATH && export IMAGE_TAG='$IMAGE_TAG' && docker compose --project-name rb-rules-v2 pull -q && docker compose --project-name rb-rules-v2 up -d && docker compose --project-name rb-rules-v2 ps"
 
       - name: Verifieer deploy
         if: steps.check.outputs.enabled == 'true'

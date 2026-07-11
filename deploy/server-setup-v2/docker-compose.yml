@@ -12,6 +12,12 @@
 #    + pagecache 384m uit .env + JVM-overhead) + ollama 2.5g (bge-m3 geladen).
 #  - healthchecks op alle services + log-rotatie (json-file groeit anders
 #    onbegrensd).
+#
+# IMAGE_TAG (issue #45, :latest-race): de deploy-workflow pint per run de
+# commit-SHA van de publish die hem triggerde (export op het SSH-commando —
+# de .env op de VM blijft onaangeroerd). Zonder IMAGE_TAG valt alles terug
+# op :latest, dus handmatig `docker compose up -d` op de VM blijft gewoon
+# werken; de eerstvolgende automatische deploy pint dan weer een SHA.
 
 x-logging: &default-logging
   driver: json-file
@@ -21,7 +27,7 @@ x-logging: &default-logging
 
 services:
   rb-api:
-    image: ghcr.io/sjoerd-bo3/rb-rules-rb-api:latest
+    image: ghcr.io/sjoerd-bo3/rb-rules-rb-api:${IMAGE_TAG:-latest}
     container_name: rb-v2-api
     restart: unless-stopped
     logging: *default-logging
@@ -59,7 +65,7 @@ services:
     networks: [internal]
 
   rb-web:
-    image: ghcr.io/sjoerd-bo3/rb-rules-rb-web:latest
+    image: ghcr.io/sjoerd-bo3/rb-rules-rb-web:${IMAGE_TAG:-latest}
     container_name: rb-v2-web
     restart: unless-stopped
     logging: *default-logging
@@ -86,7 +92,7 @@ services:
     networks: [internal, caddy]
 
   rb-ai:
-    image: ghcr.io/sjoerd-bo3/rb-rules-rb-ai:latest
+    image: ghcr.io/sjoerd-bo3/rb-rules-rb-ai:${IMAGE_TAG:-latest}
     container_name: rb-v2-ai
     restart: unless-stopped
     logging: *default-logging

@@ -50,6 +50,21 @@ jobs:
     needs: test
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # Serialiseer alleen de publish (issue #45, tweede vondst): twee parallelle
+    # publishes kunnen :latest in de verkeerde volgorde pushen. Concurrency op
+    # jobniveau raakt PR-runs niet (die publishen niet), dus de CI-doorlooptijd
+    # voor reviews blijft gelijk; alleen snel opeenvolgende merges wachten op
+    # elkaar (~enkele minuten per publish dankzij de GHA-cache). Let op twee
+    # bekende beperkingen, bewust geaccepteerd omdat de deploy op SHA pint en
+    # dus niet meer van :latest afhangt:
+    #  - GitHub garandeert geen commit-volgorde binnen een group (een tragere
+    #    oudere run kan alsnog als laatste :latest zetten);
+    #  - bij 3+ wachtende merges vervangt GitHub de pending run door de
+    #    nieuwste (de middelste publish wordt gecanceld → die commit krijgt
+    #    geen SHA-tag en geen eigen deploy; de nieuwste dekt hem inhoudelijk).
+    concurrency:
+      group: v2-publish-${{ matrix.service }}
+      cancel-in-progress: false
     strategy:
       matrix:
         service: [rb-api, rb-web, rb-ai]
@@ -66,6 +81,10 @@ jobs:
           context: ./${{ matrix.service }}
           platforms: linux/amd64
           push: true
+          # Contract met v2-deploy.yml (issue #45): de :<volledige commit-SHA>-
+          # tag is wat de deploy pint (workflow_run.head_sha == github.sha van
+          # deze run). Niet weghalen of inkorten; :latest blijft bestaan voor
+          # handmatige dispatch-deploys, bootstrap en handmatige VM-ops.
           tags: |
             ghcr.io/sjoerd-bo3/rb-rules-${{ matrix.service }}:latest
             ghcr.io/sjoerd-bo3/rb-rules-${{ matrix.service }}:${{ github.sha }}
