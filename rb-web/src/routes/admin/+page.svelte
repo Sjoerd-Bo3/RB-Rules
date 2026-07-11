@@ -192,6 +192,7 @@
 
 		<!-- Bronnen -->
 		<h2>Bronnen</h2>
+		<div class="table-wrap">
 		<table>
 			<thead><tr><th>Bron</th><th>Trust</th><th>Cadans</th><th>Laatst gecontroleerd</th><th>Actief</th></tr></thead>
 			<tbody>
@@ -212,9 +213,11 @@
 				{/each}
 			</tbody>
 		</table>
+		</div>
 
 		<!-- Live logs -->
 		<h2>Recente activiteit <span class="meta live-tag">live</span></h2>
+		<div class="table-wrap">
 		<table>
 			<thead><tr><th>Tijd</th><th>Soort</th><th>Ref</th><th>Status</th><th>Detail</th></tr></thead>
 			<tbody>
@@ -229,6 +232,7 @@
 				{/each}
 			</tbody>
 		</table>
+		</div>
 	{/if}
 </main>
 

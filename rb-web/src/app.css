@@ -29,7 +29,20 @@ body {
 	color: var(--text);
 	font: 15px/1.55 -apple-system, 'Segoe UI', system-ui, sans-serif;
 	-webkit-font-smoothing: antialiased;
+	/* Vangrail: de pagina scrollt nooit horizontaal — brede inhoud
+	   (tabellen, diagrammen) scrolt binnen zijn eigen container. */
+	overflow-x: clip;
 }
+
+img { max-width: 100%; height: auto; }
+
+/* Brede inhoud (tabellen) krijgt zijn eigen horizontale scroll. */
+.table-wrap {
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch;
+	margin-bottom: 20px;
+}
+.table-wrap > table { margin-bottom: 0; }
 
 h1 { font-size: 1.6rem; letter-spacing: -0.02em; font-weight: 700; }
 h2 { letter-spacing: -0.01em; }

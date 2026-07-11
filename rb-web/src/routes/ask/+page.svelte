@@ -320,7 +320,8 @@
 	.cite summary .meta { margin-left: 8px; font-size: 0.82rem; }
 	.cite-text { margin: 8px 0 4px; line-height: 1.6; }
 	.cite-links a { color: var(--ok); text-decoration: none; font-weight: 600; }
-	.card-body { display: flex; gap: 14px; margin-top: 8px; }
+	.card-body { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; }
+	.card-body > div { flex: 1 1 220px; min-width: 0; }
 	.card-body img { width: 120px; border-radius: 8px; border: 1px solid var(--border); align-self: flex-start; }
 	.card-body .oracle {
 		background: var(--surface); border: 1px solid var(--border);
