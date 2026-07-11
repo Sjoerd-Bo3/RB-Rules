@@ -166,6 +166,10 @@ services:
     container_name: rb-v2-ollama
     restart: unless-stopped
     logging: *default-logging
+    volumes:
+      # Modellen op de datadisk — bij de #82-hardening per ongeluk gesneuveld,
+      # waardoor een recreate het gepullde bge-m3 wiste (embedding-uitval).
+      - /mnt/data/ollama/rb-rules-v2:/root/.ollama
     healthcheck:
       # 'ollama ls' praat met de eigen API op 11434 — geen curl nodig.
       test: ["CMD", "ollama", "ls"]
