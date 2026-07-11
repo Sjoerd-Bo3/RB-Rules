@@ -187,8 +187,11 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         // PDF-bestands-URL's voor deeplinks (…rules.pdf#page=N).
         var docIds = ordered.Select(c => c.DocumentId).Distinct().ToList();
+        // Projectie: de Content-kolom (volledige PDF-tekst) hoort niet over
+        // de lijn voor een id->FileUrl-map (review-fix refactor-golf).
         var fileUrls = await db.Documents
             .Where(d => docIds.Contains(d.Id) && d.FileUrl != null)
+            .Select(d => new { d.Id, d.FileUrl })
             .ToDictionaryAsync(d => d.Id, d => d.FileUrl, ct);
 
         // Ouderketen per citatie (#39): een subregel als 466.2.c is zonder
@@ -360,7 +363,13 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         }
         catch
         {
-            // meting mag een antwoord nooit blokkeren
+            // Meting mag een antwoord nooit blokkeren — en een mislukte
+            // metric-rij mag niet als Added blijven hangen in de gedeelde
+            // context, anders faalt de trace-save erna mee (review-fix).
+            foreach (var entry in db.ChangeTracker.Entries<AskMetric>()
+                         .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+                         .ToList())
+                entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
         }
     }
 
