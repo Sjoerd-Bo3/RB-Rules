@@ -14,7 +14,10 @@ public record ClaimMineResult(
 /// tekst + embedding-clustering + LLM-toets, telt corroboratie over
 /// onafhankelijke bronnen en toetst nieuwe claims aan de officiële regels
 /// (officieel wint altijd: tegenspraak ⇒ automatisch rejected met verwijzing).
-/// Alles best-effort per stap; cheap-model, gecapt per run (nachtelijke job).</summary>
+/// Alles best-effort per stap; cheap-model, gecapt per run (nachtelijke job).
+/// Elke faalstap is herleidbaar in run_log (#93) en claims_mined_at wordt pas
+/// gezet nadat een document volledig en zonder mislukte claims is verwerkt
+/// (#92) — een afgebroken of falende run probeert het vanzelf opnieuw.</summary>
 public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingService embeddings)
 {
     /// <summary>Lange gidsen gaan in stukken naar de extractor; de cap houdt
@@ -34,6 +37,9 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
     /// (rb-ai/Ollama-uitval of nog geen regelindex) — klein gehouden, het is
     /// bijvangst naast de verse oogst.</summary>
     private const int MaxRechecksPerRun = 15;
+    /// <summary>Afkaplengte voor de rauwe LLM-respons in run_log-diagnose
+    /// (patroon van de scout-fix, PR #87).</summary>
+    private const int ResponseSnippetLength = 400;
 
     public async Task<ClaimMineResult> RunAsync(
         bool force = false, int maxClaims = 60,
@@ -71,6 +77,10 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
             var extractionComplete = true;
             var srcNew = 0;
             var srcCorroborated = 0;
+            // Reden per mislukte claim: herleidbaar in run_log in plaats van
+            // één anonieme "mislukt"-teller (#93 — op productie faalden 60/60
+            // claims zonder één zichtbare foutregel).
+            var claimFailures = new List<string>();
 
             var segments = Segment(doc.Content);
             for (var si = 0; si < segments.Count; si++)
@@ -79,17 +89,36 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
                 progress?.Invoke(
                     $"{src.Id}: deel {si + 1}/{segments.Count} extraheren ({newClaims} nieuw, {corroborated} gecorroboreerd)");
 
-                var raw = await ai.AskAsync(
+                var raw = await AskSafeAsync(
                     ClaimMiner.BuildExtractionPrompt(src.Name, segments[si]),
-                    ClaimMiner.ExtractionSystemPrompt, ct: ct);
-                var extracted = raw is null ? null : ClaimMiner.ParseClaims(raw);
-                if (extracted is null)
+                    ClaimMiner.ExtractionSystemPrompt, ct);
+                if (raw is null)
                 {
-                    // rb-ai weg of onzin-output: dit deel blijft staan voor een
-                    // volgende run (document blijft ongemarkeerd), de rest van
-                    // de oogst gaat door.
+                    // rb-ai weg: dit deel blijft staan voor een volgende run
+                    // (document blijft ongemarkeerd), de rest gaat door.
                     extractionComplete = false;
                     failed++;
+                    db.RunLogs.Add(new RunLog
+                    {
+                        Kind = "claims", Ref = src.Id, Status = "error",
+                        Detail = $"deel {si + 1}/{segments.Count}: rb-ai niet beschikbaar — extractie overgeslagen",
+                    });
+                    continue;
+                }
+                var extracted = ClaimMiner.ParseClaims(raw);
+                if (extracted is null)
+                {
+                    // Onzin-output: reden + afgekapte respons in run_log
+                    // (scout-patroon, PR #87), zodat de beheerder ziet wát het
+                    // model werkelijk antwoordde.
+                    extractionComplete = false;
+                    failed++;
+                    db.RunLogs.Add(new RunLog
+                    {
+                        Kind = "claims", Ref = src.Id, Status = "error",
+                        Detail = $"deel {si + 1}/{segments.Count}: LLM-antwoord onbruikbaar — geen parseerbare claims. "
+                                 + $"Respons (afgekapt): {LlmJson.Snippet(raw, ResponseSnippetLength)}",
+                    });
                     continue;
                 }
 
@@ -104,29 +133,48 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
                         break;
                     }
                     processed++;
-                    var outcome = await ProcessClaimAsync(src, ec, officialSourceIds, ct);
+                    var (outcome, failure) = await ProcessClaimAsync(src, ec, officialSourceIds, ct);
                     switch (outcome)
                     {
                         case ClaimOutcome.New: newClaims++; srcNew++; break;
                         case ClaimOutcome.Corroborated: corroborated++; srcCorroborated++; break;
                         case ClaimOutcome.Rejected: rejected++; srcNew++; break;
                         case ClaimOutcome.Conflict: conflicts++; srcNew++; break;
-                        case ClaimOutcome.Failed: failed++; break;
+                        case ClaimOutcome.Failed:
+                            failed++;
+                            claimFailures.Add(failure ?? "onbekende fout");
+                            break;
                         case ClaimOutcome.Seen: break; // zelfde bron, al bekend
                     }
                 }
             }
 
-            if (extractionComplete)
+            // Gelijke redenen gegroepeerd tot één regel: Ollama-uitval raakt
+            // doorgaans álle claims van een document met dezelfde fout.
+            foreach (var g in claimFailures.GroupBy(r => r))
+            {
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = "claims", Ref = src.Id, Status = "error",
+                    Detail = $"{g.Count()} claim(s) niet verwerkt: {g.Key}",
+                });
+            }
+
+            // #92: pas markeren wanneer extractie én verwerking voor dit
+            // document volledig geslaagd zijn (0 claims vinden is ook een
+            // geldig resultaat). Een mislukte, afgekapte of op de cap
+            // gestrande run komt zo vanzelf opnieuw aan de beurt.
+            var documentDone = extractionComplete && claimFailures.Count == 0;
+            if (documentDone)
             {
                 doc.ClaimsMinedAt = DateTimeOffset.UtcNow;
             }
             db.RunLogs.Add(new RunLog
             {
                 Kind = "claims", Ref = src.Id,
-                Status = extractionComplete ? "ok" : "info",
+                Status = documentDone ? "ok" : "info",
                 Detail = $"{srcNew} nieuwe claims, {srcCorroborated} gecorroboreerd"
-                         + (extractionComplete ? "" : " (deels — rest volgt in een volgende run)"),
+                         + (documentDone ? "" : " (deels — document blijft staan voor een volgende run)"),
             });
             await db.SaveChangesAsync(ct);
         }
@@ -141,13 +189,29 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
             $"{docs} documenten verwerkt: {newClaims} nieuwe claims, {corroborated} gecorroboreerd, "
             + $"{rejected} verworpen (officieel tegengesproken), {conflicts} conflicten, "
             + $"{rechecked} hergetoetst, {failed} mislukt"
+            + (failed > 0 ? " (redenen in run_log)" : "")
             + (budgetHit ? $" — cap van {maxClaims} claims bereikt, rest volgt bij de volgende run" : "");
         return new(docs, newClaims, corroborated, rejected, conflicts, rechecked, failed, message);
     }
 
     private enum ClaimOutcome { New, Corroborated, Seen, Rejected, Conflict, Failed }
 
-    private async Task<ClaimOutcome> ProcessClaimAsync(
+    /// <summary>AskAsync met het scout-timeoutpatroon: een HttpClient-timeout
+    /// (niet de aanroeper die annuleert) telt als uitval van één stap, niet
+    /// als crash van de hele nachtelijke oogst.</summary>
+    private async Task<string?> AskSafeAsync(string prompt, string system, CancellationToken ct)
+    {
+        try
+        {
+            return await ai.AskAsync(prompt, system, ct: ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    private async Task<(ClaimOutcome Outcome, string? Failure)> ProcessClaimAsync(
         Source src, ExtractedClaim ec, IReadOnlyList<string> officialSourceIds,
         CancellationToken ct)
     {
@@ -162,10 +226,12 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
         var exact = topicClaims.FirstOrDefault(
             c => ClaimMiner.NormalizeStatement(c.Statement) == norm);
         if (exact is not null)
-            return await CorroborateAsync(exact, src, ec.Quote, ct);
+            return (await CorroborateAsync(exact, src, ec.Quote, ct), null);
 
         // 2. Embedding voor clustering (en straks retrieval, #51). Zonder
         // Ollama geen betrouwbare dedupe — deze claim wacht op een latere run.
+        // De reden gaat mee naar run_log: op productie faalden 60/60 claims
+        // precies hier, zonder één zichtbare foutregel (#93).
         Vector vec;
         try
         {
@@ -173,7 +239,7 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return ClaimOutcome.Failed;
+            return (ClaimOutcome.Failed, $"embedding mislukt (Ollama): {ex.Message}");
         }
 
         // 3. Dichtstbijzijnde bestaande claims → LLM-oordeel "zelfde bewering?".
@@ -192,24 +258,47 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
         long? contradictsClaimId = null;
         if (candidates.Count > 0)
         {
-            var raw = await ai.AskAsync(
+            var raw = await AskSafeAsync(
                 ClaimJudge.BuildPrompt(ec.Statement, [.. candidates.Select(c => c.Statement)]),
-                ClaimJudge.SystemPrompt, ct: ct);
+                ClaimJudge.SystemPrompt, ct);
             var judgement = raw is null ? null : ClaimJudge.Parse(raw, candidates.Count);
+            if (judgement is null)
+            {
+                // Onbruikbare dedupe-toets: als nieuw behandelen (veilige
+                // kant), maar wel herleidbaar — bij parse-uitval mét de
+                // afgekapte respons (#93).
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = "claims", Ref = src.Id,
+                    Status = raw is null ? "info" : "error",
+                    Detail = "dedupe-toets gaf geen bruikbaar oordeel — claim als nieuw behandeld"
+                             + (raw is null
+                                ? " (rb-ai niet beschikbaar)"
+                                : $". Respons (afgekapt): {LlmJson.Snippet(raw, ResponseSnippetLength)}"),
+                });
+            }
             if (judgement is { Verdict: "same", Match: not null })
             {
                 var match = await db.Claims.FindAsync([candidates[judgement.Match.Value - 1].Id], ct);
                 if (match is not null)
-                    return await CorroborateAsync(match, src, ec.Quote, ct);
+                    return (await CorroborateAsync(match, src, ec.Quote, ct), null);
             }
             if (judgement is { Verdict: "contradicts", Match: not null })
                 contradictsClaimId = candidates[judgement.Match.Value - 1].Id;
-            // null of "different": als nieuwe claim behandelen (veilige kant).
+            // "different": als nieuwe claim behandelen.
         }
 
         // 4. Toets tegen de officiële regels — officieel wint altijd.
-        var (officialStatus, statusReason) = await CheckOfficialAsync(
+        var (officialStatus, statusReason, officialDegraded) = await CheckOfficialAsync(
             ec.Statement, vec, officialSourceIds, ct);
+        if (officialDegraded is not null)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "claims", Ref = src.Id, Status = "info",
+                Detail = $"toets tegen officiële regels bleef uit — claim blijft 'unchecked': {officialDegraded}",
+            });
+        }
         var status = officialStatus == "contradicted" ? "rejected" : "unreviewed";
 
         var claim = new Claim
@@ -257,9 +346,10 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
         }
         await db.SaveChangesAsync(ct);
 
-        return contradictsClaimId is not null ? ClaimOutcome.Conflict
+        var outcome = contradictsClaimId is not null ? ClaimOutcome.Conflict
             : status == "rejected" ? ClaimOutcome.Rejected
             : ClaimOutcome.New;
+        return (outcome, null);
     }
 
     /// <summary>Corroboratie: een nieuwe onafhankelijke bron versterkt de
@@ -297,8 +387,9 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
     }
 
     /// <summary>Toets één claim aan de dichtstbijzijnde officiële §'s. Geen
-    /// regelindex of geen bruikbaar oordeel ⇒ "unchecked" (volgende run).</summary>
-    private async Task<(string OfficialStatus, string? Reason)> CheckOfficialAsync(
+    /// regelindex of geen bruikbaar oordeel ⇒ "unchecked" (volgende run);
+    /// Degraded draagt in dat laatste geval de reden voor run_log.</summary>
+    private async Task<(string OfficialStatus, string? Reason, string? Degraded)> CheckOfficialAsync(
         string statement, Vector vec, IReadOnlyList<string> officialSourceIds,
         CancellationToken ct)
     {
@@ -309,17 +400,22 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
             .Take(OfficialChunks)
             .Select(c => new { c.SectionCode, c.Text })
             .ToListAsync(ct);
-        if (chunks.Count == 0) return ("unchecked", null);
+        if (chunks.Count == 0) return ("unchecked", null, "geen officiële regelindex met embeddings");
 
-        var raw = await ai.AskAsync(
+        var raw = await AskSafeAsync(
             OfficialCheck.BuildPrompt(statement, chunks.Select(c => (c.SectionCode!, c.Text))),
-            OfficialCheck.SystemPrompt, ct: ct);
-        var verdict = raw is null ? null : OfficialCheck.Parse(raw);
-        if (verdict is null) return ("unchecked", null);
+            OfficialCheck.SystemPrompt, ct);
+        if (raw is null) return ("unchecked", null, "rb-ai niet beschikbaar");
+        var verdict = OfficialCheck.Parse(raw);
+        if (verdict is null)
+        {
+            return ("unchecked", null,
+                $"oordeel onparseerbaar. Respons (afgekapt): {LlmJson.Snippet(raw, ResponseSnippetLength)}");
+        }
 
         return verdict.Verdict == "contradicted"
-            ? ("contradicted", verdict.Reason ?? "de officiële regels spreken deze claim tegen")
-            : (verdict.Verdict, null);
+            ? ("contradicted", verdict.Reason ?? "de officiële regels spreken deze claim tegen", null)
+            : (verdict.Verdict, null, null);
     }
 
     /// <summary>Her-toets claims die eerder "unchecked" bleven. Tegenspraak
@@ -338,12 +434,21 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
 
         var rechecked = 0;
         var weerlegd = 0;
+        var skipped = 0;
+        string? firstDegradation = null;
         foreach (var claim in pending)
         {
             progress?.Invoke($"hertoets tegen officiële regels: {rechecked + 1}/{pending.Count}");
-            var (officialStatus, reason) = await CheckOfficialAsync(
+            var (officialStatus, reason, degraded) = await CheckOfficialAsync(
                 claim.Statement, claim.Embedding!, officialSourceIds, ct);
-            if (officialStatus == "unchecked") continue; // nog steeds geen oordeel
+            if (officialStatus == "unchecked")
+            {
+                // Nog steeds geen oordeel — herleidbaar houden, maar
+                // geaggregeerd (één regel per run, geen 15 losse regels).
+                skipped++;
+                firstDegradation ??= degraded;
+                continue;
+            }
 
             rechecked++;
             claim.OfficialStatus = officialStatus;
@@ -353,6 +458,16 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
                 claim.StatusReason = reason ?? "de officiële regels spreken deze claim tegen";
                 weerlegd++;
             }
+            await db.SaveChangesAsync(ct);
+        }
+        if (skipped > 0)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "claims", Ref = null, Status = "info",
+                Detail = $"hertoets: {skipped} claim(s) blijven 'unchecked'"
+                         + (firstDegradation is null ? "" : $" — {firstDegradation}"),
+            });
             await db.SaveChangesAsync(ct);
         }
         return (rechecked, weerlegd);
