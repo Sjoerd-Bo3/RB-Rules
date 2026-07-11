@@ -1,16 +1,15 @@
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
+import { quotaMessage } from '$lib/quota';
 import { userHeaders } from '$lib/server/user';
 
 // Quota-fouten van rb-api (#42) vertaald naar een bruikbare melding — de
-// api()-helper geeft alleen de status door.
+// api()-helper geeft alleen de status door. De teksten staan in $lib/quota,
+// gedeeld met het streamingpad (#31).
 function quotaError(msg: string, fallback: string): string {
-	if (msg.includes('429'))
-		return 'Limiet bereikt: te veel vragen in korte tijd of je dagquotum is op. Probeer het later opnieuw — of log in via Account voor een ruimer quotum.';
-	if (msg.includes('401')) return 'Je sessie is verlopen — log opnieuw in via Account.';
-	if (msg.includes('403')) return 'Dit account is geblokkeerd door de beheerder.';
-	return fallback;
+	const status = [429, 401, 403].find((s) => msg.includes(String(s)));
+	return (status !== undefined && quotaMessage(status)) || fallback;
 }
 
 export interface AskStats {

@@ -27,14 +27,16 @@ public static class AskEndpoints
         // meta (citaties/claims vóór het antwoord) → delta* → final|error.
         // Zelfde retrieval en afronding als /api/ask (AskService is de bron);
         // AI-uitval eindigt in een final-frame met de gedegradeerde tekst,
-        // precies zoals de niet-streamende route.
+        // precies zoals de niet-streamende route. Zelfde quota-poort (#42):
+        // de filter vuurt vóór de eerste frame-byte, dus 401/403/429 zijn
+        // hier nog gewone JSON-responses.
         app.MapPost("/api/ask/stream", (AskRequest req, AskService ask, HttpContext http) =>
         {
             if (ValidateAsk(req, out var images, out var history) is { } bad) return bad;
             return Results.Stream(
                 body => StreamAskAsync(ask, req.Question.Trim(), images, history, http, body),
                 "application/x-ndjson");
-        }).RequireRateLimiting("llm");
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
 
         // Echte duurstatistiek (laatste 100 geslaagde vragen) voor de wachtindicatie.
         app.MapGet("/api/ask/stats", async (RbRulesDbContext db) =>

@@ -4,6 +4,7 @@
 	import RbText from '$lib/RbText.svelte';
 	import AnswerView from '$lib/AnswerView.svelte';
 	import { citationEssence, splitSettled } from '$lib/answerFormat';
+	import { quotaMessage } from '$lib/quota';
 
 	let { data, form } = $props();
 	let busy = $state(false);
@@ -237,16 +238,15 @@
 				await fallbackAsk(formData, clearQuestion);
 				return;
 			}
-			if (res.status === 429) {
-				// Rate limit: terugvallen raakt dezelfde limiet — gewoon melden.
+			const gate = quotaMessage(res.status);
+			if (gate) {
+				// Rate-limit/quota/sessiepoort (#42): terugvallen raakt exact
+				// dezelfde poort — gewoon melden, met dezelfde tekst als de
+				// niet-streamende route.
 				await applyAction({
 					type: 'failure',
-					status: 429,
-					data: {
-						error: 'Even rustig aan — te veel vragen kort achter elkaar. Probeer het zo weer.',
-						question: q,
-						history: turns
-					}
+					status: res.status,
+					data: { error: gate, question: q, history: turns }
 				});
 				return;
 			}
