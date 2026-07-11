@@ -14,7 +14,8 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
     public async Task<List<IngestResult>> ScanAsync(
-        bool onlyDue, string? sourceId = null, CancellationToken ct = default)
+        bool onlyDue, string? sourceId = null,
+        Action<string>? progress = null, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
         var query = db.Sources.Where(s => s.Enabled);
@@ -24,9 +25,12 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
             .ToListAsync(ct);
 
         var results = new List<IngestResult>();
+        var n = 0;
         foreach (var src in sources)
         {
+            n++;
             if (onlyDue && !Scheduling.IsDue(src.Cadence, src.LastChecked, now)) continue;
+            progress?.Invoke($"bron {n}/{sources.Count}: {src.Name} ophalen en vergelijken");
             var r = await ScanOneAsync(src, ct);
             results.Add(r);
             db.RunLogs.Add(new RunLog { Kind = "scan", Ref = src.Id, Status = r.Status, Detail = r.Detail });

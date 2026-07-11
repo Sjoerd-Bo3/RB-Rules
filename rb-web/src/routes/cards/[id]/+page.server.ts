@@ -23,6 +23,15 @@ export interface CardDetail {
 	effects: string[] | null;
 	banned: boolean;
 	errataText: string | null;
+	variantOf: string | null;
+	versions: {
+		riftboundId: string;
+		setId: string | null;
+		setLabel: string | null;
+		rarity: string | null;
+		collectorNumber: number | null;
+		imageUrl: string | null;
+	}[];
 }
 
 interface Interaction {

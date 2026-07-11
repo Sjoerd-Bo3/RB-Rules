@@ -12,18 +12,23 @@ public class MechanicMiningService(RbRulesDbContext db, RbAiClient ai)
 {
     private const int BatchSize = 8;
 
-    public async Task<MiningResult> RunAsync(int maxBatches = 25, CancellationToken ct = default)
+    public async Task<MiningResult> RunAsync(
+        int maxBatches = 25, Action<string>? progress = null, CancellationToken ct = default)
     {
         var todo = await db.Cards
-            .Where(c => c.Mechanics == null && c.TextPlain != null && c.TextPlain != "")
+            .Where(c => c.Mechanics == null && c.TextPlain != null && c.TextPlain != ""
+                        && c.VariantOf == null)
             .OrderBy(c => c.RiftboundId)
             .Take(maxBatches * BatchSize)
             .ToListAsync(ct);
 
         var mined = 0;
         var failed = 0;
+        var done = 0;
         foreach (var batch in todo.Chunk(BatchSize))
         {
+            done += batch.Length;
+            progress?.Invoke($"kaartteksten analyseren via LLM: {done}/{todo.Count} in deze run");
             var raw = await ai.AskAsync(
                 MechanicMiner.BuildPrompt(batch), MechanicMiner.GetSystemPrompt(), ct: ct);
             var parsed = raw is null ? [] : MechanicMiner.ParseBatch(raw);

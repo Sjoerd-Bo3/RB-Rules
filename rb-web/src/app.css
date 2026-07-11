@@ -1,0 +1,108 @@
+/* Ontwerptokens — één bron voor kleur, typografie en vormtaal.
+   Donker, rustig en zakelijk: geen emoji's, status via kleur en tekst. */
+:root {
+	--bg: #0d1420;
+	--surface: #151f31;
+	--surface-deep: #0a111d;
+	--border: #263650;
+	--border-strong: #3a5178;
+	--text: #e8eefb;
+	--muted: #93a5c4;
+	--accent: #d98a4e;
+	--accent-soft: #d98a4e22;
+	--accent-ink: #1a1206;
+	--ok: #4fbf8b;
+	--ok-soft: #4fbf8b1c;
+	--warn: #e0a32e;
+	--warn-soft: #e0a32e1c;
+	--err: #e5484d;
+	--err-soft: #e5484d1c;
+	--radius: 10px;
+	--radius-lg: 14px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font: 15px/1.55 -apple-system, 'Segoe UI', system-ui, sans-serif;
+	-webkit-font-smoothing: antialiased;
+}
+
+h1 { font-size: 1.6rem; letter-spacing: -0.02em; font-weight: 700; }
+h2 { letter-spacing: -0.01em; }
+
+a { color: inherit; }
+
+/* Gedeelde bouwstenen */
+.panel {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-lg);
+}
+
+.status-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	vertical-align: middle;
+}
+.status-dot.ok { background: var(--ok); }
+.status-dot.warn { background: var(--warn); }
+.status-dot.err { background: var(--err); }
+.status-dot.busy {
+	background: var(--accent);
+	animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+	50% { opacity: 0.35; }
+}
+
+.spin {
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	border: 2px solid var(--border);
+	border-top-color: var(--accent);
+	animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+	to { transform: rotate(360deg); }
+}
+
+/* Markdown-weergave (rulings) */
+.md :is(h1, h2, h3) { font-size: 1.02rem; color: var(--accent); margin: 18px 0 6px; }
+.md p { margin: 8px 0; }
+.md ul, .md ol { margin: 8px 0; padding-left: 22px; }
+.md li { margin: 3px 0; }
+.md blockquote {
+	margin: 10px 0;
+	padding: 6px 14px;
+	border-left: 3px solid var(--accent);
+	background: var(--surface-deep);
+	border-radius: 0 8px 8px 0;
+	color: var(--muted);
+}
+.md code {
+	background: var(--surface-deep);
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	padding: 1px 6px;
+	font-size: 0.86em;
+}
+.md table {
+	border-collapse: collapse;
+	margin: 10px 0;
+	width: 100%;
+	font-size: 0.92rem;
+}
+.md th, .md td {
+	border: 1px solid var(--border);
+	padding: 6px 10px;
+	text-align: left;
+}
+.md th { background: var(--surface-deep); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }

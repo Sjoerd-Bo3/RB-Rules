@@ -14,26 +14,72 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
     private const string RiftcodexBase = "https://api.riftcodex.com";
     private const string RiotGallery = "https://playriftbound.com/en-us/card-gallery/";
 
-    public async Task<CardSyncResult> SyncAsync(CancellationToken ct = default)
+    public async Task<CardSyncResult> SyncAsync(
+        Action<string>? progress = null, CancellationToken ct = default)
     {
         // Opruimen: set-facetten die eerdere versies per abuis als kaart
         // importeerden (id zonder '-', bijv. 'VEN'/'OGN').
         await db.Cards.Where(c => !c.RiftboundId.Contains('-')).ExecuteDeleteAsync(ct);
 
         var mode = Environment.GetEnvironmentVariable("CARD_SOURCE") ?? "auto";
-        if (mode == "riot") return await SyncFromRiotAsync(ct);
-        try
+        CardSyncResult result;
+        if (mode == "riot")
         {
-            return await SyncFromRiftcodexAsync(ct);
+            result = await SyncFromRiotAsync(progress, ct);
         }
-        catch when (mode != "riftcodex")
+        else
         {
-            return await SyncFromRiotAsync(ct);
+            try
+            {
+                result = await SyncFromRiftcodexAsync(progress, ct);
+            }
+            catch when (mode != "riftcodex")
+            {
+                progress?.Invoke("Riftcodex niet bereikbaar — overschakelen naar officiële Riot-gallery");
+                result = await SyncFromRiotAsync(progress, ct);
+            }
         }
+
+        progress?.Invoke("varianten groeperen (alt-art/promo/herdruk)");
+        await RegroupVariantsAsync(ct);
+        return result;
     }
 
-    private async Task<CardSyncResult> SyncFromRiftcodexAsync(CancellationToken ct)
+    /// <summary>Groepeert printings met dezelfde naam: één canonieke kaart,
+    /// de rest (alt-art/showcase/promo/herdruk) verwijst ernaar via VariantOf.</summary>
+    private async Task RegroupVariantsAsync(CancellationToken ct)
     {
+        var cards = await db.Cards.ToListAsync(ct);
+        foreach (var group in cards.GroupBy(c => c.Name))
+        {
+            var canonical = group
+                .OrderBy(AltPrintingRank)
+                .ThenBy(c => c.Rarity == "Showcase" ? 1 : 0)
+                .ThenBy(c => c.RiftboundId, StringComparer.Ordinal)
+                .First();
+            foreach (var c in group)
+            {
+                var variantOf = ReferenceEquals(c, canonical) ? null : canonical.RiftboundId;
+                if (c.VariantOf != variantOf) c.VariantOf = variantOf;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>'ogn-119-298' = basisprinting (0); 'ogn-119a-298',
+    /// 'sfd-227-star-221' en 'ven-sp3-006' zijn alt-varianten (1).</summary>
+    private static int AltPrintingRank(Card c)
+    {
+        var parts = c.RiftboundId.Split('-');
+        var numeric = parts.Length >= 2 && parts[1].Length > 0 && parts[1].All(char.IsAsciiDigit)
+            && (parts.Length < 3 || (parts[2].Length > 0 && parts[2].All(char.IsAsciiDigit)));
+        return numeric ? 0 : 1;
+    }
+
+    private async Task<CardSyncResult> SyncFromRiftcodexAsync(
+        Action<string>? progress, CancellationToken ct)
+    {
+        progress?.Invoke("setlijst ophalen bij Riftcodex");
         var setsNode = await GetJsonAsync($"{RiftcodexBase}/sets?page=1&size=100", ct);
         var sets = AsList(setsNode);
         var setIds = new List<string>();
@@ -51,6 +97,7 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         {
             for (var page = 1; page <= 200; page++)
             {
+                progress?.Invoke($"set {setId}: pagina {page} ophalen ({total} kaarten verwerkt)");
                 var node = await GetJsonAsync(
                     $"{RiftcodexBase}/cards?set_id={Uri.EscapeDataString(setId)}&page={page}&size=100", ct);
                 var items = AsList(node);
@@ -71,8 +118,10 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         return new(setIds.Count, total, "riftcodex");
     }
 
-    private async Task<CardSyncResult> SyncFromRiotAsync(CancellationToken ct)
+    private async Task<CardSyncResult> SyncFromRiotAsync(
+        Action<string>? progress, CancellationToken ct)
     {
+        progress?.Invoke("officiële card-gallery ophalen (playriftbound.com)");
         var html = await GetStringAsync(RiotGallery, ct);
         var buildId = RiotCardMapper.ExtractBuildId(html)
             ?? throw new InvalidOperationException("Riot build-id niet gevonden");
@@ -80,6 +129,7 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
             $"https://playriftbound.com/_next/data/{buildId}/en-us/card-gallery.json", ct);
         var cards = RiotCardMapper.ParseGallery(json?["pageProps"] ?? new JsonObject());
 
+        progress?.Invoke($"{cards.Count} kaarten verwerken");
         var setIds = new HashSet<string>();
         foreach (var card in cards)
         {

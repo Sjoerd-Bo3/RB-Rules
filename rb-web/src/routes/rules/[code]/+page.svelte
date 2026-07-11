@@ -42,8 +42,8 @@
 	</article>
 
 	<div class="actions">
-		<button onclick={copyLink}>{copied ? '✅ Gekopieerd' : '🔗 Kopieer permalink'}</button>
-		<a class="ext" href={s.sourceUrl} target="_blank" rel="noopener">Officiële bron ↗</a>
+		<button onclick={copyLink}>{copied ? 'Gekopieerd' : 'Kopieer permalink'}</button>
+		<a class="ext" href={s.sourceUrl} target="_blank" rel="noopener">Officiële bron</a>
 	</div>
 
 	<div class="pager">

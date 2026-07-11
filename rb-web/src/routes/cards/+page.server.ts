@@ -14,6 +14,7 @@ export interface CardHit {
 	textPlain: string | null;
 	imageUrl: string | null;
 	distance?: number;
+	variants?: number;
 }
 
 export interface Facets {

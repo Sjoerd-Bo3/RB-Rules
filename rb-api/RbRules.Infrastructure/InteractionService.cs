@@ -15,8 +15,10 @@ public class InteractionService(
 {
     private const int VerifyBatch = 6;
 
-    public async Task<InteractionMineResult> MineAsync(int maxCandidates = 60, CancellationToken ct = default)
+    public async Task<InteractionMineResult> MineAsync(
+        int maxCandidates = 60, Action<string>? progress = null, CancellationToken ct = default)
     {
+        progress?.Invoke("kandidaat-paren zoeken op gedeelde mechanieken");
         var cards = await db.Cards
             .Where(c => c.Mechanics != null)
             .ToListAsync(ct);
@@ -42,8 +44,11 @@ public class InteractionService(
             .ToList();
 
         var verified = 0;
+        var judged = 0;
         foreach (var batch in candidates.Chunk(VerifyBatch))
         {
+            judged += batch.Length;
+            progress?.Invoke($"paren beoordelen via LLM: {judged}/{candidates.Count} ({verified} geverifieerd)");
             var raw = await ai.AskAsync(
                 InteractionMiner.BuildVerifyPrompt(batch),
                 InteractionMiner.VerifySystemPrompt, ct: ct);

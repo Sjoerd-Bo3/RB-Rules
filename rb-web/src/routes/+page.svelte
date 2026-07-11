@@ -78,7 +78,7 @@
 				</div>
 			{/if}
 			{#if sevFilter || typeFilter || srcFilter}
-				<button class="chip clear" onclick={() => { sevFilter = null; typeFilter = null; srcFilter = null; }}>✕ wis filters</button>
+				<button class="chip clear" onclick={() => { sevFilter = null; typeFilter = null; srcFilter = null; }}>Wis filters</button>
 			{/if}
 		</div>
 		<p class="meta count">{changes.length} van {data.changes.length} wijzigingen</p>
@@ -94,7 +94,7 @@
 					{#if data.isAdmin}
 						<form method="POST" action="?/delete" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
 							<input type="hidden" name="id" value={c.id} />
-							<button class="del" title="Verwijder uit feed">🗑</button>
+							<button class="del" title="Verwijder uit feed">Verwijder</button>
 						</form>
 					{/if}
 				</header>
@@ -116,12 +116,6 @@
 </main>
 
 <style>
-	:global(body) {
-		margin: 0;
-		background: #0e1726;
-		color: #e7eefc;
-		font: 16px/1.5 system-ui, sans-serif;
-	}
 	main { max-width: 860px; margin: 0 auto; padding: 24px 20px; }
 	h1 span { color: #d98a4e; }
 	.subtitle, .meta, .empty { color: #9fb0cc; }
@@ -144,8 +138,11 @@
 	.card header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 	.src { color: #9fb0cc; font-size: 0.85rem; text-decoration: none; border-bottom: 1px dotted #9fb0cc66; }
 	.when { margin-left: auto; font-size: 0.85rem; }
-	.del { background: none; border: 0; cursor: pointer; opacity: 0.5; font-size: 0.9rem; }
-	.del:hover { opacity: 1; }
+	.del {
+		background: none; border: 1px solid #243551; border-radius: 6px;
+		color: #9fb0cc; cursor: pointer; font-size: 0.75rem; padding: 2px 8px; opacity: 0.7;
+	}
+	.del:hover { opacity: 1; border-color: #e5484d; color: #ff8b8e; }
 	.badge {
 		font-size: 0.72rem;
 		text-transform: uppercase;

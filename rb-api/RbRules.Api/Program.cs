@@ -102,16 +102,18 @@ app.MapGet("/api/changes", async (
 
 app.MapGet("/api/cards", async (
     string? q, string? domain, string? type, string? set, string? rarity,
-    string? mechanic, int? maxEnergy, int? page,
+    string? mechanic, int? maxEnergy, int? page, bool? all,
     RbRulesDbContext db) =>
 {
     var query = db.Cards.AsQueryable();
+    // Standaard één kaart per naam; alt-art/promo-printings tellen niet mee.
+    if (all != true) query = query.Where(c => c.VariantOf == null);
     if (!string.IsNullOrWhiteSpace(q))
         query = query.Where(c => EF.Functions.ILike(c.Name, $"%{q}%"));
     query = ApplyCardFilters(query, domain, type, set, rarity, mechanic, maxEnergy);
 
     const int pageSize = 60;
-    return await query.OrderBy(c => c.Name)
+    var cards = await query.OrderBy(c => c.Name)
         .Skip(Math.Max(0, (page ?? 1) - 1) * pageSize)
         .Take(pageSize)
         .Select(c => new
@@ -120,6 +122,20 @@ app.MapGet("/api/cards", async (
             c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
         })
         .ToListAsync();
+
+    // Aantal extra printings per kaart (alt-art/promo) voor een subtiel label.
+    var ids = cards.Select(c => c.RiftboundId).ToList();
+    var variantCounts = await db.Cards
+        .Where(c => c.VariantOf != null && ids.Contains(c.VariantOf))
+        .GroupBy(c => c.VariantOf!)
+        .Select(g => new { Id = g.Key, N = g.Count() })
+        .ToDictionaryAsync(x => x.Id, x => x.N);
+    return Results.Ok(cards.Select(c => new
+    {
+        c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
+        c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+        Variants = variantCounts.GetValueOrDefault(c.RiftboundId),
+    }));
 });
 
 // Filteropties voor de kaart-browser (à la Piltover Archive), incl. onze
@@ -127,6 +143,7 @@ app.MapGet("/api/cards", async (
 app.MapGet("/api/cards/facets", async (RbRulesDbContext db) =>
 {
     var rows = await db.Cards
+        .Where(c => c.VariantOf == null)
         .Select(c => new { c.SetId, c.SetLabel, c.Type, c.Rarity, c.Domains, c.Mechanics })
         .ToListAsync();
     return Results.Ok(new
@@ -153,12 +170,24 @@ app.MapGet("/api/cards/{id}", async (string id, RbRulesDbContext db) =>
         .OrderByDescending(e => e.DetectedAt)
         .Select(e => e.NewText)
         .FirstOrDefaultAsync();
+    // Alle printings van deze kaart (alt-art/showcase/promo/herdruk).
+    var canonicalId = c.VariantOf ?? c.RiftboundId;
+    var versions = await db.Cards
+        .Where(x => x.RiftboundId != c.RiftboundId &&
+                    (x.RiftboundId == canonicalId || x.VariantOf == canonicalId))
+        .OrderBy(x => x.RiftboundId)
+        .Select(x => new
+        {
+            x.RiftboundId, x.SetId, x.SetLabel, x.Rarity, x.CollectorNumber, x.ImageUrl,
+        })
+        .ToListAsync();
     return Results.Ok(new
     {
         c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
         c.Energy, c.Might, c.Power, c.SetId, c.SetLabel, c.CollectorNumber,
         c.TextPlain, c.ImageUrl, c.Tags, c.Mechanics, c.Triggers, c.Effects,
         c.UpdatedAt, Banned = banned, ErrataText = erratum,
+        c.VariantOf, Versions = versions,
     });
 });
 
@@ -220,7 +249,7 @@ app.MapGet("/api/cards/search", async (
 
     var queryVector = await embeddings.EmbedOneAsync(q);
     var cards = ApplyCardFilters(
-        db.Cards.Where(c => c.Embedding != null),
+        db.Cards.Where(c => c.Embedding != null && c.VariantOf == null),
         domain, type, set, rarity, mechanic, maxEnergy);
 
     var results = await cards
@@ -246,7 +275,8 @@ app.MapGet("/api/cards/{id}/similar", async (
 
     var anchor = card.Embedding;
     var rows = await db.Cards
-        .Where(c => c.Embedding != null && c.RiftboundId != id)
+        .Where(c => c.Embedding != null && c.RiftboundId != id
+                    && c.VariantOf == null && c.Name != card.Name)
         .OrderBy(c => c.Embedding!.CosineDistance(anchor))
         .Take(Math.Clamp(limit ?? 10, 1, 30))
         .Select(c => new
@@ -513,46 +543,52 @@ admin.MapPost("/interactions/mine", async (
 // ── Levendige admin: async jobs + live status ──────────────────
 admin.MapPost("/jobs/{name}", (string name, JobRunner jobs) =>
 {
-    Func<IServiceProvider, CancellationToken, Task<string>>? work = name switch
+    Func<IServiceProvider, Action<string>, CancellationToken, Task<string>>? work = name switch
     {
-        "scan" => async (sp, ct) =>
+        "scan" => async (sp, report, ct) =>
         {
-            var r = await sp.GetRequiredService<IngestService>().ScanAsync(onlyDue: false, ct: ct);
+            var r = await sp.GetRequiredService<IngestService>()
+                .ScanAsync(onlyDue: false, progress: report, ct: ct);
             return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
         },
-        "cards" => async (sp, ct) =>
+        "cards" => async (sp, report, ct) =>
         {
-            var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(ct);
+            var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(report, ct);
             return $"{r.Sets} sets, {r.Cards} kaarten via {r.Source}";
         },
-        "embed" => async (sp, ct) =>
+        "embed" => async (sp, report, ct) =>
         {
-            var r = await sp.GetRequiredService<CardEmbeddingPipeline>().RunAsync(ct: ct);
+            var r = await sp.GetRequiredService<CardEmbeddingPipeline>()
+                .RunAsync(progress: report, ct: ct);
             return $"{r.Embedded} kaarten geembed, {r.Skipped} al actueel";
         },
-        "mine" => async (sp, ct) =>
+        "mine" => async (sp, report, ct) =>
         {
-            var r = await sp.GetRequiredService<MechanicMiningService>().RunAsync(ct: ct);
+            var r = await sp.GetRequiredService<MechanicMiningService>()
+                .RunAsync(progress: report, ct: ct);
             return $"{r.Mined} kaarten gemined, {r.Remaining} resterend";
         },
-        "rules" => async (sp, ct) =>
+        "rules" => async (sp, report, ct) =>
         {
-            var r = await sp.GetRequiredService<RuleChunkPipeline>().RunAsync(ct);
+            var r = await sp.GetRequiredService<RuleChunkPipeline>().RunAsync(report, ct);
             return $"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen";
         },
-        "bans" => async (sp, ct) =>
+        "bans" => async (sp, report, ct) =>
         {
+            report("officiële documenten structureren via LLM");
             var r = await sp.GetRequiredService<BanErrataSyncService>().SyncAsync(ct);
             return $"{r.Bans} bans, {r.Errata} errata gestructureerd";
         },
-        "graph" => async (sp, ct) =>
+        "graph" => async (sp, report, ct) =>
         {
+            report("kaarten, domeinen, tags en mechanieken naar Neo4j schrijven");
             var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
             return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics";
         },
-        "interactions" => async (sp, ct) =>
+        "interactions" => async (sp, report, ct) =>
         {
-            var r = await sp.GetRequiredService<InteractionService>().MineAsync(ct: ct);
+            var r = await sp.GetRequiredService<InteractionService>()
+                .MineAsync(progress: report, ct: ct);
             return $"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd";
         },
         _ => null,
