@@ -18,8 +18,9 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         Action<string>? progress = null, CancellationToken ct = default)
     {
         // Opruimen: set-facetten die eerdere versies per abuis als kaart
-        // importeerden (id zonder '-', bijv. 'VEN'/'OGN').
-        await db.Cards.Where(c => !c.RiftboundId.Contains('-')).ExecuteDeleteAsync(ct);
+        // importeerden (id zonder '-', bijv. 'VEN'/'OGN'). String-overload:
+        // Npgsql vertaalt Contains(char) niet naar SQL.
+        await db.Cards.Where(c => !c.RiftboundId.Contains("-")).ExecuteDeleteAsync(ct);
 
         var mode = Environment.GetEnvironmentVariable("CARD_SOURCE") ?? "auto";
         CardSyncResult result;
