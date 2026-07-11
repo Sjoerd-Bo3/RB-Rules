@@ -26,7 +26,10 @@ builder.Services.AddSingleton<IDriver>(_ => GraphDatabase.Driver(
 builder.Services.AddHttpClient<RbAiClient>(c =>
 {
     c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("RB_AI_URL") ?? "http://localhost:8090");
-    c.Timeout = TimeSpan.FromMinutes(3);
+    // Ruim boven het harde 5-minutenbudget van research-calls in rb-ai (#64),
+    // anders hakt rb-api een nog lopende webzoektocht (#63-scout) af terwijl
+    // de sidecar doorwerkt. Overige taken antwoorden of falen veel eerder.
+    c.Timeout = TimeSpan.FromMinutes(6);
 });
 builder.Services.AddHttpClient<IngestService>(c => c.Timeout = TimeSpan.FromSeconds(60));
 builder.Services.AddHttpClient<CardSyncService>(c => c.Timeout = TimeSpan.FromSeconds(120));
@@ -46,6 +49,7 @@ builder.Services.AddScoped<BanErrataSyncService>();
 builder.Services.AddScoped<InteractionService>();
 builder.Services.AddScoped<AdminOverviewService>();
 builder.Services.AddScoped<ChangeClassificationService>();
+builder.Services.AddScoped<SourceScoutService>();
 builder.Services.AddSingleton<JobRunner>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddHostedService<ScanScheduler>();

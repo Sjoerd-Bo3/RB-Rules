@@ -273,6 +273,16 @@ public static class AdminEndpoints
                         .MineAsync(progress: report, ct: ct);
                     return $"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd";
                 },
+                // Bronnenjacht (#63, stap 2): rb-ai doorzoekt het web (task
+                // "research", #64) naar nieuwe regel-/uitlegbronnen. Vondsten
+                // worden alleen als voorstel gelogd (run_log, kind "scout") —
+                // opname in het register blijft een beheerdersbeslissing.
+                "scout" => async (sp, report, ct) =>
+                {
+                    var r = await sp.GetRequiredService<SourceScoutService>()
+                        .RunAsync(progress: report, ct: ct);
+                    return r.Message;
+                },
                 // Backfill (#58): álle changes zonder samenvatting/duiding of met
                 // type "unknown" alsnog classificeren — de scan-retry pakt alleen
                 // de laatste 14 dagen. Best-effort: wat mislukt blijft staan.
