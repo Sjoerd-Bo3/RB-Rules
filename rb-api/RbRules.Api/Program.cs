@@ -60,26 +60,56 @@ builder.Services.AddScoped<ClaimMiningService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();
+// Accounts + per-gebruiker-quota (#42).
+builder.Services.AddScoped<UserAccountService>();
+builder.Services.AddScoped<RequestUserContext>();
+builder.Services.AddSingleton<MailService>();
 builder.Services.AddSingleton<JobRunner>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddHostedService<ScanScheduler>();
 
 builder.Services.AddOpenApi();
 
-// Rate-limiting op de dure/publieke schrijfroutes (#42-quick-win): elke
-// /api/ask en explain-call is een betaalde LLM-call. Partitie op het echte
+// Rate-limiting op de dure/publieke schrijfroutes (#42): elke /api/ask en
+// explain-call is een betaalde LLM-call. Anoniem: partitie op het echte
 // client-IP dat rb-web meegeeft (X-Client-Ip) — requests komen anders
-// allemaal van het rb-web-container-IP.
+// allemaal van het rb-web-container-IP. Ingelogd (X-User-Token): ruimere
+// limiet per sessietoken; de echte per-account-dagquota handhaaft
+// UserQuotaFilter (ongeldige tokens strandden daar op een 401, dus een
+// verzonnen token koopt geen LLM-calls).
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    o.AddPolicy("llm", ctx => RateLimitPartition.GetFixedWindowLimiter(
-        ctx.Request.Headers["X-Client-Ip"].FirstOrDefault()
-            ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
+    o.AddPolicy("llm", ctx =>
+    {
+        var userToken = ctx.Request.Headers["X-User-Token"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(userToken))
+            return RateLimitPartition.GetFixedWindowLimiter($"user:{userToken}",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 30,
+                    Window = TimeSpan.FromMinutes(5),
+                    QueueLimit = 0,
+                });
+        return RateLimitPartition.GetFixedWindowLimiter(
+            "ip:" + (ctx.Request.Headers["X-Client-Ip"].FirstOrDefault()
+                ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "anon"),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 12,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+            });
+    });
+    // Login-routes (#42): strikt per IP — mailbombing en token-raden remmen.
+    // Bewust nooit op X-User-Token partitioneren: die is hier onbevestigd.
+    o.AddPolicy("auth", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        "auth:" + (ctx.Request.Headers["X-Client-Ip"].FirstOrDefault()
+            ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "anon"),
         _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = 12,
-            Window = TimeSpan.FromMinutes(5),
+            PermitLimit = 8,
+            Window = TimeSpan.FromMinutes(15),
             QueueLimit = 0,
         }));
 });
@@ -120,6 +150,7 @@ app.MapCardEndpoints();
 app.MapRuleEndpoints();
 app.MapKnowledgeEndpoints();
 app.MapAskEndpoints();
+app.MapAuthEndpoints();
 app.MapFeedEndpoints();
 app.MapPushEndpoints();
 app.MapAdminEndpoints();

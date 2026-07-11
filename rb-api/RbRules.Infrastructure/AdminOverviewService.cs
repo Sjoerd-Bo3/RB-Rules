@@ -52,6 +52,14 @@ public record ProposalOverview(
     int Total, int Page, int PageSize,
     IReadOnlyList<ProposalStatusCount> StatusCounts, IReadOnlyList<ProposalOverviewItem> Items);
 
+public record UserOverviewItem(
+    long Id, string Email, bool Blocked, int DailyQuota, int DailyPhotoQuota,
+    DateTimeOffset CreatedAt, DateTimeOffset? LastLoginAt,
+    int Questions, int Photos, int Cheap, int Hard, int Failed, int AvgDurationMs);
+public record UserOverview(
+    int Total, int Page, int PageSize, string Period,
+    int AnonQuestions, int AnonPhotos, IReadOnlyList<UserOverviewItem> Items);
+
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
 /// server-side gepagineerd waar lijsten groot zijn.</summary>
@@ -249,6 +257,61 @@ public class AdminOverviewService(RbRulesDbContext db)
                 p.Status, p.FoundAt, p.ReviewedAt))
             .ToListAsync();
         return new(total, page, PageSize, statusCounts, items);
+    }
+
+    /// <summary>Gebruikers met hun LLM-gebruik in de gekozen periode (#42):
+    /// aantallen, foto's en de cheap/hard-verdeling — het kosteninzicht.
+    /// Bewust uit ask_metric en niet uit ask_trace: traces bewaren maar 200
+    /// rijen, dus alleen de metric-tabel telt eerlijk over een periode.</summary>
+    public async Task<UserOverview> UsersAsync(string? period, int page)
+    {
+        page = ClampPage(page);
+        var now = DateTimeOffset.UtcNow;
+        var normalizedPeriod = period is "vandaag" or "30d" ? period : "7d";
+        var since = normalizedPeriod switch
+        {
+            "vandaag" => new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero),
+            "30d" => now.AddDays(-30),
+            _ => now.AddDays(-7),
+        };
+
+        // Eén aggregatie over de periode; kleine gebruikersaantallen, dus de
+        // volledige groepering ophalen en per paginarij opzoeken is prima.
+        var stats = await db.AskMetrics.AsNoTracking()
+            .Where(m => m.CreatedAt >= since)
+            .GroupBy(m => m.UserId)
+            .Select(g => new
+            {
+                UserId = g.Key,
+                Questions = g.Count(),
+                Photos = g.Count(m => m.HadImage),
+                // Oude rijen (vóór #42) hebben geen model; daar was hard == foto.
+                Hard = g.Count(m => m.Model == "hard" || (m.Model == null && m.HadImage)),
+                Failed = g.Count(m => !m.Ok),
+                AvgMs = (int)g.Average(m => m.DurationMs),
+            })
+            .ToListAsync();
+        var byUser = stats.Where(s => s.UserId != null).ToDictionary(s => s.UserId!.Value);
+        var anon = stats.FirstOrDefault(s => s.UserId == null);
+
+        var total = await db.Users.CountAsync();
+        var users = await db.Users.AsNoTracking()
+            .OrderBy(u => u.Email)
+            .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
+            .ToListAsync();
+
+        var items = users.Select(u =>
+        {
+            var s = byUser.GetValueOrDefault(u.Id);
+            return new UserOverviewItem(
+                u.Id, u.Email, u.Blocked, u.DailyQuota, u.DailyPhotoQuota,
+                u.CreatedAt, u.LastLoginAt,
+                s?.Questions ?? 0, s?.Photos ?? 0,
+                (s?.Questions ?? 0) - (s?.Hard ?? 0), s?.Hard ?? 0,
+                s?.Failed ?? 0, s?.AvgMs ?? 0);
+        }).ToList();
+        return new(total, page, PageSize, normalizedPeriod,
+            anon?.Questions ?? 0, anon?.Photos ?? 0, items);
     }
 
     public async Task<Paged<ChangeOverviewItem>> ChangesAsync(int page)

@@ -21,3 +21,11 @@ public record CorrectionSubmit(string Question, string Verdict, string? Text);
 public record PushSubscribe(string Endpoint, string P256dh, string Auth);
 
 public record PushUnsubscribe(string Endpoint);
+
+/// <summary>Magic-link-login (#42).</summary>
+public record AuthRequestDto(string? Email);
+
+public record AuthVerifyDto(string? Token);
+
+/// <summary>Beheerder-bewerking van een account (#42): blokkeren en quota.</summary>
+public record UserPatch(bool? Blocked, int? DailyQuota, int? DailyPhotoQuota);

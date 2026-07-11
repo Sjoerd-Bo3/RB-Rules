@@ -28,6 +28,10 @@ public class DbModelTests
     [InlineData(typeof(Claim), "claim")]
     [InlineData(typeof(ClaimSource), "claim_source")]
     [InlineData(typeof(SourceProposal), "source_proposal")]
+    // Accounts (#42): app_user en niet "user" — gereserveerd woord in Postgres.
+    [InlineData(typeof(AppUser), "app_user")]
+    [InlineData(typeof(UserSession), "user_session")]
+    [InlineData(typeof(LoginToken), "login_token")]
     public void TableNames_MatchPopSchema(Type entity, string expectedTable)
     {
         using var db = CreateContext();
