@@ -552,10 +552,17 @@ app.MapGet("/api/rules/section/{code}", async (string code, string? source, RbRu
         .OrderBy(c => c.ChunkIndex)
         .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
         {
-            c.SourceId, SourceName = s.Name, SourceUrl = s.Url, c.ChunkIndex, c.Text,
+            c.SourceId, SourceName = s.Name, SourceUrl = s.Url,
+            c.ChunkIndex, c.Text, c.Page, c.DocumentId,
         })
         .ToListAsync();
     if (chunks.Count == 0) return Results.NotFound();
+
+    // PDF-deeplink: werkelijke bestands-URL + beginpagina van de sectie.
+    var fileUrl = await db.Documents
+        .Where(d => d.Id == chunks[0].DocumentId)
+        .Select(d => d.FileUrl)
+        .FirstOrDefaultAsync();
 
     // Bij codes die in meerdere bronnen voorkomen: houd één bron aan.
     var srcId = chunks[0].SourceId;
@@ -578,6 +585,8 @@ app.MapGet("/api/rules/section/{code}", async (string code, string? source, RbRu
         chunks[0].SourceName,
         chunks[0].SourceUrl,
         Text = string.Join("\n\n", chunks.Select(c => c.Text)),
+        PdfUrl = fileUrl,
+        chunks[0].Page,
         Prev = idx > 0 ? distinct[idx - 1] : null,
         Next = idx >= 0 && idx < distinct.Count - 1 ? distinct[idx + 1] : null,
     });

@@ -43,7 +43,13 @@
 
 	<div class="actions">
 		<button onclick={copyLink}>{copied ? 'Gekopieerd' : 'Kopieer permalink'}</button>
-		<a class="ext" href={s.sourceUrl} target="_blank" rel="noopener">Officiële bron</a>
+		{#if s.pdfUrl}
+			<a class="ext" href="{s.pdfUrl}{s.page ? `#page=${s.page}` : ''}" target="_blank" rel="noopener">
+				Officiële PDF{s.page ? ` — pagina ${s.page}` : ''}
+			</a>
+		{:else}
+			<a class="ext" href={s.sourceUrl} target="_blank" rel="noopener">Officiële bron</a>
+		{/if}
 	</div>
 
 	<div class="pager">

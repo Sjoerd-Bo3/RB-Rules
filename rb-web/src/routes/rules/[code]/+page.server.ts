@@ -8,6 +8,8 @@ export interface Section {
 	sourceName: string;
 	sourceUrl: string;
 	text: string;
+	pdfUrl: string | null;
+	page: number | null;
 	prev: string | null;
 	next: string | null;
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { renderMarkdown } from '$lib/markdown';
+	import RbText from '$lib/RbText.svelte';
 
 	let { form } = $props();
 	let busy = $state(false);
@@ -96,18 +97,53 @@
 			<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
 			<div class="md">{@html answerHtml}</div>
 			{#if form?.citations?.length}
-				<h2>Bronnen</h2>
-				<ol>
-					{#each form.citations as c (c.n)}
-						<li>
-							<a href={c.url} target="_blank" rel="noreferrer">{c.sourceName}</a>
-							<span class="meta">(trust {c.trust})</span>
+				<h2>Geciteerde regelsecties</h2>
+				{#each form.citations as c (c.n)}
+					<details class="cite">
+						<summary>
+							<span class="cite-n">[{c.n}]</span>
+							{#if c.section}<strong>§ {c.section}</strong>{/if}
+							<span class="meta">{c.sourceName} · trust {c.trust}</span>
+						</summary>
+						{#if c.text}<p class="cite-text">{c.text}</p>{/if}
+						<p class="cite-links meta">
 							{#if c.section}
-								<a class="sec" href="/rules/{encodeURIComponent(c.section)}">§ {c.section}</a>
+								<a href="/rules/{encodeURIComponent(c.section)}">Sectiepagina</a>
 							{/if}
-						</li>
-					{/each}
-				</ol>
+							{#if c.pdfUrl}
+								· <a href="{c.pdfUrl}{c.page ? `#page=${c.page}` : ''}" target="_blank" rel="noopener">
+									Officiële PDF{c.page ? ` (pagina ${c.page})` : ''}</a>
+							{:else}
+								· <a href={c.url} target="_blank" rel="noreferrer">Officiële bron</a>
+							{/if}
+						</p>
+					</details>
+				{/each}
+			{/if}
+
+			{#if form?.cards?.length}
+				<h2>Betrokken kaarten</h2>
+				{#each form.cards as k (k.riftboundId)}
+					<details class="cite card-detail">
+						<summary>
+							<strong>{k.name}</strong>
+							<span class="meta">{[k.supertype, k.type].filter(Boolean).join(' ')} · {k.domains.join('/') || '—'}</span>
+							{#if k.banned}<span class="ban">Verboden</span>{/if}
+						</summary>
+						<div class="card-body">
+							{#if k.imageUrl}<img src={k.imageUrl} alt={k.name} loading="lazy" />{/if}
+							<div>
+								<p class="meta">
+									{#if k.energy !== null}Energy {k.energy}{/if}
+									{#if k.might !== null}&nbsp;· Might {k.might}{/if}
+									{#if k.mechanics?.length}&nbsp;· {k.mechanics.join(', ')}{/if}
+								</p>
+								{#if k.textPlain}<p class="oracle"><RbText text={k.textPlain} /></p>{/if}
+								<a href="/cards/{k.riftboundId}">Naar kaartpagina →</a>
+							</div>
+						</div>
+					</details>
+				{/each}
 			{/if}
 
 			<!-- Self-learning: feedback wordt beoordeeld en stuurt daarna antwoorden -->
@@ -124,6 +160,7 @@
 						<input type="hidden" name="question" value={form?.question ?? ''} />
 						<input type="hidden" name="answer" value={form?.answer ?? ''} />
 						<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
+						<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
 						<input type="hidden" name="verdict" value="up" />
 						<button class="fb">Ja</button>
 					</form>
@@ -135,6 +172,7 @@
 					<input type="hidden" name="question" value={form?.question ?? ''} />
 					<input type="hidden" name="answer" value={form?.answer ?? ''} />
 					<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
+					<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
 					<input type="hidden" name="verdict" value="down" />
 					<textarea name="text" rows="3" placeholder="Wat is het juiste antwoord? Verwijs waar mogelijk naar een §-sectie."></textarea>
 					<button type="submit">Verstuur correctie</button>
@@ -181,10 +219,25 @@
 	.answer-panel { padding: 18px 20px; }
 	.asked { margin: 0 0 4px; font-size: 0.85rem; }
 	h2 { font-size: 1rem; color: var(--accent); margin: 16px 0 6px; }
-	ol { margin: 0; padding-left: 20px; }
-	.sec {
-		color: var(--ok); text-decoration: none; font-weight: 600;
-		background: var(--ok-soft); border-radius: 999px; padding: 1px 9px; margin-left: 6px;
+	.cite {
+		background: var(--surface-deep); border: 1px solid var(--border);
+		border-radius: 8px; padding: 8px 12px; margin-bottom: 6px;
+	}
+	.cite summary { cursor: pointer; }
+	.cite-n { color: var(--muted); font-size: 0.85rem; margin-right: 4px; }
+	.cite summary .meta { margin-left: 8px; font-size: 0.82rem; }
+	.cite-text { margin: 8px 0 4px; line-height: 1.6; }
+	.cite-links a { color: var(--ok); text-decoration: none; font-weight: 600; }
+	.card-body { display: flex; gap: 14px; margin-top: 8px; }
+	.card-body img { width: 120px; border-radius: 8px; border: 1px solid var(--border); align-self: flex-start; }
+	.card-body .oracle {
+		background: var(--surface); border: 1px solid var(--border);
+		border-radius: 8px; padding: 8px 10px; margin: 6px 0;
+	}
+	.card-body a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+	.ban {
+		font-size: 0.7rem; text-transform: uppercase; margin-left: 8px;
+		background: var(--err-soft); color: var(--err); border-radius: 999px; padding: 2px 8px;
 	}
 	.feedback {
 		display: flex; align-items: center; gap: 10px;

@@ -51,6 +51,7 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
                 return new(src.Id, "error", $"HTTP {(int)res.StatusCode}");
 
             string text;
+            string? fileUrl = null;
             switch (src.Parser)
             {
                 case "html":
@@ -77,6 +78,7 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
                         return new(src.Id, "error", $"PDF HTTP {(int)pdfRes.StatusCode} ({pdfUrl})");
                     var bytes = await pdfRes.Content.ReadAsByteArrayAsync(ct);
                     text = PdfTextExtractor.Extract(bytes);
+                    fileUrl = pdfUrl.ToString();
                     break;
                 }
                 default:
@@ -101,7 +103,10 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
                 .OrderByDescending(d => d.RetrievedAt)
                 .FirstOrDefaultAsync(ct);
 
-            db.Documents.Add(new Document { SourceId = src.Id, Content = text, ContentHash = hash });
+            db.Documents.Add(new Document
+            {
+                SourceId = src.Id, Content = text, ContentHash = hash, FileUrl = fileUrl,
+            });
 
             var isNew = src.LastHash is null;
             if (!isNew)
@@ -109,9 +114,11 @@ public class IngestService(RbRulesDbContext db, HttpClient http, RbAiClient ai)
                 var diff = DiffUtils.LineDiff(prevDoc?.Content ?? "", text);
                 if (string.IsNullOrWhiteSpace(diff))
                 {
-                    // Zelfde zinnen, andere volgorde — ruis, geen change-item.
+                    // Zelfde zinnen, andere volgorde of alleen opmaak — het
+                    // document wél bewaren (nieuwste versie is leidend voor
+                    // indexering), maar geen change-item in de feed.
                     src.LastHash = hash;
-                    return new(src.Id, "unchanged", "alleen herordening");
+                    return new(src.Id, "unchanged", "alleen herordening/opmaak");
                 }
                 var cls = await ClassifyAsync(src.Name, diff, ct);
                 db.Changes.Add(new Change

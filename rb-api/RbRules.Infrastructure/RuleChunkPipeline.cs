@@ -46,6 +46,7 @@ public class RuleChunkPipeline(RbRulesDbContext db, EmbeddingService embeddings)
                 SectionCode = string.IsNullOrEmpty(s.Code) || s.Code == "intro" ? null : s.Code,
                 ChunkIndex = i,
                 Text = s.Text,
+                Page = s.Page,
             }).ToList();
 
             foreach (var batch in chunks.Chunk(EmbedBatch))

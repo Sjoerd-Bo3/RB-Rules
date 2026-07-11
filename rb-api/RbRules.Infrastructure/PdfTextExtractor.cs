@@ -11,8 +11,14 @@ public static class PdfTextExtractor
     {
         using var doc = PdfDocument.Open(pdfBytes);
         var sb = new StringBuilder();
+        var first = true;
         foreach (var page in doc.GetPages())
         {
+            // Paginagrens als form-feed: de sectie-parser leidt hieruit het
+            // paginanummer af voor PDF-deeplinks (#page=N).
+            if (!first) sb.Append('\f');
+            first = false;
+
             // Woorden gegroepeerd per regel (Y-positie), regels van boven naar
             // beneden — geeft nette "601.2. Tekst…"-regels.
             var lines = page.GetWords()

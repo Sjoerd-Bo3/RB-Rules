@@ -4,8 +4,18 @@ using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
 
-public record Citation(int N, string SourceName, string Url, string? Section, int Trust);
-public record AskResult(string Answer, IReadOnlyList<Citation> Citations);
+public record Citation(
+    int N, string SourceName, string Url, string? Section, int Trust,
+    string? Text = null, string? PdfUrl = null, int? Page = null);
+
+public record AskCard(
+    string RiftboundId, string Name, string? Type, string? Supertype,
+    string[] Domains, int? Energy, int? Might, string? TextPlain,
+    string[]? Mechanics, string? ImageUrl, bool Banned);
+
+public record AskResult(
+    string Answer, IReadOnlyList<Citation> Citations,
+    IReadOnlyList<AskCard> Cards);
 
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
@@ -57,20 +67,27 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         var topIds = scores.OrderByDescending(kv => kv.Value).Take(TopK).Select(kv => kv.Key).ToList();
         if (topIds.Count == 0)
-            return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.", []);
+            return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.", [], []);
 
         var chunks = await db.RuleChunks
             .Where(c => topIds.Contains(c.Id))
             .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
             {
-                c.Id, c.Text, c.SectionCode,
+                c.Id, c.Text, c.SectionCode, c.Page, c.DocumentId,
                 s.Name, s.Url, s.TrustTier,
             })
             .ToListAsync(ct);
         var ordered = topIds.Select(id => chunks.First(c => c.Id == id)).ToList();
 
-        var citations = ordered.Select((c, i) =>
-            new Citation(i + 1, c.Name, c.Url, c.SectionCode, c.TrustTier)).ToList();
+        // PDF-bestands-URL's voor deeplinks (…rules.pdf#page=N).
+        var docIds = ordered.Select(c => c.DocumentId).Distinct().ToList();
+        var fileUrls = await db.Documents
+            .Where(d => docIds.Contains(d.Id) && d.FileUrl != null)
+            .ToDictionaryAsync(d => d.Id, d => d.FileUrl, ct);
+
+        var citations = ordered.Select((c, i) => new Citation(
+            i + 1, c.Name, c.Url, c.SectionCode, c.TrustTier,
+            Text: c.Text, PdfUrl: fileUrls.GetValueOrDefault(c.DocumentId), Page: c.Page)).ToList();
 
         var context = string.Join("\n\n", ordered.Select((c, i) =>
             $"[{i + 1}] ({c.Name}, trust {c.TrustTier}{(c.SectionCode is null ? "" : $", §{c.SectionCode}")})\n{c.Text}"));
@@ -103,7 +120,34 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             SystemPrompt, ct: ct)
             ?? "AI is niet beschikbaar — probeer het later opnieuw.";
 
-        return new(answer, citations);
+        // Betrokken kaarten (herkend in vraag én antwoord) voor de kaart-
+        // uitklap op de ruling-pagina.
+        var cards = await MatchCardsAsync($"{question}\n{answer}", ct);
+        return new(answer, citations, cards);
+    }
+
+    private async Task<List<AskCard>> MatchCardsAsync(string text, CancellationToken ct)
+    {
+        var t = text.ToLowerInvariant();
+        var names = await db.Cards
+            .Where(c => c.VariantOf == null)
+            .Select(c => new { c.RiftboundId, c.Name })
+            .ToListAsync(ct);
+        var hits = names
+            .Where(c => c.Name.Length >= 4 && t.Contains(c.Name.ToLowerInvariant()))
+            .Select(c => c.RiftboundId)
+            .Take(6)
+            .ToList();
+        if (hits.Count == 0) return [];
+
+        var cards = await db.Cards.Where(c => hits.Contains(c.RiftboundId)).ToListAsync(ct);
+        var banned = await db.BanEntries
+            .Where(b => b.CardRiftboundId != null && hits.Contains(b.CardRiftboundId))
+            .Select(b => b.CardRiftboundId!)
+            .ToListAsync(ct);
+        return [.. cards.Select(c => new AskCard(
+            c.RiftboundId, c.Name, c.Type, c.Supertype, c.Domains, c.Energy, c.Might,
+            c.TextPlain, c.Mechanics, c.ImageUrl, banned.Contains(c.RiftboundId)))];
     }
 
     private async Task<string> CardFactsAsync(string question, CancellationToken ct)

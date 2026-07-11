@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace RbRules.Domain;
 
-public record ParsedSection(string Code, string Text);
+public record ParsedSection(string Code, string Text, int Page = 1);
 
 /// <summary>Splitst geëxtraheerde regeltekst (Core/Tournament Rules) in
 /// genummerde secties: sectie = chunk-eenheid (audit-fix: geen 900-tekens-
@@ -33,7 +33,7 @@ public static partial class RuleSectionParser
         if (first > 0)
         {
             var pre = Clean(text[..first]);
-            if (pre.Length > 40) sections.AddRange(SplitLong("intro", pre));
+            if (pre.Length > 40) sections.AddRange(SplitLong("intro", pre, 1));
         }
 
         for (var i = 0; i < matches.Count; i++)
@@ -45,7 +45,10 @@ public static partial class RuleSectionParser
             var code = NormalizeCode(matches[i].Groups[1].Value);
             var body = Clean(text[start..end]);
             if (body.Length == 0) continue;
-            sections.AddRange(SplitLong(code, body));
+            // Paginanummer uit form-feed-markers (PDF-extractie) — voor
+            // deeplinks naar de officiële PDF (#page=N).
+            var page = PageAt(text, matches[i].Index);
+            sections.AddRange(SplitLong(code, body, page));
         }
         return sections;
     }
@@ -59,11 +62,19 @@ public static partial class RuleSectionParser
         return $"{head}.{m.Groups[2].Value}";
     }
 
-    private static IEnumerable<ParsedSection> SplitLong(string code, string body)
+    private static int PageAt(string text, int index)
+    {
+        var page = 1;
+        for (var i = 0; i < index && i < text.Length; i++)
+            if (text[i] == '\f') page++;
+        return page;
+    }
+
+    private static IEnumerable<ParsedSection> SplitLong(string code, string body, int page)
     {
         if (body.Length <= MaxSectionLength)
         {
-            yield return new ParsedSection(code, body);
+            yield return new ParsedSection(code, body, page);
             yield break;
         }
         // Splits op zinsgrens; zelfde sectienummer op elk deel.
@@ -72,19 +83,18 @@ public static partial class RuleSectionParser
         {
             if (sb.Length + sentence.Length > MaxSectionLength && sb.Length > 0)
             {
-                yield return new ParsedSection(code, sb.ToString().Trim());
+                yield return new ParsedSection(code, sb.ToString().Trim(), page);
                 sb.Clear();
             }
             sb.Append(sentence).Append(' ');
         }
-        if (sb.Length > 0) yield return new ParsedSection(code, sb.ToString().Trim());
+        if (sb.Length > 0) yield return new ParsedSection(code, sb.ToString().Trim(), page);
     }
 
     private static List<ParsedSection> SplitPlain(string text)
     {
         var clean = Clean(text);
-        return clean.Length == 0 ? [] : [.. SplitLong("", clean).Select(
-            s => new ParsedSection("", s.Text))];
+        return clean.Length == 0 ? [] : [.. SplitLong("", clean, 1)];
     }
 
     private static string Clean(string s) => Regex.Replace(s, @"\s+", " ").Trim();

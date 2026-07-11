@@ -34,6 +34,9 @@ public class Document
     public Source? Source { get; set; }
     public required string Content { get; set; }
     public required string ContentHash { get; set; }
+    /// <summary>Werkelijke bestands-URL bij PDF-bronnen (de bron-URL is de
+    /// ontdek-pagina) — basis voor deeplinks als "…rules.pdf#page=12".</summary>
+    public string? FileUrl { get; set; }
     public DateTimeOffset RetrievedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -129,6 +132,8 @@ public class RuleChunk
     public string? SectionCode { get; set; }
     /// <summary>Audit-fix: chunk-volgorde was onherstelbaar in de PoP.</summary>
     public int ChunkIndex { get; set; }
+    /// <summary>PDF-pagina waar de sectie begint (deeplink #page=N).</summary>
+    public int? Page { get; set; }
     public required string Text { get; set; }
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
