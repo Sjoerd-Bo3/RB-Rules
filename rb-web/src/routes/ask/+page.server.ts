@@ -29,6 +29,7 @@ interface AskResult {
 	answer: string;
 	citations: Citation[];
 	cards: AskCard[];
+	questionType: string;
 }
 
 export const actions: Actions = {

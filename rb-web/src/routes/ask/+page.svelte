@@ -71,6 +71,14 @@
 	}
 
 	const answerHtml = $derived(form?.answer ? renderMarkdown(form.answer) : null);
+
+	const TYPE_LABELS: Record<string, string> = {
+		Ruling: 'Ruling',
+		Definitie: 'Uitleg',
+		Kaart: 'Kaartvraag',
+		Legaliteit: 'Legaliteit',
+		Toernooi: 'Toernooiregels'
+	};
 </script>
 
 <svelte:head><title>Vraag een ruling — RB Rules</title></svelte:head>
@@ -150,7 +158,12 @@
 
 	{#if answerHtml && !busy}
 		<article class="panel answer-panel">
-			{#if form?.question}<p class="asked meta">Vraag: {form.question}</p>{/if}
+			{#if form?.question}
+				<p class="asked meta">
+					{#if form?.questionType}<span class="qtype">{TYPE_LABELS[form.questionType] ?? form.questionType}</span>{/if}
+					Vraag: {form.question}
+				</p>
+			{/if}
 			<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
 			<div class="md">{@html answerHtml}</div>
 			{#if form?.citations?.length}
@@ -282,6 +295,12 @@
 	.waiting .meta { margin: 0; font-size: 0.85rem; }
 	.answer-panel { padding: 18px 20px; }
 	.asked { margin: 0 0 4px; font-size: 0.85rem; }
+	.qtype {
+		display: inline-block; font-size: 0.7rem; font-weight: 700;
+		text-transform: uppercase; letter-spacing: 0.06em;
+		background: var(--accent-soft); color: var(--accent);
+		border-radius: 999px; padding: 2px 9px; margin-right: 8px;
+	}
 	h2 { font-size: 1rem; color: var(--accent); margin: 16px 0 6px; }
 	.cite {
 		background: var(--surface-deep); border: 1px solid var(--border);

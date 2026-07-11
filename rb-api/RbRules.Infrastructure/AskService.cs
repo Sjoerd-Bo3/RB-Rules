@@ -15,7 +15,7 @@ public record AskCard(
 
 public record AskResult(
     string Answer, IReadOnlyList<Citation> Citations,
-    IReadOnlyList<AskCard> Cards);
+    IReadOnlyList<AskCard> Cards, string QuestionType);
 
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
@@ -25,31 +25,14 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
     private const int TopK = 8;
     private const int RrfK = 60;
 
-    // De "ruling-skill": vaste structuur, toon en spelregels voor elk antwoord.
-    private const string SystemPrompt = """
+    // De "ruling-skill": toon en spelregels — de structuur komt per vraagtype
+    // uit QuestionRouter.StructureFor (interne router, geen extra LLM-call).
+    private const string BasePrompt = """
         Je bent de rulings-assistent van Riftbound Rules Companion. Je geeft
         oordelen zoals een toernooi-scheidsrechter: beslist, neutraal en
         controleerbaar. Antwoord in het Nederlands; laat Engelse speltermen
-        (Deflect, showdown, exhaust, Hidden, …) onvertaald.
-
-        STRUCTUUR — altijd exact deze opbouw, in markdown:
-        **Oordeel:** één zin met het directe antwoord op de vraag.
-        **Zekerheid:** kies één van:
-        - Bevestigd — de geciteerde regels dekken dit expliciet
-        - Afgeleid — volgt logisch uit de geciteerde regels, maar staat er niet letterlijk
-        - Onzeker — benoem exact welke informatie of regeltekst ontbreekt
-
-        ### Uitleg
-        Genummerde stappen in spelvolgorde (timing, prioriteit, triggers).
-        Citeer bij elke stap de dragende bron met [n] en §-nummer.
-
-        ### Regelbasis
-        Per gebruikte bron één regel: [n] §nummer — wat die regel zegt in eigen
-        woorden. Alleen bronnen die het oordeel echt dragen.
-
-        ### Let op
-        Alleen indien relevant: randgevallen, veelgemaakte misvattingen, actieve
-        errata of banlijst-status van betrokken kaarten. Weglaten als leeg.
+        (Deflect, showdown, exhaust, Hidden, …) onvertaald. Antwoord in
+        markdown en volg exact de structuur van het opgegeven vraagtype.
 
         REGELS:
         - Baseer je uitsluitend op de meegegeven context-fragmenten en
@@ -70,13 +53,17 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         string question, IReadOnlyList<RbAiClient.AiImage>? images = null,
         CancellationToken ct = default)
     {
+        // 0. Interne router: vraagtype stuurt structuur en bronnen-bias.
+        var mentionsCard = await MentionsCardAsync(question, ct);
+        var type = QuestionRouter.Classify(question, mentionsCard);
+
         // 1. Vector-kanaal
         var qv = await embeddings.EmbedOneAsync(question, ct);
         var vectorHits = await db.RuleChunks
             .Where(c => c.Embedding != null)
             .OrderBy(c => c.Embedding!.CosineDistance(qv))
             .Take(TopK * 2)
-            .Select(c => c.Id)
+            .Select(c => new { c.Id, c.SourceId })
             .ToListAsync(ct);
 
         // 2. Full-text-kanaal (Engels — de bronnen zijn Engels)
@@ -86,22 +73,35 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .OrderByDescending(c => EF.Functions.ToTsVector("english", c.Text)
                 .Rank(EF.Functions.PlainToTsQuery("english", question)))
             .Take(TopK * 2)
-            .Select(c => c.Id)
+            .Select(c => new { c.Id, c.SourceId })
             .ToListAsync(ct);
 
-        // 3. RRF-fusie
-        var scores = new Dictionary<long, double>();
-        void Accumulate(List<long> ids)
+        // 3. RRF-fusie, met bron-bias per vraagtype: toernooivragen tillen
+        // Tournament Rules-chunks op, gewone rulings de Core Rules.
+        var sourceBias = type switch
         {
-            for (var rank = 0; rank < ids.Count; rank++)
-                scores[ids[rank]] = scores.GetValueOrDefault(ids[rank]) + 1.0 / (RrfK + rank + 1);
+            QuestionType.Toernooi => "tournament",
+            QuestionType.Ruling or QuestionType.Definitie => "core",
+            _ => null,
+        };
+        var scores = new Dictionary<long, double>();
+        void Accumulate(IEnumerable<(long Id, string SourceId)> hits)
+        {
+            var rank = 0;
+            foreach (var (id, sourceId) in hits)
+            {
+                var bonus = sourceBias != null &&
+                    sourceId.Contains(sourceBias, StringComparison.OrdinalIgnoreCase) ? 0.008 : 0;
+                scores[id] = scores.GetValueOrDefault(id) + 1.0 / (RrfK + rank + 1) + bonus;
+                rank++;
+            }
         }
-        Accumulate(vectorHits);
-        Accumulate(textHits);
+        Accumulate(vectorHits.Select(h => (h.Id, h.SourceId)));
+        Accumulate(textHits.Select(h => (h.Id, h.SourceId)));
 
         var topIds = scores.OrderByDescending(kv => kv.Value).Take(TopK).Select(kv => kv.Key).ToList();
         if (topIds.Count == 0)
-            return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.", [], []);
+            return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.", [], [], type.ToString());
 
         var chunks = await db.RuleChunks
             .Where(c => topIds.Contains(c.Id))
@@ -129,6 +129,20 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         // 4. Kaartfeiten (incl. mechanieken en ban-status) voor herkende kaarten
         var cardBlock = await CardFactsAsync(question, ct);
 
+        // 4b. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend blok.
+        var banBlock = "";
+        if (type == QuestionType.Legaliteit)
+        {
+            var bans = await db.BanEntries
+                .OrderBy(b => b.Name)
+                .Take(40)
+                .Select(b => $"- {b.Name} ({b.Kind})")
+                .ToListAsync(ct);
+            banBlock = bans.Count == 0
+                ? "\n\nBANLIJST (gezaghebbend): momenteel leeg — er zijn geen bans bekend."
+                : "\n\nBANLIJST (gezaghebbend, actueel):\n" + string.Join("\n", bans);
+        }
+
         // 5. Geverifieerde rulings (self-learning override-laag) — semantisch
         // gematcht op de vraag; zonder embedding vallen we terug op recentste.
         var rulings = await db.Corrections
@@ -151,15 +165,26 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
         var answer = await ai.AskAsync(
-            $"Context-fragmenten:\n{context}{cardBlock}{rulingBlock}\n\nVraag: {question}",
-            SystemPrompt, task: images is { Count: > 0 } ? "hard" : "cheap",
+            $"Context-fragmenten:\n{context}{cardBlock}{banBlock}{rulingBlock}\n\nVraag: {question}",
+            $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}",
+            task: images is { Count: > 0 } ? "hard" : "cheap",
             images: images, ct: ct)
             ?? "AI is niet beschikbaar — probeer het later opnieuw.";
 
         // Betrokken kaarten (herkend in vraag én antwoord) voor de kaart-
         // uitklap op de ruling-pagina.
         var cards = await MatchCardsAsync($"{question}\n{answer}", ct);
-        return new(answer, citations, cards);
+        return new(answer, citations, cards, type.ToString());
+    }
+
+    private async Task<bool> MentionsCardAsync(string question, CancellationToken ct)
+    {
+        var q = question.ToLowerInvariant();
+        var names = await db.Cards
+            .Where(c => c.VariantOf == null)
+            .Select(c => c.Name)
+            .ToListAsync(ct);
+        return names.Any(n => n.Length >= 4 && q.Contains(n.ToLowerInvariant()));
     }
 
     private async Task<List<AskCard>> MatchCardsAsync(string text, CancellationToken ct)
