@@ -76,7 +76,10 @@ public static partial class RiotCardMapper
             SetId = c["set"]?["value"]?["id"]?.GetValue<string>()?.ToUpperInvariant(),
             SetLabel = c["set"]?["value"]?["label"]?.GetValue<string>(),
             CollectorNumber = c["collectorNumber"]?.GetValue<int?>(),
-            TextPlain = textHtml is null ? null : CardText.HumanizeIcons(TextUtils.HtmlToText(textHtml)),
+            // Icon-tokens (:rb_energy_1: e.d.) blijven rauw in de opslag —
+            // de site rendert ze als echte iconen; embeddings/LLM krijgen
+            // de leesbare variant via CardText.HumanizeIcons.
+            TextPlain = textHtml is null ? null : TextUtils.HtmlToText(textHtml),
             ImageUrl = c["cardImage"]?["url"]?.GetValue<string>(),
             Tags = c["tags"]?["tags"] is JsonArray t
                 ? [.. t.Select(x => x?.GetValue<string>()).OfType<string>()]

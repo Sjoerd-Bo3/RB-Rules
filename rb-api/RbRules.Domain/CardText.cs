@@ -45,7 +45,8 @@ public static partial class CardText
         if (c.Power is not null) stats.Add($"Power {c.Power}");
         if (stats.Count > 0) parts.Add(string.Join(", ", stats));
 
-        if (!string.IsNullOrWhiteSpace(c.TextPlain)) parts.Add(c.TextPlain!);
+        // Leesbare icon-tekst voor het embeddingmodel (geen :rb_…:-tokens).
+        if (!string.IsNullOrWhiteSpace(c.TextPlain)) parts.Add(HumanizeIcons(c.TextPlain)!);
         if (c.Tags.Length > 0) parts.Add($"Tags: {string.Join(", ", c.Tags)}");
         return string.Join(" | ", parts);
     }

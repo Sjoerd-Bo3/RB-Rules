@@ -331,7 +331,7 @@ app.MapGet("/api/cards/{id}/similar/{otherId}/explain", async (
     string Describe(RbRules.Domain.Card c) =>
         $"{c.Name} ({c.Supertype} {c.Type}, {string.Join("/", c.Domains)}, energy {c.Energy?.ToString() ?? "—"})" +
         (c.Mechanics is { Length: > 0 } m ? $", mechanieken: {string.Join(", ", m)}" : "") +
-        (c.TextPlain is null ? "" : $"\nTekst: {c.TextPlain}");
+        (c.TextPlain is null ? "" : $"\nTekst: {CardText.HumanizeIcons(c.TextPlain)}");
 
     var raw = await ai.AskAsync(
         $"Kaart 1: {Describe(cardA)}\n\nKaart 2: {Describe(cardB)}",

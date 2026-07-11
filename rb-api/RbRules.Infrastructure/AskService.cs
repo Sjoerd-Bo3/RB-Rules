@@ -130,7 +130,8 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             $"Domains: {string.Join(", ", c.Domains)}. Energy {c.Energy?.ToString() ?? "—"}, Might {c.Might?.ToString() ?? "—"}. " +
             (c.Mechanics is { Length: > 0 } m ? $"Mechanieken: {string.Join(", ", m)}. " : "") +
             (bannedNames.Contains(c.RiftboundId) ? "⚠ STAAT OP DE BANLIJST. " : "") +
-            (c.TextPlain is null ? "" : $"Tekst: {c.TextPlain[..Math.Min(c.TextPlain.Length, 240)]}"));
+            (c.TextPlain is null ? "" :
+                $"Tekst: {CardText.HumanizeIcons(c.TextPlain[..Math.Min(c.TextPlain.Length, 240)])}"));
 
         return "\n\nKaartgegevens (gezaghebbend voor stats/mechanieken):\n" + string.Join("\n", lines);
     }

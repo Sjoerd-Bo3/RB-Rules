@@ -1,4 +1,6 @@
 <script lang="ts">
+	import RbText from '$lib/RbText.svelte';
+
 	let { data } = $props();
 	const c = $derived(data.card);
 
@@ -59,18 +61,18 @@
 			{#if c.errataText}
 				<section>
 					<h2>Actuele tekst (errata)</h2>
-					<p class="oracle errata">{c.errataText}</p>
+					<p class="oracle errata"><RbText text={c.errataText} /></p>
 					{#if c.textPlain}
 						<details>
 							<summary class="meta">Gedrukte tekst (achterhaald)</summary>
-							<p class="oracle printed">{c.textPlain}</p>
+							<p class="oracle printed"><RbText text={c.textPlain} /></p>
 						</details>
 					{/if}
 				</section>
 			{:else if c.textPlain}
 				<section>
 					<h2>Kaarttekst</h2>
-					<p class="oracle">{c.textPlain}</p>
+					<p class="oracle"><RbText text={c.textPlain} /></p>
 				</section>
 			{/if}
 
@@ -126,7 +128,7 @@
 				<div class="interaction">
 					<a href="/cards/{x.otherId}"><strong>{x.otherName}</strong></a>
 					<span class="chip kind-{x.kind}">{x.kind}</span>
-					<p class="meta">{x.explanation}</p>
+					<p class="meta"><RbText text={x.explanation} /></p>
 				</div>
 			{/each}
 		</section>

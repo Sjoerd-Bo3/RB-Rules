@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { navigating } from '$app/state';
+	import RbText from '$lib/RbText.svelte';
 
 	let { data } = $props();
 
@@ -86,7 +87,7 @@
 							{#if c.energy !== null}· E{c.energy}{/if}
 							{#if c.might !== null}· M{c.might}{/if}
 						</p>
-						{#if c.textPlain}<p class="text">{c.textPlain}</p>{/if}
+						{#if c.textPlain}<p class="text"><RbText text={c.textPlain} /></p>{/if}
 					</div>
 				</a>
 			{/each}

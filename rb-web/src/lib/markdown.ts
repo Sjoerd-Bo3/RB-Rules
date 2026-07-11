@@ -1,4 +1,5 @@
 import { marked } from 'marked';
+import { iconifyTokens } from '$lib/rbtokens';
 
 // Rulings komen als markdown uit het LLM en gaan via {@html} de pagina in.
 // Twee verdedigingslinies:
@@ -30,5 +31,7 @@ marked.use({
 });
 
 export function renderMarkdown(src: string): string {
-	return marked.parse(escapeHtml(src), { async: false, gfm: true, breaks: true });
+	const html = marked.parse(escapeHtml(src), { async: false, gfm: true, breaks: true });
+	// Antwoorden citeren kaartteksten — icon-tokens ook hier als echte iconen.
+	return iconifyTokens(html);
 }
