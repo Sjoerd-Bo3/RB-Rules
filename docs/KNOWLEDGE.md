@@ -99,10 +99,75 @@ Graph-edges: Card—STAPLE_IN→Archetype. Pas oppakken als laag 1+2 staan.
 - **Bron-hygiëne**: bronnen leven in het bestaande register met trust/rank;
   een bron die structureel door errata wordt tegengesproken zakt in trust.
 
+## Evolutie-raamwerk: de bank groeit met het spel mee
+
+Dit is geen eenmalige bouw — elke set brengt nieuwe kaarten, mechanieken en
+community-kennis. Evolutie is een eersteklas onderdeel van het ontwerp:
+
+1. **Set-release als event.** De change-classifier herkent set-releases al;
+   dat event triggert voortaan de volledige keten: card-sync → nieuwe-
+   mechanieken-detectie → gerichte claims-harvest op de nieuwe set →
+   embeddings → graph-sync → primer-herziening waar nieuwe keywords de flow
+   raken. Grotendeels bestaande scheduler-stappen, plus gerichte triggers.
+2. **Het mechaniek-vocabulaire groeit.** De miner werkt nu met een vaste
+   seed-lijst. Evolutie: de miner rapporteert óók keyword-kandidaten
+   (bracketed termen in kaartteksten die niet in het vocabulaire staan) →
+   admin-reviewqueue → geaccepteerde keywords worden vocabulaire → re-mine
+   van kaarten met dat keyword. Zo leert het systeem "Overwhelm" kennen op
+   de dag dat de eerste kaart ermee verschijnt.
+3. **Kennis heeft een levenscyclus.** Elke eenheid (chunk, claim, primer-doc,
+   uitleg-cache) draagt provenance en geldigheid. Errata/regelwijzigingen
+   invalideren afhankelijke kennis automatisch (deels gebouwd: embeddings en
+   uitleg-cache invalideren al bij tekstwijziging); primer-docs en claims
+   krijgen dezelfde behandeling.
+4. **Kennis-gaten worden gemeten, niet geraden.** Ask-traces + feedback
+   vormen het kompas: vragen met "Onzeker"-label, negatieve feedback of lege
+   retrieval worden geclusterd tot een "kennis-gaten"-rapport in het beheer —
+   dat stuurt waar de volgende harvest of primer-uitbreiding heen gaat. De
+   zelflerende correcties-loop (bestaat) is hier het handmatige zusje van.
+
+## Einddoel: één brein — alles vector- én graf-gelinkt
+
+Alle kennissoorten worden knopen in één samenhangend model, met twee
+complementaire representaties over dezelfde identiteiten:
+
+- **pgvector** voor semantische nabijheid (wat lijkt op elkaar)
+- **Neo4j** voor getypeerde relaties (wat hoort bij elkaar en waarom)
+
+Schema (groeit met de lagen mee):
+
+```
+(Card)-[:HAS_MECHANIC]->(Mechanic)     (Claim)-[:ABOUT]->(Card|Mechanic|Section)
+(Card)-[:INTERACTS_WITH]->(Card)       (Claim)-[:SUPPORTED_BY]->(Source)
+(Concept)-[:EXPLAINS]->(Section)       (Erratum)-[:SUPERSEDES]->(Card-tekst)
+(Card)-[:CITED_IN]->(Section)          (Card)-[:STAPLE_IN]->(Archetype)
+(Change)-[:AFFECTS]->(Section|Card)
+```
+
+Daarboven een **brein-API** — de toolset waarmee AI (onze eigen ask-agent
+voorop) het model kan bevragen in plaats van alleen een statische prompt te
+krijgen:
+
+- `semantic_search(query, layer?)` — zoeken over alle lagen
+- `neighbors(node, edge_types?)` — wat hangt hieraan vast
+- `path(a, b)` — hoe zijn twee dingen verbonden (bewijsketen)
+- `evidence(claim)` — bronnen + corroboratie van een bewering
+- `contradictions(topic)` — waar spreken bronnen elkaar tegen
+
+De ask-agent evolueert daarmee van "één prompt met context" naar een agent
+die zelf het brein doorloopt (rb-ai draait al op de Agent SDK — tools zijn
+een geconfigureerde MCP-server, maxTurns omhoog). Dezelfde brein-API is
+daarna de bouwsteen voor alles wat we nog verzinnen: interactie-ontdekking,
+deck-advies, "wat verandert er voor mijn deck door deze errata", enz.
+
 ## Uitvoeringsvolgorde
 
-1. **Primer** (issue) — grootste begripwinst per uur werk.
-2. **Claims-model + pipeline v1** met 2-3 bronnen + admin-review (issue).
+1. **Primer** (#49) — grootste begripwinst per uur werk.
+2. **Claims-model + pipeline v1** met 2-3 bronnen + admin-review (#50).
 3. **Retrieval-lagen + prompt/UI-integratie** ("Community-consensus"-blok,
-   trace-uitbreiding) (issue).
-4. Meta-laag na decks (#15).
+   trace-uitbreiding) (#51).
+4. **Evolutie-raamwerk**: set-release-keten, vocabulaire-groei,
+   kennis-gaten-rapport (#52).
+5. **Brein-API + agentic ask**: unified graph-schema + tools voor de
+   ask-agent (#53).
+6. Meta-laag na decks (#15).
