@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { citationEssence, stripDuplicateRuleRefs, type CitationRef } from './answerFormat';
+import {
+	certaintyLevel,
+	citationEssence,
+	stripDuplicateRuleRefs,
+	type CitationRef
+} from './answerFormat';
+
+describe('certaintyLevel', () => {
+	it('herkent de bestaande labels, met en zonder toevoeging', () => {
+		expect(certaintyLevel('Bevestigd')).toBe('ok');
+		expect(certaintyLevel('Bevestigd (officieel)')).toBe('ok');
+		expect(certaintyLevel('Afgeleid')).toBe('warn');
+		expect(certaintyLevel('Onzeker')).toBe('unsure');
+	});
+
+	it('geeft community-consensus (#51) een eigen niveau', () => {
+		expect(certaintyLevel('Community-consensus (3 bronnen)')).toBe('community');
+	});
+
+	it('valt zonder of met onbekend label terug op unsure', () => {
+		expect(certaintyLevel(null)).toBe('unsure');
+		expect(certaintyLevel(undefined)).toBe('unsure');
+		expect(certaintyLevel('Waarschijnlijk wel')).toBe('unsure');
+	});
+});
 
 describe('citationEssence', () => {
 	it('geeft null zonder tekst', () => {

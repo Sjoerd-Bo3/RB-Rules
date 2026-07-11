@@ -45,11 +45,27 @@ export interface AskCard {
 	legalFrom: string | null;
 	legality: 'legal' | 'upcoming' | 'announced';
 }
+/** Community-consensus (#51): geaccepteerde claims die als interpretatielaag
+ *  meegingen — apart blok onder het antwoord, met trust-label en bronnen. */
+export interface AskClaimSource {
+	sourceName: string;
+	url: string;
+}
+export interface AskClaim {
+	topicType: string;
+	topicRef: string;
+	statement: string;
+	corroboration: number;
+	trustScore: number;
+	officialStatus: string;
+	sources: AskClaimSource[];
+}
 interface AskResult {
 	answer: string;
 	citations: Citation[];
 	cards: AskCard[];
 	questionType: string;
+	claims: AskClaim[] | null;
 }
 
 export const actions: Actions = {
@@ -107,16 +123,18 @@ export const actions: Actions = {
 		const answer = String(form.get('answer') ?? '');
 		let citations: Citation[] = [];
 		let cards: AskCard[] = [];
+		let claims: AskClaim[] = [];
 		try {
 			citations = JSON.parse(String(form.get('citations') ?? '[]'));
 			cards = JSON.parse(String(form.get('cards') ?? '[]'));
+			claims = JSON.parse(String(form.get('claims') ?? '[]'));
 		} catch {
 			/* corrupt doorgegeven state — dan zonder */
 		}
 		// Ook bij fouten antwoord+citaties teruggeven, anders verdwijnt het
 		// zojuist gegeven antwoord van de pagina.
 		if (!question || !['up', 'down'].includes(verdict)) {
-			return fail(400, { error: 'Ongeldige feedback.', question, answer, citations, cards });
+			return fail(400, { error: 'Ongeldige feedback.', question, answer, citations, cards, claims });
 		}
 		try {
 			await api('/api/corrections', {
@@ -124,14 +142,15 @@ export const actions: Actions = {
 				headers: { 'x-client-ip': getClientAddress() },
 				body: JSON.stringify({ question, verdict, text })
 			});
-			return { question, answer, citations, cards, feedbackSent: verdict };
+			return { question, answer, citations, cards, claims, feedbackSent: verdict };
 		} catch (e) {
 			return fail(500, {
 				error: `Feedback versturen mislukt (${e instanceof Error ? e.message : e})`,
 				question,
 				answer,
 				citations,
-				cards
+				cards,
+				claims
 			});
 		}
 	}

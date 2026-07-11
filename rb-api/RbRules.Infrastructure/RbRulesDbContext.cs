@@ -189,6 +189,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("mechanic_keyword");
             e.HasIndex(x => x.Term).IsUnique();
+            e.HasIndex(x => x.Status);
         });
     }
 }

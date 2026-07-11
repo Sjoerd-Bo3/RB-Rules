@@ -19,10 +19,20 @@ public record AskCard(
 
 public record AskTurn(string Question, string Answer);
 
+public record AskClaimSource(string SourceName, string Url);
+
+/// <summary>Community-claim in het antwoord (#51): het "Community-consensus"-
+/// blok onder het antwoord toont deze apart van de officiële citaties, met
+/// trust-label en uitklapbare bronnen.</summary>
+public record AskClaim(
+    string TopicType, string TopicRef, string Statement,
+    int Corroboration, double TrustScore, string OfficialStatus,
+    IReadOnlyList<AskClaimSource> Sources);
+
 public record AskResult(
     string Answer, IReadOnlyList<Citation> Citations,
     IReadOnlyList<AskCard> Cards, string QuestionType,
-    bool Ok = true);
+    bool Ok = true, IReadOnlyList<AskClaim>? Claims = null);
 
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
@@ -268,6 +278,48 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             : "\n\nGEVERIFIEERDE RULINGS (gezaghebbend):\n" +
               string.Join("\n", rulings.Select(r => $"- {r}"));
 
+        // 5b. Community-claims (kennislaag 2, #51): door de beheerder
+        // geaccepteerde claims, semantisch bij de vraag — een eigen, expliciet
+        // gelabeld kanaal, strikt gescheiden van de officiële lagen. Het
+        // router-gewicht bepaalt hoeveel er meegaan (ruling: weinig;
+        // lijst-/meta-vraag: meer). De afstand wordt bewust in-memory gecapt
+        // (bewezen vertaalbaar patroon, zie ClaimMiningService).
+        var claimHits = await db.Claims.AsNoTracking()
+            .Where(c => c.Status == "accepted" && c.Embedding != null)
+            .OrderBy(c => c.Embedding!.CosineDistance(qv))
+            .Take(ClaimRetrieval.TakeFor(type))
+            .Select(c => new
+            {
+                c.Id, c.TopicType, c.TopicRef, c.Statement,
+                c.Corroboration, c.TrustScore, c.OfficialStatus,
+                Distance = c.Embedding!.CosineDistance(qv),
+            })
+            .ToListAsync(ct);
+        var retrievedClaims = claimHits
+            .Where(c => c.Distance <= ClaimRetrieval.MaxDistance)
+            .ToList();
+        var claimsBlock = ClaimRetrieval.PromptBlock([.. retrievedClaims.Select(c =>
+            new RetrievedClaim(c.TopicType, c.TopicRef, c.Statement,
+                c.Corroboration, c.TrustScore, c.OfficialStatus))]);
+
+        // Bronnen per claim voor het uitklapbare "Community-consensus"-blok in
+        // het antwoord (#51) — registernaam erbij voor leesbaarheid.
+        var askClaims = new List<AskClaim>();
+        if (retrievedClaims.Count > 0)
+        {
+            var claimIds = retrievedClaims.Select(c => c.Id).ToList();
+            var claimSources = await db.ClaimSources.AsNoTracking()
+                .Where(s => claimIds.Contains(s.ClaimId))
+                .Join(db.Sources, cs => cs.SourceId, s => s.Id,
+                    (cs, s) => new { cs.ClaimId, s.Name, cs.Url })
+                .ToListAsync(ct);
+            askClaims.AddRange(retrievedClaims.Select(c => new AskClaim(
+                c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
+                c.TrustScore, c.OfficialStatus,
+                [.. claimSources.Where(s => s.ClaimId == c.Id)
+                    .Select(s => new AskClaimSource(s.Name, s.Url))])));
+        }
+
         // Doorvraag-gesprek (#41): eerdere rondes gecapt in de prompt.
         var historyBlock = turns.Count == 0
             ? ""
@@ -277,8 +329,10 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var questionLabel = turns.Count == 0 ? "Vraag" : "Vervolgvraag";
 
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
+        // Blok-volgorde = de kennispiramide van #51: officieel (fragmenten,
+        // rulings, kaartfeiten, banlijst) > primer > community-interpretatie.
         var aiAnswer = await ai.AskAsync(
-            $"Context-fragmenten:\n{context}{primerBlock}{cardBlock}{banBlock}{rulingBlock}{historyBlock}\n\n{questionLabel}: {question}",
+            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{historyBlock}\n\n{questionLabel}: {question}",
             $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}",
             task: images is { Count: > 0 } ? "hard" : "cheap",
             images: images, ct: ct);
@@ -311,6 +365,8 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
                     .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
                 ContextCards = string.Join(", ", cardContext.CardNames),
                 PrimerDocs = string.Join(", ", primerDocs.Select(p => p.Title)),
+                CommunityClaims = string.Join(", ", retrievedClaims
+                    .Select(c => $"{c.TopicType}:{c.TopicRef}")),
                 VerifiedRulings = rulings.Count,
                 Model = images is { Count: > 0 } ? "hard" : "cheap",
                 HadImage = images is { Count: > 0 },
@@ -332,7 +388,8 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             // trace mag een antwoord nooit blokkeren
         }
 
-        return new(answer, citations, cards, type.ToString(), Ok: aiAnswer is not null);
+        return new(answer, citations, cards, type.ToString(),
+            Ok: aiAnswer is not null, Claims: askClaims);
     }
 
     /// <summary>Canonieke kaarten waarvan de naam letterlijk in de (lowercase)

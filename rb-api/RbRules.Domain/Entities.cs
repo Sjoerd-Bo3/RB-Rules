@@ -215,6 +215,9 @@ public class AskTrace
     public string? ContextCards { get; set; }
     /// <summary>Titels van de primer-docs die als spelbegrip meegingen.</summary>
     public string? PrimerDocs { get; set; }
+    /// <summary>Community-claims (kennislaag 2, #51) die als context meegingen,
+    /// als "topicType:topicRef", komma-gescheiden.</summary>
+    public string? CommunityClaims { get; set; }
     public int VerifiedRulings { get; set; }
     public string? Model { get; set; }                  // cheap|hard
     public bool HadImage { get; set; }
