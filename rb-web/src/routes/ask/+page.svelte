@@ -184,6 +184,14 @@
 							{#if c.section}<strong>§ {c.section}</strong>{/if}
 							<span class="meta">{c.sourceName} · trust {c.trust}</span>
 						</summary>
+						{#if c.parents?.length}
+							<!-- Bovenliggende regels: zonder § 466.2 is 466.2.c onleesbaar -->
+							<div class="parents">
+								{#each c.parents as par (par.code)}
+									<p class="parent"><a href="/rules/{encodeURIComponent(par.code)}">§ {par.code}</a> {par.text}</p>
+								{/each}
+							</div>
+						{/if}
 						{#if c.text}<p class="cite-text">{c.text}</p>{/if}
 						<p class="cite-links meta">
 							{#if c.section}
@@ -318,6 +326,10 @@
 	.cite summary { cursor: pointer; }
 	.cite-n { color: var(--muted); font-size: 0.85rem; margin-right: 4px; }
 	.cite summary .meta { margin-left: 8px; font-size: 0.82rem; }
+	.parents { border-left: 2px solid var(--border); margin: 8px 0 0; padding-left: 10px; }
+	.parent { margin: 4px 0; color: var(--muted); font-size: 0.85rem; }
+	.parent a { color: var(--muted); font-weight: 700; text-decoration: none; }
+	.parent a:hover { color: var(--accent); }
 	.cite-text { margin: 8px 0 4px; line-height: 1.6; }
 	.cite-links a { color: var(--ok); text-decoration: none; font-weight: 600; }
 	.card-body { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; }

@@ -10,6 +10,7 @@ export interface Section {
 	text: string;
 	pdfUrl: string | null;
 	page: number | null;
+	parents: { code: string; text: string }[];
 	prev: string | null;
 	next: string | null;
 }

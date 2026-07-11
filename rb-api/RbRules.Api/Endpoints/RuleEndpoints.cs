@@ -75,6 +75,9 @@ public static class RuleEndpoints
             var distinct = codes.Distinct().ToList();
             var idx = distinct.IndexOf(code);
 
+            // Ouderketen (#39): subregels tonen hun bovenliggende regels mee.
+            var parents = await RuleParentLookup.FetchAsync(db, [(srcId, code)]);
+
             return Results.Ok(new
             {
                 Code = code,
@@ -84,6 +87,7 @@ public static class RuleEndpoints
                 Text = string.Join("\n\n", chunks.Select(c => c.Text)),
                 PdfUrl = fileUrl,
                 chunks[0].Page,
+                Parents = parents.GetValueOrDefault((srcId, code)) ?? [],
                 Prev = idx > 0 ? distinct[idx - 1] : null,
                 Next = idx >= 0 && idx < distinct.Count - 1 ? distinct[idx + 1] : null,
             });

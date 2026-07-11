@@ -53,6 +53,17 @@ public static partial class RuleSectionParser
         return sections;
     }
 
+    /// <summary>Ouderketen van een sectiecode: "466.2.c" → ["466", "466.2"].
+    /// Voor context-weergave — een subregel is zonder zijn ouders onleesbaar.</summary>
+    public static IReadOnlyList<string> ParentCodes(string code)
+    {
+        var parts = code.Split('.');
+        var parents = new List<string>(parts.Length - 1);
+        for (var i = 1; i < parts.Length; i++)
+            parents.Add(string.Join('.', parts[..i]));
+        return parents;
+    }
+
     /// <summary>"601.2d" en "601.2.d" normaliseren naar "601.2.d".</summary>
     public static string NormalizeCode(string code)
     {

@@ -8,7 +8,8 @@ namespace RbRules.Infrastructure;
 
 public record Citation(
     int N, string SourceName, string Url, string? Section, int Trust,
-    string? Text = null, string? PdfUrl = null, int? Page = null);
+    string? Text = null, string? PdfUrl = null, int? Page = null,
+    IReadOnlyList<ParentSection>? Parents = null);
 
 public record AskCard(
     string RiftboundId, string Name, string? Type, string? Supertype,
@@ -56,6 +57,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         string question, IReadOnlyList<RbAiClient.AiImage>? images = null,
         CancellationToken ct = default)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         // 0. Kaartnamenlijst één keer per request (review-fix: werd 3× geladen)
         // + interne router: vraagtype stuurt structuur en bronnen-bias.
         var cardNames = await db.Cards.AsNoTracking()
@@ -117,7 +119,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .Where(c => topIds.Contains(c.Id))
             .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
             {
-                c.Id, c.Text, c.SectionCode, c.Page, c.DocumentId,
+                c.Id, c.Text, c.SectionCode, c.Page, c.DocumentId, c.SourceId,
                 s.Name, s.Url, s.TrustTier,
             })
             .ToListAsync(ct);
@@ -132,9 +134,20 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .Where(d => docIds.Contains(d.Id) && d.FileUrl != null)
             .ToDictionaryAsync(d => d.Id, d => d.FileUrl, ct);
 
+        // Ouderketen per citatie (#39): een subregel als 466.2.c is zonder
+        // § 466 en § 466.2 onleesbaar.
+        var parentKeys = ordered
+            .Where(c => c.SectionCode != null)
+            .Select(c => (c.SourceId, Code: c.SectionCode!))
+            .ToList();
+        var parents = await RuleParentLookup.FetchAsync(db, parentKeys, ct);
+
         var citations = ordered.Select((c, i) => new Citation(
             i + 1, c.Name, c.Url, c.SectionCode, c.TrustTier,
-            Text: c.Text, PdfUrl: fileUrls.GetValueOrDefault(c.DocumentId), Page: c.Page)).ToList();
+            Text: c.Text, PdfUrl: fileUrls.GetValueOrDefault(c.DocumentId), Page: c.Page,
+            Parents: c.SectionCode is null
+                ? null
+                : parents.GetValueOrDefault((c.SourceId, c.SectionCode)))).ToList();
 
         var context = string.Join("\n\n", ordered.Select((c, i) =>
             $"[{i + 1}] ({c.Name}, trust {c.TrustTier}{(c.SectionCode is null ? "" : $", §{c.SectionCode}")})\n{c.Text}"));
@@ -142,7 +155,8 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
         // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
         // regels het keyword niet expliciet definiëren.
-        var cardBlock = await CardContextAsync(question, qLower, qv, cardNames, ct);
+        var cardContext = await CardContextAsync(question, qLower, qv, cardNames, ct);
+        var cardBlock = cardContext.Block;
 
         // 4b. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend blok.
         var banBlock = "";
@@ -189,6 +203,42 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         // Betrokken kaarten (herkend in vraag én antwoord) voor de kaart-
         // uitklap op de ruling-pagina.
         var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", cardNames, ct);
+        sw.Stop();
+
+        // Denkstappen-trace voor het beheer (#40) — best-effort.
+        try
+        {
+            db.AskTraces.Add(new AskTrace
+            {
+                Question = question.Length > 500 ? question[..500] : question,
+                QuestionType = type.ToString(),
+                SourceBias = sourceBias,
+                MentionsCard = mentionsCard,
+                MechanicMatches = string.Join(", ", cardContext.Mechanics),
+                Sections = string.Join(", ", citations
+                    .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
+                ContextCards = string.Join(", ", cardContext.CardNames),
+                VerifiedRulings = rulings.Count,
+                Model = images is { Count: > 0 } ? "hard" : "cheap",
+                HadImage = images is { Count: > 0 },
+                DurationMs = (int)sw.ElapsedMilliseconds,
+                Ok = aiAnswer is not null,
+            });
+            // Bewaar alleen de recente historie.
+            var cutoff = await db.AskTraces
+                .OrderByDescending(t => t.CreatedAt)
+                .Skip(200)
+                .Select(t => t.CreatedAt)
+                .FirstOrDefaultAsync(ct);
+            if (cutoff != default)
+                await db.AskTraces.Where(t => t.CreatedAt <= cutoff).ExecuteDeleteAsync(ct);
+            await db.SaveChangesAsync(ct);
+        }
+        catch
+        {
+            // trace mag een antwoord nooit blokkeren
+        }
+
         return new(answer, citations, cards, type.ToString(), Ok: aiAnswer is not null);
     }
 
@@ -221,11 +271,14 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             c.TextPlain, c.Mechanics, c.ImageUrl, banned.Contains(c.RiftboundId)))];
     }
 
+    private sealed record CardContextResult(
+        string Block, IReadOnlyList<string> Mechanics, IReadOnlyList<string> CardNames);
+
     /// <summary>Kaartcontext via drie kanalen: exacte naam-matches, herkende
     /// mechaniek-keywords ("wat is Deflect?" → kaarten mét Deflect) en
     /// semantische buren van de vraag. Zo is er áltijd kaart-bewijs, ook als
     /// de regels-PDF een keyword niet expliciet definieert.</summary>
-    private async Task<string> CardContextAsync(
+    private async Task<CardContextResult> CardContextAsync(
         string question, string qLower, Vector qv, List<CardName> names, CancellationToken ct)
     {
         // 1. Exacte naam-matches (gezaghebbend voor de genoemde kaarten).
@@ -274,7 +327,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .ToListAsync(ct);
 
         var ids = nameHits.Concat(mechanicCardIds).Concat(semanticIds).Distinct().Take(8).ToList();
-        if (ids.Count == 0) return "";
+        if (ids.Count == 0) return new("", matchedMechanics, []);
 
         var cards = await db.Cards.Where(c => ids.Contains(c.RiftboundId)).ToListAsync(ct);
         var bannedIds = await db.BanEntries
@@ -297,8 +350,13 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var header = mechanicBlocks.Count > 0
             ? string.Join("\n", mechanicBlocks) + "\n"
             : "";
-        return "\n\nKaartgegevens (gezaghebbend voor stats/mechanieken; " +
+        var block = "\n\nKaartgegevens (gezaghebbend voor stats/mechanieken; " +
                "kaartteksten zijn bewijs voor hoe keywords werken):\n" +
                header + string.Join("\n", lines);
+        var includedNames = ids
+            .Where(cardsById.ContainsKey)
+            .Select(id => cardsById[id].Name)
+            .ToList();
+        return new(block, matchedMechanics, includedNames);
     }
 }
