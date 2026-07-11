@@ -38,7 +38,7 @@ public static class AskEndpoints
                 req.Question.Trim(), images.Count > 0 ? images : null,
                 history.Count > 0 ? history : null);
             return Results.Ok(result);
-        }).RequireRateLimiting("llm");
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
 
         // Echte duurstatistiek (laatste 100 geslaagde vragen) voor de wachtindicatie.
         app.MapGet("/api/ask/stats", async (RbRulesDbContext db) =>
@@ -69,7 +69,7 @@ public static class AskEndpoints
             return result is null
                 ? Results.BadRequest(new { error = "kaarten niet gevonden" })
                 : Results.Ok(result);
-        }).RequireRateLimiting("llm");
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
 
         // ── Feedback op antwoorden (self-learning, #24) ────────────────
         app.MapPost("/api/corrections", async (CorrectionSubmit body, RbRulesDbContext db) =>
@@ -97,6 +97,6 @@ public static class AskEndpoints
             });
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
-        }).RequireRateLimiting("llm");
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
     }
 }

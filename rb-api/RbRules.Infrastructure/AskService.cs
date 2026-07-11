@@ -37,7 +37,8 @@ public record AskResult(
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
 /// kaartfeiten + geverifieerde rulings + antwoord via rb-ai met [n]-citaten.</summary>
-public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai)
+public class AskService(
+    RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai, RequestUserContext userContext)
 {
     private const int TopK = 8;
 
@@ -372,6 +373,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
                 HadImage = images is { Count: > 0 },
                 DurationMs = (int)sw.ElapsedMilliseconds,
                 Ok = aiAnswer is not null,
+                UserId = userContext.User?.Id,
             });
             // Bewaar alleen de recente historie.
             var cutoff = await db.AskTraces
@@ -415,6 +417,10 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
                 QuestionType = type.ToString(),
                 HadImage = images is { Count: > 0 },
                 Ok = ok,
+                // Account-koppeling + modelkeuze (#42): voedt de per-account-
+                // quota en het kosten-overzicht in het beheer.
+                UserId = userContext.User?.Id,
+                Model = images is { Count: > 0 } ? "hard" : "cheap",
             });
             await db.SaveChangesAsync();
         }

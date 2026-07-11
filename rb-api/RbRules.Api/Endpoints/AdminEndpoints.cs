@@ -177,6 +177,7 @@ public static class AdminEndpoints
                     Claims = await db.Claims.CountAsync(),
                     MechanicCandidates = await db.MechanicKeywords.CountAsync(k => k.Status == "candidate"),
                     OpenProposals = await db.SourceProposals.CountAsync(p => p.Status == "proposed"),
+                    Users = await db.Users.CountAsync(),
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
             });
@@ -354,6 +355,29 @@ public static class AdminEndpoints
         admin.MapGet("/overview/proposals", async (
                 string? status, int? page, AdminOverviewService overview) =>
             Results.Ok(await overview.ProposalsAsync(status, page ?? 1)));
+
+        // Gebruikers + kosteninzicht (#42): LLM-gebruik per account per
+        // periode, met de cheap/hard-verdeling als kosten-indicatie.
+        admin.MapGet("/overview/users", async (
+                string? period, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.UsersAsync(period, page ?? 1)));
+
+        // Accountbeheer (#42): blokkeren en quota bijstellen.
+        admin.MapPatch("/users/{id:long}", async (long id, UserPatch patch, RbRulesDbContext db) =>
+        {
+            var user = await db.Users.FindAsync(id);
+            if (user is null) return Results.NotFound();
+            if (patch.DailyQuota is < 0 or > 10_000 || patch.DailyPhotoQuota is < 0 or > 10_000)
+                return Results.BadRequest(new { error = "quotum moet tussen 0 en 10000 liggen" });
+            if (patch.Blocked is not null) user.Blocked = patch.Blocked.Value;
+            if (patch.DailyQuota is not null) user.DailyQuota = patch.DailyQuota.Value;
+            if (patch.DailyPhotoQuota is not null) user.DailyPhotoQuota = patch.DailyPhotoQuota.Value;
+            await db.SaveChangesAsync();
+            return Results.Ok(new
+            {
+                user.Id, user.Email, user.Blocked, user.DailyQuota, user.DailyPhotoQuota,
+            });
+        });
 
         // Bronvoorstellen-review (#63): accepteren zet de bron uitgeschakeld
         // in het register (veilige defaults — de beheerder zet hem daarna

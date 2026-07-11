@@ -174,6 +174,13 @@ public class AskMetric
     public string? QuestionType { get; set; }
     public bool HadImage { get; set; }
     public bool Ok { get; set; } = true;
+    /// <summary>Ingelogde vrager (#42) — voedt de per-account-dagquota en het
+    /// kosten-overzicht in het beheer. Null = anonieme vraag.</summary>
+    public long? UserId { get; set; }
+    /// <summary>cheap|hard — kostenindicatie per vraag (#42). AskTrace kent het
+    /// model ook, maar die tabel bewaart alleen de laatste 200 traces; hier
+    /// blijft de verdeling over langere periodes optelbaar.</summary>
+    public string? Model { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -223,7 +230,49 @@ public class AskTrace
     public bool HadImage { get; set; }
     public int DurationMs { get; set; }
     public bool Ok { get; set; } = true;
+    /// <summary>Ingelogde vrager (#42); null = anoniem.</summary>
+    public long? UserId { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Account voor de publieke site (#42): e-mail + magic-link, bewust
+/// zonder wachtwoorden. Quota zijn per gebruiker instelbaar in het beheer.</summary>
+public class AppUser
+{
+    public long Id { get; set; }
+    /// <summary>Genormaliseerd (lowercase) — zie Accounts.NormalizeEmail.</summary>
+    public required string Email { get; set; }
+    public bool Blocked { get; set; }
+    /// <summary>Vragen per UTC-dag op /api/ask (foto-vragen tellen ook mee).</summary>
+    public int DailyQuota { get; set; } = 30;
+    /// <summary>Foto-vragen per UTC-dag — die forceren het dure model.</summary>
+    public int DailyPhotoQuota { get; set; } = 5;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? LastLoginAt { get; set; }
+}
+
+/// <summary>Ingelogde sessie (#42): rb-web bewaart het token in een httpOnly-
+/// cookie en stuurt het als X-User-Token mee; hier staat alleen de hash.</summary>
+public class UserSession
+{
+    public long Id { get; set; }
+    public long UserId { get; set; }
+    public AppUser? User { get; set; }
+    public required string TokenHash { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; }
+}
+
+/// <summary>Eenmalige magic-link (#42): kort geldig, single-use, alleen de
+/// hash opgeslagen. Per adres is maar één link tegelijk actief.</summary>
+public class LoginToken
+{
+    public long Id { get; set; }
+    public required string Email { get; set; }
+    public required string TokenHash { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? UsedAt { get; set; }
 }
 
 public class PushSubscription

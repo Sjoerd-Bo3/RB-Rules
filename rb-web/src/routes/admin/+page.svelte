@@ -118,7 +118,9 @@
 		{ key: 'openCorrections', label: 'Open correcties', slug: 'correcties' },
 		{ key: 'knowledge', label: 'Spelbegrip-docs', slug: 'primer' },
 		{ key: 'claims', label: 'Claims', slug: 'claims' },
-		{ key: 'openProposals', label: 'Bronvoorstellen', slug: 'voorstellen' }
+		{ key: 'openProposals', label: 'Bronvoorstellen', slug: 'voorstellen' },
+		// Accounts + kosteninzicht (#42).
+		{ key: 'users', label: 'Gebruikers', slug: 'gebruikers' }
 	];
 </script>
 

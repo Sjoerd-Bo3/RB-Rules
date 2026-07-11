@@ -12,6 +12,7 @@
 		{ href: '/ask', label: 'Vraag' },
 		{ href: '/cards', label: 'Kaarten' },
 		{ href: '/graph', label: 'Graph' },
+		{ href: '/account', label: 'Account' },
 		{ href: '/admin', label: 'Beheer' }
 	];
 

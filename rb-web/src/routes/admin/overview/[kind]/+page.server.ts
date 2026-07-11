@@ -20,7 +20,9 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	claims: { allowed: ['unreviewed', 'accepted', 'rejected', 'superseded'], fallback: '' },
 	// Bronvoorstellen uit de scout (#63): zelfde chip-patroon als claims.
 	voorstellen: { allowed: ['proposed', 'accepted', 'rejected'], fallback: '' },
-	gaten: null
+	gaten: null,
+	// Gebruikers + kosteninzicht (#42): de chips kiezen de meetperiode.
+	gebruikers: { allowed: ['vandaag', '7d', '30d'], fallback: '7d' }
 };
 
 export const load: PageServerLoad = async ({ params, url, cookies }) => {
@@ -79,6 +81,10 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 			case 'gaten':
 				// Kennis-gaten-rapport (#52): vers berekend bij elke aanvraag.
 				return { ...base, data: await adminApi<unknown>('/api/admin/overview/gaps') };
+			case 'gebruikers': {
+				const qs = new URLSearchParams({ page: String(page), period: filter });
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/users?${qs}`) };
+			}
 			default:
 				throw error(404, 'Onbekend overzicht');
 		}
@@ -202,6 +208,34 @@ export const actions: Actions = {
 			return { ok: true };
 		} catch (e) {
 			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Accountbeheer (#42): blokkeren/deblokkeren en quota bijstellen. Fouten
+	// dragen het gebruikers-id mee zodat de melding bij de juiste rij landt.
+	saveUser: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const patch: Record<string, unknown> = {};
+		if (form.has('blocked')) patch.blocked = form.get('blocked') === 'true';
+		if (form.has('dailyQuota')) {
+			const q = Number(form.get('dailyQuota'));
+			if (!Number.isInteger(q) || q < 0) return fail(400, { error: 'Quotum moet een getal van 0 of hoger zijn', id });
+			patch.dailyQuota = q;
+		}
+		if (form.has('dailyPhotoQuota')) {
+			const q = Number(form.get('dailyPhotoQuota'));
+			if (!Number.isInteger(q) || q < 0) return fail(400, { error: 'Foto-quotum moet een getal van 0 of hoger zijn', id });
+			patch.dailyPhotoQuota = q;
+		}
+		try {
+			await adminApi(`/api/admin/users/${id}`, {
+				method: 'PATCH',
+				body: JSON.stringify(patch)
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
 		}
 	}
 };

@@ -29,6 +29,9 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<ClaimSource> ClaimSources => Set<ClaimSource>();
     public DbSet<MechanicKeyword> MechanicKeywords => Set<MechanicKeyword>();
     public DbSet<SourceProposal> SourceProposals => Set<SourceProposal>();
+    public DbSet<AppUser> Users => Set<AppUser>();
+    public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<LoginToken> LoginTokens => Set<LoginToken>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -145,6 +148,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("ask_metric");
             e.HasIndex(x => x.CreatedAt);
+            // Quota-teller (#42): "vragen van gebruiker X vandaag".
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
         });
 
         b.Entity<AskTrace>(e =>
@@ -200,6 +205,30 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // vergelijkt genormaliseerd; de index borgt het hard).
             e.HasIndex(x => x.Url).IsUnique();
             e.HasIndex(x => x.Status);
+        });
+
+        // Accounts (#42). Bewust "app_user" en niet het "user" uit het issue:
+        // user is een gereserveerd woord in Postgres en zou elke handmatige
+        // query tot quoten dwingen.
+        b.Entity<AppUser>(e =>
+        {
+            e.ToTable("app_user");
+            e.HasIndex(x => x.Email).IsUnique();
+        });
+
+        b.Entity<UserSession>(e =>
+        {
+            e.ToTable("user_session");
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<LoginToken>(e =>
+        {
+            e.ToTable("login_token");
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => x.Email);
         });
     }
 }
