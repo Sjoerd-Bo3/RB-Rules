@@ -29,6 +29,15 @@ antwoordformat scheidt "Regelbasis" (laag 0) van "Community-consensus"
 - "How to Play – Quick Start Guide" en "Gameplay Guide – Core Rules" —
   officiële Riot-artikelen, het learn-to-play-"boekje" in webvorm; als
   bronnen `how-to-play` en `gameplay-guide` in het register (trust 1)
+- "Deckbuilding Primer" — officieel Riot-artikel over deckconstructie;
+  bron `deckbuilding-primer` (trust 1)
+- "How to Play – Proving Grounds" PDF van UVS Games (Riots organized-play-
+  partner) — bron `uvs-how-to-play-pdf` (trust 2: partnermateriaal, niet
+  door Riot zelf gepubliceerd)
+- Community-beginnersgidsen: riftbound.gg en Fanfinity — bronnen
+  `beginners-guide-riftboundgg` en `beginners-guide-fanfinity` (trust 3;
+  community-claims volgen de corroboratie-regels van #50). Alle vier de
+  startbronnen uit #63 zijn op 2026-07-11 geverifieerd, ook vanaf de VM.
 - De officiële Learn to Play-video (YouTube DMXztr0OOXc, gelinkt vanaf de
   how-to-play-pagina) — transcript als primer-input in de claims-pipeline
 - Het gedrukte boekje/learn-to-play-kaartjes uit de pakjes staan níet als

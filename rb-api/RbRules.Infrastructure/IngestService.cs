@@ -100,8 +100,17 @@ public class IngestService(
                 }
                 case "pdf":
                 {
-                    // src.Url is de ontdek-pagina (Rules Hub); de PDF-link wordt
-                    // per run gevonden (versies wisselen — nooit hardcoden).
+                    // Directe PDF-URL (partner-bronnen zoals UVS Games, #63):
+                    // de respons is zelf al een PDF — geen ontdek-stap nodig.
+                    if (res.Content.Headers.ContentType?.MediaType == "application/pdf")
+                    {
+                        text = PdfTextExtractor.Extract(await res.Content.ReadAsByteArrayAsync(ct));
+                        fileUrl = src.Url;
+                        break;
+                    }
+
+                    // Anders is src.Url de ontdek-pagina (Rules Hub); de PDF-link
+                    // wordt per run gevonden (versies wisselen — nooit hardcoden).
                     var hubHtml = await res.Content.ReadAsStringAsync(ct);
                     var keyword = src.Id.Contains("tournament", StringComparison.OrdinalIgnoreCase)
                         ? "tournament" : "core";
