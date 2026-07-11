@@ -109,7 +109,8 @@
 		background: #0b1322; color: #e7eefc;
 		border: 1px solid #243551; border-radius: 8px; padding: 9px 11px;
 	}
-	input[type='number'] { width: 90px; }
+	/* Breed genoeg voor de placeholder "Max energy" bij 16px op mobiel. */
+	input[type='number'] { width: 116px; }
 	button {
 		background: #d98a4e; color: #1a1206; border: 0; border-radius: 8px;
 		padding: 9px 16px; font-weight: 600; cursor: pointer;

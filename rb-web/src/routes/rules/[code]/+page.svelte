@@ -93,7 +93,8 @@
 		border-radius: 12px; padding: 18px 20px;
 	}
 	.text { white-space: pre-wrap; margin: 0; line-height: 1.65; }
-	.actions { display: flex; gap: 12px; align-items: center; margin: 14px 0; }
+	/* Wrap op smal: knop + lange PDF-link passen niet altijd naast elkaar. */
+	.actions { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; margin: 14px 0; }
 	button {
 		background: #d98a4e; color: #1a1206; border: 0; border-radius: 8px;
 		padding: 8px 14px; font-weight: 600; cursor: pointer;

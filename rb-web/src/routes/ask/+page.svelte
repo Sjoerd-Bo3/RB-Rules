@@ -421,12 +421,14 @@
 		background: var(--warn-soft); color: var(--warn); border-radius: 999px; padding: 2px 8px;
 	}
 	.feedback {
-		display: flex; align-items: center; gap: 10px;
+		display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 		border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px;
 	}
 	.fb {
 		background: transparent; color: var(--muted); border: 1px solid var(--border);
 		border-radius: 8px; padding: 4px 12px; font-size: 0.85rem; cursor: pointer;
+		/* Op smal wrapt de rij als geheel; de knoptekst zelf breekt niet. */
+		white-space: nowrap;
 	}
 	.fb:hover { color: var(--text); border-color: var(--border-strong); }
 	.fb-inline { display: inline; }

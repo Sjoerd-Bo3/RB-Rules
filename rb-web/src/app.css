@@ -32,6 +32,9 @@ body {
 	/* Vangrail: de pagina scrollt nooit horizontaal — brede inhoud
 	   (tabellen, diagrammen) scrolt binnen zijn eigen container. */
 	overflow-x: clip;
+	/* Vangrail (#38): lange ononderbroken tokens (URL's, codes) in regel- en
+	   kaartteksten breken binnen hun blok in plaats van de pagina te verbreden. */
+	overflow-wrap: break-word;
 }
 
 img { max-width: 100%; height: auto; }
@@ -43,6 +46,23 @@ img { max-width: 100%; height: auto; }
 	select,
 	textarea {
 		font-size: 16px;
+	}
+}
+
+/* Tap-targets (#38): op touch-schermen krijgen knoppen en chip-links een
+   raakvlak van minstens 44px hoog (iOS-richtlijn); de dichte desktop-layout
+   met muis blijft ongewijzigd. */
+@media (pointer: coarse) {
+	button {
+		min-height: 44px;
+	}
+	.site nav a,
+	a.chip,
+	.toc a,
+	.pager a {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
 	}
 }
 

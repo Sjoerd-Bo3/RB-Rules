@@ -149,8 +149,10 @@
 	.candidate { padding: 8px; text-decoration: none; color: var(--text); display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; }
 	.candidate img { width: 100%; border-radius: 8px; }
 	.candidate:hover { border-color: var(--accent); }
-	.viz-wrap { padding: 8px; overflow-x: auto; }
-	svg { width: 100%; height: auto; display: block; }
+	.viz-wrap { padding: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+	/* Mobile-first (#38): op smal niet meeschalen (labels worden dan ~5px),
+	   maar op natuurlijke grootte horizontaal scrollen binnen .viz-wrap. */
+	svg { width: 100%; min-width: 900px; height: auto; display: block; }
 	svg a { cursor: pointer; }
 	.legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.82rem; }
 	.legend a { color: var(--muted); }
