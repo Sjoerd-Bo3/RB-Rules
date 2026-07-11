@@ -2,9 +2,41 @@ import { describe, expect, it } from 'vitest';
 import {
 	certaintyLevel,
 	citationEssence,
+	splitSettled,
 	stripDuplicateRuleRefs,
 	type CitationRef
 } from './answerFormat';
+
+describe('splitSettled', () => {
+	it('zonder newline is alles staart', () => {
+		expect(splitSettled('**Oordeel:** Ja')).toEqual({ settled: '', tail: '**Oordeel:** Ja' });
+	});
+
+	it('splitst op de laatste newline', () => {
+		expect(splitSettled('**Oordeel:** Ja.\n\nDe unit blijft')).toEqual({
+			settled: '**Oordeel:** Ja.\n\n',
+			tail: 'De unit blijft'
+		});
+	});
+
+	it('verbergt een half binnengekomen widget-marker in de staart', () => {
+		expect(splitSettled('Stap 1 [1].\n[[rule:466.2')).toEqual({
+			settled: 'Stap 1 [1].\n',
+			tail: ''
+		});
+	});
+
+	it('laat een afgeronde marker in settled ongemoeid', () => {
+		expect(splitSettled('[[rule:466.2.c]]\nvervolg')).toEqual({
+			settled: '[[rule:466.2.c]]\n',
+			tail: 'vervolg'
+		});
+	});
+
+	it('lege input blijft leeg', () => {
+		expect(splitSettled('')).toEqual({ settled: '', tail: '' });
+	});
+});
 
 describe('certaintyLevel', () => {
 	it('herkent de bestaande labels, met en zonder toevoeging', () => {
