@@ -41,6 +41,19 @@ public static class RuleEndpoints
             return Results.Ok(toc);
         });
 
+        // ── Hybride zoeken in de regelsecties (#72) ────────────────────
+        app.MapGet("/api/rules/search", async (
+            string? q, int? limit, RuleSearchService search, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(q))
+                return Results.BadRequest(new { error = "q is verplicht" });
+            // Publiek endpoint: extreem lange invoer hoort niet de embedder in.
+            var query = q.Trim();
+            if (query.Length > 400) query = query[..400];
+            var hits = await search.SearchAsync(query, Math.Clamp(limit ?? 10, 1, 30), ct);
+            return Results.Ok(hits);
+        });
+
         app.MapGet("/api/rules/section/{code}", async (string code, string? source, RbRulesDbContext db) =>
         {
             var query = db.RuleChunks.Where(c => c.SectionCode == code);

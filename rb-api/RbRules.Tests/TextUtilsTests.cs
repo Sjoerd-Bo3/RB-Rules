@@ -25,4 +25,32 @@ public class TextUtilsTests
     {
         Assert.Equal("a b c", TextUtils.HtmlToText("a\n\n  b\t c"));
     }
+
+    [Fact]
+    public void Snippet_ReturnsShortTextUnchanged()
+    {
+        Assert.Equal("601.2.c A unit that is killed leaves play.",
+            TextUtils.Snippet("  601.2.c A unit that is killed leaves play. ", 180));
+    }
+
+    [Fact]
+    public void Snippet_KeepsTextAtExactLimit()
+    {
+        var text = new string('b', 180);
+        Assert.Equal(text, TextUtils.Snippet(text, 180));
+    }
+
+    [Fact]
+    public void Snippet_TruncatesOnWordBoundaryWithEllipsis()
+    {
+        // Harde afkap op 10 zou "abcdef ghi…" geven — de woordgrens wint.
+        Assert.Equal("abcdef…", TextUtils.Snippet("abcdef ghijkl mnopqr", 10));
+    }
+
+    [Fact]
+    public void Snippet_HardCutsWhenNoWordBoundary()
+    {
+        var snippet = TextUtils.Snippet(new string('a', 300), 180);
+        Assert.Equal(new string('a', 180) + "…", snippet);
+    }
 }
