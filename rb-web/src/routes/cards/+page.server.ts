@@ -15,6 +15,9 @@ export interface CardHit {
 	imageUrl: string | null;
 	distance?: number;
 	variants?: number;
+	/** Set-legaliteit (#22): releasedatum van de set (yyyy-mm-dd) of null. */
+	legalFrom?: string | null;
+	legality?: 'legal' | 'upcoming' | 'announced';
 }
 
 export interface Facets {

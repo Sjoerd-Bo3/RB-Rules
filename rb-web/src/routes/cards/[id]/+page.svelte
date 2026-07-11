@@ -42,6 +42,19 @@
 			<h1>
 				{c.name}
 				{#if c.banned}<span class="banned">Verboden</span>{/if}
+				<!-- Set-legaliteit (#22). "Verboden" domineert: een gebande kaart
+				     óók "Legaal" noemen zou tegenstrijdig lezen. Bij een onbekende
+				     releasedatum geen "niet legaal"-claim — dat kan net zo goed een
+				     allang verschenen set zijn waarvan de sync geen datum heeft. -->
+				{#if !c.banned}
+					{#if c.legality === 'upcoming'}
+						<span class="status upcoming">Nog niet legaal — komt {c.legalFrom ? new Date(c.legalFrom).toLocaleDateString('nl-NL') : 'binnenkort'}</span>
+					{:else if c.legality === 'announced'}
+						<span class="status announced">Releasedatum onbekend</span>
+					{:else}
+						<span class="status legal">Legaal</span>
+					{/if}
+				{/if}
 			</h1>
 			<p class="meta">
 				{[c.supertype, c.type].filter(Boolean).join(' ')}
@@ -219,6 +232,13 @@
 		background: var(--err-soft); color: var(--err); border: 1px solid var(--err);
 		border-radius: 999px; padding: 3px 10px; text-transform: uppercase; letter-spacing: 0.05em;
 	}
+	.status {
+		font-size: 0.78rem; vertical-align: middle; margin-left: 8px;
+		border-radius: 999px; padding: 3px 10px; border: 1px solid var(--border);
+	}
+	.status.legal { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
+	.status.upcoming { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+	.status.announced { color: var(--muted); }
 	.oracle.errata { border-color: var(--accent); }
 	.oracle.printed { opacity: 0.6; }
 	.versions { display: flex; gap: 10px; flex-wrap: wrap; }

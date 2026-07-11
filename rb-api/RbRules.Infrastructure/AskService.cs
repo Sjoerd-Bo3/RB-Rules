@@ -14,7 +14,8 @@ public record Citation(
 public record AskCard(
     string RiftboundId, string Name, string? Type, string? Supertype,
     string[] Domains, int? Energy, int? Might, string? TextPlain,
-    string[]? Mechanics, string? ImageUrl, bool Banned);
+    string[]? Mechanics, string? ImageUrl, bool Banned,
+    string? SetName, DateOnly? LegalFrom, string Legality);
 
 public record AskTurn(string Question, string Answer);
 
@@ -50,6 +51,11 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         - Officiële bronnen (lagere trust = betrouwbaarder) gaan vóór community.
           GEVERIFIEERDE RULINGS zijn gezaghebbend en gaan vóór alles.
         - Kaartgegevens in de context zijn gezaghebbend voor stats/mechanieken.
+        - Een kaartfeit met "NOG NIET LEGAAL" betekent: die kaart zit in een
+          set die nog niet is verschenen. Benoem dat expliciet (setnaam +
+          datum) zodra je die kaart noemt of aanbeveelt — zeker bij meta-,
+          lijst- of legaliteitsvragen — en presenteer zo'n kaart nooit als nu
+          speelbaar.
         - Kort is beter: geen inleiding, geen herhaling van de vraag.
 
         CITATEN — de site toont de meegegeven fragmenten zelf als uitklapbare
@@ -341,10 +347,25 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         if (cards.Count == 0) return [];
 
         var banned = await BanLookup.BannedCanonicalIdsAsync(db, ct);
-        return [.. cards.Select(c => new AskCard(
-            c.RiftboundId, c.Name, c.Type, c.Supertype, c.Domains, c.Energy, c.Might,
-            c.TextPlain, c.Mechanics, c.ImageUrl, BanLookup.IsBanned(banned, c)))];
+        // Set-legaliteit (#68): de kaartwidget labelt kaarten uit een nog
+        // niet verschenen set als "nog niet legaal".
+        var setDates = await SetDatesAsync(ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        return [.. cards.Select(c =>
+        {
+            var legalFrom = c.SetId is null ? null : setDates.GetValueOrDefault(c.SetId);
+            return new AskCard(
+                c.RiftboundId, c.Name, c.Type, c.Supertype, c.Domains, c.Energy, c.Might,
+                c.TextPlain, c.Mechanics, c.ImageUrl, BanLookup.IsBanned(banned, c),
+                c.SetLabel ?? c.SetId, legalFrom,
+                SetLegality.Key(SetLegality.StatusFor(legalFrom, today)));
+        })];
     }
+
+    /// <summary>Releasedatum per set (handvol rijen) — voor de legaliteits-
+    /// status in kaartfeiten en kaart-widgets (#22/#68).</summary>
+    private Task<Dictionary<string, DateOnly?>> SetDatesAsync(CancellationToken ct) =>
+        db.CardSets.AsNoTracking().ToDictionaryAsync(s => s.SetId, s => s.PublishedOn, ct);
 
     private sealed record CardContextResult(
         string Block, IReadOnlyList<string> Mechanics, IReadOnlyList<string> CardNames);
@@ -463,11 +484,23 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var cards = await FetchPromptCardsAsync(ids, ct);
         var banned = await BanLookup.BannedCanonicalIdsAsync(db, ct);
 
+        // Set-legaliteit (#68): kaarten uit een nog niet verschenen set krijgen
+        // een expliciet "NOG NIET LEGAAL"-feit mee als bewijs voor het model.
+        var setDates = await SetDatesAsync(ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
         var cardsById = cards.ToDictionary(c => c.RiftboundId);
         var lines = ids
             .Where(cardsById.ContainsKey)
             .Select(id => cardsById[id])
-            .Select(c => "- " + CardText.DescribeForPrompt(c, BanLookup.IsBanned(banned, c)));
+            .Select(c =>
+            {
+                var fact = SetLegality.PromptFact(
+                    c.SetId is null ? null : setDates.GetValueOrDefault(c.SetId),
+                    today, c.SetLabel ?? c.SetId);
+                return "- " + CardText.DescribeForPrompt(c, BanLookup.IsBanned(banned, c))
+                     + (fact is null ? "" : $" {fact}");
+            });
 
         var header = mechanicBlocks.Count > 0
             ? string.Join("\n", mechanicBlocks) + "\n"

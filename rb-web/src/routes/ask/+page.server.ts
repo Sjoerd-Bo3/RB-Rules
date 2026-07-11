@@ -40,6 +40,10 @@ export interface AskCard {
 	mechanics: string[] | null;
 	imageUrl: string | null;
 	banned: boolean;
+	/** Set-legaliteit (#68): label voor kaarten uit een nog niet verschenen set. */
+	setName: string | null;
+	legalFrom: string | null;
+	legality: 'legal' | 'upcoming' | 'announced';
 }
 interface AskResult {
 	answer: string;

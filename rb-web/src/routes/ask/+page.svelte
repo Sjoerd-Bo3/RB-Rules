@@ -253,6 +253,9 @@
 							<strong>{k.name}</strong>
 							<span class="meta">{[k.supertype, k.type].filter(Boolean).join(' ')} · {k.domains.join('/') || '—'}</span>
 							{#if k.banned}<span class="ban">Verboden</span>{/if}
+							{#if k.legality === 'upcoming'}
+								<span class="soon">Nog niet legaal{k.legalFrom ? ` — komt ${new Date(k.legalFrom).toLocaleDateString('nl-NL')}` : ''}</span>
+							{/if}
 						</summary>
 						<div class="card-body">
 							{#if k.imageUrl}<img src={k.imageUrl} alt={k.name} loading="lazy" />{/if}
@@ -412,6 +415,10 @@
 	.ban {
 		font-size: 0.7rem; text-transform: uppercase; margin-left: 8px;
 		background: var(--err-soft); color: var(--err); border-radius: 999px; padding: 2px 8px;
+	}
+	.soon {
+		font-size: 0.7rem; margin-left: 8px;
+		background: var(--warn-soft); color: var(--warn); border-radius: 999px; padding: 2px 8px;
 	}
 	.feedback {
 		display: flex; align-items: center; gap: 10px;

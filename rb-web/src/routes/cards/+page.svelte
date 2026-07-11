@@ -81,6 +81,9 @@
 					<div class="body">
 						<strong>{c.name}</strong>
 						{#if c.variants}<span class="variants">+{c.variants} versies</span>{/if}
+						<!-- Set-legaliteit (#22): in de lijst alleen de actionable
+						     waarschuwing; "legaal"/"datum onbekend" zou hier ruis zijn. -->
+						{#if c.legality === 'upcoming'}<span class="soon">Nog niet legaal</span>{/if}
 						<p class="meta">
 							{[c.supertype, c.type].filter(Boolean).join(' ')}
 							· {c.domains.join('/') || '—'}
@@ -139,6 +142,11 @@
 	.variants {
 		display: inline-block; margin-left: 6px; font-size: 0.7rem; color: #9fb0cc;
 		border: 1px solid #243551; border-radius: 999px; padding: 1px 7px;
+	}
+	.soon {
+		display: inline-block; margin-left: 6px; font-size: 0.7rem;
+		background: var(--warn-soft); color: var(--warn);
+		border: 1px solid var(--warn); border-radius: 999px; padding: 1px 7px;
 	}
 	.warn { color: #ff8b8e; }
 </style>
