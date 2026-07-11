@@ -16,6 +16,38 @@
 	);
 	let question = $state('');
 	let correcting = $state(false);
+	let followUp = $state('');
+
+	// Historie voor de volgende doorvraag: eerdere rondes + de huidige.
+	const nextHistory = $derived(
+		JSON.stringify([
+			...((form?.history as { question: string; answer: string }[] | undefined) ?? []),
+			...(form?.question && form?.answer ? [{ question: form.question, answer: form.answer }] : [])
+		].slice(-3))
+	);
+
+	// Voorlezen (#31): antwoord zonder markdown/widget-markers.
+	let speaking = $state(false);
+	function toggleSpeech() {
+		if (speaking) {
+			speechSynthesis.cancel();
+			speaking = false;
+			return;
+		}
+		const plain = (form?.answer ?? '')
+			.replace(/\[\[(rule|card):[^\]]+\]\]/g, '')
+			.replace(/[#*_`>|-]/g, ' ')
+			.replace(/\[(\d+)\]/g, '')
+			.replace(/\s+/g, ' ')
+			.trim();
+		if (!plain) return;
+		const u = new SpeechSynthesisUtterance(plain);
+		u.lang = 'nl-NL';
+		u.onend = () => (speaking = false);
+		u.onerror = () => (speaking = false);
+		speechSynthesis.speak(u);
+		speaking = true;
+	}
 
 	// Board-state-foto: client verkleint naar max 1600px JPEG vóór upload.
 	let photoInput = $state<HTMLInputElement | null>(null);
@@ -171,6 +203,9 @@
 				<p class="asked meta">
 					{#if form?.questionType}<span class="qtype">{TYPE_LABELS[form.questionType] ?? form.questionType}</span>{/if}
 					Vraag: {form.question}
+					<button type="button" class="fb speech" onclick={toggleSpeech}>
+						{speaking ? 'Stop voorlezen' : 'Lees voor'}
+					</button>
 				</p>
 			{/if}
 			<AnswerView answer={form?.answer ?? ''} citations={form?.citations ?? []} cards={form?.cards ?? []} />
@@ -265,6 +300,31 @@
 				</form>
 			{/if}
 		</article>
+	{/if}
+
+	{#if hasAnswer && !busy}
+		<!-- Doorvragen (#41): bouwt voort op het gesprek, met alle context -->
+		<form
+			method="POST"
+			action="?/ask"
+			use:enhance={({ formData }) => {
+				busy = true;
+				const q = String(formData.get('question') ?? '').trim();
+				if (q) remember(q);
+				return async ({ update }) => {
+					busy = false;
+					followUp = '';
+					await update();
+				};
+			}}
+			class="panel followup"
+		>
+			<h2>Vraag door</h2>
+			<p class="meta small">Nog niet duidelijk, of wil je een vervolgsituatie checken? De vraag bouwt voort op dit gesprek.</p>
+			<input type="hidden" name="history" value={nextHistory} />
+			<textarea name="question" rows="2" placeholder="Bijv.: En wat als de unit al exhausted was?" bind:value={followUp}></textarea>
+			<button type="submit" disabled={busy || !followUp.trim()}>Vraag door</button>
+		</form>
 	{/if}
 
 	{#if history.length && !busy}
@@ -362,6 +422,19 @@
 		margin-top: 8px; background: var(--accent); color: var(--accent-ink); border: 0;
 		border-radius: 8px; padding: 7px 14px; font-weight: 600; cursor: pointer;
 	}
+	.followup { padding: 14px 16px; margin-top: 14px; }
+	.followup h2 { margin: 0 0 2px; }
+	.followup textarea {
+		width: 100%; background: var(--surface-deep); color: var(--text);
+		border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+		resize: vertical; margin-top: 8px;
+	}
+	.followup button {
+		margin-top: 8px; background: var(--accent); color: var(--accent-ink); border: 0;
+		border-radius: 8px; padding: 8px 16px; font-weight: 600; cursor: pointer;
+	}
+	.followup button:disabled { opacity: 0.5; }
+	.speech { margin-left: 8px; }
 	.hist-title { margin-top: 26px; }
 	.history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 	.warn { color: var(--err); }

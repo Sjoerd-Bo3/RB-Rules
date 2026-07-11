@@ -24,8 +24,19 @@ public static class AskEndpoints
             if (images.Any(i => i.Data.Length > 8_000_000))
                 return Results.BadRequest(new { error = "afbeelding te groot (max ~6 MB)" });
 
+            // Doorvraag-historie (#41): gecapt op 3 rondes, tekstlengte begrensd.
+            var history = (req.History ?? [])
+                .Where(t => !string.IsNullOrWhiteSpace(t.Question))
+                .TakeLast(3)
+                .Select(t => new AskTurn(
+                    t.Question.Length > 2000 ? t.Question[..2000] : t.Question,
+                    t.Answer.Length > 6000 ? t.Answer[..6000] : t.Answer))
+                .ToList();
+
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var result = await ask.AskAsync(req.Question.Trim(), images.Count > 0 ? images : null);
+            var result = await ask.AskAsync(
+                req.Question.Trim(), images.Count > 0 ? images : null,
+                history.Count > 0 ? history : null);
             sw.Stop();
             try
             {
@@ -44,7 +55,7 @@ public static class AskEndpoints
                 // meting mag een antwoord nooit blokkeren
             }
             return Results.Ok(result);
-        });
+        }).RequireRateLimiting("llm");
 
         // Echte duurstatistiek (laatste 100 geslaagde vragen) voor de wachtindicatie.
         app.MapGet("/api/ask/stats", async (RbRulesDbContext db) =>
@@ -75,7 +86,7 @@ public static class AskEndpoints
             return result is null
                 ? Results.BadRequest(new { error = "kaarten niet gevonden" })
                 : Results.Ok(result);
-        });
+        }).RequireRateLimiting("llm");
 
         // ── Feedback op antwoorden (self-learning, #24) ────────────────
         app.MapPost("/api/corrections", async (CorrectionSubmit body, RbRulesDbContext db) =>
@@ -103,6 +114,6 @@ public static class AskEndpoints
             });
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
-        });
+        }).RequireRateLimiting("llm");
     }
 }

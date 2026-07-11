@@ -16,6 +16,8 @@ public record AskCard(
     string[] Domains, int? Energy, int? Might, string? TextPlain,
     string[]? Mechanics, string? ImageUrl, bool Banned);
 
+public record AskTurn(string Question, string Answer);
+
 public record AskResult(
     string Answer, IReadOnlyList<Citation> Citations,
     IReadOnlyList<AskCard> Cards, string QuestionType,
@@ -39,6 +41,9 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         markdown en volg exact de structuur van het opgegeven vraagtype.
 
         REGELS:
+        - Schrijf 'Oordeel' en 'Zekerheid' exact als losse regels in de vorm
+          `**Oordeel:** …` en `**Zekerheid:** …` — géén ##-koppen daarvoor,
+          geen scheidingslijnen (---). De overige kopjes wél als ### koppen.
         - Baseer je uitsluitend op de meegegeven context-fragmenten en
           kaartgegevens. Ontbreekt het antwoord daarin: Zekerheid = Onzeker,
           en zeg wat er nodig is. Nooit gokken zonder dat label.
@@ -65,21 +70,34 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         daarnaast gewoon nodig.
         """;
 
+    private const int MaxHistoryTurns = 3;
+    private const int MaxHistoryAnswerChars = 900;
+
     public async Task<AskResult> AskAsync(
         string question, IReadOnlyList<RbAiClient.AiImage>? images = null,
+        IReadOnlyList<AskTurn>? history = null,
         CancellationToken ct = default)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        // Doorvragen (#41): eerdere rondes gaan gecapt mee; de retrieval
+        // kijkt naar follow-up + eerdere vragen zodat nieuwe relevante §'s
+        // bijgeladen worden.
+        var turns = (history ?? []).TakeLast(MaxHistoryTurns).ToList();
+        var retrievalText = turns.Count == 0
+            ? question
+            : string.Join("\n", turns.Select(t => t.Question).Append(question));
+
         // 0. Naam-match in SQL (review-fix #43: geen full-table naar de client)
         // + interne router: vraagtype stuurt structuur en bronnen-bias.
-        var qLower = question.ToLowerInvariant();
+        var qLower = $"{string.Join("\n", turns.Select(t => t.Question))}\n{question}"
+            .ToLowerInvariant();
         var mentionsCard = await db.Cards
             .AnyAsync(c => c.VariantOf == null && c.Name.Length >= 4 &&
                            qLower.Contains(c.Name.ToLower()), ct);
         var type = QuestionRouter.Classify(question, mentionsCard);
 
         // 1. Vector-kanaal
-        var qv = await embeddings.EmbedOneAsync(question, ct);
+        var qv = await embeddings.EmbedOneAsync(retrievalText, ct);
         var vectorHits = await db.RuleChunks
             .Where(c => c.Embedding != null)
             .OrderBy(c => c.Embedding!.CosineDistance(qv))
@@ -90,9 +108,9 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         // 2. Full-text-kanaal (Engels — de bronnen zijn Engels)
         var textHits = await db.RuleChunks
             .Where(c => EF.Functions.ToTsVector("english", c.Text)
-                .Matches(EF.Functions.PlainToTsQuery("english", question)))
+                .Matches(EF.Functions.PlainToTsQuery("english", retrievalText)))
             .OrderByDescending(c => EF.Functions.ToTsVector("english", c.Text)
-                .Rank(EF.Functions.PlainToTsQuery("english", question)))
+                .Rank(EF.Functions.PlainToTsQuery("english", retrievalText)))
             .Take(TopK * 2)
             .Select(c => new { c.Id, c.SourceId })
             .ToListAsync(ct);
@@ -217,9 +235,17 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             : "\n\nGEVERIFIEERDE RULINGS (gezaghebbend):\n" +
               string.Join("\n", rulings.Select(r => $"- {r}"));
 
+        // Doorvraag-gesprek (#41): eerdere rondes gecapt in de prompt.
+        var historyBlock = turns.Count == 0
+            ? ""
+            : "\n\nGESPREK TOT NU TOE (bouw hierop voort; herhaal niet wat al gezegd is):\n" +
+              string.Join("\n", turns.Select(t =>
+                  $"Vraag: {t.Question}\nAntwoord: {(t.Answer.Length > MaxHistoryAnswerChars ? t.Answer[..MaxHistoryAnswerChars] + "…" : t.Answer)}"));
+        var questionLabel = turns.Count == 0 ? "Vraag" : "Vervolgvraag";
+
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
         var aiAnswer = await ai.AskAsync(
-            $"Context-fragmenten:\n{context}{primerBlock}{cardBlock}{banBlock}{rulingBlock}\n\nVraag: {question}",
+            $"Context-fragmenten:\n{context}{primerBlock}{cardBlock}{banBlock}{rulingBlock}{historyBlock}\n\n{questionLabel}: {question}",
             $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}",
             task: images is { Count: > 0 } ? "hard" : "cheap",
             images: images, ct: ct);

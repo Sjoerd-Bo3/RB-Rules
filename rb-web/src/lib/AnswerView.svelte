@@ -23,6 +23,8 @@
 		let text = answer;
 		let oordeel: string | null = null;
 		let zekerheid: string | null = null;
+		// Twee vormen accepteren: "**Oordeel:** zin" én "## Oordeel\n\nzin"
+		// (het model wijkt soms af naar koppen).
 		text = text.replace(/^\s*\*\*Oordeel:\*\*\s*(.+)$/m, (_, v: string) => {
 			oordeel = v.trim();
 			return '';
@@ -31,6 +33,19 @@
 			zekerheid = v.trim();
 			return '';
 		});
+		if (!oordeel) {
+			text = text.replace(/^#{1,3}\s*Oordeel\s*\n+([^\n#][^\n]*(?:\n(?!#{1,3}\s|---)[^\n]*)*)/m, (_, v: string) => {
+				oordeel = v.replace(/\n+/g, ' ').trim();
+				return '';
+			});
+		}
+		if (!zekerheid) {
+			text = text.replace(/^#{1,3}\s*Zekerheid\s*\n+([^\n#][^\n]*(?:\n(?!#{1,3}\s|---)[^\n]*)*)/m, (_, v: string) => {
+				zekerheid = v.replace(/\n+/g, ' ').trim();
+				return '';
+			});
+		}
+		text = text.replace(/^---\s*$/gm, '');
 
 		const segs: Seg[] = [];
 		const re = /\[\[(rule|card):([^\]]+)\]\]/g;
