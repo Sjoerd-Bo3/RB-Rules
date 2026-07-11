@@ -87,16 +87,17 @@
 		return JOBS.find((j) => j.name === name)?.label ?? name;
 	}
 
-	const TILES: { key: string; label: string }[] = [
-		{ key: 'cards', label: 'Kaarten' },
-		{ key: 'cardsEmbedded', label: 'Geëmbed' },
-		{ key: 'cardsMined', label: 'Geanalyseerd' },
-		{ key: 'ruleChunks', label: 'Regelsecties' },
-		{ key: 'bans', label: 'Bans' },
-		{ key: 'errata', label: 'Errata' },
-		{ key: 'interactions', label: 'Interacties' },
-		{ key: 'changes', label: 'Wijzigingen' },
-		{ key: 'openCorrections', label: 'Open correcties' }
+	// Elke tegel klikt door naar het onderliggende overzicht (#61).
+	const TILES: { key: string; label: string; slug: string }[] = [
+		{ key: 'cards', label: 'Kaarten', slug: 'kaarten' },
+		{ key: 'cardsEmbedded', label: 'Geëmbed', slug: 'embeddings' },
+		{ key: 'cardsMined', label: 'Geanalyseerd', slug: 'analyse' },
+		{ key: 'ruleChunks', label: 'Regelsecties', slug: 'regelsecties' },
+		{ key: 'bans', label: 'Bans', slug: 'bans' },
+		{ key: 'errata', label: 'Errata', slug: 'errata' },
+		{ key: 'interactions', label: 'Interacties', slug: 'interacties' },
+		{ key: 'changes', label: 'Wijzigingen', slug: 'wijzigingen' },
+		{ key: 'openCorrections', label: 'Open correcties', slug: 'correcties' }
 	];
 </script>
 
@@ -147,10 +148,10 @@
 		{#if live?.counts}
 			<div class="tiles">
 				{#each TILES as t (t.key)}
-					<div class="tile panel">
+					<a class="tile panel" href="/admin/overview/{t.slug}">
 						<span class="num">{live.counts[t.key] ?? 0}</span>
 						<span class="lbl">{t.label}</span>
-					</div>
+					</a>
 				{/each}
 			</div>
 		{/if}
@@ -338,7 +339,8 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
-	.tile { padding: 10px 12px; display: flex; flex-direction: column; }
+	.tile { padding: 10px 12px; display: flex; flex-direction: column; text-decoration: none; }
+	.tile:hover { border-color: var(--accent); }
 	.tile .num { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 	.tile .lbl { color: var(--muted); font-size: 0.76rem; }
 	.jobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }

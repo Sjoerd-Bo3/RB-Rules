@@ -387,6 +387,29 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
+        // ── Tegel-overzichten (#61): elke dashboard-tegel klikt door ──────
+        admin.MapGet("/overview/cards", async (
+                string? filter, string? q, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.CardsAsync(filter, q, page ?? 1)));
+
+        admin.MapGet("/overview/rulechunks", async (
+                string? sourceId, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.RuleChunksAsync(sourceId, page ?? 1)));
+
+        admin.MapGet("/overview/bans", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.BansAsync()));
+
+        admin.MapGet("/overview/errata", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.ErrataAsync()));
+
+        admin.MapGet("/overview/interactions", async (
+                int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.InteractionsAsync(page ?? 1)));
+
+        admin.MapGet("/overview/changes", async (
+                int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.ChangesAsync(page ?? 1)));
+
         // Denkstappen-traces van de vraag-pipeline (#40).
         admin.MapGet("/asktraces", async (RbRulesDbContext db) =>
             await db.AskTraces.AsNoTracking()
