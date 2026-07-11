@@ -14,6 +14,9 @@ public enum QuestionType
     Legaliteit,
     /// <summary>Toernooiregels/procedures (rondes, judges, penalties).</summary>
     Toernooi,
+    /// <summary>Lijst-/opsommingsvraag ("welke kaarten…", "alle X", "geef een
+    /// overzicht", meta) — krijgt bredere kaart-retrieval (#67).</summary>
+    Lijst,
 }
 
 /// <summary>Interne vraag-router: het soort vraag bepaalt de antwoordstructuur
@@ -34,10 +37,22 @@ public static partial class QuestionRouter
     [GeneratedRegex(@"\b(wat doet|what does|hoe werkt de kaart|kaarttekst van)\b", RegexOptions.IgnoreCase)]
     private static partial Regex CardQuestion();
 
+    // Lijst-/opsommingsvragen (#67): "welke kaarten…", "welke X zijn er",
+    // "alle kaarten", "geef een overzicht/lijst", meta-vragen.
+    [GeneratedRegex(
+        @"\b(welke|which|what|noem)\b[^.?!]{0,60}\b(kaarten|cards)\b" +
+        @"|\bwelke\b[^.?!]{0,60}\bzijn er\b" +
+        @"|\b(geef|maak|toon|give|show)\b[^.?!]{0,40}\b(overzicht|lijst|overview|list)\b" +
+        @"|\b(overzicht|lijst) van\b|\blist all\b|\balle? (kaarten|cards)\b" +
+        @"|\bde meta\b|\bmeta ?-?(decks?|kaarten|cards|overzicht)\b",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex ListQuestion();
+
     public static QuestionType Classify(string question, bool mentionsCard = false)
     {
         if (Tournament().IsMatch(question)) return QuestionType.Toernooi;
         if (Legality().IsMatch(question)) return QuestionType.Legaliteit;
+        if (ListQuestion().IsMatch(question)) return QuestionType.Lijst;
         if (CardQuestion().IsMatch(question) && mentionsCard) return QuestionType.Kaart;
         if (Definition().IsMatch(question) && !mentionsCard) return QuestionType.Definitie;
         return QuestionType.Ruling;
@@ -77,6 +92,19 @@ public static partial class QuestionRouter
             VRAAGTYPE: toernooiprocedure. Gebruik het scheidsrechter-format
             (Oordeel → Zekerheid → Uitleg → Regelbasis → Let op) en baseer je
             primair op de Tournament Rules-fragmenten in de context.
+            """,
+        QuestionType.Lijst => """
+            VRAAGTYPE: lijst/overzicht — de vraag vraagt om een verzameling kaarten.
+            **Antwoord:** één zin met de kern (hoeveel passende kaarten er zijn gevonden).
+            ### Kaarten
+            Een opsomming: per kaart de naam (vetgedrukt) plus één zin waarom hij aan
+            het criterium voldoet, gebaseerd op de kaarttekst in de kaartgegevens.
+            Noem uitsluitend kaarten uit de meegegeven kaartgegevens — nooit uit eigen
+            kennis; kaarten die niet echt aan het criterium voldoen sla je over.
+            Als de kaartgegevens melden dat de lijst is afgekapt ("eerste N van M"),
+            zeg dat dan expliciet in het antwoord — nooit doen alsof de lijst compleet is.
+            ### Regelbasis
+            Alleen als een regel-§ het criterium verduidelijkt; anders weglaten.
             """,
         _ => """
             VRAAGTYPE: ruling/interactie. Gebruik het volledige format:

@@ -96,21 +96,45 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
                            qLower.Contains(c.Name.ToLower()), ct);
         var type = QuestionRouter.Classify(question, mentionsCard);
 
-        // 1. Vector-kanaal
-        var qv = await embeddings.EmbedOneAsync(retrievalText, ct);
-        var vectorHits = await db.RuleChunks
-            .Where(c => c.Embedding != null)
-            .OrderBy(c => c.Embedding!.CosineDistance(qv))
-            .Take(TopK * 2)
-            .Select(c => new { c.Id, c.SourceId })
-            .ToListAsync(ct);
+        // 0b. #66: query-herformulering via één goedkope LLM-call — typo's
+        // corrigeren, NL→EN speltermen, zoekqueries en lexicale termen. Bij
+        // doorvragen (#41) gaat de gespreks-historie mee als context.
+        // Uitval of onzin-output = verwacht pad: rewrite blijft null en we
+        // zoeken met de rauwe vraag(+historie), het gedrag van vóór #66.
+        QueryRewrite? rewrite = null;
+        var rewriteRaw = await ai.AskAsync(
+            QueryRewriter.BuildPrompt(retrievalText), QueryRewriter.SystemPrompt, ct: ct);
+        if (rewriteRaw is not null) rewrite = QueryRewriter.Parse(rewriteRaw);
+        var searchText = rewrite?.NormalizedQuestion ?? retrievalText;
 
-        // 2. Full-text-kanaal (Engels — de bronnen zijn Engels)
+        // 1. Vector-kanaal: de genormaliseerde zoekzin plus de extra
+        // zoekqueries uit de rewrite, in één Ollama-batch geëmbed. Elke query
+        // is een eigen ranked list voor de RRF-fusie hieronder.
+        string[] embedTexts = rewrite is null
+            ? [retrievalText]
+            : [searchText, .. rewrite.SearchQueries
+                .Where(q => !q.Equals(searchText, StringComparison.OrdinalIgnoreCase))];
+        var queryVectors = await embeddings.EmbedAsync(embedTexts, ct);
+        var qv = queryVectors[0];
+        var vectorLists = new List<List<(long Id, string SourceId)>>();
+        foreach (var vec in queryVectors)
+        {
+            var hits = await db.RuleChunks
+                .Where(c => c.Embedding != null)
+                .OrderBy(c => c.Embedding!.CosineDistance(vec))
+                .Take(TopK * 2)
+                .Select(c => new { c.Id, c.SourceId })
+                .ToListAsync(ct);
+            vectorLists.Add([.. hits.Select(h => (h.Id, h.SourceId))]);
+        }
+
+        // 2. Full-text-kanaal (Engels — de bronnen zijn Engels; de rewrite
+        // levert een Engelse zoekzin, dus die matcht hier beter dan NL).
         var textHits = await db.RuleChunks
             .Where(c => EF.Functions.ToTsVector("english", c.Text)
-                .Matches(EF.Functions.PlainToTsQuery("english", retrievalText)))
+                .Matches(EF.Functions.PlainToTsQuery("english", searchText)))
             .OrderByDescending(c => EF.Functions.ToTsVector("english", c.Text)
-                .Rank(EF.Functions.PlainToTsQuery("english", retrievalText)))
+                .Rank(EF.Functions.PlainToTsQuery("english", searchText)))
             .Take(TopK * 2)
             .Select(c => new { c.Id, c.SourceId })
             .ToListAsync(ct);
@@ -135,7 +159,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
                 rank++;
             }
         }
-        Accumulate(vectorHits.Select(h => (h.Id, h.SourceId)));
+        foreach (var list in vectorLists) Accumulate(list);
         Accumulate(textHits.Select(h => (h.Id, h.SourceId)));
 
         var topIds = scores.OrderByDescending(kv => kv.Value).Take(TopK).Select(kv => kv.Key).ToList();
@@ -197,8 +221,9 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
         // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
-        // regels het keyword niet expliciet definiëren.
-        var cardContext = await CardContextAsync(question, qLower, qv, ct);
+        // regels het keyword niet expliciet definiëren. Lijstvragen (#67)
+        // krijgen daarnaast een lexicaal kanaal op kaarttekst met ruimere limiet.
+        var cardContext = await CardContextAsync(question, qLower, qv, type, rewrite, ct);
         var cardBlock = cardContext.Block;
 
         // 4b. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend blok.
@@ -263,6 +288,10 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             {
                 Question = question.Length > 500 ? question[..500] : question,
                 QuestionType = type.ToString(),
+                RewrittenQuery = rewrite is null ? null :
+                    $"{rewrite.NormalizedQuestion} | queries: " +
+                    $"{string.Join("; ", rewrite.SearchQueries)} | termen: " +
+                    $"{string.Join("; ", rewrite.LexicalTerms)}",
                 SourceBias = sourceBias,
                 MentionsCard = mentionsCard,
                 MechanicMatches = string.Join(", ", cardContext.Mechanics),
@@ -313,13 +342,22 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
     private sealed record CardContextResult(
         string Block, IReadOnlyList<string> Mechanics, IReadOnlyList<string> CardNames);
 
+    /// <summary>Ruimere limiet voor lijst-/opsommingsvragen (#67).</summary>
+    private const int ListCardLimit = 40;
+
     /// <summary>Kaartcontext via drie kanalen: exacte naam-matches, herkende
     /// mechaniek-keywords ("wat is Deflect?" → kaarten mét Deflect) en
     /// semantische buren van de vraag. Zo is er áltijd kaart-bewijs, ook als
-    /// de regels-PDF een keyword niet expliciet definieert.</summary>
+    /// de regels-PDF een keyword niet expliciet definieert. Lijstvragen (#67)
+    /// krijgen een vierde, lexicaal kanaal: ILIKE op kaarttekst per zoekterm
+    /// uit de rewrite (#66), met ruimere limiet en een expliciete
+    /// afkap-melding richting de prompt ("eerste N van M").</summary>
     private async Task<CardContextResult> CardContextAsync(
-        string question, string qLower, Vector qv, CancellationToken ct)
+        string question, string qLower, Vector qv, QuestionType type,
+        QueryRewrite? rewrite, CancellationToken ct)
     {
+        var isList = type == QuestionType.Lijst;
+
         // 1. Exacte naam-matches, in SQL (#43).
         var nameHits = await db.Cards
             .Where(c => c.VariantOf == null && c.Name.Length >= 4 &&
@@ -328,7 +366,11 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .Select(c => c.RiftboundId)
             .ToListAsync(ct);
 
-        // 2. Mechaniek-keywords in de vraag → voorbeeldkaarten + telling.
+        // 2. Mechaniek-keywords in de vraag (én in de rewrite: "deflekt" →
+        // "Deflect") → voorbeeldkaarten + telling.
+        var mechanicCorpus = rewrite is null
+            ? question
+            : $"{question}\n{rewrite.NormalizedQuestion}\n{string.Join('\n', rewrite.SearchQueries)}";
         var allMechanics = (await db.Cards
                 .Where(c => c.Mechanics != null && c.VariantOf == null)
                 .Select(c => c.Mechanics!)
@@ -338,7 +380,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .ToList();
         var matchedMechanics = allMechanics
             .Where(m => m.Length >= 3 && Regex.IsMatch(
-                question, $@"\b{Regex.Escape(m)}\b", RegexOptions.IgnoreCase))
+                mechanicCorpus, $@"\b{Regex.Escape(m)}\b", RegexOptions.IgnoreCase))
             .Take(2)
             .ToList();
 
@@ -351,27 +393,67 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             var examples = await db.Cards
                 .Where(c => c.VariantOf == null && c.Mechanics != null && c.Mechanics.Contains(m))
                 .OrderBy(c => c.RiftboundId)
-                .Take(4)
+                .Take(isList ? ListCardLimit : 4)
                 .Select(c => c.RiftboundId)
                 .ToListAsync(ct);
             mechanicCardIds.AddRange(examples);
             mechanicBlocks.Add($"Mechaniek '{m}' komt voor op {count} kaarten; voorbeelden hieronder.");
         }
 
-        // 3. Semantische buren van de vraag (altijd, als vangnet).
+        // 2b. Lexicaal kanaal voor lijstvragen (#67): ILIKE op kaarttekst per
+        // zoekterm uit de rewrite. Eén query per term (bewezen vertaalbaar,
+        // zie CardEndpoints); rangschikking op aantal geraakte termen gebeurt
+        // in-memory. Zonder rewrite is de ruimere semantiek het vangnet.
+        var lexicalIds = new List<string>();
+        if (isList && rewrite is { LexicalTerms.Length: > 0 })
+        {
+            var matchCounts = new Dictionary<string, int>();
+            foreach (var term in rewrite.LexicalTerms)
+            {
+                var pattern = "%" + EscapeLike(term) + "%";
+                var idsForTerm = await db.Cards
+                    .Where(c => c.VariantOf == null && c.TextPlain != null &&
+                                EF.Functions.ILike(c.TextPlain!, pattern, "\\"))
+                    .Select(c => c.RiftboundId)
+                    .ToListAsync(ct);
+                foreach (var id in idsForTerm)
+                    matchCounts[id] = matchCounts.GetValueOrDefault(id) + 1;
+            }
+            lexicalIds = [.. matchCounts
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => kv.Key)];
+        }
+
+        // 3. Semantische buren van de vraag (altijd, als vangnet; ruimer bij
+        // lijstvragen — zeker als de rewrite geen lexicale termen opleverde).
         var semanticIds = await db.Cards
             .Where(c => c.Embedding != null && c.VariantOf == null)
             .OrderBy(c => c.Embedding!.CosineDistance(qv))
-            .Take(4)
+            .Take(isList ? 12 : 4)
             .Select(c => c.RiftboundId)
             .ToListAsync(ct);
 
-        var ids = nameHits.Concat(mechanicCardIds).Concat(semanticIds).Distinct().Take(8).ToList();
+        var cap = isList ? ListCardLimit : 8;
+        var merged = nameHits.Concat(lexicalIds).Concat(mechanicCardIds)
+            .Concat(semanticIds).Distinct().ToList();
+        var ids = merged.Take(cap).ToList();
         if (ids.Count == 0) return new("", matchedMechanics, []);
 
-        var cards = await db.Cards.AsNoTracking()
-            .Where(c => ids.Contains(c.RiftboundId))
-            .ToListAsync(ct);
+        // Afkap-melding (#67): nooit stilzwijgend inkorten — de prompt moet
+        // "eerste N van M" kunnen zeggen.
+        if (isList && lexicalIds.Count > 0)
+        {
+            var includedLexical = lexicalIds.Count(ids.Contains);
+            if (includedLexical < lexicalIds.Count)
+                mechanicBlocks.Add(
+                    $"LET OP: de tekst-zoek vond {lexicalIds.Count} kaarten die aan de " +
+                    $"zoektermen voldoen; hieronder staan er {includedLexical}. Meld in het " +
+                    $"antwoord expliciet dat dit de eerste {includedLexical} van " +
+                    $"{lexicalIds.Count} gevonden kaarten zijn.");
+        }
+
+        var cards = await FetchPromptCardsAsync(ids, ct);
         var banned = await BanLookup.BannedCanonicalIdsAsync(db, ct);
 
         var cardsById = cards.ToDictionary(c => c.RiftboundId);
@@ -392,4 +474,30 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .ToList();
         return new(block, matchedMechanics, includedNames);
     }
+
+    /// <summary>Kaarten voor de prompt, geprojecteerd zónder embedding —
+    /// 1024 floats × tot 40 kaarten hoort niet over de lijn (#67).</summary>
+    private async Task<List<Card>> FetchPromptCardsAsync(List<string> ids, CancellationToken ct)
+    {
+        var rows = await db.Cards.AsNoTracking()
+            .Where(c => ids.Contains(c.RiftboundId))
+            .Select(c => new
+            {
+                c.RiftboundId, c.Name, c.Type, c.Supertype, c.Domains,
+                c.Energy, c.Might, c.TextPlain, c.Mechanics, c.ImageUrl, c.VariantOf,
+            })
+            .ToListAsync(ct);
+        return [.. rows.Select(r => new Card
+        {
+            RiftboundId = r.RiftboundId, Name = r.Name, Type = r.Type,
+            Supertype = r.Supertype, Domains = r.Domains, Energy = r.Energy,
+            Might = r.Might, TextPlain = r.TextPlain, Mechanics = r.Mechanics,
+            ImageUrl = r.ImageUrl, VariantOf = r.VariantOf,
+        })];
+    }
+
+    /// <summary>LIKE/ILIKE-metatekens in een zoekterm onschadelijk maken
+    /// (escape-teken is backslash, zie de ILike-aanroep).</summary>
+    private static string EscapeLike(string term) =>
+        term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }

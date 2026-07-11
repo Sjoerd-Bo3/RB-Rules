@@ -198,6 +198,9 @@ public class AskTrace
     public long Id { get; set; }
     public required string Question { get; set; }
     public string? QuestionType { get; set; }
+    /// <summary>#66: LLM-herformulering waarmee gezocht is (zoekzin, queries,
+    /// lexicale termen); null = rewrite mislukt, gezocht met de rauwe vraag.</summary>
+    public string? RewrittenQuery { get; set; }
     public string? SourceBias { get; set; }
     public bool MentionsCard { get; set; }
     /// <summary>Herkende mechaniek-keywords, komma-gescheiden.</summary>
