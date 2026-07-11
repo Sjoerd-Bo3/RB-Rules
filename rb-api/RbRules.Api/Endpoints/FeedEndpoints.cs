@@ -34,5 +34,18 @@ public static class FeedEndpoints
 
         app.MapGet("/api/bans", async (RbRulesDbContext db) =>
             await db.BanEntries.OrderBy(b => b.Kind).ThenBy(b => b.Name).ToListAsync());
+
+        // Aankomende-set-signaal (#52): sets met een bekende releasedatum in
+        // de toekomst (SetLegality: upcoming). Voedt de banner in de feed en
+        // het beheer — spelers zien wanneer nieuwe kaarten legaal worden.
+        app.MapGet("/api/sets/upcoming", async (RbRulesDbContext db) =>
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            return await db.CardSets.AsNoTracking()
+                .Where(s => s.PublishedOn != null && s.PublishedOn > today)
+                .OrderBy(s => s.PublishedOn)
+                .Select(s => new { s.SetId, s.Name, s.PublishedOn, s.CardCount })
+                .ToListAsync();
+        });
     }
 }

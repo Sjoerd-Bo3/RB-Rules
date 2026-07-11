@@ -27,6 +27,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<KnowledgeDoc> KnowledgeDocs => Set<KnowledgeDoc>();
     public DbSet<Claim> Claims => Set<Claim>();
     public DbSet<ClaimSource> ClaimSources => Set<ClaimSource>();
+    public DbSet<MechanicKeyword> MechanicKeywords => Set<MechanicKeyword>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -182,6 +183,12 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
                 .OnDelete(DeleteBehavior.Cascade);
             // Eén bron telt één keer per claim (corroboratie-integriteit).
             e.HasIndex(x => new { x.ClaimId, x.SourceId }).IsUnique();
+        });
+
+        b.Entity<MechanicKeyword>(e =>
+        {
+            e.ToTable("mechanic_keyword");
+            e.HasIndex(x => x.Term).IsUnique();
         });
     }
 }

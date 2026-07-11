@@ -17,7 +17,8 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	correcties: null,
 	primer: null,
 	// Claims (#50): status-chips; leeg = alle statussen.
-	claims: { allowed: ['unreviewed', 'accepted', 'rejected', 'superseded'], fallback: '' }
+	claims: { allowed: ['unreviewed', 'accepted', 'rejected', 'superseded'], fallback: '' },
+	gaten: null
 };
 
 export const load: PageServerLoad = async ({ params, url, cookies }) => {
@@ -68,6 +69,9 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 				if (filter) qs.set('status', filter);
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/claims?${qs}`) };
 			}
+			case 'gaten':
+				// Kennis-gaten-rapport (#52): vers berekend bij elke aanvraag.
+				return { ...base, data: await adminApi<unknown>('/api/admin/overview/gaps') };
 			default:
 				throw error(404, 'Onbekend overzicht');
 		}

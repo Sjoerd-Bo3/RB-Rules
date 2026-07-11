@@ -68,7 +68,8 @@ public static class AdminEndpoints
             db.RunLogs.Add(new RunLog
             {
                 Kind = "mine", Ref = "mechanics", Status = r.Failed > 0 ? "info" : "ok",
-                Detail = $"{r.Mined} gemined, {r.Failed} mislukt, {r.Remaining} resterend",
+                Detail = $"{r.Mined} gemined, {r.Failed} mislukt, {r.Remaining} resterend, " +
+                         $"{r.NewCandidates} nieuwe keyword-kandidaten",
             });
             await db.SaveChangesAsync();
             return Results.Ok(r);
@@ -174,6 +175,7 @@ public static class AdminEndpoints
                     OpenCorrections = await db.Corrections.CountAsync(c => c.Status == "unverified"),
                     Knowledge = await db.KnowledgeDocs.CountAsync(),
                     Claims = await db.Claims.CountAsync(),
+                    MechanicCandidates = await db.MechanicKeywords.CountAsync(k => k.Status == "candidate"),
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
             });
@@ -369,6 +371,22 @@ public static class AdminEndpoints
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
+        // Kennis-gaten-rapport (#52): waar is de kennisbank dun — dekking,
+        // vraag-signalen (lege retrieval/AI-uitval/negatieve feedback) en
+        // bron-versheid. Vers berekend bij elke aanvraag.
+        admin.MapGet("/overview/gaps", async (KnowledgeGapsService gaps, CancellationToken ct) =>
+            Results.Ok(await gaps.BuildAsync(ct)));
+        // Groeiend mechaniek-vocabulaire (#52): kandidaten uit de miner
+        // reviewen. Accepteren = vocabulaire + re-mine van de betrokken
+        // kaarten; verwerpen = term komt niet opnieuw de queue in.
+        admin.MapGet("/mechanics", async (MechanicVocabularyService vocab) =>
+            Results.Ok(await vocab.ListAsync()));
+        admin.MapPost("/mechanics/{id:long}/accept", async (
+                long id, MechanicVocabularyService vocab) =>
+            await vocab.AcceptAsync(id) is { } r ? Results.Ok(r) : Results.NotFound());
+        admin.MapPost("/mechanics/{id:long}/reject", async (
+                long id, MechanicVocabularyService vocab) =>
+            await vocab.RejectAsync(id) ? Results.Ok(new { ok = true }) : Results.NotFound());
 
         // Denkstappen-traces van de vraag-pipeline (#40).
         admin.MapGet("/asktraces", async (RbRulesDbContext db) =>

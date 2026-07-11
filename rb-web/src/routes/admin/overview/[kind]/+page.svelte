@@ -50,6 +50,22 @@
 	}
 	interface ClaimStatusCount { status: string; count: number; }
 	interface ClaimOverview extends Paged<ClaimItem> { statusCounts: ClaimStatusCount[]; }
+	interface GapCoverage {
+		cards: number; cardsWithoutEmbedding: number; cardsWithoutMechanics: number;
+		ruleChunks: number; ruleChunksWithoutEmbedding: number;
+		primerTopics: number; primerTopicsMissing: number; primerDrafts: number;
+		openMechanicCandidates: number; tracesConsidered: number;
+	}
+	interface GapQuestion {
+		signal: string; question: string; questionType: string | null; createdAt: string;
+	}
+	interface GapSource {
+		id: string; name: string; trustTier: number; documents: number; chunks: number;
+		lastChecked: string | null; lastChangeAt: string | null;
+	}
+	interface GapsReport {
+		coverage: GapCoverage; questions: GapQuestion[]; sources: GapSource[];
+	}
 
 	const TITLES: Record<string, { title: string; sub: string }> = {
 		kaarten: { title: 'Kaarten', sub: 'alle kaarten in de database, doorklikbaar naar de kaartpagina' },
@@ -62,7 +78,8 @@
 		wijzigingen: { title: 'Wijzigingen', sub: 'de wijzigingshistorie die de feed voedt' },
 		correcties: { title: 'Correcties', sub: 'feedback op antwoorden en geverifieerde rulings' },
 		primer: { title: 'Spelbegrip-primer', sub: 'alle spelbegrip-docs, bewerkbaar — goedgekeurde docs voeden elke ruling' },
-		claims: { title: 'Community-claims', sub: 'beweringen uit community-bronnen met corroboratie en bron-trust — geaccepteerde claims worden het community-kanaal (#51)' }
+		claims: { title: 'Community-claims', sub: 'beweringen uit community-bronnen met corroboratie en bron-trust — geaccepteerde claims worden het community-kanaal (#51)' },
+		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' }
 	};
 	const meta = $derived(TITLES[data.kind]);
 
@@ -86,6 +103,26 @@
 	};
 	function claimStatus(status: string): { label: string; badge: string } {
 		return CLAIM_STATUS[status] ?? { label: status, badge: 'warn-b' };
+	}
+
+	const gaps = $derived(data.kind === 'gaten' ? (data.data as GapsReport | null) : null);
+
+	// Vraag-signalen gegroepeerd per signaal, in vaste presentatievolgorde.
+	const SIGNALS: Record<string, { label: string; hint: string }> = {
+		'lege-retrieval': { label: 'Lege retrieval', hint: 'de vraag vond geen secties, kaarten of primer — hier weet de bank aantoonbaar niets' },
+		'negatieve-feedback': { label: 'Negatieve feedback', hint: 'antwoorden die als onjuist zijn gemeld' },
+		'ai-uitval': { label: 'AI-uitval', hint: 'vragen zonder antwoord doordat rb-ai niet beschikbaar was' }
+	};
+	const gapGroups = $derived(
+		gaps
+			? Object.entries(SIGNALS)
+					.map(([key, m]) => ({ key, ...m, items: gaps.questions.filter((q) => q.signal === key) }))
+					.filter((g) => g.items.length > 0)
+			: []
+	);
+
+	function daysAgo(iso: string | null): number | null {
+		return iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000) : null;
 	}
 
 	// saveKnowledge-fouten dragen het doc-id mee zodat de melding bij het
@@ -424,6 +461,86 @@
 			{#if !claims.items.length}<p class="meta">Geen claims{data.filter ? ' met deze status' : ' — draai "Claims minen" in het beheer'}.</p>{/if}
 		{/if}
 
+		<!-- Kennis-gaten-rapport (#52) -->
+		{#if gaps}
+			<h2 class="gap-h">Dekking</h2>
+			<div class="gap-grid">
+				<div class="panel gap-stat" class:thin={gaps.coverage.cardsWithoutEmbedding > 0}>
+					<span class="num">{gaps.coverage.cardsWithoutEmbedding}</span>
+					<span class="lbl">kaarten zonder embedding <span class="of">van {gaps.coverage.cards}</span></span>
+					<a class="meta" href="/admin/overview/embeddings?filter=unembedded">bekijk</a>
+				</div>
+				<div class="panel gap-stat" class:thin={gaps.coverage.cardsWithoutMechanics > 0}>
+					<span class="num">{gaps.coverage.cardsWithoutMechanics}</span>
+					<span class="lbl">kaarten zonder mechanieken <span class="of">van {gaps.coverage.cards}</span></span>
+					<a class="meta" href="/admin/overview/analyse?filter=unmined">bekijk</a>
+				</div>
+				<div class="panel gap-stat" class:thin={gaps.coverage.ruleChunksWithoutEmbedding > 0}>
+					<span class="num">{gaps.coverage.ruleChunksWithoutEmbedding}</span>
+					<span class="lbl">regelsecties zonder embedding <span class="of">van {gaps.coverage.ruleChunks}</span></span>
+				</div>
+				<div class="panel gap-stat" class:thin={gaps.coverage.primerTopicsMissing > 0 || gaps.coverage.primerDrafts > 0}>
+					<span class="num">{gaps.coverage.primerTopicsMissing}</span>
+					<span class="lbl">primer-concepten zonder doc <span class="of">van {gaps.coverage.primerTopics}</span>{gaps.coverage.primerDrafts ? ` · ${gaps.coverage.primerDrafts} draft` : ''}</span>
+					<a class="meta" href="/admin/overview/primer">bekijk</a>
+				</div>
+				<div class="panel gap-stat" class:thin={gaps.coverage.openMechanicCandidates > 0}>
+					<span class="num">{gaps.coverage.openMechanicCandidates}</span>
+					<span class="lbl">open keyword-kandidaten</span>
+					<a class="meta" href="/admin">reviewqueue</a>
+				</div>
+			</div>
+
+			<h2 class="gap-h">Vraag-signalen <span class="meta">(laatste {gaps.coverage.tracesConsidered} traces + gemelde antwoorden — hier hoort de volgende harvest of primer-uitbreiding heen)</span></h2>
+			{#if gapGroups.length === 0}
+				<p class="meta">Geen signalen — geen lege retrieval, AI-uitval of negatieve feedback in het venster.</p>
+			{/if}
+			{#each gapGroups as g (g.key)}
+				<div class="panel item">
+					<p class="item-head">
+						<span class="badge {g.key === 'ai-uitval' ? 'err' : 'warn-b'}">{g.label}</span>
+						<span class="meta">{g.items.length} {g.items.length === 1 ? 'vraag' : 'vragen'} · {g.hint}</span>
+					</p>
+					<ul class="gap-list">
+						{#each g.items as q, i (i)}
+							<li>
+								{q.question}
+								<span class="meta">{q.questionType ? `${q.questionType} · ` : ''}{fmtDate(q.createdAt)}</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/each}
+
+			<h2 class="gap-h">Bron-versheid <span class="meta">(wanneer leverde elke bron voor het laatst iets nieuws)</span></h2>
+			<div class="table-wrap">
+				<table>
+					<thead><tr><th>Bron</th><th>Trust</th><th>Documenten</th><th>Secties</th><th>Laatst gecontroleerd</th><th>Laatste wijziging</th></tr></thead>
+					<tbody>
+						{#each gaps.sources as s (s.id)}
+							{@const changeDays = daysAgo(s.lastChangeAt)}
+							<tr>
+								<td><strong>{s.name}</strong><br /><span class="meta">{s.id}</span></td>
+								<td class="meta">{s.trustTier}</td>
+								<td class="meta">{s.documents}</td>
+								<td class="meta">{s.chunks}</td>
+								<td class="meta">{fmtDate(s.lastChecked)}</td>
+								<td>
+									{#if changeDays === null}
+										<span class="badge warn-b">nooit</span>
+									{:else if changeDays > 30}
+										<span class="badge warn-b">{changeDays} dagen stil</span>
+									{:else}
+										<span class="meta">{fmtDate(s.lastChangeAt)}</span>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+
 		<!-- Paginering -->
 		{#if paged && totalPages > 1}
 			<nav class="pager">
@@ -485,6 +602,16 @@
 		font-size: 16px; /* iOS zoomt in op form-controls kleiner dan 16px */
 		font-family: inherit; line-height: 1.55;
 	}
+	.gap-h { color: var(--accent); font-size: 1.02rem; margin: 22px 0 10px; }
+	.gap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+	.gap-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; }
+	.gap-stat .num { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ok); }
+	.gap-stat.thin .num { color: var(--warn); }
+	.gap-stat .lbl { color: var(--muted); font-size: 0.82rem; }
+	.gap-stat .of { opacity: 0.75; }
+	.gap-stat a { color: var(--accent); text-decoration: none; }
+	.gap-list { margin: 4px 0 0; padding-left: 18px; }
+	.gap-list li { margin-bottom: 4px; line-height: 1.5; }
 	.pager { display: flex; align-items: center; gap: 14px; margin: 16px 0; }
 	.pager a { color: var(--accent); text-decoration: none; font-weight: 600; }
 	.meta { color: var(--muted); font-size: 0.85rem; }

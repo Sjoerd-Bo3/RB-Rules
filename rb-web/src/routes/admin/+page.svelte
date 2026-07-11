@@ -31,6 +31,7 @@
 		{ name: 'primer', label: 'Primer genereren', hint: 'spelbegrip-docs destilleren uit de regels (drafts ter review)' },
 		{ name: 'graph', label: 'Graph synchroniseren', hint: 'Neo4j bijwerken' },
 		{ name: 'interactions', label: 'Interacties minen', hint: 'kandidaten zoeken en LLM-verifiëren' },
+		{ name: 'setrelease', label: 'Set-release-keten', hint: 'kaarten → mechanieken → embeddings → graph → primer-herziening; draait automatisch zodra de classifier een set-release herkent' },
 		{ name: 'classify', label: 'Classificaties aanvullen', hint: 'changes zonder samenvatting/duiding alsnog classificeren' },
 		{ name: 'claims', label: 'Claims minen', hint: 'community-claims destilleren uit registerbronnen (trust 3+), met corroboratie en toets tegen de officiële regels' },
 		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten worden als voorstel gelogd, nooit automatisch toegevoegd' }
@@ -50,10 +51,23 @@
 		ok: boolean; createdAt: string;
 	}
 
+	interface MechanicKeyword {
+		id: number; term: string; status: string; occurrences: number;
+		firstSeen: string; reviewedAt: string | null;
+	}
+
+	interface UpcomingSet {
+		setId: string; name: string; publishedOn: string; cardCount: number | null;
+	}
+
 	const sources = $derived(data.sources as Source[]);
 	const corrections = $derived((data.corrections ?? []) as Correction[]);
 	const openCorrections = $derived(corrections.filter((c) => c.status === 'unverified'));
 	const askTraces = $derived((data.askTraces ?? []) as AskTrace[]);
+	const mechanics = $derived((data.mechanics ?? []) as MechanicKeyword[]);
+	const mechanicCandidates = $derived(mechanics.filter((m) => m.status === 'candidate'));
+	const acceptedMechanics = $derived(mechanics.filter((m) => m.status === 'accepted'));
+	const upcoming = $derived((data.upcoming ?? []) as UpcomingSet[]);
 
 	interface KnowledgeDoc {
 		id: number; kind: string; topic: string; title: string; body: string;
@@ -149,6 +163,19 @@
 		{/if}
 		{#if form?.error}<p class="warn">{form.error}</p>{/if}
 
+		<!-- Aankomende set (#52): op de releasedag draait de keten automatisch
+		     zodra de classifier de release herkent; handmatig kan altijd. -->
+		{#each upcoming as s (s.setId)}
+			<div class="banner upcoming-set">
+				<span class="status-dot warn"></span>
+				<div class="banner-body">
+					<strong>Aankomende set: {s.name}{s.name !== s.setId ? ` (${s.setId})` : ''}</strong>
+					<span class="meta">release {new Date(s.publishedOn).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' })}{s.cardCount ? ` · ${s.cardCount} kaarten` : ''}</span>
+					<p class="progress">Bij de release triggert de set-release-keten automatisch; met de actie "Set-release-keten" kan hij ook handmatig draaien.</p>
+				</div>
+			</div>
+		{/each}
+
 		<!-- Statistieken -->
 		{#if live?.counts}
 			<div class="tiles">
@@ -158,6 +185,11 @@
 						<span class="lbl">{t.label}</span>
 					</a>
 				{/each}
+				<!-- Rapport, geen telling: waar is de kennisbank dun (#52). -->
+				<a class="tile panel" href="/admin/overview/gaten">
+					<span class="num">→</span>
+					<span class="lbl">Kennis-gaten</span>
+				</a>
 			</div>
 		{/if}
 
@@ -213,6 +245,32 @@
 					</div>
 				</div>
 			{/each}
+		{/if}
+
+		<!-- Mechaniek-kandidaten (#52): het vocabulaire groeit met elke set -->
+		{#if mechanicCandidates.length}
+			<h2>Mechaniek-kandidaten <span class="meta">({mechanicCandidates.length} open — bracketed termen uit kaartteksten die nog niet in het vocabulaire staan)</span></h2>
+			{#each mechanicCandidates as m (m.id)}
+				<div class="correction panel">
+					<div class="correction-body">
+						<p class="t"><strong>{m.term}</strong> <span class="badge warn-b">kandidaat</span></p>
+						<p class="meta">komt voor op {m.occurrences} {m.occurrences === 1 ? 'kaart' : 'kaarten'} · gezien {new Date(m.firstSeen).toLocaleDateString('nl-NL')}</p>
+					</div>
+					<div class="correction-actions">
+						<form method="POST" action="?/acceptMechanic" use:enhance>
+							<input type="hidden" name="id" value={m.id} />
+							<button title="Wordt vocabulaire; de kaarten met dit keyword worden opnieuw gemined (volgende mining-run)">Accepteer</button>
+						</form>
+						<form method="POST" action="?/rejectMechanic" use:enhance>
+							<input type="hidden" name="id" value={m.id} />
+							<button class="ghost small" title="Komt niet opnieuw de queue in">Verwerp</button>
+						</form>
+					</div>
+				</div>
+			{/each}
+			{#if acceptedMechanics.length}
+				<p class="meta">Vocabulaire naast de seed-lijst: {acceptedMechanics.map((m) => m.term).join(', ')}</p>
+			{/if}
 		{/if}
 
 		<!-- Bronnen -->
@@ -333,6 +391,7 @@
 		border-radius: var(--radius); padding: 12px 16px; margin: 14px 0;
 	}
 	.banner.running { background: var(--accent-soft); border: 1px solid var(--accent); }
+	.banner.upcoming-set { background: var(--accent-soft); border: 1px solid var(--accent); }
 	.banner.done { background: var(--ok-soft); border: 1px solid var(--ok); }
 	.banner.failed { background: var(--err-soft); border: 1px solid var(--err); }
 	.banner .spin { margin-top: 3px; }

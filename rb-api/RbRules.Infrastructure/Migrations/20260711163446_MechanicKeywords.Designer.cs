@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260711163446_MechanicKeywords")]
+    partial class MechanicKeywords
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -432,130 +435,6 @@ namespace RbRules.Infrastructure.Migrations
                     b.ToTable("change", (string)null);
                 });
 
-            modelBuilder.Entity("RbRules.Domain.Claim", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<int>("Corroboration")
-                        .HasColumnType("integer")
-                        .HasColumnName("corroboration");
-
-                    b.Property<Vector>("Embedding")
-                        .HasColumnType("vector(1024)")
-                        .HasColumnName("embedding");
-
-                    b.Property<string>("EmbeddingModel")
-                        .HasColumnType("text")
-                        .HasColumnName("embedding_model");
-
-                    b.Property<DateTimeOffset>("FirstSeen")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("first_seen");
-
-                    b.Property<DateTimeOffset>("LastSeen")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_seen");
-
-                    b.Property<string>("OfficialStatus")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("official_status");
-
-                    b.Property<string>("Statement")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("statement");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("status");
-
-                    b.Property<string>("StatusReason")
-                        .HasColumnType("text")
-                        .HasColumnName("status_reason");
-
-                    b.Property<string>("TopicRef")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("topic_ref");
-
-                    b.Property<string>("TopicType")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("topic_type");
-
-                    b.Property<double>("TrustScore")
-                        .HasColumnType("double precision")
-                        .HasColumnName("trust_score");
-
-                    b.HasKey("Id")
-                        .HasName("pk_claim");
-
-                    b.HasIndex("Embedding")
-                        .HasDatabaseName("ix_claim_embedding");
-
-                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Embedding"), "hnsw");
-                    NpgsqlIndexBuilderExtensions.HasOperators(b.HasIndex("Embedding"), new[] { "vector_cosine_ops" });
-
-                    b.HasIndex("Status")
-                        .HasDatabaseName("ix_claim_status");
-
-                    b.HasIndex("TopicType", "TopicRef")
-                        .HasDatabaseName("ix_claim_topic_type_topic_ref");
-
-                    b.ToTable("claim", (string)null);
-                });
-
-            modelBuilder.Entity("RbRules.Domain.ClaimSource", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<long>("ClaimId")
-                        .HasColumnType("bigint")
-                        .HasColumnName("claim_id");
-
-                    b.Property<string>("QuoteExcerpt")
-                        .HasColumnType("text")
-                        .HasColumnName("quote_excerpt");
-
-                    b.Property<DateTimeOffset>("SeenAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("seen_at");
-
-                    b.Property<string>("SourceId")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("source_id");
-
-                    b.Property<string>("Url")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("url");
-
-                    b.HasKey("Id")
-                        .HasName("pk_claim_source");
-
-                    b.HasIndex("SourceId")
-                        .HasDatabaseName("ix_claim_source_source_id");
-
-                    b.HasIndex("ClaimId", "SourceId")
-                        .IsUnique()
-                        .HasDatabaseName("ix_claim_source_claim_id_source_id");
-
-                    b.ToTable("claim_source", (string)null);
-                });
-
             modelBuilder.Entity("RbRules.Domain.Conflict", b =>
                 {
                     b.Property<long>("Id")
@@ -681,10 +560,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnName("id");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<DateTimeOffset?>("ClaimsMinedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("claims_mined_at");
 
                     b.Property<string>("Content")
                         .IsRequired()
@@ -1102,25 +977,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasConstraintName("fk_change_source_source_id");
 
                     b.Navigation("Source");
-                });
-
-            modelBuilder.Entity("RbRules.Domain.ClaimSource", b =>
-                {
-                    b.HasOne("RbRules.Domain.Claim", "Claim")
-                        .WithMany()
-                        .HasForeignKey("ClaimId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_claim_source_claim_claim_id");
-
-                    b.HasOne("RbRules.Domain.Source", null)
-                        .WithMany()
-                        .HasForeignKey("SourceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_claim_source_source_source_id");
-
-                    b.Navigation("Claim");
                 });
 
             modelBuilder.Entity("RbRules.Domain.Conflict", b =>
