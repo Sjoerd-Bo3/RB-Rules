@@ -8,6 +8,7 @@
 	const NAV = [
 		{ href: '/', label: 'Wijzigingen' },
 		{ href: '/rules', label: 'Regels' },
+		{ href: '/primer', label: 'Spelbegrip' },
 		{ href: '/ask', label: 'Vraag' },
 		{ href: '/cards', label: 'Kaarten' },
 		{ href: '/graph', label: 'Graph' },

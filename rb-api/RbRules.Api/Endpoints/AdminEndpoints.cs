@@ -300,6 +300,7 @@ public static class AdminEndpoints
                     Errata = await db.Errata.CountAsync(),
                     Interactions = await db.CardInteractions.CountAsync(),
                     OpenCorrections = await db.Corrections.CountAsync(c => c.Status == "unverified"),
+                    Knowledge = await db.KnowledgeDocs.CountAsync(),
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
             });
@@ -376,6 +377,66 @@ public static class AdminEndpoints
             doc.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
+        });
+
+        // Intrekken (#70): terug naar draft — het doc doet dan niet meer mee
+        // in de /ask-context (AskService filtert op Status == "approved")
+        // tot her-goedkeuring.
+        admin.MapPost("/knowledge/{id:long}/unapprove", async (long id, RbRulesDbContext db) =>
+        {
+            var doc = await db.KnowledgeDocs.FindAsync(id);
+            if (doc is null) return Results.NotFound();
+            doc.Status = "draft";
+            doc.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Beheerder-bewerking (#70): titel/tekst corrigeren zonder
+        // her-generatie. Status blijft wat hij was: een bewerkte approved
+        // blijft approved, een bewerkte draft blijft draft.
+        admin.MapPatch("/knowledge/{id:long}", async (
+            long id, KnowledgePatch patch, RbRulesDbContext db, EmbeddingService embeddings) =>
+        {
+            var doc = await db.KnowledgeDocs.FindAsync(id);
+            if (doc is null) return Results.NotFound();
+            var title = patch.Title?.Trim();
+            var body = patch.Body?.Trim();
+            if (string.IsNullOrEmpty(title) && string.IsNullOrEmpty(body))
+                return Results.BadRequest(new { error = "titel of tekst is verplicht" });
+
+            var changed = (!string.IsNullOrEmpty(title) && title != doc.Title)
+                       || (!string.IsNullOrEmpty(body) && body != doc.Body);
+            if (!string.IsNullOrEmpty(title)) doc.Title = title;
+            if (!string.IsNullOrEmpty(body)) doc.Body = body;
+            if (changed)
+            {
+                try
+                {
+                    // Zelfde embed-input als PrimerService, zodat /ask de
+                    // bewerkte versie direct semantisch vindt.
+                    doc.Embedding = await embeddings.EmbedOneAsync($"{doc.Title}\n{doc.Body}");
+                    doc.EmbeddingModel = EmbeddingConfig.Model;
+                }
+                catch
+                {
+                    // Ollama tijdelijk weg — opslaan telt (zelfde patroon als
+                    // corrections/verify). De oude embedding hoort bij de oude
+                    // tekst: liever géén embedding (het doc doet even niet mee
+                    // in /ask) dan een stille mismatch; embedding volgt bij de
+                    // volgende bewerking.
+                    doc.Embedding = null;
+                    doc.EmbeddingModel = null;
+                }
+            }
+            doc.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new
+            {
+                doc.Id, doc.Kind, doc.Topic, doc.Title, doc.Body,
+                doc.SectionRefs, doc.Status, doc.UpdatedAt,
+                Embedded = doc.Embedding != null,
+            });
         });
 
         admin.MapDelete("/knowledge/{id:long}", async (long id, RbRulesDbContext db) =>

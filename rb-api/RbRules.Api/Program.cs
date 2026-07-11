@@ -102,6 +102,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "rb-api" }
 
 app.MapCardEndpoints();
 app.MapRuleEndpoints();
+app.MapKnowledgeEndpoints();
 app.MapAskEndpoints();
 app.MapFeedEndpoints();
 app.MapPushEndpoints();

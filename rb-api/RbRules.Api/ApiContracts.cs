@@ -3,6 +3,9 @@ namespace RbRules.Api;
 public record SourcePatch(
     string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled);
 
+/// <summary>Beheerder-bewerking van een kennisdoc (#70).</summary>
+public record KnowledgePatch(string? Title, string? Body);
+
 public record AskRequest(
     string Question, List<AskImageDto>? Images = null, List<AskTurnDto>? History = null);
 
