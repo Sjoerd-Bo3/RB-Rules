@@ -24,6 +24,9 @@ export interface CardDetail {
 	banned: boolean;
 	errataText: string | null;
 	variantOf: string | null;
+	/** Set-legaliteit (#22): releasedatum van de set (yyyy-mm-dd) of null. */
+	legalFrom: string | null;
+	legality: 'legal' | 'upcoming' | 'announced';
 	versions: {
 		riftboundId: string;
 		setId: string | null;

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using RbRules.Domain;
@@ -98,7 +99,7 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
             var setId = s["set_id"]?.GetValue<string>();
             if (setId is null) continue;
             await UpsertSetAsync(setId.ToUpperInvariant(), s["name"]?.GetValue<string>() ?? setId,
-                s["card_count"]?.GetValue<int?>(), ct);
+                s["card_count"]?.GetValue<int?>(), ParsePublishedOn(s["published_on"]), ct);
             setIds.Add(setId);
         }
 
@@ -147,7 +148,9 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
             await UpsertCardAsync(card, existing, ct);
             if (card.SetId is not null) setIds.Add(card.SetId);
         }
-        foreach (var sid in setIds) await UpsertSetAsync(sid, sid, null, ct);
+        // De Riot-gallery levert geen setnamen of releasedatums bij de
+        // set-facetten — alleen de set-code is hier bekend.
+        foreach (var sid in setIds) await UpsertSetAsync(sid, sid, null, null, ct);
         await db.SaveChangesAsync(ct);
         return new(setIds.Count, cards.Count, "riot");
     }
@@ -217,16 +220,31 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         existing.UpdatedAt = DateTimeOffset.UtcNow;
     }
 
-    private async Task UpsertSetAsync(string setId, string name, int? cardCount, CancellationToken ct)
+    /// <summary>Riftcodex levert published_on als ISO-datetime
+    /// ("2026-07-31T00:00:00") — basis voor de set-legaliteit (#22).</summary>
+    private static DateOnly? ParsePublishedOn(JsonNode? node) =>
+        node?.GetValue<string>() is { } s &&
+        DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt)
+            ? DateOnly.FromDateTime(dt)
+            : null;
+
+    private async Task UpsertSetAsync(
+        string setId, string name, int? cardCount, DateOnly? publishedOn, CancellationToken ct)
     {
         var existing = await db.CardSets.FindAsync([setId], ct);
         if (existing is null)
         {
-            db.CardSets.Add(new CardSet { SetId = setId, Name = name, CardCount = cardCount });
+            db.CardSets.Add(new CardSet
+            {
+                SetId = setId, Name = name, CardCount = cardCount, PublishedOn = publishedOn,
+            });
             return;
         }
-        existing.Name = name;
+        // De Riot-fallback kent alleen de set-code (name == setId, geen datum):
+        // eerder gesyncte échte namen/releasedatums nooit overschrijven met "onbekend".
+        if (name != setId) existing.Name = name;
         existing.CardCount = cardCount ?? existing.CardCount;
+        existing.PublishedOn = publishedOn ?? existing.PublishedOn;
         existing.SyncedAt = DateTimeOffset.UtcNow;
     }
 

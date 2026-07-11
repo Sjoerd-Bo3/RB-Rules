@@ -39,11 +39,14 @@ public static class CardEndpoints
                 .GroupBy(c => c.VariantOf!)
                 .Select(g => new { Id = g.Key, N = g.Count() })
                 .ToDictionaryAsync(x => x.Id, x => x.N);
+            var legality = await SetLegalityLookupAsync(db);
             return Results.Ok(cards.Select(c => new
             {
                 c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
                 c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
                 Variants = variantCounts.GetValueOrDefault(c.RiftboundId),
+                LegalFrom = legality.DateOf(c.SetId),
+                Legality = legality.KeyOf(c.SetId),
             }));
         });
 
@@ -96,6 +99,8 @@ public static class CardEndpoints
             // Mining draait alleen op canonieke printings — varianten tonen de
             // analyse van hun canonieke kaart (zelfde tekst, zelfde spel-gedrag).
             var canonical = c.VariantOf is null ? null : await db.Cards.FindAsync(c.VariantOf);
+            // Set-legaliteit (#22): status afgeleid van de releasedatum van de set.
+            var set = c.SetId is null ? null : await db.CardSets.FindAsync(c.SetId);
             return Results.Ok(new
             {
                 c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
@@ -106,6 +111,9 @@ public static class CardEndpoints
                 Effects = c.Effects ?? canonical?.Effects,
                 c.UpdatedAt, Banned = banned, ErrataText = erratum,
                 c.VariantOf, Versions = versions,
+                LegalFrom = set?.PublishedOn,
+                Legality = SetLegality.Key(SetLegality.StatusFor(
+                    set?.PublishedOn, DateOnly.FromDateTime(DateTime.UtcNow))),
             });
         });
 
@@ -158,7 +166,14 @@ public static class CardEndpoints
                     Distance = c.Embedding!.CosineDistance(queryVector),
                 })
                 .ToListAsync();
-            return Results.Ok(results);
+            var legality = await SetLegalityLookupAsync(db);
+            return Results.Ok(results.Select(c => new
+            {
+                c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
+                c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl, c.Distance,
+                LegalFrom = legality.DateOf(c.SetId),
+                Legality = legality.KeyOf(c.SetId),
+            }));
         });
 
         app.MapGet("/api/cards/{id}/similar", async (
@@ -324,6 +339,24 @@ public static class CardEndpoints
 
             return Results.Ok(new { Errata = errata, RelevantRules = relevantRules });
         });
+    }
+
+    /// <summary>Set-releasedatums één keer laden (handvol rijen) en per kaart
+    /// vertalen naar een legaliteitsstatus (#22).</summary>
+    private static async Task<LegalityLookup> SetLegalityLookupAsync(RbRulesDbContext db)
+    {
+        var dates = await db.CardSets.AsNoTracking()
+            .ToDictionaryAsync(s => s.SetId, s => s.PublishedOn);
+        return new(dates, DateOnly.FromDateTime(DateTime.UtcNow));
+    }
+
+    private sealed record LegalityLookup(Dictionary<string, DateOnly?> Dates, DateOnly Today)
+    {
+        public DateOnly? DateOf(string? setId) =>
+            setId is null ? null : Dates.GetValueOrDefault(setId);
+
+        public string KeyOf(string? setId) =>
+            SetLegality.Key(SetLegality.StatusFor(DateOf(setId), Today));
     }
 
     private static IQueryable<RbRules.Domain.Card> ApplyCardFilters(
