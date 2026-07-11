@@ -18,6 +18,9 @@ services:
       RB_AI_URL: http://rb-v2-ai:8090
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       OLLAMA_URL: http://rb-v2-ollama:11434
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:beheer@bo3.dev}
     depends_on:
       postgres:
         condition: service_healthy

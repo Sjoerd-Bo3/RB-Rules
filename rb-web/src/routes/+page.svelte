@@ -4,6 +4,67 @@
 
 	let { data } = $props();
 
+	// Web-push (#28): meldingen bij belangrijke wijzigingen (bans/errata).
+	let pushState = $state<'unavailable' | 'off' | 'on' | 'busy'>('unavailable');
+	$effect(() => {
+		(async () => {
+			if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+			const vapid = await fetch('/push');
+			if (!vapid.ok) return; // server heeft geen VAPID-keys
+			const reg = await navigator.serviceWorker.ready;
+			pushState = (await reg.pushManager.getSubscription()) ? 'on' : 'off';
+		})().catch(() => {});
+	});
+
+	function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+		const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+		const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+		const bytes = new Uint8Array(new ArrayBuffer(raw.length));
+		for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+		return bytes;
+	}
+
+	async function togglePush() {
+		const prev = pushState;
+		pushState = 'busy';
+		try {
+			const reg = await navigator.serviceWorker.ready;
+			if (prev === 'on') {
+				const sub = await reg.pushManager.getSubscription();
+				if (sub) {
+					await fetch('/push', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ action: 'unsubscribe', endpoint: sub.endpoint })
+					});
+					await sub.unsubscribe();
+				}
+				pushState = 'off';
+				return;
+			}
+			if ((await Notification.requestPermission()) !== 'granted') { pushState = 'off'; return; }
+			const { publicKey } = await (await fetch('/push')).json();
+			const sub = await reg.pushManager.subscribe({
+				userVisibleOnly: true,
+				applicationServerKey: b64ToBytes(publicKey)
+			});
+			const raw = sub.toJSON();
+			await fetch('/push', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					action: 'subscribe',
+					endpoint: sub.endpoint,
+					p256dh: raw.keys?.p256dh,
+					auth: raw.keys?.auth
+				})
+			});
+			pushState = 'on';
+		} catch {
+			pushState = prev === 'busy' ? 'off' : prev;
+		}
+	}
+
 	let sevFilter = $state<string | null>(null);
 	let typeFilter = $state<string | null>(null);
 	let srcFilter = $state<string | null>(null);
@@ -47,8 +108,17 @@
 </svelte:head>
 
 <main>
-	<h1>Riftbound <span>Rules Companion</span></h1>
-	<p class="subtitle">Wat is er veranderd in de regels, bans en errata — automatisch bijgehouden.</p>
+	<div class="hero">
+		<div>
+			<h1>Riftbound <span>Rules Companion</span></h1>
+			<p class="subtitle">Wat is er veranderd in de regels, bans en errata — automatisch bijgehouden.</p>
+		</div>
+		{#if pushState !== 'unavailable'}
+			<button class="push-toggle" class:on={pushState === 'on'} disabled={pushState === 'busy'} onclick={togglePush}>
+				{pushState === 'on' ? 'Meldingen aan' : pushState === 'busy' ? 'Bezig…' : 'Meldingen bij belangrijke wijzigingen'}
+			</button>
+		{/if}
+	</div>
 
 	{#if data.apiDown}
 		<p class="warn">rb-api is niet bereikbaar.</p>
@@ -118,6 +188,14 @@
 <style>
 	main { max-width: 860px; margin: 0 auto; padding: 24px 20px; }
 	h1 span { color: #d98a4e; }
+	.hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+	.push-toggle {
+		background: transparent; color: #9fb0cc; border: 1px solid #243551;
+		border-radius: 999px; padding: 7px 14px; font-size: 0.82rem; cursor: pointer;
+		margin-top: 14px; white-space: nowrap;
+	}
+	.push-toggle.on { color: #7fd1a8; border-color: #4fbf8b; }
+	.push-toggle:disabled { opacity: 0.5; }
 	.subtitle, .meta, .empty { color: #9fb0cc; }
 	.filters { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 4px; }
 	.fgroup { display: flex; flex-wrap: wrap; gap: 6px; }

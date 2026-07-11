@@ -41,6 +41,7 @@ builder.Services.AddScoped<AskService>();
 builder.Services.AddScoped<BanErrataSyncService>();
 builder.Services.AddScoped<InteractionService>();
 builder.Services.AddSingleton<JobRunner>();
+builder.Services.AddSingleton<PushService>();
 builder.Services.AddHostedService<ScanScheduler>();
 
 builder.Services.AddOpenApi();
@@ -331,6 +332,40 @@ app.MapGet("/api/cards/{id}/rules", async (string id, RbRulesDbContext db) =>
     }
 
     return Results.Ok(new { Errata = errata, RelevantRules = relevantRules });
+});
+
+// ── Web-push (#28): meldingen bij belangrijke wijzigingen ──────
+app.MapGet("/api/push/vapid", (PushService push) =>
+    push.Enabled
+        ? Results.Ok(new { publicKey = push.PublicKey })
+        : Results.NotFound(new { error = "push niet geconfigureerd (VAPID-keys ontbreken)" }));
+
+app.MapPost("/api/push/subscribe", async (PushSubscribe body, RbRulesDbContext db) =>
+{
+    if (string.IsNullOrWhiteSpace(body.Endpoint) ||
+        string.IsNullOrWhiteSpace(body.P256dh) || string.IsNullOrWhiteSpace(body.Auth))
+        return Results.BadRequest(new { error = "endpoint, p256dh en auth zijn verplicht" });
+    var existing = await db.PushSubscriptions.FindAsync(body.Endpoint);
+    if (existing is null)
+    {
+        db.PushSubscriptions.Add(new RbRules.Domain.PushSubscription
+        {
+            Endpoint = body.Endpoint, P256dh = body.P256dh, Auth = body.Auth,
+        });
+    }
+    else
+    {
+        existing.P256dh = body.P256dh;
+        existing.Auth = body.Auth;
+    }
+    await db.SaveChangesAsync();
+    return Results.Ok(new { ok = true });
+});
+
+app.MapPost("/api/push/unsubscribe", async (PushUnsubscribe body, RbRulesDbContext db) =>
+{
+    await db.PushSubscriptions.Where(s => s.Endpoint == body.Endpoint).ExecuteDeleteAsync();
+    return Results.Ok(new { ok = true });
 });
 
 // ── Feedback op antwoorden (self-learning, #24) ────────────────
@@ -757,5 +792,9 @@ public record AskRequest(string Question);
 public record ResolveRequest(string[] CardIds);
 
 public record CorrectionSubmit(string Question, string Verdict, string? Text);
+
+public record PushSubscribe(string Endpoint, string P256dh, string Auth);
+
+public record PushUnsubscribe(string Endpoint);
 
 public partial class Program;
