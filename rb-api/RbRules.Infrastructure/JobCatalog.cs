@@ -42,6 +42,9 @@ public static class JobCatalog
             // type "unknown" alsnog classificeren — de scan-retry pakt alleen
             // de laatste 14 dagen. Best-effort: wat mislukt blijft staan.
             new("classify", ClassifyAsync),
+            // Kennislaag 2 (#50): claims destilleren uit community-bronnen in
+            // het register (trust >= 3), met corroboratie en officiële toets.
+            new("claims", ClaimsAsync),
         }.ToDictionary(j => j.Name);
 
     private static async Task<string> RunAllAsync(
@@ -202,5 +205,13 @@ public static class JobCatalog
         var r = await sp.GetRequiredService<ChangeClassificationService>()
             .ClassifyPendingAsync(progress: report, ct: ct);
         return $"{r.Classified} changes alsnog geclassificeerd, {r.Failed} mislukt, {r.Remaining} resterend";
+    }
+
+    private static async Task<string> ClaimsAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<ClaimMiningService>()
+            .RunAsync(progress: report, ct: ct);
+        return r.Message;
     }
 }

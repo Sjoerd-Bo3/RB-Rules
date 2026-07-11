@@ -37,6 +37,10 @@ public class Document
     /// <summary>Werkelijke bestands-URL bij PDF-bronnen (de bron-URL is de
     /// ontdek-pagina) — basis voor deeplinks als "…rules.pdf#page=12".</summary>
     public string? FileUrl { get; set; }
+    /// <summary>Wanneer de claims-pipeline (#50) dit document verwerkte;
+    /// null = nog niet. Een nieuwe documentversie (bronwijziging) krijgt een
+    /// eigen rij en wordt dus vanzelf opnieuw gemined.</summary>
+    public DateTimeOffset? ClaimsMinedAt { get; set; }
     public DateTimeOffset RetrievedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -250,6 +254,49 @@ public class Erratum
     public required string NewText { get; set; }
     public required string SourceUrl { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Kennislaag 2 (#50): een geparafraseerde community-bewering over
+/// hoe een regel/kaart/mechaniek/conventie in de praktijk werkt, met
+/// corroboratie (hoeveel onafhankelijke bronnen hetzelfde zeggen) en een
+/// gewogen trust-score. Interpretatief — officieel (laag 0) wint altijd.</summary>
+public class Claim
+{
+    public long Id { get; set; }
+    public required string TopicType { get; set; }      // card|mechanic|section|concept
+    public required string TopicRef { get; set; }       // kaartnaam/mechaniek/§-code/concept
+    /// <summary>De bewering, geparafraseerd in het NL (auteursrecht: nooit
+    /// overgenomen tekst — het korte citaat leeft bij de bron).</summary>
+    public required string Statement { get; set; }
+    /// <summary>Aantal onafhankelijke bronnen dat hetzelfde beweert.</summary>
+    public int Corroboration { get; set; } = 1;
+    /// <summary>Gewogen bron-trust × corroboratie (0..1), zie ClaimScoring.</summary>
+    public double TrustScore { get; set; }
+    public string Status { get; set; } = "unreviewed";  // unreviewed|accepted|rejected|superseded
+    /// <summary>Toelichting bij rejected/superseded (bijv. de officiële § die
+    /// de claim tegenspreekt — "officieel wint altijd").</summary>
+    public string? StatusReason { get; set; }
+    /// <summary>Toets tegen officiële §'s: unchecked|confirmed|contradicted|unclear.</summary>
+    public string OfficialStatus { get; set; } = "unchecked";
+    public Vector? Embedding { get; set; }
+    public string? EmbeddingModel { get; set; }
+    public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Bewijsvoering per claim: welke bron beweerde dit, waar, en met
+/// welk kort citaat. Eén bron telt één keer mee in de corroboratie.</summary>
+public class ClaimSource
+{
+    public long Id { get; set; }
+    public long ClaimId { get; set; }
+    public Claim? Claim { get; set; }
+    public required string SourceId { get; set; }
+    public required string Url { get; set; }
+    /// <summary>Kort letterlijk citaat als bewijs (auteursrecht: parafrase +
+    /// kort citaat + bronlink, geen overgenomen teksten).</summary>
+    public string? QuoteExcerpt { get; set; }
+    public DateTimeOffset SeenAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 /// <summary>S3: LLM-geverifieerde kaart↔kaart-interactie (kandidaten komen uit

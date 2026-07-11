@@ -25,6 +25,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<AskMetric> AskMetrics => Set<AskMetric>();
     public DbSet<AskTrace> AskTraces => Set<AskTrace>();
     public DbSet<KnowledgeDoc> KnowledgeDocs => Set<KnowledgeDoc>();
+    public DbSet<Claim> Claims => Set<Claim>();
+    public DbSet<ClaimSource> ClaimSources => Set<ClaimSource>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -155,6 +157,31 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.HasIndex(x => new { x.Kind, x.Topic }).IsUnique();
             e.HasIndex(x => x.Status);
             e.Property(x => x.Embedding).HasColumnType(vectorType);
+        });
+
+        b.Entity<Claim>(e =>
+        {
+            e.ToTable("claim");
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => new { x.TopicType, x.TopicRef });
+            e.Property(x => x.Embedding).HasColumnType(vectorType);
+            // ANN-index: dedupe/clustering én straks het retrieval-kanaal (#51).
+            e.HasIndex(x => x.Embedding)
+                .HasMethod("hnsw")
+                .HasOperators("vector_cosine_ops");
+        });
+
+        b.Entity<ClaimSource>(e =>
+        {
+            e.ToTable("claim_source");
+            e.HasOne(x => x.Claim).WithMany().HasForeignKey(x => x.ClaimId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Bron-verwijdering laat geen wees-bewijs achter (Conflict-patroon);
+            // de corroboratie-telling herstelt bij de volgende claims-run.
+            e.HasOne<Source>().WithMany().HasForeignKey(x => x.SourceId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Eén bron telt één keer per claim (corroboratie-integriteit).
+            e.HasIndex(x => new { x.ClaimId, x.SourceId }).IsUnique();
         });
     }
 }

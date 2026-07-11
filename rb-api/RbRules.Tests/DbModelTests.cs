@@ -25,6 +25,8 @@ public class DbModelTests
     [InlineData(typeof(RuleChunk), "rule_chunk")]
     [InlineData(typeof(RunLog), "run_log")]
     [InlineData(typeof(PushSubscription), "push_subscription")]
+    [InlineData(typeof(Claim), "claim")]
+    [InlineData(typeof(ClaimSource), "claim_source")]
     public void TableNames_MatchPopSchema(Type entity, string expectedTable)
     {
         using var db = CreateContext();
@@ -43,6 +45,7 @@ public class DbModelTests
                      (typeof(Card), nameof(Card.Embedding)),
                      (typeof(RuleChunk), nameof(RuleChunk.Embedding)),
                      (typeof(Correction), nameof(Correction.Embedding)),
+                     (typeof(Claim), nameof(Claim.Embedding)),
                  })
         {
             var p = db.Model.FindEntityType(entity)!.FindProperty(prop);
@@ -55,7 +58,7 @@ public class DbModelTests
     public void CardAndRuleChunk_HaveHnswIndexOnEmbedding()
     {
         using var db = CreateContext();
-        foreach (var entity in new[] { typeof(Card), typeof(RuleChunk) })
+        foreach (var entity in new[] { typeof(Card), typeof(RuleChunk), typeof(Claim) })
         {
             var idx = db.Model.FindEntityType(entity)!
                 .GetIndexes()
