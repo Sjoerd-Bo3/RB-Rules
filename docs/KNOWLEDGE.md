@@ -82,6 +82,34 @@ Retrieval: geaccepteerde claims doen mee als eigen kanaal in /ask, met in de
 prompt per claim: `[community, 4 bronnen, trust 0.8] "…"`. De router bepaalt
 het gewicht (ruling: laag; conventie-/tactiekvraag: hoog).
 
+### Websearch via rb-ai (#64) — bouwsteen voor de bronnenjacht (#63)
+
+De rb-ai-sidecar kent een opt-in task-type `research`: een `/ask`-call met
+`task: "research"` draait als agent mét WebSearch/WebFetch (alle andere
+task-types blijven bewust zonder web-toegang — kosten/latency, #42). Het
+resultaatcontract is afgedwongen in de systeem-prompt (zie
+`rb-ai/src/ai.ts`, `RESEARCH_CONTRACT`): het antwoord eindigt altijd met een
+`Bronnen:`-sectie met volledige URL's van daadwerkelijk geraadpleegde
+pagina's; onbevestigde beweringen worden expliciet zo benoemd.
+
+Beoogd gebruik door #63 (rb-api-kant, nog te bouwen):
+
+1. Een periodieke job in rb-api stelt via `RbAiClient.AskAsync(prompt,
+   system, task: "research")` een gerichte zoekvraag ("nieuwe
+   Riftbound-regelbronnen/judge-uitleg sinds …").
+2. rb-ai zoekt/leest het web en antwoordt met samenvatting + `Bronnen:`-URL's.
+3. rb-api parseert de URL's en zet ze als **registervoorstel** in de
+   bestaande source-registry-reviewqueue (nooit rechtstreeks als bron
+   opnemen; trust-toekenning blijft bij de beheerder).
+
+Randvoorwaarden die al in rb-ai zijn geregeld: harde timeout op
+research-calls (5 min, AbortController), en het bestaande degradatiepad —
+faalt SDK of web-tooling, dan geeft de sidecar een nette fout en levert
+`RbAiClient` `null`, de job logt dat in `run_log` en gaat door. Let op:
+sommige sites weigeren datacenter-IP's (Cloudflare); een lege of gedeeltelijke
+oogst is dus een verwacht resultaat, geen bug. Webresultaten komen per
+definitie binnen als community-/meta-laag, nooit als officiële laag.
+
 ## Laag 3 — Meta & tactiek
 
 Bouwt op decks-backlog (#15): archetype-detectie uit decklijsten,

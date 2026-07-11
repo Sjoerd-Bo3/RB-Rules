@@ -38,11 +38,12 @@ jobs:
           npx svelte-check
           npm run build
 
-      - name: rb-ai — typecheck
+      - name: rb-ai — typecheck & test
         working-directory: rb-ai
         run: |
           npm ci
           npm run typecheck
+          npm test
 
   publish:
     needs: test
