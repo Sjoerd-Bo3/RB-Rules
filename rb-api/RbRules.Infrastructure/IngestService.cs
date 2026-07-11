@@ -96,6 +96,12 @@ public class IngestService(
                 {
                     var raw = await res.Content.ReadAsStringAsync(ct);
                     text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
+                    // #94: de hub-index is óók de ontdek-pagina voor per-set-
+                    // artikelen — op de rauwe HTML, want de tekst-extractie
+                    // stript de ankers (href + linktekst) die de ontdekking
+                    // nodig heeft.
+                    if (src.Id == SourceSeed.RulesHubId)
+                        await ProposeHubSetPagesAsync(raw, new Uri(src.Url), ct);
                     break;
                 }
                 case "pdf":
@@ -185,6 +191,50 @@ public class IngestService(
         catch (Exception ex)
         {
             return new(src.Id, "error", ex.Message);
+        }
+    }
+
+    /// <summary>#94: nieuwe per-set-links ("… Patch Notes"/"… Errata") op de
+    /// Rules Hub als bronvoorstel loggen — dezelfde run_log-vorm als de scout
+    /// (#63): kind "scout", Ref = url. Zo delen hub-ontdekking en webscout één
+    /// dedupe (over runs heen én onderling) en één kanaal dat de komende
+    /// voorstellenqueue kan backfillen. HubDiscovery sorteert en dedupliceert,
+    /// dus de per-request wisselende linkvolgorde van de hub (flip-flop) geeft
+    /// hier nooit ruis; er ontstaat géén Change-item. Best-effort: uitval van
+    /// de ontdekking mag de scan van de hub zelf niet breken.</summary>
+    private async Task ProposeHubSetPagesAsync(string html, Uri baseUri, CancellationToken ct)
+    {
+        try
+        {
+            var found = HubDiscovery.FindSetPages(html, baseUri);
+            if (found.Count == 0) return;
+
+            var registered = await db.Sources.AsNoTracking()
+                .Select(s => s.Url).ToListAsync(ct);
+            var proposedEarlier = await db.RunLogs.AsNoTracking()
+                .Where(l => l.Kind == "scout" && l.Ref != null)
+                .Select(l => l.Ref!).Distinct().ToListAsync(ct);
+            var known = registered.Concat(proposedEarlier)
+                .Select(HubDiscovery.ComparisonKey)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var page in found.Where(p => !known.Contains(HubDiscovery.ComparisonKey(p.Url))))
+            {
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = "scout", Ref = page.Url, Status = "info",
+                    Detail = $"{page.Url} — {page.Title} (official): nieuwe {page.Kind}-pagina "
+                             + "op de Rules Hub (nieuwe set?); kandidaat trust-1-bron.",
+                });
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "scout", Ref = null, Status = "error",
+                Detail = $"hub-ontdekking mislukt: {ex.Message}",
+            });
         }
     }
 
