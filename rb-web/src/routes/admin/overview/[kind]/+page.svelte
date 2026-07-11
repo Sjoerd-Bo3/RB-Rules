@@ -50,6 +50,12 @@
 	}
 	interface ClaimStatusCount { status: string; count: number; }
 	interface ClaimOverview extends Paged<ClaimItem> { statusCounts: ClaimStatusCount[]; }
+	interface ProposalItem {
+		id: number; url: string; name: string; type: string; motivation: string;
+		status: string; foundAt: string; reviewedAt: string | null;
+	}
+	interface ProposalStatusCount { status: string; count: number; }
+	interface ProposalOverview extends Paged<ProposalItem> { statusCounts: ProposalStatusCount[]; }
 	interface GapCoverage {
 		cards: number; cardsWithoutEmbedding: number; cardsWithoutMechanics: number;
 		ruleChunks: number; ruleChunksWithoutEmbedding: number;
@@ -79,6 +85,7 @@
 		correcties: { title: 'Correcties', sub: 'feedback op antwoorden en geverifieerde rulings' },
 		primer: { title: 'Spelbegrip-primer', sub: 'alle spelbegrip-docs, bewerkbaar — goedgekeurde docs voeden elke ruling' },
 		claims: { title: 'Community-claims', sub: 'beweringen uit community-bronnen met corroboratie en bron-trust — geaccepteerde claims worden het community-kanaal (#51)' },
+		voorstellen: { title: 'Bronvoorstellen', sub: 'webvondsten van de scout — accepteren zet de bron uitgeschakeld in het register, aanzetten gaat daarna via de bronnen-tabel' },
 		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' }
 	};
 	const meta = $derived(TITLES[data.kind]);
@@ -93,6 +100,7 @@
 	const corrections = $derived(data.kind === 'correcties' ? ((data.data ?? []) as CorrectionItem[]) : []);
 	const knowledge = $derived(data.kind === 'primer' ? ((data.data ?? []) as KnowledgeItem[]) : []);
 	const claims = $derived(data.kind === 'claims' ? (data.data as ClaimOverview | null) : null);
+	const proposals = $derived(data.kind === 'voorstellen' ? (data.data as ProposalOverview | null) : null);
 
 	// Status-vocabulaire van de claims-pipeline (#50): kleur + NL-label.
 	const CLAIM_STATUS: Record<string, { label: string; badge: string }> = {
@@ -103,6 +111,16 @@
 	};
 	function claimStatus(status: string): { label: string; badge: string } {
 		return CLAIM_STATUS[status] ?? { label: status, badge: 'warn-b' };
+	}
+
+	// Status-vocabulaire van de bronvoorstellen (#63): kleur + NL-label.
+	const PROPOSAL_STATUS: Record<string, { label: string; badge: string }> = {
+		proposed: { label: 'te beoordelen', badge: 'warn-b' },
+		accepted: { label: 'geaccepteerd', badge: 'ok-b' },
+		rejected: { label: 'verworpen', badge: 'err' }
+	};
+	function proposalStatus(status: string): { label: string; badge: string } {
+		return PROPOSAL_STATUS[status] ?? { label: status, badge: 'warn-b' };
 	}
 
 	const gaps = $derived(data.kind === 'gaten' ? (data.data as GapsReport | null) : null);
@@ -137,7 +155,7 @@
 		editing = null;
 	});
 
-	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims);
+	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims ?? proposals);
 	const totalPages = $derived(paged ? Math.max(1, Math.ceil(paged.total / paged.pageSize)) : 1);
 
 	function href(overrides: { page?: number; filter?: string; source?: string }): string {
@@ -191,6 +209,14 @@
 				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({claims.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
 				{#each claims.statusCounts as s (s.status)}
 					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{claimStatus(s.status).label} ({s.count})</a>
+				{/each}
+			</div>
+		{:else if data.kind === 'voorstellen' && proposals}
+			<div class="chips">
+				<!-- Som over de statussen: proposals.total is het gefilterde totaal. -->
+				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({proposals.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
+				{#each proposals.statusCounts as s (s.status)}
+					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{proposalStatus(s.status).label} ({s.count})</a>
 				{/each}
 			</div>
 		{:else if chunks && chunks.sources.length > 1}
@@ -461,6 +487,40 @@
 			{#if !claims.items.length}<p class="meta">Geen claims{data.filter ? ' met deze status' : ' — draai "Claims minen" in het beheer'}.</p>{/if}
 		{/if}
 
+		<!-- Bronvoorstellen (#63): url + type-inschatting + motivatie + reviewacties -->
+		{#if proposals}
+			{#each proposals.items as p (p.id)}
+				<div class="panel item corr">
+					<div class="corr-body">
+						<p class="item-head">
+							<span class="badge {proposalStatus(p.status).badge}">{proposalStatus(p.status).label}</span>
+							<strong>{p.name}</strong>
+							<span class="meta">{p.type} · gevonden {fmtDate(p.foundAt)}{p.reviewedAt ? ` · beoordeeld ${fmtDate(p.reviewedAt)}` : ''}</span>
+						</p>
+						<p class="meta refs proposal-url"><a href={p.url}>{p.url}</a></p>
+						{#if p.motivation}<p class="pre">{p.motivation}</p>{/if}
+					</div>
+					<!-- Geaccepteerd = de bron leeft nu in het register; beheer
+					     hem daar. Verworpen mag heroverwogen worden. -->
+					{#if p.status !== 'accepted'}
+						<div class="corr-actions">
+							<form method="POST" action="?/acceptProposal" use:enhance>
+								<input type="hidden" name="id" value={p.id} />
+								<button class="small" title="Zet de bron uitgeschakeld in het register met veilige defaults — aanzetten kan daarna via de bronnen-tabel">Accepteer</button>
+							</form>
+							{#if p.status === 'proposed'}
+								<form method="POST" action="?/rejectProposal" use:enhance>
+									<input type="hidden" name="id" value={p.id} />
+									<button class="ghost small" title="Wordt niet opnieuw voorgesteld">Verwerp</button>
+								</form>
+							{/if}
+						</div>
+					{/if}
+				</div>
+			{/each}
+			{#if !proposals.items.length}<p class="meta">Geen voorstellen{data.filter ? ' met deze status' : ' — draai "Bronnen zoeken (web)" in het beheer'}.</p>{/if}
+		{/if}
+
 		<!-- Kennis-gaten-rapport (#52) -->
 		{#if gaps}
 			<h2 class="gap-h">Dekking</h2>
@@ -592,6 +652,9 @@
 	.corr-body { flex: 1; }
 	.corr-actions { display: flex; flex-direction: column; gap: 6px; }
 	.refs { margin: 6px 0 0; }
+	/* Lange bron-URL's mogen op 390px nooit horizontale overflow geven. */
+	.proposal-url { overflow-wrap: anywhere; }
+	.proposal-url a { color: var(--accent); }
 	.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 	.actions { margin-top: 10px; }
 	.edit { display: flex; flex-direction: column; gap: 10px; }

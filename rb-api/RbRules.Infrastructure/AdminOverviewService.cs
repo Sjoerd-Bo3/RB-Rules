@@ -44,6 +44,14 @@ public record ClaimOverview(
     int Total, int Page, int PageSize,
     IReadOnlyList<ClaimStatusCount> StatusCounts, IReadOnlyList<ClaimOverviewItem> Items);
 
+public record ProposalOverviewItem(
+    long Id, string Url, string Name, string Type, string Motivation,
+    string Status, DateTimeOffset FoundAt, DateTimeOffset? ReviewedAt);
+public record ProposalStatusCount(string Status, int Count);
+public record ProposalOverview(
+    int Total, int Page, int PageSize,
+    IReadOnlyList<ProposalStatusCount> StatusCounts, IReadOnlyList<ProposalOverviewItem> Items);
+
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
 /// server-side gepagineerd waar lijsten groot zijn.</summary>
@@ -212,6 +220,34 @@ public class AdminOverviewService(RbRulesDbContext db)
                 c.FirstSeen, c.LastSeen,
                 bySrc.GetValueOrDefault(c.Id, [])))
             .ToList();
+        return new(total, page, PageSize, statusCounts, items);
+    }
+
+    /// <summary>Bronvoorstellen uit de scout (#63): status-chips + de
+    /// reviewqueue zelf, nieuwste vondsten eerst (zelfde patroon als Claims).</summary>
+    public async Task<ProposalOverview> ProposalsAsync(string? status, int page)
+    {
+        page = ClampPage(page);
+        var statusCounts = (await db.SourceProposals.AsNoTracking()
+                .GroupBy(p => p.Status)
+                .Select(g => new { g.Key, Count = g.Count() })
+                .OrderBy(s => s.Key)
+                .ToListAsync())
+            .Select(s => new ProposalStatusCount(s.Key, s.Count))
+            .ToList();
+
+        var query = db.SourceProposals.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(p => p.Status == status);
+
+        var total = await query.CountAsync();
+        var items = await query
+            .OrderByDescending(p => p.FoundAt).ThenBy(p => p.Id)
+            .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
+            .Select(p => new ProposalOverviewItem(
+                p.Id, p.Url, p.Name, p.Type, p.Motivation,
+                p.Status, p.FoundAt, p.ReviewedAt))
+            .ToListAsync();
         return new(total, page, PageSize, statusCounts, items);
     }
 

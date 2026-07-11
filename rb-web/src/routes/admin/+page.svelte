@@ -34,7 +34,7 @@
 		{ name: 'setrelease', label: 'Set-release-keten', hint: 'kaarten → mechanieken → embeddings → graph → primer-herziening; draait automatisch zodra de classifier een set-release herkent' },
 		{ name: 'classify', label: 'Classificaties aanvullen', hint: 'changes zonder samenvatting/duiding alsnog classificeren' },
 		{ name: 'claims', label: 'Claims minen', hint: 'community-claims destilleren uit registerbronnen (trust 3+), met corroboratie en toets tegen de officiële regels' },
-		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten worden als voorstel gelogd, nooit automatisch toegevoegd' }
+		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten komen als voorstel in de reviewqueue, nooit automatisch in het register' }
 	];
 
 	interface Correction {
@@ -117,7 +117,8 @@
 		{ key: 'changes', label: 'Wijzigingen', slug: 'wijzigingen' },
 		{ key: 'openCorrections', label: 'Open correcties', slug: 'correcties' },
 		{ key: 'knowledge', label: 'Spelbegrip-docs', slug: 'primer' },
-		{ key: 'claims', label: 'Claims', slug: 'claims' }
+		{ key: 'claims', label: 'Claims', slug: 'claims' },
+		{ key: 'openProposals', label: 'Bronvoorstellen', slug: 'voorstellen' }
 	];
 </script>
 

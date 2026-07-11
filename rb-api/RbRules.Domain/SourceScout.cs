@@ -1,15 +1,14 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace RbRules.Domain;
-
-/// <summary>Eén webvondst uit de bronnenjacht (#63): een kandidaat-bron als
-/// vóórstel voor de beheerder — nooit iets dat automatisch bron wordt.</summary>
-public record SourceProposal(string Url, string Name, string Type, string Motivation);
 
 /// <summary>Prompt + parser voor de herhaalbare bronnenjacht (#63, stap 2).
 /// De LLM-call loopt via rb-ai (task "research", #64); dit deel is puur en
 /// getest, zelfde patroon als QueryRewriter/Classifier. Uitval of
-/// onzin-output ⇒ null, en de aanroeper degradeert netjes.</summary>
+/// onzin-output ⇒ null, en de aanroeper degradeert netjes. Parse levert
+/// direct <see cref="SourceProposal"/>-entiteiten (de vondst ís het
+/// reviewqueue-item — geen aparte DTO-laag nodig).</summary>
 public static class SourceScout
 {
     /// <summary>Harde cap per run — liever een handvol goede voorstellen dan
@@ -116,16 +115,91 @@ public static class SourceScout
 
             var name = Truncate(GetString(item, "name"), MaxNameLength);
             var type = GetString(item, "type")?.ToLowerInvariant();
-            result.Add(new SourceProposal(
-                url,
-                string.IsNullOrEmpty(name) ? uri.Host : name,
+            result.Add(new SourceProposal
+            {
+                Url = url,
+                Name = string.IsNullOrEmpty(name) ? uri.Host : name,
                 // Webvondsten zijn per definitie hooguit zo betrouwbaar
                 // als hun type-inschatting; onbekende labels degraderen
                 // naar community (docs/KNOWLEDGE.md: trust is heilig).
-                type is "official" or "partner" ? type : "community",
-                Truncate(GetString(item, "motivation"), MaxMotivationLength) ?? ""));
+                Type = type is "official" or "partner" ? type : "community",
+                Motivation = Truncate(GetString(item, "motivation"), MaxMotivationLength) ?? "",
+            });
         }
         return result;
+    }
+
+    /// <summary>Backfill-parser (#63): reconstrueert een voorstel uit de oude
+    /// run_log-vorm (Ref = url, Detail = "url — naam (type): motivatie"), zodat
+    /// voorstellen van vóór de reviewqueue niet verloren gaan. Onherkenbaar
+    /// detail degradeert veilig: host als naam, community als type (nooit een
+    /// trust-upgrade door een parse-gok).</summary>
+    public static SourceProposal FromRunLog(string url, string? detail, DateTimeOffset foundAt)
+    {
+        var rest = detail ?? "";
+        var prefix = url + " — ";
+        if (rest.StartsWith(prefix, StringComparison.Ordinal)) rest = rest[prefix.Length..];
+
+        var m = RunLogDetailPattern.Match(rest);
+        var host = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : url;
+        return new SourceProposal
+        {
+            Url = url,
+            Name = Truncate(m.Success ? m.Groups["name"].Value : host, MaxNameLength)!,
+            Type = m.Success ? m.Groups["type"].Value : "community",
+            Motivation = Truncate(m.Success ? m.Groups["motivation"].Value : rest, MaxMotivationLength)!,
+            FoundAt = foundAt,
+        };
+    }
+
+    // Greedy name-groep: een naam als "Judge FAQ (example.com)" mag zelf
+    // haakjes bevatten — het láátste "(type):" telt.
+    private static readonly Regex RunLogDetailPattern = new(
+        @"^(?<name>.+) \((?<type>official|partner|community)\): (?<motivation>.*)$",
+        RegexOptions.Singleline | RegexOptions.ExplicitCapture);
+
+    /// <summary>Register-entry voor een geaccepteerd voorstel, met veilige
+    /// defaults: uitgeschakeld (de beheerder zet hem bewust aan via de
+    /// bronnen-tabel), cadence weekly, parser naar bestandstype, trust volgens
+    /// de type-inschatting maar nooit tier 1 voor niet-official — de
+    /// kennislagen-regel blijft zo intact. Id-uniekheid regelt de
+    /// aanroeper (suffix bij botsing).</summary>
+    public static Source ToSource(SourceProposal p) => new()
+    {
+        Id = SlugForUrl(p.Url),
+        Name = p.Name,
+        Url = p.Url,
+        Type = p.Type is "official" or "partner" ? p.Type : "community",
+        TrustTier = p.Type switch { "official" => (short)1, "partner" => (short)2, _ => (short)3 },
+        // Laag in de pikorde tot de beheerder anders beslist (curated
+        // bronnen: officieel 90-110, partner 70, community 40-50).
+        Rank = 10,
+        Parser = Uri.TryCreate(p.Url, UriKind.Absolute, out var uri)
+                 && uri.AbsolutePath.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
+            ? "pdf" : "html",
+        Cadence = "weekly",
+        Enabled = false,
+    };
+
+    /// <summary>Leesbaar register-id uit een URL: host zonder www + laatste
+    /// betekenisvolle padsegment ("riftbound.gg/judge-faq/" →
+    /// "riftbound-gg-judge-faq"), begrensd op 60 tekens.</summary>
+    public static string SlugForUrl(string url)
+    {
+        string host = url, segment = "";
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            host = uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase)
+                ? uri.Host[4..] : uri.Host;
+            segment = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .LastOrDefault() ?? "";
+            var dot = segment.LastIndexOf('.');
+            if (dot > 0) segment = segment[..dot];      // extensie eraf (.pdf, .html)
+        }
+        var raw = string.Concat($"{host}-{segment}".ToLowerInvariant()
+            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
+        var slug = string.Join('-', raw.Split('-', StringSplitOptions.RemoveEmptyEntries));
+        return slug.Length > 60 ? slug[..60].TrimEnd('-') : slug;
     }
 
     /// <summary>Vergelijkingsvorm voor URL-dedupe: case- en

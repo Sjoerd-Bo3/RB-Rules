@@ -27,6 +27,7 @@ public class DbModelTests
     [InlineData(typeof(PushSubscription), "push_subscription")]
     [InlineData(typeof(Claim), "claim")]
     [InlineData(typeof(ClaimSource), "claim_source")]
+    [InlineData(typeof(SourceProposal), "source_proposal")]
     public void TableNames_MatchPopSchema(Type entity, string expectedTable)
     {
         using var db = CreateContext();

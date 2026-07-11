@@ -302,6 +302,25 @@ public class ClaimSource
     public DateTimeOffset SeenAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Bronvoorstel uit de bronnenjacht (#63): een webvondst van de
+/// scout als reviewqueue-item. Accepteren zet de bron met veilige defaults
+/// (uitgeschakeld!) in het register; verwerpen houdt de URL uit volgende
+/// runs. Niets gaat automatisch aan — trust-toekenning en activeren blijven
+/// een beheerdersbeslissing (docs/KNOWLEDGE.md: bron-trust is heilig).</summary>
+public class SourceProposal
+{
+    public long Id { get; set; }
+    public required string Url { get; set; }
+    public required string Name { get; set; }
+    /// <summary>Type-inschatting van de scout: official | partner | community.</summary>
+    public required string Type { get; set; }
+    /// <summary>Waarom deze bron de kennisbank zou versterken (LLM, NL).</summary>
+    public required string Motivation { get; set; }
+    public string Status { get; set; } = "proposed";    // proposed|accepted|rejected
+    public DateTimeOffset FoundAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ReviewedAt { get; set; }
+}
+
 /// <summary>Evolutie-raamwerk (#52): groeiend mechaniek-vocabulaire. De miner
 /// rapporteert bracketed termen uit kaartteksten die niet in het vocabulaire
 /// staan als kandidaat; de beheerder accepteert of verwerpt ze. Geaccepteerde
