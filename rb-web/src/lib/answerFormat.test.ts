@@ -26,6 +26,19 @@ describe('splitSettled', () => {
 		});
 	});
 
+	it('verbergt ook een complete marker die nog op zijn newline wacht', () => {
+		// Zonder dit toont de staart letterlijk "[[rule:466.2.c]]" tot het
+		// volgende frame de newline brengt (review-fix).
+		expect(splitSettled('Stap 1 [1].\n[[rule:466.2.c]]')).toEqual({
+			settled: 'Stap 1 [1].\n',
+			tail: ''
+		});
+		expect(splitSettled('Stap 1 [1].\n[[rule:466.2.c]')).toEqual({
+			settled: 'Stap 1 [1].\n',
+			tail: ''
+		});
+	});
+
 	it('laat een afgeronde marker in settled ongemoeid', () => {
 		expect(splitSettled('[[rule:466.2.c]]\nvervolg')).toEqual({
 			settled: '[[rule:466.2.c]]\n',

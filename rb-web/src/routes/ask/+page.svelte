@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { applyAction, deserialize, enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import RbText from '$lib/RbText.svelte';
 	import AnswerView from '$lib/AnswerView.svelte';
 	import { citationEssence, splitSettled } from '$lib/answerFormat';
@@ -132,6 +133,13 @@
 	}
 	let live = $state<LiveAsk | null>(null);
 	let liveError = $state<string | null>(null);
+	// Brak de verbinding ná response-start maar vóór het eerste frame, dan
+	// kán rb-api al aan de (betaalde) LLM-call begonnen zijn: geen stille
+	// automatische herkansing, maar een expliciete "Opnieuw proberen"-knop.
+	let retryPending = $state<{ fd: FormData; clearQuestion: boolean } | null>(null);
+	// Afronding voor screenreaders: het groeiende antwoord zelf is bewust
+	// géén live-region (elke delta zou opnieuw voorgelezen worden).
+	let announce = $state('');
 	// Markdown/widget-parsing is pas zinvol op afgeronde regels: alleen het
 	// deel t/m de laatste newline gaat door AnswerView, de staart als kale
 	// tekst. Het slotframe her-rendert daarna het volledige antwoord.
@@ -149,17 +157,27 @@
 	}
 
 	/** Vangnet: de bestaande niet-streamende form action, handmatig
-	 *  aangeroepen. Alleen gebruikt zolang er nog géén stream-frame binnen
-	 *  is — de stream is dan nooit aan een antwoord begonnen, dus dit kost
-	 *  geen dubbele LLM-call. */
-	async function fallbackAsk(formData: FormData) {
+	 *  aangeroepen. Automatisch alléén als de stream-fetch faalde vóór er
+	 *  response-headers waren of met een nette foutstatus antwoordde — rb-api
+	 *  is dan (vrijwel zeker) nooit aan een antwoord begonnen. Brak een
+	 *  gestárte response af, dan loopt dit uitsluitend via de expliciete
+	 *  "Opnieuw proberen"-knop (retryPending) om stille dubbele LLM-kosten
+	 *  te vermijden. */
+	async function fallbackAsk(formData: FormData, clearQuestion: boolean) {
 		try {
 			const res = await fetch('?/ask', {
 				method: 'POST',
 				headers: { 'x-sveltekit-action': 'true' },
 				body: formData
 			});
-			await applyAction(deserialize(await res.text()));
+			const result = deserialize(await res.text());
+			if (result.type === 'success') {
+				// Zelfde afronding als de oude update()-flow: formulier leeg en
+				// duurstatistiek ("Meestal ±Xs") vers.
+				if (clearQuestion) question = '';
+				await invalidateAll();
+			}
+			await applyAction(result);
 		} catch (e) {
 			await applyAction({
 				type: 'failure',
@@ -169,14 +187,39 @@
 		}
 	}
 
-	async function streamAsk(q: string, turns: Turn[], photo: Blob | null, formData: FormData) {
+	/** De expliciete herkansing na een afgebroken maar wél gestarte stream —
+	 *  via de niet-streamende route, zodat het antwoord in één keer landt. */
+	async function retryAsk() {
+		const pending = retryPending;
+		if (!pending || busy) return;
+		retryPending = null;
+		busy = true;
+		try {
+			await fallbackAsk(pending.fd, pending.clearQuestion);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function streamAsk(
+		q: string,
+		turns: Turn[],
+		photo: Blob | null,
+		formData: FormData,
+		clearQuestion: boolean
+	) {
 		busy = true;
 		liveError = null;
 		live = null;
+		retryPending = null;
+		announce = '';
 		let sawFrame = false;
 		try {
 			const images = photo
-				? [{ mediaType: 'image/jpeg', data: await blobToBase64(photo) }]
+				? // mediaType uit het bestand zelf: downscale() kan het originele
+					// File (PNG/WebP) teruggeven — een vast 'image/jpeg'-label laat
+					// de Anthropic-API de mismatch weigeren (review-fix).
+					[{ mediaType: photo.type || 'image/jpeg', data: await blobToBase64(photo) }]
 				: undefined;
 			let res: Response;
 			try {
@@ -190,7 +233,8 @@
 					})
 				});
 			} catch {
-				await fallbackAsk(formData);
+				// Geen response-headers gezien: veilige automatische terugval.
+				await fallbackAsk(formData, clearQuestion);
 				return;
 			}
 			if (res.status === 429) {
@@ -207,7 +251,9 @@
 				return;
 			}
 			if (!res.ok || !res.body) {
-				await fallbackAsk(formData);
+				// Nette foutstatus vóór het streamen (proxy 502 e.d.): rb-api is
+				// niet aan een antwoord begonnen — automatische terugval kan.
+				await fallbackAsk(formData, clearQuestion);
 				return;
 			}
 
@@ -257,28 +303,48 @@
 				}
 			}
 			if (finalData) {
-				// Slotframe = het volledige AskResult: her-render via het gewone
-				// form-pad (incl. citaties, kaarten, claims, feedback, doorvragen).
-				await applyAction({
-					type: 'success',
-					status: 200,
-					data: { question: q, history: turns, hadPhoto: Boolean(photo), ...finalData }
-				});
-				live = null;
+				if (finalData.ok === false && live?.answer) {
+					// AI viel halverwege uit: het deelantwoord dat er al staat is
+					// meer waard dan de kale uitvalmelding in het slotframe —
+					// behouden + melden, net als bij een weggevallen verbinding.
+					liveError = 'De AI viel halverwege uit — dit antwoord is mogelijk onvolledig.';
+					announce = 'Antwoord onderbroken.';
+				} else {
+					// Slotframe = het volledige AskResult: her-render via het gewone
+					// form-pad (incl. citaties, kaarten, claims, feedback, doorvragen).
+					// Zelfde afronding als de oude update()-flow: formulier leeg en
+					// duurstatistiek vers (review-fix).
+					if (clearQuestion) question = '';
+					await invalidateAll();
+					await applyAction({
+						type: 'success',
+						status: 200,
+						data: { question: q, history: turns, hadPhoto: Boolean(photo), ...finalData }
+					});
+					live = null;
+					announce = 'Antwoord compleet.';
+				}
 			} else if (!sawFrame) {
+				// Response gestart maar gebroken vóór het eerste frame: rb-api kan
+				// al aan de LLM-call begonnen zijn — expliciete knop, geen stille
+				// dubbele kosten (review-fix).
 				live = null;
-				await fallbackAsk(formData);
+				retryPending = { fd: formData, clearQuestion };
+				announce = 'Antwoord mislukt.';
 			} else {
 				// Midden in het antwoord gebroken: partial behouden (fail-paden
 				// laten het antwoord niet verdwijnen), geen dure herkansing.
 				liveError = 'De verbinding viel weg — dit antwoord is mogelijk onvolledig.';
+				announce = 'Antwoord onderbroken.';
 			}
 		} catch (e) {
 			if (sawFrame && live?.answer) {
 				liveError = 'De verbinding viel weg — dit antwoord is mogelijk onvolledig.';
+				announce = 'Antwoord onderbroken.';
 			} else if (!sawFrame) {
 				live = null;
-				await fallbackAsk(formData);
+				retryPending = { fd: formData, clearQuestion };
+				announce = 'Antwoord mislukt.';
 			} else {
 				live = null;
 				await applyAction({
@@ -326,6 +392,13 @@
 		action="?/ask"
 		enctype="multipart/form-data"
 		use:enhance={async ({ formData, cancel }) => {
+			// Guard meteen dicht (review-fix): tijdens 'await downscale' mag een
+			// tweede klik geen tweede (betaalde) request kunnen starten.
+			if (busy) {
+				cancel();
+				return;
+			}
+			busy = true;
 			const q = String(formData.get('question') ?? '').trim();
 			if (q) remember(q);
 			const f = photoInput?.files?.[0];
@@ -336,10 +409,9 @@
 			// bestaande niet-streamende action gewoon door.
 			if (q && canStream()) {
 				cancel();
-				void streamAsk(q, [], photo, formData);
+				void streamAsk(q, [], photo, formData, true);
 				return;
 			}
-			busy = true;
 			return async ({ update }) => {
 				busy = false;
 				clearPhoto();
@@ -392,11 +464,29 @@
 
 	{#if form?.error && !live}<p class="warn">{form.error}</p>{/if}
 
+	<!-- Screenreader-status (review-fix): alleen de afronding wordt
+	     aangekondigd; het groeiende antwoord zelf is géén live-region, anders
+	     wordt bij elke delta het hele antwoord opnieuw voorgelezen. -->
+	<p class="visually-hidden" role="status">{announce}</p>
+
+	{#if retryPending && !busy}
+		<div class="panel waiting">
+			<div>
+				<p class="phase">De verbinding brak voordat het antwoord binnenkwam.</p>
+				<p class="meta">
+					Mogelijk was er al een antwoord onderweg; daarom proberen we niet automatisch
+					opnieuw.
+				</p>
+				<button type="button" class="retry" onclick={retryAsk}>Opnieuw proberen</button>
+			</div>
+		</div>
+	{/if}
+
 	{#if live?.answer}
 		<!-- Streaming (#31): het antwoord groeit woord voor woord. Afgeronde
 		     regels gaan door de gewone AnswerView (widgets werken al via de
 		     meta-citaties); de staart is kale tekst met een cursor. -->
-		<article class="panel answer-panel" aria-live="polite">
+		<article class="panel answer-panel" aria-busy={!liveError}>
 			<p class="asked meta">
 				{#if live.questionType}<span class="qtype">{TYPE_LABELS[live.questionType] ?? live.questionType}</span>{/if}
 				Vraag: {live.question}
@@ -557,6 +647,11 @@
 			method="POST"
 			action="?/ask"
 			use:enhance={({ formData, cancel }) => {
+				if (busy) {
+					cancel();
+					return;
+				}
+				busy = true;
 				const q = String(formData.get('question') ?? '').trim();
 				if (q) remember(q);
 				if (q && canStream()) {
@@ -569,10 +664,9 @@
 					}
 					cancel();
 					followUp = '';
-					void streamAsk(q, turns.slice(-3), null, formData);
+					void streamAsk(q, turns.slice(-3), null, formData, false);
 					return;
 				}
-				busy = true;
 				return async ({ update }) => {
 					busy = false;
 					followUp = '';
@@ -632,6 +726,16 @@
 	.phase { margin: 0 0 2px; font-weight: 600; }
 	.waiting .meta { margin: 0; font-size: 0.85rem; }
 	.answer-panel { padding: 18px 20px; }
+	/* Alleen voor screenreaders: visueel volledig verborgen statusregel. */
+	.visually-hidden {
+		position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+		overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+	}
+	.retry {
+		margin-top: 8px; background: var(--accent); color: var(--accent-ink);
+		border: 0; border-radius: 8px; padding: 7px 14px; font-weight: 600;
+		cursor: pointer;
+	}
 	/* Streaming (#31): staart van de binnenstromende regel + cursor. */
 	.md-tail { margin: 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.cursor {

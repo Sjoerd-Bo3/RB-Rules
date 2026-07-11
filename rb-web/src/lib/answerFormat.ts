@@ -26,12 +26,13 @@ export function certaintyLevel(
  *  regels. Splits het groeiende antwoord op de laatste newline: `settled`
  *  gaat door AnswerView (stripDuplicateRuleRefs, widgets, markdown), de
  *  `tail` — de nog binnenstromende regel — rendert als kale tekst. Een
- *  half binnengekomen widget-marker ([[rule:46…) in de staart wordt
- *  verborgen: dat is machine-syntax, geen leestekst. */
+ *  widget-marker aan het staart-einde wordt verborgen — half ([[rule:46…)
+ *  én compleet ([[rule:466.2.c]], wachtend op de newline die hem settelt):
+ *  dat is machine-syntax, geen leestekst (review-fix). */
 export function splitSettled(text: string): { settled: string; tail: string } {
 	const i = text.lastIndexOf('\n');
 	const settled = i < 0 ? '' : text.slice(0, i + 1);
-	const tail = (i < 0 ? text : text.slice(i + 1)).replace(/\[\[[^\]]*$/, '');
+	const tail = (i < 0 ? text : text.slice(i + 1)).replace(/\[\[[^\]]*(\]\]?)?$/, '');
 	return { settled, tail };
 }
 
