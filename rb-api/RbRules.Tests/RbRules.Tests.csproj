@@ -24,4 +24,10 @@
     <ProjectReference Include="..\RbRules.Infrastructure\RbRules.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Echte snapshots van live bronnen (conventie: fixtures spiegelen de
+         echte data-vormen, geen versimpelde verzinsels). -->
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

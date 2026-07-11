@@ -7,8 +7,9 @@ public record BanErrataResult(int Bans, int Errata);
 
 /// <summary>Structureert de banlijst en errata uit de nieuwste officiële
 /// documenten via LLM-extractie (rb-ai). Vervangt de tekst-heuristiek uit de
-/// PoP ("Bandle" matchte "ban"). Herbouwt de tabellen volledig per run —
-/// de bron van waarheid is de officiële pagina, niet de vorige extractie.</summary>
+/// PoP ("Bandle" matchte "ban"). Herbouwt per run: bans volledig vanaf de hub,
+/// errata per officiële per-set-pagina (#94) — de bron van waarheid is de
+/// officiële pagina, niet de vorige extractie.</summary>
 public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
 {
     public async Task<BanErrataResult> SyncAsync(CancellationToken ct = default)
@@ -21,11 +22,11 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
             ?.RiftboundId;
 
         var bans = 0;
-        var hub = await LatestDocAsync("rules-hub", ct);
+        var hub = await LatestDocAsync(SourceSeed.RulesHubId, ct);
         if (hub is not null)
         {
             var raw = await ai.AskAsync(
-                hub.Value.Content[..Math.Min(hub.Value.Content.Length, 12000)],
+                hub.Value.Content[..Math.Min(hub.Value.Content.Length, BanErrataExtractor.MaxPageTextLength)],
                 BanErrataExtractor.BanSystemPrompt, ct: ct);
             if (raw is not null)
             {
@@ -53,35 +54,58 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
             }
         }
 
+        // Errata (#94): alle officiële per-set-errata-pagina's structureren.
+        // Bron-selectie op naamconventie (Id bevat "errata") binnen trust 1,
+        // zodat een nieuwe set-pagina meteen meedoet zodra de beheerder haar
+        // (via een hub-voorstel) als bron opneemt. De community-mirror
+        // (card-errata, trust 3) structureert bewust niet meer mee: de
+        // officiële pagina's dekken alle sets en officieel wint altijd.
         var errata = 0;
-        var errataDoc = await LatestDocAsync("card-errata", ct);
-        if (errataDoc is not null)
+        var errataSources = await db.Sources.AsNoTracking()
+            .Where(s => s.Enabled && s.TrustTier == 1 && s.Id.Contains("errata"))
+            .OrderByDescending(s => s.Rank)
+            .Select(s => new { s.Id, s.Name, s.Url })
+            .ToListAsync(ct);
+
+        // Per bron extraheren, buiten de transactie (LLM-calls zijn traag en
+        // fallibel). Best-effort per pagina: één haperende call laat de
+        // andere pagina's — én de bestaande rijen van déze bron — met rust.
+        var perSource = new List<(string Url, List<Erratum> Rows)>();
+        foreach (var s in errataSources)
         {
+            var doc = await LatestDocAsync(s.Id, ct);
+            if (doc is null) continue;
             var raw = await ai.AskAsync(
-                errataDoc.Value.Content[..Math.Min(errataDoc.Value.Content.Length, 12000)],
+                BanErrataExtractor.BuildErrataInput(s.Name, doc.Value.Content),
                 BanErrataExtractor.ErrataSystemPrompt, ct: ct);
-            if (raw is not null)
+            if (raw is null) continue;
+            var extracted = BanErrataExtractor.ParseErrata(raw);
+            if (extracted.Count == 0) continue;
+            perSource.Add((doc.Value.Url, [.. extracted.Select(e => new Erratum
             {
-                var extracted = BanErrataExtractor.ParseErrata(raw);
-                if (extracted.Count > 0)
-                {
-                    await using var tx = await db.Database.BeginTransactionAsync(ct);
-                    await db.Errata.ExecuteDeleteAsync(ct);
-                    foreach (var e in extracted)
-                    {
-                        db.Errata.Add(new Erratum
-                        {
-                            CardName = e.CardName,
-                            NewText = e.NewText,
-                            CardRiftboundId = MatchCard(e.CardName),
-                            SourceUrl = errataDoc.Value.Url,
-                        });
-                        errata++;
-                    }
-                    await db.SaveChangesAsync(ct);
-                    await tx.CommitAsync(ct);
-                }
+                CardName = e.CardName,
+                NewText = e.NewText,
+                CardRiftboundId = MatchCard(e.CardName),
+                SourceUrl = doc.Value.Url,
+            })]));
+        }
+
+        if (perSource.Count > 0)
+        {
+            // Vervang per geslaagde bron in één transactie (nooit een venster
+            // zonder errata); rijen van bronnen die niet meer meedoen (zoals
+            // de oude alles-in-één-mirror) zijn wees en gaan mee weg.
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            var activeUrls = errataSources.Select(s => s.Url).ToList();
+            await db.Errata.Where(e => !activeUrls.Contains(e.SourceUrl)).ExecuteDeleteAsync(ct);
+            foreach (var (url, rows) in perSource)
+            {
+                await db.Errata.Where(e => e.SourceUrl == url).ExecuteDeleteAsync(ct);
+                db.Errata.AddRange(rows);
+                errata += rows.Count;
             }
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
         }
 
         return new(bans, errata);

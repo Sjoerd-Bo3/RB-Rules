@@ -19,12 +19,24 @@ public static class BanErrataExtractor
         """;
 
     public const string ErrataSystemPrompt = """
-        Je krijgt tekst van een Riftbound errata-pagina. Extraheer per kaart de
+        Je krijgt tekst van een Riftbound errata-pagina; de eerste regel
+        ("Bron: …") vermeldt om welke bron/set het gaat. Extraheer per kaart de
         actuele (post-errata) rules-tekst. Antwoord UITSLUITEND met JSON:
         [{"cardName": "...", "newText": "..."}]. Alleen kaarten waarvan de
         tekst daadwerkelijk gewijzigd is. Lege lijst [] als er geen errata staan.
         Geen tekst buiten de JSON.
         """;
+
+    /// <summary>Prompt-invoer past ruim in het cheap-model-budget; errata-
+    /// en banlijst-pagina's zijn korter dan dit.</summary>
+    public const int MaxPageTextLength = 12000;
+
+    /// <summary>Invoer voor de errata-extractie (#94): de bronnaam als eerste
+    /// regel — de per-set-pagina's benoemen hun set niet altijd expliciet in
+    /// de lopende tekst, de bronnaam ("Origins Card Errata …") draagt die
+    /// context — gevolgd door de (afgekapte) paginatekst.</summary>
+    public static string BuildErrataInput(string sourceName, string pageText) =>
+        $"Bron: {sourceName}\n\n{pageText[..Math.Min(pageText.Length, MaxPageTextLength)]}";
 
     public static IReadOnlyList<ExtractedBan> ParseBans(string raw) =>
         ParseArray(raw, item =>

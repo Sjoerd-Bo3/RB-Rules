@@ -44,6 +44,18 @@ public class SourceSeedTests
     }
 
     [Fact]
+    public void OfficialErrataSources_FollowIdConvention()
+    {
+        // BanErrataSyncService selecteert errata-bronnen op Id-conventie
+        // (bevat "errata") binnen trust 1 — een officiële errata-bron zonder
+        // die Id-vorm zou stilletjes niet gestructureerd worden.
+        foreach (var s in SourceSeed.Defaults.Where(s =>
+                     s.TrustTier == 1 &&
+                     s.Name.Contains("errata", StringComparison.OrdinalIgnoreCase)))
+            Assert.Contains("errata", s.Id);
+    }
+
+    [Fact]
     public void Urls_AreAbsoluteHttps()
     {
         foreach (var s in SourceSeed.Defaults)

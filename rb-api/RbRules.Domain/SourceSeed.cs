@@ -7,6 +7,11 @@ namespace RbRules.Domain;
 /// audit-bevinding).</summary>
 public static class SourceSeed
 {
+    /// <summary>De hub-index is óók de ontdek-pagina voor per-set-artikelen
+    /// (#94): IngestService draait er HubDiscovery op en logt onbekende
+    /// "… Patch Notes"/"… Errata"-links als bronvoorstel.</summary>
+    public const string RulesHubId = "rules-hub";
+
     public static IReadOnlyList<Source> Defaults =>
     [
         new()
@@ -27,10 +32,68 @@ public static class SourceSeed
         },
         new()
         {
-            Id = "rules-hub",
+            Id = RulesHubId,
             Name = "Riftbound Rules Hub (officieel)",
             Url = "https://playriftbound.com/en-us/rules-hub/",
             Type = "official", TrustTier = 1, Rank = 100, Parser = "html", Cadence = "daily",
+        },
+        new()
+        {
+            // Per-set patch notes van de Rules Hub (#94): officiële rulings-
+            // en interactie-uitleg ("questions and … rules and interactions
+            // you'll commonly encounter") — goud voor de vraagbaak, dus vlak
+            // onder de core-documenten. De hub linkt via het legacy-domein
+            // riftbound.leagueoflegends.com; hier staat het canonieke
+            // playriftbound.com-doel van die 301 (geverifieerd 2026-07-11,
+            // HTTP 200). Nieuwe sets komen binnen via de hub-ontdekking
+            // (HubDiscovery) als bronvoorstel, niet via deze seed.
+            Id = "core-rules-patch-notes",
+            Name = "Core Rules Patch Notes (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/riftbound-core-rules-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
+        },
+        new()
+        {
+            Id = "spiritforged-patch-notes",
+            Name = "Spiritforged Patch Notes (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/riftbound-core-rules-spiritforged-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 98, Parser = "html", Cadence = "weekly",
+        },
+        new()
+        {
+            Id = "unleashed-patch-notes",
+            Name = "Unleashed Patch Notes (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/riftbound-core-rules-unleashed-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 97, Parser = "html", Cadence = "weekly",
+        },
+        new()
+        {
+            // Officiële per-set-errata van de Rules Hub (#94) — de dekking
+            // die de community-mirror (card-errata hieronder) tot nu toe
+            // alleen droeg. De Id-conventie "…errata" is dragend:
+            // BanErrataSyncService structureert alle trust-1-bronnen met
+            // "errata" in de Id. De set-context zit in de bronnaam en gaat
+            // mee de LLM-extractie in. Zelfde legacy-domein-verhaal als de
+            // patch notes hierboven; ranks 95-93 zijn de spelbegrip-gidsen,
+            // vandaar 96 → 92/91.
+            Id = "origins-errata",
+            Name = "Origins Card Errata (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/riftbound-origins-card-errata/",
+            Type = "official", TrustTier = 1, Rank = 96, Parser = "html", Cadence = "weekly",
+        },
+        new()
+        {
+            Id = "spiritforged-errata",
+            Name = "Spiritforged Errata (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/riftbound-spiritforged-errata/",
+            Type = "official", TrustTier = 1, Rank = 92, Parser = "html", Cadence = "weekly",
+        },
+        new()
+        {
+            Id = "unleashed-errata",
+            Name = "Unleashed Errata (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/unleashed-errata-updates/",
+            Type = "official", TrustTier = 1, Rank = 91, Parser = "html", Cadence = "weekly",
         },
         new()
         {
@@ -82,6 +145,10 @@ public static class SourceSeed
         },
         new()
         {
+            // Sinds #94 alleen nog change-feed/claims-voer: de gestructureerde
+            // errata komen van de officiële per-set-pagina's hierboven
+            // (BanErrataSyncService selecteert op trust 1 — deze trust-3-
+            // mirror structureert bewust niet meer mee; officieel wint).
             Id = "card-errata",
             Name = "Card Errata (riftbound.gg, community mirror)",
             Url = "https://riftbound.gg/card-errata/",
