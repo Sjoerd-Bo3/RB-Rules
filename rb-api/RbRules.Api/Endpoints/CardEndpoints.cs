@@ -73,7 +73,10 @@ public static class CardEndpoints
             var c = await db.Cards.AsNoTracking()
                 .FirstOrDefaultAsync(x => x.RiftboundId == id);
             if (c is null) return Results.NotFound();
-            var banned = await db.BanEntries.AnyAsync(b => b.CardRiftboundId == id);
+            // Ban geldt voor de hele variantgroep (#44) — een ban op één
+            // printing is op alle printings zichtbaar.
+            var bannedGroups = await BanLookup.BannedCanonicalIdsAsync(db);
+            var banned = BanLookup.IsBanned(bannedGroups, c);
             var erratum = await db.Errata
                 .Where(e => e.CardRiftboundId == id)
                 .OrderByDescending(e => e.DetectedAt)
@@ -205,7 +208,7 @@ public static class CardEndpoints
         app.MapGet("/api/cards/{id}/similar/{otherId}/explain", async (
             string id, string otherId, RbRulesDbContext db, RbAiClient ai) =>
         {
-            var (a, b) = string.CompareOrdinal(id, otherId) < 0 ? (id, otherId) : (otherId, id);
+            var (a, b) = CardText.OrderedPair(id, otherId);
             var cached = await db.SimilarityExplanations
                 .FirstOrDefaultAsync(e => e.CardAId == a && e.CardBId == b);
             if (cached is not null) return Results.Ok(new { explanation = cached.Text, cached = true });
@@ -214,13 +217,8 @@ public static class CardEndpoints
             var cardB = await db.Cards.FindAsync(otherId);
             if (cardA is null || cardB is null) return Results.NotFound();
 
-            string Describe(RbRules.Domain.Card c) =>
-                $"{c.Name} ({c.Supertype} {c.Type}, {string.Join("/", c.Domains)}, energy {c.Energy?.ToString() ?? "—"})" +
-                (c.Mechanics is { Length: > 0 } m ? $", mechanieken: {string.Join(", ", m)}" : "") +
-                (c.TextPlain is null ? "" : $"\nTekst: {CardText.HumanizeIcons(c.TextPlain)}");
-
             var raw = await ai.AskAsync(
-                $"Kaart 1: {Describe(cardA)}\n\nKaart 2: {Describe(cardB)}",
+                $"Kaart 1: {CardText.DescribeForPrompt(cardA)}\n\nKaart 2: {CardText.DescribeForPrompt(cardB)}",
                 """
                 Je legt in één of twee Nederlandse zinnen uit op welk semantisch vlak twee
                 Riftbound-kaarten op elkaar lijken: welk gedrag, welke rol of welk

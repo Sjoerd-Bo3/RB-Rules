@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { renderMarkdown } from '$lib/markdown';
 	import RbText from '$lib/RbText.svelte';
+	import AnswerView from '$lib/AnswerView.svelte';
 
 	let { data, form } = $props();
 	let busy = $state(false);
@@ -79,7 +79,7 @@
 		localStorage.setItem('rb-ask-history', JSON.stringify(history));
 	}
 
-	const answerHtml = $derived(form?.answer ? renderMarkdown(form.answer) : null);
+	const hasAnswer = $derived(Boolean(form?.answer));
 
 	const TYPE_LABELS: Record<string, string> = {
 		Ruling: 'Ruling',
@@ -165,7 +165,7 @@
 
 	{#if form?.error}<p class="warn">{form.error}</p>{/if}
 
-	{#if answerHtml && !busy}
+	{#if hasAnswer && !busy}
 		<article class="panel answer-panel">
 			{#if form?.question}
 				<p class="asked meta">
@@ -173,8 +173,7 @@
 					Vraag: {form.question}
 				</p>
 			{/if}
-			<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
-			<div class="md">{@html answerHtml}</div>
+			<AnswerView answer={form?.answer ?? ''} citations={form?.citations ?? []} cards={form?.cards ?? []} />
 			{#if form?.citations?.length}
 				<h2>Geciteerde regelsecties</h2>
 				{#each form.citations as c (c.n)}

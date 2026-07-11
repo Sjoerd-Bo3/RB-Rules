@@ -80,10 +80,16 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         return numeric ? 0 : 1;
     }
 
+    /// <summary>Alle bestaande kaarten één keer laden (review-fix #43: geen
+    /// FindAsync per kaart — dat waren ~1250 losse SELECT's per sync).</summary>
+    private async Task<Dictionary<string, Card>> LoadExistingAsync(CancellationToken ct) =>
+        await db.Cards.ToDictionaryAsync(c => c.RiftboundId, ct);
+
     private async Task<CardSyncResult> SyncFromRiftcodexAsync(
         Action<string>? progress, CancellationToken ct)
     {
         progress?.Invoke("setlijst ophalen bij Riftcodex");
+        var existing = await LoadExistingAsync(ct);
         var setsNode = await GetJsonAsync($"{RiftcodexBase}/sets?page=1&size=100", ct);
         var sets = AsList(setsNode);
         var setIds = new List<string>();
@@ -111,7 +117,7 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
                     var card = MapRiftcodexCard(c, setId);
                     if (card is not null)
                     {
-                        await UpsertCardAsync(card, ct);
+                        await UpsertCardAsync(card, existing, ct);
                         total++;
                     }
                 }
@@ -134,10 +140,11 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         var cards = RiotCardMapper.ParseGallery(json?["pageProps"] ?? new JsonObject());
 
         progress?.Invoke($"{cards.Count} kaarten verwerken");
+        var existing = await LoadExistingAsync(ct);
         var setIds = new HashSet<string>();
         foreach (var card in cards)
         {
-            await UpsertCardAsync(card, ct);
+            await UpsertCardAsync(card, existing, ct);
             if (card.SetId is not null) setIds.Add(card.SetId);
         }
         foreach (var sid in setIds) await UpsertSetAsync(sid, sid, null, ct);
@@ -173,12 +180,13 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         };
     }
 
-    private async Task UpsertCardAsync(Card card, CancellationToken ct)
+    private async Task UpsertCardAsync(
+        Card card, Dictionary<string, Card> known, CancellationToken ct)
     {
-        var existing = await db.Cards.FindAsync([card.RiftboundId], ct);
-        if (existing is null)
+        if (!known.TryGetValue(card.RiftboundId, out var existing))
         {
             db.Cards.Add(card);
+            known[card.RiftboundId] = card;
             return;
         }
         existing.Name = card.Name;

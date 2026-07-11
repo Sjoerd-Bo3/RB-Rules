@@ -39,6 +39,7 @@ builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
+builder.Services.AddScoped<PrimerService>();
 builder.Services.AddScoped<BanErrataSyncService>();
 builder.Services.AddScoped<InteractionService>();
 builder.Services.AddSingleton<JobRunner>();

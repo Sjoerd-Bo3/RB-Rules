@@ -215,14 +215,8 @@ public static class AdminEndpoints
                     // Ook handmatige scans sturen pushmeldingen bij high-severity.
                     try
                     {
-                        var db = sp.GetRequiredService<RbRulesDbContext>();
-                        var push = sp.GetRequiredService<PushService>();
-                        var important = await db.Changes
-                            .Where(c => c.DetectedAt >= scanStart && c.Severity == "high")
-                            .ToListAsync(ct);
-                        foreach (var c in important)
-                            await push.SendToAllAsync(db, "Belangrijke Riftbound-wijziging",
-                                c.Summary ?? c.ChangeType, "https://riftbound-v2.bo3.dev/", ct);
+                        await sp.GetRequiredService<PushService>().NotifyHighSeverityAsync(
+                            sp.GetRequiredService<RbRulesDbContext>(), scanStart, ct);
                     }
                     catch
                     {
@@ -266,6 +260,12 @@ public static class AdminEndpoints
                     report("kaarten, domeinen, tags en mechanieken naar Neo4j schrijven");
                     var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
                     return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics";
+                },
+                "primer" => async (sp, report, ct) =>
+                {
+                    var r = await sp.GetRequiredService<PrimerService>()
+                        .GenerateAsync(progress: report, ct: ct);
+                    return $"{r.Written} primer-docs geschreven (drafts), {r.Skipped} goedgekeurd gelaten, {r.Failed} mislukt";
                 },
                 "interactions" => async (sp, report, ct) =>
                 {
@@ -353,6 +353,36 @@ public static class AdminEndpoints
             var c = await db.Changes.FindAsync(id);
             if (c is null) return Results.NotFound();
             db.Changes.Remove(c);
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Primer-kennisdocs (kennislaag 1, #49): reviewen en goedkeuren.
+        admin.MapGet("/knowledge", async (RbRulesDbContext db) =>
+            await db.KnowledgeDocs.AsNoTracking()
+                .OrderBy(k => k.Topic)
+                .Select(k => new
+                {
+                    k.Id, k.Kind, k.Topic, k.Title, k.Body,
+                    k.SectionRefs, k.Status, k.UpdatedAt,
+                })
+                .ToListAsync());
+
+        admin.MapPost("/knowledge/{id:long}/approve", async (long id, RbRulesDbContext db) =>
+        {
+            var doc = await db.KnowledgeDocs.FindAsync(id);
+            if (doc is null) return Results.NotFound();
+            doc.Status = "approved";
+            doc.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapDelete("/knowledge/{id:long}", async (long id, RbRulesDbContext db) =>
+        {
+            var doc = await db.KnowledgeDocs.FindAsync(id);
+            if (doc is null) return Results.NotFound();
+            db.KnowledgeDocs.Remove(doc);
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });

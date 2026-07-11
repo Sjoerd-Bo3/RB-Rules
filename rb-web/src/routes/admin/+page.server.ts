@@ -4,17 +4,22 @@ import { env } from '$env/dynamic/private';
 import { ADMIN_COOKIE, adminApi, adminToken, authed } from '$lib/server/admin';
 
 export const load: PageServerLoad = async ({ cookies }) => {
-	if (!authed(cookies)) return { authed: false, sources: [], status: null, corrections: [], askTraces: [] };
+	if (!authed(cookies))
+		return { authed: false, sources: [], status: null, corrections: [], askTraces: [], knowledge: [] };
 	try {
-		const [sources, status, corrections, askTraces] = await Promise.all([
+		const [sources, status, corrections, askTraces, knowledge] = await Promise.all([
 			adminApi<unknown[]>('/api/sources'),
 			adminApi<unknown>('/api/admin/status'),
 			adminApi<unknown[]>('/api/admin/corrections').catch(() => []),
-			adminApi<unknown[]>('/api/admin/asktraces').catch(() => [])
+			adminApi<unknown[]>('/api/admin/asktraces').catch(() => []),
+			adminApi<unknown[]>('/api/admin/knowledge').catch(() => [])
 		]);
-		return { authed: true, sources, status, corrections, askTraces, apiDown: false };
+		return { authed: true, sources, status, corrections, askTraces, knowledge, apiDown: false };
 	} catch {
-		return { authed: true, sources: [], status: null, corrections: [], askTraces: [], apiDown: true };
+		return {
+			authed: true, sources: [], status: null,
+			corrections: [], askTraces: [], knowledge: [], apiDown: true
+		};
 	}
 };
 
@@ -62,6 +67,26 @@ export const actions: Actions = {
 		const form = await request.formData();
 		try {
 			await adminApi(`/api/admin/corrections/${form.get('id')}`, { method: 'DELETE' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	approveKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/knowledge/${form.get('id')}/approve`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	deleteKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/knowledge/${form.get('id')}`, { method: 'DELETE' });
 			return { ok: true };
 		} catch (e) {
 			return fail(502, { error: e instanceof Error ? e.message : String(e) });

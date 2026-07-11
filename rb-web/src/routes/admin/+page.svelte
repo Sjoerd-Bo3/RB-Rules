@@ -28,6 +28,7 @@
 		{ name: 'mine', label: 'Mechanieken analyseren', hint: 'LLM-analyse van kaartteksten' },
 		{ name: 'rules', label: 'Regels indexeren', hint: 'sectie-chunks en embeddings opbouwen' },
 		{ name: 'bans', label: 'Bans en errata structureren', hint: 'uit de officiële documenten' },
+		{ name: 'primer', label: 'Primer genereren', hint: 'spelbegrip-docs destilleren uit de regels (drafts ter review)' },
 		{ name: 'graph', label: 'Graph synchroniseren', hint: 'Neo4j bijwerken' },
 		{ name: 'interactions', label: 'Interacties minen', hint: 'kandidaten zoeken en LLM-verifiëren' }
 	];
@@ -50,6 +51,14 @@
 	const corrections = $derived((data.corrections ?? []) as Correction[]);
 	const openCorrections = $derived(corrections.filter((c) => c.status === 'unverified'));
 	const askTraces = $derived((data.askTraces ?? []) as AskTrace[]);
+
+	interface KnowledgeDoc {
+		id: number; kind: string; topic: string; title: string; body: string;
+		sectionRefs: string | null; status: string; updatedAt: string;
+	}
+	const knowledge = $derived((data.knowledge ?? []) as KnowledgeDoc[]);
+	const draftDocs = $derived(knowledge.filter((k) => k.status === 'draft'));
+	const approvedDocs = $derived(knowledge.filter((k) => k.status === 'approved'));
 	// svelte-ignore state_referenced_locally
 	let live = $state<Status | null>(data.status as Status | null);
 	const running = $derived(live?.running ?? null);
@@ -225,6 +234,32 @@
 		</table>
 		</div>
 
+		<!-- Primer-kennisdocs (#49): spelbegrip reviewen -->
+		{#if knowledge.length}
+			<h2>Spelbegrip-primer <span class="meta">({approvedDocs.length} goedgekeurd, {draftDocs.length} te reviewen — goedgekeurde docs voeden elke ruling)</span></h2>
+			{#each draftDocs as k (k.id)}
+				<div class="correction panel">
+					<div class="correction-body">
+						<p class="t"><strong>{k.title}</strong> <span class="badge warn-b">Draft</span></p>
+						<details>
+							<summary class="meta">Lees de gegenereerde tekst (gebaseerd op {k.sectionRefs || 'regels'})</summary>
+							<p class="primer-body">{k.body}</p>
+						</details>
+					</div>
+					<div class="correction-actions">
+						<form method="POST" action="?/approveKnowledge" use:enhance>
+							<input type="hidden" name="id" value={k.id} />
+							<button title="Goedgekeurde docs gaan mee als spelbegrip in elke vraag">Keur goed</button>
+						</form>
+						<form method="POST" action="?/deleteKnowledge" use:enhance>
+							<input type="hidden" name="id" value={k.id} />
+							<button class="ghost small">Verwijder</button>
+						</form>
+					</div>
+				</div>
+			{/each}
+		{/if}
+
 		<!-- Vraag-traces (#40): denkstappen van de ask-pipeline -->
 		{#if askTraces.length}
 			<h2>Vraag-traces <span class="meta">(laatste {askTraces.length} — de route die elke vraag door de pipeline nam)</span></h2>
@@ -311,6 +346,7 @@
 	.job { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
 	.job-info { flex: 1; display: flex; flex-direction: column; }
 	.job-info .hint { color: var(--muted); font-size: 0.78rem; }
+	.primer-body { white-space: pre-wrap; margin: 8px 0 2px; line-height: 1.6; }
 	.trace { padding: 10px 14px; margin-bottom: 6px; }
 	.trace summary { cursor: pointer; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 	.trace-q { flex: 1; min-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -173,6 +173,24 @@ public class AskMetric
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Kennisbank-document (docs/KNOWLEDGE.md). Kind "primer" =
+/// gedistilleerd spelbegrip; draft → door de beheerder approved, daarna
+/// doet het doc mee in de /ask-context.</summary>
+public class KnowledgeDoc
+{
+    public long Id { get; set; }
+    public required string Kind { get; set; }           // primer | (later: claim-samenvatting …)
+    public required string Topic { get; set; }          // PrimerTopics.Key
+    public required string Title { get; set; }
+    public required string Body { get; set; }
+    /// <summary>§-codes waarop het doc gebaseerd is, komma-gescheiden.</summary>
+    public string? SectionRefs { get; set; }
+    public string Status { get; set; } = "draft";       // draft | approved
+    public Vector? Embedding { get; set; }
+    public string? EmbeddingModel { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 /// <summary>Denkstappen-trace per rulings-vraag (#40, admin-only): welke
 /// route nam de vraag door de pipeline en met welke context.</summary>
 public class AskTrace
@@ -188,6 +206,8 @@ public class AskTrace
     public string? Sections { get; set; }
     /// <summary>Kaartnamen die als context meegingen.</summary>
     public string? ContextCards { get; set; }
+    /// <summary>Titels van de primer-docs die als spelbegrip meegingen.</summary>
+    public string? PrimerDocs { get; set; }
     public int VerifiedRulings { get; set; }
     public string? Model { get; set; }                  // cheap|hard
     public bool HadImage { get; set; }
