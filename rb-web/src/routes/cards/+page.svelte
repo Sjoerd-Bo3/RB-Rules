@@ -46,7 +46,7 @@
 				type="number"
 				name="maxEnergy"
 				value={data.filters.maxEnergy}
-				placeholder="Max ⚡"
+				placeholder="Max energy"
 				min="0"
 				max="12"
 			/>
@@ -79,11 +79,12 @@
 					{/if}
 					<div class="body">
 						<strong>{c.name}</strong>
+						{#if c.variants}<span class="variants">+{c.variants} versies</span>{/if}
 						<p class="meta">
 							{[c.supertype, c.type].filter(Boolean).join(' ')}
 							· {c.domains.join('/') || '—'}
-							{#if c.energy !== null}· ⚡{c.energy}{/if}
-							{#if c.might !== null}· ⚔{c.might}{/if}
+							{#if c.energy !== null}· E{c.energy}{/if}
+							{#if c.might !== null}· M{c.might}{/if}
 						</p>
 						{#if c.textPlain}<p class="text">{c.textPlain}</p>{/if}
 					</div>
@@ -134,5 +135,9 @@
 	.card img { width: 100%; aspect-ratio: 744 / 1039; object-fit: cover; }
 	.card .body { padding: 10px 12px; }
 	.text { font-size: 0.85rem; color: #cdd9ef; }
+	.variants {
+		display: inline-block; margin-left: 6px; font-size: 0.7rem; color: #9fb0cc;
+		border: 1px solid #243551; border-radius: 999px; padding: 1px 7px;
+	}
 	.warn { color: #ff8b8e; }
 </style>

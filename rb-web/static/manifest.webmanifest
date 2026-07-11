@@ -1,0 +1,18 @@
+{
+	"name": "Riftbound Rules Companion",
+	"short_name": "RB Rules",
+	"description": "Actuele Riftbound TCG regels, bans, errata en rulings — automatisch bijgehouden.",
+	"start_url": "/",
+	"display": "standalone",
+	"background_color": "#0d1420",
+	"theme_color": "#0d1420",
+	"lang": "nl",
+	"icons": [
+		{
+			"src": "/icon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "any"
+		}
+	]
+}

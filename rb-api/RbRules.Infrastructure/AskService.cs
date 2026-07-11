@@ -78,13 +78,21 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         // 4. Kaartfeiten (incl. mechanieken en ban-status) voor herkende kaarten
         var cardBlock = await CardFactsAsync(question, ct);
 
-        // 5. Geverifieerde rulings (self-learning override-laag)
+        // 5. Geverifieerde rulings (self-learning override-laag) — semantisch
+        // gematcht op de vraag; zonder embedding vallen we terug op recentste.
         var rulings = await db.Corrections
-            .Where(c => c.Status == "verified")
-            .OrderByDescending(c => c.VerifiedAt)
+            .Where(c => c.Status == "verified" && c.Embedding != null)
+            .OrderBy(c => c.Embedding!.CosineDistance(qv))
             .Take(3)
             .Select(c => c.Text)
             .ToListAsync(ct);
+        if (rulings.Count == 0)
+            rulings = await db.Corrections
+                .Where(c => c.Status == "verified")
+                .OrderByDescending(c => c.VerifiedAt)
+                .Take(3)
+                .Select(c => c.Text)
+                .ToListAsync(ct);
         var rulingBlock = rulings.Count == 0
             ? ""
             : "\n\nGEVERIFIEERDE RULINGS (gezaghebbend):\n" +

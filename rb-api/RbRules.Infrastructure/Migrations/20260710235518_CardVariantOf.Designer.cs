@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260710235518_CardVariantOf")]
+    partial class CardVariantOf
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -631,48 +634,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_run_log_created_at");
 
                     b.ToTable("run_log", (string)null);
-                });
-
-            modelBuilder.Entity("RbRules.Domain.SimilarityExplanation", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("CardAId")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("card_a_id");
-
-                    b.Property<string>("CardBId")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("card_b_id");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("Model")
-                        .HasColumnType("text")
-                        .HasColumnName("model");
-
-                    b.Property<string>("Text")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("text");
-
-                    b.HasKey("Id")
-                        .HasName("pk_similarity_explanation");
-
-                    b.HasIndex("CardAId", "CardBId")
-                        .IsUnique()
-                        .HasDatabaseName("ix_similarity_explanation_card_a_id_card_b_id");
-
-                    b.ToTable("similarity_explanation", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.Source", b =>

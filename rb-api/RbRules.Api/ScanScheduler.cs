@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using RbRules.Infrastructure;
 
 namespace RbRules.Api;
@@ -23,12 +24,40 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
         {
             try
             {
+                var tickStart = DateTimeOffset.UtcNow;
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var ingest = scope.ServiceProvider.GetRequiredService<IngestService>();
                 var results = await ingest.ScanAsync(onlyDue: true, ct: ct);
                 if (results.Count > 0)
                     logger.LogInformation("Scan: {Results}",
                         string.Join(", ", results.Select(r => $"{r.SourceId}={r.Status}")));
+
+                // Web-push (#28): meld high-severity wijzigingen (bans/errata/
+                // regelwijzigingen) aan abonnees. Best-effort.
+                if (results.Any(r => r.Status is "changed"))
+                {
+                    try
+                    {
+                        var db = scope.ServiceProvider.GetRequiredService<RbRulesDbContext>();
+                        var push = scope.ServiceProvider.GetRequiredService<PushService>();
+                        var important = await db.Changes
+                            .Where(c => c.DetectedAt >= tickStart && c.Severity == "high")
+                            .ToListAsync(ct);
+                        foreach (var c in important)
+                        {
+                            var sent = await push.SendToAllAsync(db,
+                                "Belangrijke Riftbound-wijziging",
+                                c.Summary ?? c.ChangeType,
+                                "https://riftbound-v2.bo3.dev/", ct);
+                            if (sent > 0)
+                                logger.LogInformation("Push: {Sent} meldingen voor change {Id}", sent, c.Id);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Push-verzending overgeslagen");
+                    }
+                }
 
                 // Bij nieuwe/gewijzigde documenten: her-indexeren (sectie-chunks +
                 // embeddings) en de banlijst/errata opnieuw structureren.
@@ -38,7 +67,7 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                     try
                     {
                         var rules = scope.ServiceProvider.GetRequiredService<RuleChunkPipeline>();
-                        var indexed = await rules.RunAsync(ct);
+                        var indexed = await rules.RunAsync(ct: ct);
                         if (indexed.Count > 0)
                             logger.LogInformation("Regel-index: {Detail}",
                                 string.Join(", ", indexed.Select(r => $"{r.SourceId}={r.Chunks}")));
@@ -56,7 +85,7 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                 if (DateTimeOffset.UtcNow - _lastCardSync >= CardSyncInterval)
                 {
                     var cards = scope.ServiceProvider.GetRequiredService<CardSyncService>();
-                    var r = await cards.SyncAsync(ct);
+                    var r = await cards.SyncAsync(ct: ct);
                     _lastCardSync = DateTimeOffset.UtcNow;
                     logger.LogInformation("Kaart-sync: {Sets} sets, {Cards} kaarten via {Source}",
                         r.Sets, r.Cards, r.Source);
@@ -80,7 +109,7 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                 try
                 {
                     var mining = scope.ServiceProvider.GetRequiredService<MechanicMiningService>();
-                    var m = await mining.RunAsync(maxBatches: 5, ct);
+                    var m = await mining.RunAsync(maxBatches: 5, ct: ct);
                     if (m.Mined > 0)
                     {
                         logger.LogInformation("Mechanieken: {Mined} kaarten gemined ({Remaining} resterend)",

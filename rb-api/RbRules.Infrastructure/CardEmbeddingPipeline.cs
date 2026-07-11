@@ -12,14 +12,21 @@ public class CardEmbeddingPipeline(RbRulesDbContext db, EmbeddingService embeddi
 {
     private const int BatchSize = 16;
 
-    public async Task<EmbedRunResult> RunAsync(bool force = false, CancellationToken ct = default)
+    public async Task<EmbedRunResult> RunAsync(
+        bool force = false, Action<string>? progress = null, CancellationToken ct = default)
     {
-        var cards = await db.Cards.OrderBy(c => c.RiftboundId).ToListAsync(ct);
+        // Varianten (alt-art/promo) slaan we over: identieke tekst, en zo
+        // blijven 'vergelijkbare kaarten' vrij van duplicaten.
+        var cards = await db.Cards
+            .Where(c => c.VariantOf == null)
+            .OrderBy(c => c.RiftboundId)
+            .ToListAsync(ct);
         var todo = force ? cards : [.. cards.Where(CardText.NeedsEmbedding)];
         var skipped = cards.Count - todo.Count;
 
         for (var i = 0; i < todo.Count; i += BatchSize)
         {
+            progress?.Invoke($"embeddings berekenen: kaart {i + 1}–{Math.Min(i + BatchSize, todo.Count)} van {todo.Count}");
             var batch = todo.Skip(i).Take(BatchSize).ToList();
             var vectors = await embeddings.EmbedAsync(
                 [.. batch.Select(CardText.Compose)], ct);

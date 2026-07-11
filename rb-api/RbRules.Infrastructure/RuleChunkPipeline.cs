@@ -12,13 +12,15 @@ public class RuleChunkPipeline(RbRulesDbContext db, EmbeddingService embeddings)
 {
     private const int EmbedBatch = 16;
 
-    public async Task<List<RuleIndexResult>> RunAsync(CancellationToken ct = default)
+    public async Task<List<RuleIndexResult>> RunAsync(
+        Action<string>? progress = null, CancellationToken ct = default)
     {
         var results = new List<RuleIndexResult>();
         var sources = await db.Sources.Where(s => s.Enabled).ToListAsync(ct);
 
         foreach (var src in sources)
         {
+            progress?.Invoke($"document van {src.Name} controleren");
             var doc = await db.Documents
                 .Where(d => d.SourceId == src.Id)
                 .OrderByDescending(d => d.RetrievedAt)

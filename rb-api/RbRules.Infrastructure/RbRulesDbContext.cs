@@ -21,6 +21,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<BanEntry> BanEntries => Set<BanEntry>();
     public DbSet<Erratum> Errata => Set<Erratum>();
     public DbSet<CardInteraction> CardInteractions => Set<CardInteraction>();
+    public DbSet<SimilarityExplanation> SimilarityExplanations => Set<SimilarityExplanation>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -124,6 +125,12 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.ToTable("card_interaction");
             e.HasIndex(x => x.CardAId);
             e.HasIndex(x => x.CardBId);
+            e.HasIndex(x => new { x.CardAId, x.CardBId }).IsUnique();
+        });
+
+        b.Entity<SimilarityExplanation>(e =>
+        {
+            e.ToTable("similarity_explanation");
             e.HasIndex(x => new { x.CardAId, x.CardBId }).IsUnique();
         });
     }

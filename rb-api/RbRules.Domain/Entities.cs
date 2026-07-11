@@ -114,6 +114,9 @@ public class Card
     /// <summary>S1-fundament: kaart-embedding voor semantisch zoeken.</summary>
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }         // provenance (model-wissel-guard)
+    /// <summary>Alt-art/promo/herdruk-groepering: null = canonieke printing,
+    /// anders het RiftboundId van de canonieke kaart met dezelfde naam.</summary>
+    public string? VariantOf { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -138,6 +141,18 @@ public class RunLog
     public string? Ref { get; set; }
     public required string Status { get; set; }         // ok|changed|new|unchanged|error|info
     public string? Detail { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Gecachete LLM-uitleg waarom twee kaarten op elkaar lijken (#30).
+/// Paar is geordend (CardAId &lt; CardBId); cache invalideert bij tekstwijziging.</summary>
+public class SimilarityExplanation
+{
+    public long Id { get; set; }
+    public required string CardAId { get; set; }
+    public required string CardBId { get; set; }
+    public required string Text { get; set; }
+    public string? Model { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

@@ -4,13 +4,14 @@ using RbRules.Infrastructure;
 namespace RbRules.Api;
 
 /// <summary>Achtergrond-jobs voor admin-acties: POST start direct (202), de
-/// status-endpoint toont live wat er draait. Eén job tegelijk — de acties
-/// delen dezelfde data en LLM/Ollama-capaciteit.</summary>
+/// status-endpoint toont live wat er draait — inclusief een voortgangsregel
+/// die de job zelf bijwerkt. Eén job tegelijk — de acties delen dezelfde
+/// data en LLM/Ollama-capaciteit.</summary>
 public class JobRunner(IServiceScopeFactory scopeFactory, ILogger<JobRunner> logger)
 {
     public record JobState(
         string Name, string Status, DateTimeOffset StartedAt,
-        DateTimeOffset? FinishedAt, string? Detail);
+        DateTimeOffset? FinishedAt, string? Detail, string? Progress = null);
 
     private readonly Lock _lock = new();
     private JobState? _current;
@@ -21,12 +22,22 @@ public class JobRunner(IServiceScopeFactory scopeFactory, ILogger<JobRunner> log
         lock (_lock) return (_current, _last);
     }
 
-    public bool TryStart(string name, Func<IServiceProvider, CancellationToken, Task<string>> work)
+    public bool TryStart(
+        string name,
+        Func<IServiceProvider, Action<string>, CancellationToken, Task<string>> work)
     {
         lock (_lock)
         {
             if (_current is not null) return false;
             _current = new(name, "running", DateTimeOffset.UtcNow, null, null);
+        }
+
+        void Report(string progress)
+        {
+            lock (_lock)
+            {
+                if (_current?.Name == name) _current = _current with { Progress = progress };
+            }
         }
 
         _ = Task.Run(async () =>
@@ -36,7 +47,7 @@ public class JobRunner(IServiceScopeFactory scopeFactory, ILogger<JobRunner> log
             try
             {
                 await using var scope = scopeFactory.CreateAsyncScope();
-                detail = await work(scope.ServiceProvider, CancellationToken.None);
+                detail = await work(scope.ServiceProvider, Report, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -59,7 +70,11 @@ public class JobRunner(IServiceScopeFactory scopeFactory, ILogger<JobRunner> log
 
             lock (_lock)
             {
-                _last = _current! with { Status = status, FinishedAt = DateTimeOffset.UtcNow, Detail = detail };
+                _last = _current! with
+                {
+                    Status = status, FinishedAt = DateTimeOffset.UtcNow,
+                    Detail = detail, Progress = null,
+                };
                 _current = null;
             }
         });
