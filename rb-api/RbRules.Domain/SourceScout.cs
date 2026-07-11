@@ -67,7 +67,7 @@ public static class SourceScout
     public static IReadOnlyList<SourceProposal>? Parse(
         string raw, IEnumerable<string>? knownUrls = null)
     {
-        foreach (var json in JsonCandidates(raw))
+        foreach (var json in LlmJson.Candidates(raw))
         {
             try
             {
@@ -131,46 +131,6 @@ public static class SourceScout
     /// <summary>Vergelijkingsvorm voor URL-dedupe: case- en
     /// trailing-slash-ongevoelig, maar verder de URL zoals opgegeven.</summary>
     public static string NormalizeUrl(string url) => url.Trim().TrimEnd('/');
-
-    /// <summary>Kandidaat-JSON-blokken in het antwoord, objecten vóór arrays
-    /// (het contract is een object; een kale array is een terugvaloptie).
-    /// Gebalanceerd en string-bewust gescand in plaats van first/last-index,
-    /// zodat prose vóór de JSON, ```json-fences en het "Bronnen:"-blok erna
-    /// (rb-ai's research-contract, met "[1]"-achtige markers) niet storen —
-    /// de eerste live run (#63) strandde precies daarop.</summary>
-    private static IEnumerable<string> JsonCandidates(string raw)
-    {
-        foreach (var open in new[] { '{', '[' })
-            for (var i = raw.IndexOf(open); i >= 0; i = raw.IndexOf(open, i + 1))
-                if (BalancedBlock(raw, i) is { } block)
-                    yield return block;
-    }
-
-    /// <summary>Het gebalanceerde blok dat op <paramref name="start"/> opent,
-    /// met JSON-strings (incl. escapes) overgeslagen; null als het blok niet
-    /// sluit of met het verkeerde haakje sluit.</summary>
-    private static string? BalancedBlock(string raw, int start)
-    {
-        var close = raw[start] == '{' ? '}' : ']';
-        var depth = 0;
-        var inString = false;
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-            if (inString)
-            {
-                if (c == '\\') i++;
-                else if (c == '"') inString = false;
-            }
-            else if (c == '"') inString = true;
-            else if (c is '{' or '[') depth++;
-            else if (c is '}' or ']' && --depth == 0)
-            {
-                return c == close ? raw[start..(i + 1)] : null;
-            }
-        }
-        return null;
-    }
 
     private static string? GetString(JsonElement obj, string key) =>
         obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String

@@ -59,7 +59,7 @@ public class SourceScoutService(RbRulesDbContext db, RbAiClient ai)
             // (rb-api kent geen API-keys; prompts bevatten alleen bron-URL's).
             return await DegradeAsync(
                 "LLM-antwoord onbruikbaar — geen parseerbare bronvoorstellen (blijft staan voor een volgende run). "
-                + $"Respons (afgekapt): {Snippet(raw)}",
+                + $"Respons (afgekapt): {LlmJson.Snippet(raw, SnippetLength)}",
                 ct);
         }
 
@@ -79,16 +79,6 @@ public class SourceScoutService(RbRulesDbContext db, RbAiClient ai)
     }
 
     private const int SnippetLength = 500;
-
-    /// <summary>Rauwe LLM-respons plat en afgekapt voor één run_log-regel:
-    /// whitespace samengevouwen, maximaal <see cref="SnippetLength"/> tekens.</summary>
-    private static string Snippet(string raw)
-    {
-        var flat = string.Join(' ',
-            raw.Split(default(char[]), StringSplitOptions.RemoveEmptyEntries));
-        if (flat.Length == 0) return "(leeg antwoord)";
-        return flat.Length <= SnippetLength ? flat : flat[..SnippetLength] + "…";
-    }
 
     /// <summary>Nette degradatie: de reden is zichtbaar in run_log én in het
     /// job-detail; de job crasht niet (AI-uitval is een verwacht pad).</summary>

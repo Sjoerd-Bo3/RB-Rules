@@ -98,49 +98,41 @@ public static partial class ClaimMiner
 
     /// <summary>Pakt de JSON uit het antwoord en geeft de array-items terug:
     /// object met <paramref name="property"/>, of een kale array
-    /// (prompt-afwijkingstolerantie). null als er niets bruikbaars staat.</summary>
+    /// (prompt-afwijkingstolerantie). null als er niets bruikbaars staat.
+    /// Kandidaat-blokken via <see cref="LlmJson.Candidates"/> — de oude
+    /// first/last-bracket-extractie brak op prose rond de JSON met
+    /// "[1]"-achtige markers (zelfde bug als de scout, PR #87 / #93).</summary>
     internal static List<JsonElement>? ExtractItems(string raw, string property)
     {
-        var json = ExtractJson(raw);
-        if (json is null) return null;
-        try
+        foreach (var json in LlmJson.Candidates(raw))
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            JsonElement items;
-            if (root.ValueKind == JsonValueKind.Array)
+            try
             {
-                items = root;
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object
+                    && root.TryGetProperty(property, out var p)
+                    && p.ValueKind == JsonValueKind.Array)
+                {
+                    // Clone: de elementen moeten het JsonDocument overleven.
+                    return [.. p.EnumerateArray().Select(e => e.Clone())];
+                }
+                // Kale array — tolerantie voor prompt-afwijking, maar alleen
+                // als er echt item-objecten in staan (of hij leeg is): "[1]"
+                // uit een bronvermelding is géén item-lijst (scout-les, #87).
+                if (root.ValueKind == JsonValueKind.Array
+                    && (root.GetArrayLength() == 0
+                        || root.EnumerateArray().Any(i => i.ValueKind == JsonValueKind.Object)))
+                {
+                    return [.. root.EnumerateArray().Select(e => e.Clone())];
+                }
             }
-            else if (root.ValueKind == JsonValueKind.Object
-                     && root.TryGetProperty(property, out var p)
-                     && p.ValueKind == JsonValueKind.Array)
+            catch (JsonException)
             {
-                items = p;
+                // geen geldige JSON op deze positie — volgende kandidaat
             }
-            else
-            {
-                return null;
-            }
-            // Clone: de elementen moeten het JsonDocument overleven.
-            return [.. items.EnumerateArray().Select(e => e.Clone())];
         }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Het object- of array-blok dat als eerste begint (zelfde
-    /// tolerantie als SourceScout: tekst rond de JSON is verwacht gedrag).</summary>
-    internal static string? ExtractJson(string raw)
-    {
-        var objStart = raw.IndexOf('{');
-        var arrStart = raw.IndexOf('[');
-        var useArray = arrStart >= 0 && (objStart < 0 || arrStart < objStart);
-        var start = useArray ? arrStart : objStart;
-        var end = useArray ? raw.LastIndexOf(']') : raw.LastIndexOf('}');
-        return start < 0 || end <= start ? null : raw[start..(end + 1)];
+        return null;
     }
 
     internal static string? GetString(JsonElement obj, string key) =>
@@ -182,29 +174,35 @@ public static class ClaimJudge
     /// als nieuw — de veilige kant: dedupe herstelt zich bij een latere run).</summary>
     public static ClaimJudgement? Parse(string raw, int candidateCount)
     {
-        var json = ClaimMiner.ExtractJson(raw);
-        if (json is null) return null;
-        try
+        foreach (var json in LlmJson.Candidates(raw))
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
-
-            var verdict = ClaimMiner.GetString(root, "verdict")?.ToLowerInvariant();
-            if (verdict is not ("same" or "contradicts" or "different")) return null;
-            if (verdict == "different") return new(verdict, null);
-
-            // same/contradicts vereisen een geldige kandidaat-verwijzing.
-            if (!root.TryGetProperty("match", out var m)
-                || m.ValueKind != JsonValueKind.Number
-                || !m.TryGetInt32(out var match)
-                || match < 1 || match > candidateCount) return null;
-            return new(verdict, match);
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (Map(doc.RootElement, candidateCount) is { } judgement) return judgement;
+            }
+            catch (JsonException)
+            {
+                // geen geldige JSON op deze positie — volgende kandidaat
+            }
         }
-        catch (JsonException)
-        {
-            return null;
-        }
+        return null;
+    }
+
+    private static ClaimJudgement? Map(JsonElement root, int candidateCount)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+
+        var verdict = ClaimMiner.GetString(root, "verdict")?.ToLowerInvariant();
+        if (verdict is not ("same" or "contradicts" or "different")) return null;
+        if (verdict == "different") return new(verdict, null);
+
+        // same/contradicts vereisen een geldige kandidaat-verwijzing.
+        if (!root.TryGetProperty("match", out var m)
+            || m.ValueKind != JsonValueKind.Number
+            || !m.TryGetInt32(out var match)
+            || match < 1 || match > candidateCount) return null;
+        return new(verdict, match);
     }
 }
 
@@ -235,23 +233,29 @@ public static class OfficialCheck
     /// en komt bij een volgende run opnieuw aan de beurt.</summary>
     public static OfficialVerdict? Parse(string raw)
     {
-        var json = ClaimMiner.ExtractJson(raw);
-        if (json is null) return null;
-        try
+        foreach (var json in LlmJson.Candidates(raw))
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (Map(doc.RootElement) is { } verdict) return verdict;
+            }
+            catch (JsonException)
+            {
+                // geen geldige JSON op deze positie — volgende kandidaat
+            }
+        }
+        return null;
+    }
 
-            var verdict = ClaimMiner.GetString(root, "verdict")?.ToLowerInvariant();
-            if (verdict is not ("confirmed" or "contradicted" or "unclear")) return null;
-            return new(verdict,
-                ClaimMiner.Truncate(ClaimMiner.GetString(root, "reason"), MaxReasonLength));
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
+    private static OfficialVerdict? Map(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+
+        var verdict = ClaimMiner.GetString(root, "verdict")?.ToLowerInvariant();
+        if (verdict is not ("confirmed" or "contradicted" or "unclear")) return null;
+        return new(verdict,
+            ClaimMiner.Truncate(ClaimMiner.GetString(root, "reason"), MaxReasonLength));
     }
 }
 
