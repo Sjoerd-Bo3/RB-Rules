@@ -51,6 +51,18 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         een feitelijke beschrijving van wat je op de foto ziet (welke kaarten,
         zones, exhausted/ready) en benoem expliciet wat je NIET zeker kunt
         lezen; betrek daarna alleen zekere waarnemingen in het oordeel.
+
+        WIDGETS — het antwoord wordt gerenderd met interactieve blokken.
+        Plaats markers op een eigen regel:
+        - [[rule:466.2.c]] direct onder de stap die op die sectie leunt —
+          de site toont daar een uitklapbaar regelblok met volledige tekst,
+          ouderregels en PDF-link. Alleen voor §-codes uit de context.
+        - [[card:Exacte Kaartnaam]] bij de eerste inhoudelijke vermelding
+          van een kaart — de site toont een kaart-widget met beeld en stats.
+          Alleen voor kaarten uit de kaartgegevens.
+        Spaarzaam en functioneel (2 tot 5 per antwoord), nooit dezelfde
+        marker twee keer; verwijzen met [n]/§ in de lopende tekst blijft
+        daarnaast gewoon nodig.
         """;
 
     public async Task<AskResult> AskAsync(
