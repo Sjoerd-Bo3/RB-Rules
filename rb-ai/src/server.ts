@@ -19,9 +19,21 @@ async function readJson(req: import("node:http").IncomingMessage): Promise<unkno
 
 const server = createServer(async (req, res) => {
   const send = (status: number, body: unknown) => {
+    if (res.destroyed) return res; // client al weg — niets meer te sturen
     res.writeHead(status, { "content-type": "application/json" });
-    res.end(JSON.stringify(body));
+    return res.end(JSON.stringify(body));
   };
+
+  // Weggelopen client = Claude-call afbreken (review #31): zonder deze
+  // koppeling maakt de sidecar elke geannuleerde vraag gewoon af en schrijft
+  // de deltas het niets in — een volledig gelekte LLM-call per afgebroken
+  // stream. 'close' vuurt óók na een normale afronding; alleen een respons
+  // die nog niet netjes geëindigd is (writableEnded=false) betekent een
+  // voortijdig vertrokken client.
+  const abort = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) abort.abort();
+  });
 
   try {
     if (req.method === "GET" && req.url === "/health") {
@@ -36,7 +48,7 @@ const server = createServer(async (req, res) => {
       // opt-in per call — #64); zie ai.ts voor het bronnen-contract.
       const parsed = parseAskRequest(await readJson(req));
       if (!parsed.ok) return send(400, { error: parsed.error });
-      const answer = await askClaude(parsed.request);
+      const answer = await askClaude({ ...parsed.request, signal: abort.signal });
       return send(200, { answer });
     }
 
@@ -52,6 +64,7 @@ const server = createServer(async (req, res) => {
       try {
         const answer = await askClaude({
           ...parsed.request,
+          signal: abort.signal,
           onDelta: (text) => {
             frame({ type: "delta", text });
           },
@@ -59,7 +72,8 @@ const server = createServer(async (req, res) => {
         frame({ type: "done", answer });
       } catch (e) {
         // Uitval mídden in de stream: de 200 is al weg, dus de fout gaat als
-        // frame mee — de aanroeper (rb-api) degradeert daarop netjes.
+        // frame mee — de aanroeper (rb-api) degradeert daarop netjes. Is de
+        // client zelf weggelopen (abort), dan is het frame een no-op.
         frame({ type: "error", error: String(e) });
       }
       return res.end();

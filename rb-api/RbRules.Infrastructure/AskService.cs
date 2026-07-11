@@ -374,9 +374,16 @@ public class AskService(
             : await StreamAnswerAsync(prompt, system, task, images, onDelta, ct);
         var answer = aiAnswer ?? RbAiClient.UnavailableAnswer;
 
+        // Vanaf hier bewust ZONDER request-token (review #31): de (LLM-)kosten
+        // zijn gemaakt, dus de afronding — kaart-match, metric, trace — moet
+        // ook landen als de client de tab al heeft dichtgeklapt. Anders
+        // ontbreken juist de afgebroken vragen in AskMetrics/AskTraces en
+        // divergeert het streamingpad van de niet-streamende route.
+        var finishCt = CancellationToken.None;
+
         // Betrokken kaarten (herkend in vraag én antwoord) voor de kaart-
         // uitklap op de ruling-pagina.
-        var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", ct);
+        var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", finishCt);
         sw.Stop();
 
         // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
@@ -415,10 +422,10 @@ public class AskService(
                 .OrderByDescending(t => t.CreatedAt)
                 .Skip(200)
                 .Select(t => t.CreatedAt)
-                .FirstOrDefaultAsync(ct);
+                .FirstOrDefaultAsync(finishCt);
             if (cutoff != default)
-                await db.AskTraces.Where(t => t.CreatedAt <= cutoff).ExecuteDeleteAsync(ct);
-            await db.SaveChangesAsync(ct);
+                await db.AskTraces.Where(t => t.CreatedAt <= cutoff).ExecuteDeleteAsync(finishCt);
+            await db.SaveChangesAsync(finishCt);
         }
         catch
         {
@@ -439,18 +446,28 @@ public class AskService(
         Func<string, Task> onDelta, CancellationToken ct)
     {
         string? answer = null;
-        await foreach (var frame in ai.AskStreamAsync(prompt, system, task, images, ct))
+        try
         {
-            switch (frame.Type)
+            await foreach (var frame in ai.AskStreamAsync(prompt, system, task, images, ct))
             {
-                case "delta" when !string.IsNullOrEmpty(frame.Text):
-                    await onDelta(frame.Text);
-                    break;
-                case "done":
-                    answer = string.IsNullOrWhiteSpace(frame.Answer) ? null : frame.Answer;
-                    break;
-                // "error" bewust genegeerd: answer blijft null → degradatie.
+                switch (frame.Type)
+                {
+                    case "delta" when !string.IsNullOrEmpty(frame.Text):
+                        await onDelta(frame.Text);
+                        break;
+                    case "done":
+                        answer = string.IsNullOrWhiteSpace(frame.Answer) ? null : frame.Answer;
+                        break;
+                    // "error" bewust genegeerd: answer blijft null → degradatie.
+                }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Client weggelopen tijdens het streamen (review #31): geen fout —
+            // we geven terug wat er is (meestal null), zodat AskCoreAsync de
+            // afronding (metric/trace, zonder token) alsnog registreert i.p.v.
+            // de vraag spoorloos te laten verdwijnen.
         }
         return answer;
     }
