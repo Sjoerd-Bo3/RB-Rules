@@ -41,6 +41,9 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         markdown en volg exact de structuur van het opgegeven vraagtype.
 
         REGELS:
+        - Schrijf 'Oordeel' en 'Zekerheid' exact als losse regels in de vorm
+          `**Oordeel:** …` en `**Zekerheid:** …` — géén ##-koppen daarvoor,
+          geen scheidingslijnen (---). De overige kopjes wél als ### koppen.
         - Baseer je uitsluitend op de meegegeven context-fragmenten en
           kaartgegevens. Ontbreekt het antwoord daarin: Zekerheid = Onzeker,
           en zeg wat er nodig is. Nooit gokken zonder dat label.
