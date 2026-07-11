@@ -35,10 +35,6 @@ public class RuleChunkPipeline(RbRulesDbContext db, EmbeddingService embeddings)
             var sections = RuleSectionParser.Parse(doc.Content);
             if (sections.Count == 0) continue;
 
-            // Oude chunks van deze bron eruit; nieuwste versie is leidend voor
-            // retrieval (historie blijft beschikbaar via document-snapshots).
-            await db.RuleChunks.Where(c => c.SourceId == src.Id).ExecuteDeleteAsync(ct);
-
             var chunks = sections.Select((s, i) => new RuleChunk
             {
                 DocumentId = doc.Id,
@@ -49,6 +45,9 @@ public class RuleChunkPipeline(RbRulesDbContext db, EmbeddingService embeddings)
                 Page = s.Page,
             }).ToList();
 
+            // Eerst volledig embedden (minutenlange, fallibele netwerkstap) —
+            // pas daarna oud-weg/nieuw-erin in één transactie, zodat er nooit
+            // een venster zonder regelindex is (review-fix).
             foreach (var batch in chunks.Chunk(EmbedBatch))
             {
                 var vectors = await embeddings.EmbedAsync(
@@ -60,8 +59,13 @@ public class RuleChunkPipeline(RbRulesDbContext db, EmbeddingService embeddings)
                 }
             }
 
-            db.RuleChunks.AddRange(chunks);
-            await db.SaveChangesAsync(ct);
+            await using (var tx = await db.Database.BeginTransactionAsync(ct))
+            {
+                await db.RuleChunks.Where(c => c.SourceId == src.Id).ExecuteDeleteAsync(ct);
+                db.RuleChunks.AddRange(chunks);
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+            }
             results.Add(new(src.Id, chunks.Count));
         }
         return results;

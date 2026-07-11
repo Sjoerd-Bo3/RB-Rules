@@ -9,7 +9,6 @@ namespace RbRules.Infrastructure;
 /// (audit-fix: nooit meer stille dimensie-mixen in pgvector).</summary>
 public class EmbeddingService(HttpClient http)
 {
-    private record EmbedRequest(string Model, string[] Input);
     private record EmbedResponse(float[][]? Embeddings);
 
     public async Task<Vector[]> EmbedAsync(string[] texts, CancellationToken ct = default)

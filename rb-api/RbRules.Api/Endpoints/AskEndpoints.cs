@@ -35,7 +35,7 @@ public static class AskEndpoints
                     DurationMs = (int)Math.Min(sw.ElapsedMilliseconds, int.MaxValue),
                     QuestionType = result.QuestionType,
                     HadImage = images.Count > 0,
-                    Ok = !result.Answer.StartsWith("AI is niet beschikbaar"),
+                    Ok = result.Ok,
                 });
                 await db.SaveChangesAsync();
             }

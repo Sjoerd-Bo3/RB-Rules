@@ -16,12 +16,15 @@ const safeUrl = (href: string): string | null => {
 	return null;
 };
 
+// Attribuut-escape: een '"' in de URL mag nooit uit het href-attribuut breken.
+const escapeAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+
 marked.use({
 	renderer: {
 		link({ href, text }) {
 			const url = safeUrl(href);
 			return url
-				? `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`
+				? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`
 				: text;
 		},
 		image({ text }) {

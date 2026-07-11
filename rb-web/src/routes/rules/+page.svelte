@@ -61,16 +61,13 @@
 					<details open={needle !== ''}>
 						<summary>
 							<strong>§ {g.head?.code ?? g.chapter}</strong>
-							{#if g.head}<span class="chapter-title">{g.head.preview}</span>{/if}
+							{#if g.head}
+								<a class="chapter-title" href="/rules/{encodeURIComponent(g.head.code)}?source={src.sourceId}">{g.head.preview}</a>
+							{/if}
 							<span class="meta count">({g.children.length})</span>
 						</summary>
 						<ul>
-							{#if g.head}
-								<li class="lvl-0">
-									<a href="/rules/{encodeURIComponent(g.head.code)}?source={src.sourceId}">§ {g.head.code}</a>
-									<span class="preview">{g.head.preview}…</span>
-								</li>
-							{/if}
+							<!-- De hoofdstukkop zelf staat al in de summary — niet herhalen. -->
 							{#each g.children as s (s.code)}
 								<li class="lvl-{Math.min(level(s.code), 2)}">
 									<a href="/rules/{encodeURIComponent(s.code)}?source={src.sourceId}">§ {s.code}</a>
@@ -100,7 +97,8 @@
 		padding: 8px 14px; margin-bottom: 8px;
 	}
 	summary { cursor: pointer; }
-	.chapter-title { margin-left: 8px; font-weight: 600; }
+	.chapter-title { margin-left: 8px; font-weight: 600; color: var(--text); text-decoration: none; }
+	.chapter-title:hover { color: var(--accent); }
 	.count { margin-left: 6px; font-size: 0.8rem; }
 	ul { list-style: none; margin: 8px 0 4px; padding: 0; }
 	li { padding: 4px 0; border-top: 1px solid var(--border); }
