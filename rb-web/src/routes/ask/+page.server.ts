@@ -49,10 +49,19 @@ interface AskResult {
 }
 
 export const actions: Actions = {
-	ask: async ({ request }) => {
+	ask: async ({ request, getClientAddress }) => {
 		const form = await request.formData();
 		const question = String(form.get('question') ?? '').trim();
 		if (!question) return fail(400, { error: 'Stel eerst een vraag.' });
+
+		// Doorvragen (#41): eerdere rondes reizen mee als JSON.
+		let history: { question: string; answer: string }[] = [];
+		try {
+			history = JSON.parse(String(form.get('history') ?? '[]'));
+		} catch {
+			history = [];
+		}
+		history = history.slice(-3);
 
 		// Optionele board-state-foto — client verkleint al, dit is de vangrail.
 		let images: { mediaType: string; data: string }[] | undefined;
@@ -68,19 +77,25 @@ export const actions: Actions = {
 		try {
 			const result = await api<AskResult>('/api/ask', {
 				method: 'POST',
-				body: JSON.stringify({ question, images })
+				headers: { 'x-client-ip': getClientAddress() },
+				body: JSON.stringify({
+					question,
+					images,
+					history: history.length ? history : undefined
+				})
 			});
-			return { question, hadPhoto: Boolean(images), ...result };
+			return { question, history, hadPhoto: Boolean(images), ...result };
 		} catch (e) {
 			return fail(500, {
 				error: `Vraag mislukt (${e instanceof Error ? e.message : e})`,
-				question
+				question,
+				history
 			});
 		}
 	},
 	// Self-learning (#24): feedback wordt een correctie in de reviewqueue;
 	// na verificatie door de beheerder stuurt hij toekomstige antwoorden.
-	feedback: async ({ request }) => {
+	feedback: async ({ request, getClientAddress }) => {
 		const form = await request.formData();
 		const question = String(form.get('question') ?? '').trim();
 		const verdict = String(form.get('verdict') ?? '');
@@ -102,6 +117,7 @@ export const actions: Actions = {
 		try {
 			await api('/api/corrections', {
 				method: 'POST',
+				headers: { 'x-client-ip': getClientAddress() },
 				body: JSON.stringify({ question, verdict, text })
 			});
 			return { question, answer, citations, cards, feedbackSent: verdict };

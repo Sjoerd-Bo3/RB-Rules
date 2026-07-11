@@ -1,3 +1,4 @@
+using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Neo4j.Driver;
 using Pgvector.EntityFrameworkCore;
@@ -48,6 +49,24 @@ builder.Services.AddHostedService<ScanScheduler>();
 
 builder.Services.AddOpenApi();
 
+// Rate-limiting op de dure/publieke schrijfroutes (#42-quick-win): elke
+// /api/ask en explain-call is een betaalde LLM-call. Partitie op het echte
+// client-IP dat rb-web meegeeft (X-Client-Ip) — requests komen anders
+// allemaal van het rb-web-container-IP.
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.AddPolicy("llm", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ctx.Request.Headers["X-Client-Ip"].FirstOrDefault()
+            ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 12,
+            Window = TimeSpan.FromMinutes(5),
+            QueueLimit = 0,
+        }));
+});
+
 var app = builder.Build();
 
 // Migraties, source-seed en graph-constraints bij start. Graph is best-effort:
@@ -73,6 +92,8 @@ if (!app.Environment.IsEnvironment("Testing"))
         app.Logger.LogWarning(ex, "Neo4j-constraints niet toegepast (Neo4j onbereikbaar?)");
     }
 }
+
+app.UseRateLimiter();
 
 app.MapOpenApi();
 

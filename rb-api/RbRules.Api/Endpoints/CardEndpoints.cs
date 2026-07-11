@@ -236,7 +236,7 @@ public static class CardEndpoints
             try { await db.SaveChangesAsync(); }
             catch (DbUpdateException) { /* race met parallel verzoek — cache bestaat al */ }
             return Results.Ok(new { explanation = raw.Trim(), cached = false });
-        });
+        }).RequireRateLimiting("llm");
 
         // Graph-verkenner (#29): buren van een kaart via gedeelde mechanieken,
         // domeinen en geverifieerde interacties.
