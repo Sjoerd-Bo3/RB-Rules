@@ -35,6 +35,10 @@
 		id: number; scope: string; ref: string; text: string; question: string | null;
 		provenance: string | null; status: string; createdAt: string; verifiedAt: string | null;
 	}
+	interface KnowledgeItem {
+		id: number; kind: string; topic: string; title: string; body: string;
+		sectionRefs: string | null; status: string; updatedAt: string;
+	}
 
 	const TITLES: Record<string, { title: string; sub: string }> = {
 		kaarten: { title: 'Kaarten', sub: 'alle kaarten in de database, doorklikbaar naar de kaartpagina' },
@@ -45,7 +49,8 @@
 		errata: { title: 'Errata', sub: 'actuele oracle-teksten per kaart' },
 		interacties: { title: 'Interacties', sub: 'LLM-geverifieerde kaart-interacties' },
 		wijzigingen: { title: 'Wijzigingen', sub: 'de wijzigingshistorie die de feed voedt' },
-		correcties: { title: 'Correcties', sub: 'feedback op antwoorden en geverifieerde rulings' }
+		correcties: { title: 'Correcties', sub: 'feedback op antwoorden en geverifieerde rulings' },
+		primer: { title: 'Spelbegrip-primer', sub: 'alle spelbegrip-docs, bewerkbaar — goedgekeurde docs voeden elke ruling' }
 	};
 	const meta = $derived(TITLES[data.kind]);
 
@@ -57,6 +62,19 @@
 	const interactions = $derived(data.kind === 'interacties' ? (data.data as Paged<InteractionItem> | null) : null);
 	const changes = $derived(data.kind === 'wijzigingen' ? (data.data as Paged<ChangeItem> | null) : null);
 	const corrections = $derived(data.kind === 'correcties' ? ((data.data ?? []) as CorrectionItem[]) : []);
+	const knowledge = $derived(data.kind === 'primer' ? ((data.data ?? []) as KnowledgeItem[]) : []);
+
+	// saveKnowledge-fouten dragen het doc-id mee zodat de melding bij het
+	// juiste bewerkformulier landt; andere actie-fouten hebben geen id.
+	const formDocId = $derived(form && 'id' in form ? (form.id as number) : null);
+
+	// Welk primer-doc in bewerk-modus staat; reset bij route-hergebruik
+	// (dit component blijft leven bij navigatie tussen kinds).
+	let editing = $state<number | null>(null);
+	$effect(() => {
+		void data.kind;
+		editing = null;
+	});
 
 	const paged = $derived(cards ?? chunks ?? interactions ?? changes);
 	const totalPages = $derived(paged ? Math.max(1, Math.ceil(paged.total / paged.pageSize)) : 1);
@@ -87,7 +105,8 @@
 	{#if data.apiDown}
 		<p class="warn">rb-api is niet bereikbaar — probeer het zo opnieuw.</p>
 	{:else}
-		{#if form?.error}<p class="warn">{form.error}</p>{/if}
+		<!-- Fouten mét doc-id landen bij het bijbehorende bewerkformulier. -->
+		{#if form?.error && formDocId === null}<p class="warn">{form.error}</p>{/if}
 
 		<!-- Filters -->
 		{#if data.kind === 'kaarten'}
@@ -119,6 +138,8 @@
 			<p class="meta count">{paged.total} totaal{totalPages > 1 ? ` · pagina ${paged.page} van ${totalPages}` : ''}</p>
 		{:else if data.kind === 'correcties' && corrections.length}
 			<p class="meta count">{corrections.length} getoond{corrections.length >= 200 ? ' (de laatste 200 — oudere correcties vallen buiten dit overzicht)' : ''}</p>
+		{:else if data.kind === 'primer' && knowledge.length}
+			<p class="meta count">{knowledge.length} docs · {knowledge.filter((k) => k.status === 'approved').length} goedgekeurd · {knowledge.filter((k) => k.status !== 'approved').length} draft</p>
 		{/if}
 
 		<!-- Kaart-overzichten (kaarten / embeddings / analyse) -->
@@ -275,6 +296,63 @@
 			{#if !corrections.length}<p class="meta">Geen correcties.</p>{/if}
 		{/if}
 
+		<!-- Spelbegrip-primer (#70): alle docs leesbaar en bewerkbaar -->
+		{#if data.kind === 'primer'}
+			{#each knowledge as k (k.id)}
+				<div class="panel item">
+					{#if editing === k.id}
+						<form
+							method="POST"
+							action="?/saveKnowledge"
+							class="edit"
+							use:enhance={() =>
+								async ({ update, result }) => {
+									await update();
+									if (result.type === 'success') editing = null;
+								}}
+						>
+							<input type="hidden" name="id" value={k.id} />
+							<label>Titel <input name="title" value={k.title} required /></label>
+							<label>Tekst <textarea name="body" rows="14" required>{k.body}</textarea></label>
+							{#if form?.error && formDocId === k.id}<p class="warn">{form.error}</p>{/if}
+							<div class="row">
+								<button type="submit">Opslaan</button>
+								<button type="button" class="ghost small" onclick={() => (editing = null)}>Annuleer</button>
+								<span class="meta">Opslaan embedt de tekst opnieuw; de status ({k.status === 'approved' ? 'goedgekeurd' : 'draft'}) blijft staan.</span>
+							</div>
+						</form>
+					{:else}
+						<p class="item-head">
+							<strong>{k.title}</strong>
+							<span class="badge {k.status === 'approved' ? 'ok-b' : 'warn-b'}">{k.status === 'approved' ? 'goedgekeurd' : 'draft'}</span>
+							<span class="meta">{k.topic} · {fmtDate(k.updatedAt)}</span>
+						</p>
+						<p class="pre">{k.body}</p>
+						{#if k.sectionRefs}<p class="meta refs">Gebaseerd op §{k.sectionRefs}</p>{/if}
+						<div class="row actions">
+							<button type="button" class="ghost small" onclick={() => (editing = k.id)}>Bewerk</button>
+							{#if k.status === 'approved'}
+								<form method="POST" action="?/unapproveKnowledge" use:enhance>
+									<input type="hidden" name="id" value={k.id} />
+									<button class="ghost small" title="Doet dan niet meer mee in de vraag-context tot her-goedkeuring">Terug naar draft</button>
+								</form>
+							{:else}
+								<form method="POST" action="?/approveKnowledge" use:enhance>
+									<input type="hidden" name="id" value={k.id} />
+									<button class="small" title="Goedgekeurde docs gaan mee als spelbegrip in elke vraag">Keur goed</button>
+								</form>
+							{/if}
+							<form method="POST" action="?/deleteKnowledge" use:enhance>
+								<input type="hidden" name="id" value={k.id} />
+								<button class="ghost small">Verwijder</button>
+							</form>
+						</div>
+					{/if}
+				</div>
+			{/each}
+			{#if !knowledge.length}<p class="meta">Nog geen spelbegrip-docs — draai "Primer genereren" in het beheer.</p>{/if}
+		{/if}
+
 		<!-- Paginering -->
 		{#if paged && totalPages > 1}
 			<nav class="pager">
@@ -325,6 +403,17 @@
 	.corr { display: flex; gap: 14px; }
 	.corr-body { flex: 1; }
 	.corr-actions { display: flex; flex-direction: column; gap: 6px; }
+	.refs { margin: 6px 0 0; }
+	.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+	.actions { margin-top: 10px; }
+	.edit { display: flex; flex-direction: column; gap: 10px; }
+	.edit label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 0.85rem; }
+	.edit input, .edit textarea {
+		width: 100%; box-sizing: border-box; background: var(--surface-deep); color: var(--text);
+		border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+		font-size: 16px; /* iOS zoomt in op form-controls kleiner dan 16px */
+		font-family: inherit; line-height: 1.55;
+	}
 	.pager { display: flex; align-items: center; gap: 14px; margin: 16px 0; }
 	.pager a { color: var(--accent); text-decoration: none; font-weight: 600; }
 	.meta { color: var(--muted); font-size: 0.85rem; }

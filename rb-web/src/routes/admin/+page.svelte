@@ -98,7 +98,8 @@
 		{ key: 'errata', label: 'Errata', slug: 'errata' },
 		{ key: 'interactions', label: 'Interacties', slug: 'interacties' },
 		{ key: 'changes', label: 'Wijzigingen', slug: 'wijzigingen' },
-		{ key: 'openCorrections', label: 'Open correcties', slug: 'correcties' }
+		{ key: 'openCorrections', label: 'Open correcties', slug: 'correcties' },
+		{ key: 'knowledge', label: 'Spelbegrip-docs', slug: 'primer' }
 	];
 </script>
 
@@ -238,7 +239,7 @@
 
 		<!-- Primer-kennisdocs (#49): spelbegrip reviewen -->
 		{#if knowledge.length}
-			<h2>Spelbegrip-primer <span class="meta">({approvedDocs.length} goedgekeurd, {draftDocs.length} te reviewen — goedgekeurde docs voeden elke ruling)</span></h2>
+			<h2>Spelbegrip-primer <span class="meta">({approvedDocs.length} goedgekeurd, {draftDocs.length} te reviewen — goedgekeurde docs voeden elke ruling) · <a class="meta-link" href="/admin/overview/primer">alle docs bekijken en bewerken</a></span></h2>
 			{#each draftDocs as k (k.id)}
 				<div class="correction panel">
 					<div class="correction-body">
@@ -365,6 +366,8 @@
 	th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 	th { color: var(--muted); font-size: 0.82rem; font-weight: 600; }
 	.meta { color: var(--muted); font-size: 0.85rem; }
+	.meta-link { color: var(--accent); text-decoration: none; }
+	.meta-link:hover { text-decoration: underline; }
 	.live-tag {
 		font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em;
 		border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; margin-left: 6px;

@@ -14,7 +14,8 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	errata: null,
 	interacties: null,
 	wijzigingen: null,
-	correcties: null
+	correcties: null,
+	primer: null
 };
 
 export const load: PageServerLoad = async ({ params, url, cookies }) => {
@@ -58,6 +59,8 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/changes?page=${page}`) };
 			case 'correcties':
 				return { ...base, data: await adminApi<unknown>('/api/admin/corrections') };
+			case 'primer':
+				return { ...base, data: await adminApi<unknown>('/api/admin/knowledge') };
 			default:
 				throw error(404, 'Onbekend overzicht');
 		}
@@ -83,6 +86,56 @@ export const actions: Actions = {
 		const form = await request.formData();
 		try {
 			await adminApi(`/api/admin/corrections/${form.get('id')}`, { method: 'DELETE' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Spelbegrip-primer (#70): bewerken her-embedt server-side; de status
+	// blijft staan. Fail-paden geven het doc-id mee zodat de fout bij het
+	// juiste formulier landt en de paginastate niet verdwijnt.
+	saveKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const title = String(form.get('title') ?? '').trim();
+		const body = String(form.get('body') ?? '').trim();
+		if (!title || !body) return fail(400, { error: 'Titel en tekst mogen niet leeg zijn', id });
+		try {
+			await adminApi(`/api/admin/knowledge/${id}`, {
+				method: 'PATCH',
+				body: JSON.stringify({ title, body })
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	approveKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/knowledge/${form.get('id')}/approve`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	unapproveKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/knowledge/${form.get('id')}/unapprove`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	deleteKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/knowledge/${form.get('id')}`, { method: 'DELETE' });
 			return { ok: true };
 		} catch (e) {
 			return fail(502, { error: e instanceof Error ? e.message : String(e) });
