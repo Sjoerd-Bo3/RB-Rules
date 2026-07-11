@@ -48,6 +48,59 @@ public class SourceScoutTests
         Assert.Equal("https://example.com/wiki/riftbound", p.Url);
     }
 
+    [Fact]
+    public void Parse_JsonCodeFence_IsHandled()
+    {
+        // De aangescherpte prompt staat een ```json-fence expliciet toe; de
+        // parser moet die dus aankunnen, ook met het Bronnen-blok erachter.
+        var raw = """
+            ```json
+            {"proposals": [{"url": "https://example.com/judge-guide", "name": "Judge Guide", "type": "community", "motivation": "Uitleg van judge-procedures."}]}
+            ```
+
+            Bronnen:
+            https://example.com/judge-guide (geraadpleegd 2026-07-11)
+            """;
+        var r = SourceScout.Parse(raw);
+        Assert.NotNull(r);
+        Assert.Equal("https://example.com/judge-guide", Assert.Single(r).Url);
+    }
+
+    [Fact]
+    public void Parse_ProseWithBracketsBeforeJson_StillFindsProposals()
+    {
+        // Regressie eerste live run (#63): prose vóór de JSON met een "[" erin
+        // (bronmarkers, markdown-links) liet de oude first/last-index-extractie
+        // een kapot array-blok kiezen in plaats van het JSON-object.
+        var raw = """
+            Ik heb [1] nieuwe bron gevonden, zie [de wiki](https://example.com/wiki):
+            {"proposals": [{"url": "https://example.com/wiki/rules", "name": "Wiki Rules", "type": "community", "motivation": "Regels-uitleg per keyword."}]}
+
+            Bronnen:
+            [1] https://example.com/wiki/rules
+            """;
+        var r = SourceScout.Parse(raw);
+        Assert.NotNull(r);
+        Assert.Equal("https://example.com/wiki/rules", Assert.Single(r).Url);
+    }
+
+    [Theory]
+    [InlineData("""
+        Bronnen:
+        https://example.com/zoekresultaat (geraadpleegd 2026-07-11)
+        https://andere-site.com/riftbound
+        """)]
+    [InlineData("""
+        Bronnen:
+        [1] https://example.com/zoekresultaat
+        [2] https://andere-site.com/riftbound
+        """)]
+    public void Parse_OnlyBronnenBlock_ReturnsNull(string raw) =>
+        // Alleen het (door rb-ai afgedwongen) Bronnen-blok, zonder JSON-object:
+        // onbruikbaar antwoord, geen lege-lijst-verwarring — ook niet wanneer
+        // de "[1]"-markers technisch als JSON-array parsen.
+        Assert.Null(SourceScout.Parse(raw));
+
     [Theory]
     [InlineData("")]
     [InlineData("Ik heb geen nieuwe bronnen kunnen vinden.")]

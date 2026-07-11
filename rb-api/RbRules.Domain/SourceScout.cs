@@ -19,9 +19,11 @@ public static class SourceScout
     private const int MaxMotivationLength = 300;
 
     // Let op: rb-ai plakt bij task "research" zijn eigen contract achter deze
-    // prompt (verplichte "Bronnen:"-sectie, zie rb-ai/src/ai.ts). Het antwoord
-    // eindigt dus vrijwel zeker met tekst ná de JSON — Parse is daar tolerant
-    // voor. De voorstellen zelf komen uitsluitend uit de JSON.
+    // prompt (verplichte "Bronnen:"-sectie, zie rb-ai/src/ai.ts). Die sectie
+    // botst met "alleen JSON", dus het formaat hieronder benoemt haar
+    // expliciet: éérst het JSON-object, daarna het Bronnen-blok. De eerste
+    // live run (#63) leverde onparseerbare output op — vandaar de harde
+    // formaateisen. Parse blijft tolerant voor tekst rond de JSON.
     public const string SystemPrompt = """
         Je bent de bronnen-scout van een kennisbank over Riftbound, het
         League of Legends trading card game van Riot Games. Doorzoek het web
@@ -32,8 +34,16 @@ public static class SourceScout
         Je krijgt een uitsluitlijst met URL's die al in het bronnenregister
         staan of al eerder zijn voorgesteld; stel alleen bronnen voor die daar
         nog NIET tussen staan.
-        Antwoord UITSLUITEND met JSON:
-        {"proposals": [{"url": "https://...", "name": "...", "type": "...", "motivation": "..."}]}
+
+        Antwoordformaat — dit wordt machinaal geparsed, wijk er niet van af:
+        1. Je antwoord MOET beginnen met dit JSON-object (een ```json-codefence
+           eromheen is toegestaan). Géén inleidende tekst, geen samenvatting,
+           geen kopje vóór de JSON:
+           {"proposals": [{"url": "https://...", "name": "...", "type": "...", "motivation": "..."}]}
+        2. Direct ná het JSON-object volgt uitsluitend de verplichte sectie
+           "Bronnen:" (de geraadpleegde URL's); verder geen tekst.
+
+        Veldregels:
         - url: volledige https-URL van de concrete pagina (niet de homepage
           als de inhoud dieper zit).
         - name: korte naam van de bron (site + onderwerp).
@@ -42,8 +52,7 @@ public static class SourceScout
           overige; kies dit bij twijfel).
         - motivation: 1-2 zinnen (NL) waarom deze bron de kennisbank versterkt.
         - Maximaal 10 voorstellen; liever 3 sterke dan 10 matige.
-        - Niets nieuws gevonden? Antwoord {"proposals": []}.
-        Geen tekst buiten de JSON.
+        - Niets nieuws gevonden? Begin dan met {"proposals": []}.
         """;
 
     public static string BuildPrompt(IEnumerable<string> knownUrls) =>
@@ -58,76 +67,109 @@ public static class SourceScout
     public static IReadOnlyList<SourceProposal>? Parse(
         string raw, IEnumerable<string>? knownUrls = null)
     {
-        var json = ExtractJson(raw);
-        if (json is null) return null;
-        try
+        foreach (var json in JsonCandidates(raw))
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            JsonElement items;
-            if (root.ValueKind == JsonValueKind.Array)
+            try
             {
-                items = root; // kale array — tolerantie voor prompt-afwijking
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object
+                    && root.TryGetProperty("proposals", out var p)
+                    && p.ValueKind == JsonValueKind.Array)
+                {
+                    return MapProposals(p, knownUrls);
+                }
+                // Kale array — tolerantie voor prompt-afwijking, maar alleen
+                // als er echt voorstel-objecten in staan (of hij leeg is):
+                // "[1]" uit een bronvermelding is géén voorstel-lijst.
+                if (root.ValueKind == JsonValueKind.Array
+                    && (root.GetArrayLength() == 0
+                        || root.EnumerateArray().Any(i => i.ValueKind == JsonValueKind.Object)))
+                {
+                    return MapProposals(root, knownUrls);
+                }
             }
-            else if (root.ValueKind == JsonValueKind.Object
-                     && root.TryGetProperty("proposals", out var p)
-                     && p.ValueKind == JsonValueKind.Array)
+            catch (JsonException)
             {
-                items = p;
+                // geen geldige JSON op deze positie — volgende kandidaat
             }
-            else
-            {
-                return null;
-            }
-
-            var seen = new HashSet<string>(
-                (knownUrls ?? []).Select(NormalizeUrl), StringComparer.OrdinalIgnoreCase);
-            var result = new List<SourceProposal>();
-            foreach (var item in items.EnumerateArray())
-            {
-                if (result.Count >= MaxProposals) break;
-                if (item.ValueKind != JsonValueKind.Object) continue;
-
-                var url = GetString(item, "url");
-                if (string.IsNullOrEmpty(url)
-                    || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
-                    || uri.Scheme != Uri.UriSchemeHttps) continue;
-                if (!seen.Add(NormalizeUrl(url))) continue;
-
-                var name = Truncate(GetString(item, "name"), MaxNameLength);
-                var type = GetString(item, "type")?.ToLowerInvariant();
-                result.Add(new SourceProposal(
-                    url,
-                    string.IsNullOrEmpty(name) ? uri.Host : name,
-                    // Webvondsten zijn per definitie hooguit zo betrouwbaar
-                    // als hun type-inschatting; onbekende labels degraderen
-                    // naar community (docs/KNOWLEDGE.md: trust is heilig).
-                    type is "official" or "partner" ? type : "community",
-                    Truncate(GetString(item, "motivation"), MaxMotivationLength) ?? ""));
-            }
-            return result;
         }
-        catch (JsonException)
+        return null;
+    }
+
+    private static IReadOnlyList<SourceProposal> MapProposals(
+        JsonElement items, IEnumerable<string>? knownUrls)
+    {
+        var seen = new HashSet<string>(
+            (knownUrls ?? []).Select(NormalizeUrl), StringComparer.OrdinalIgnoreCase);
+        var result = new List<SourceProposal>();
+        foreach (var item in items.EnumerateArray())
         {
-            return null;
+            if (result.Count >= MaxProposals) break;
+            if (item.ValueKind != JsonValueKind.Object) continue;
+
+            var url = GetString(item, "url");
+            if (string.IsNullOrEmpty(url)
+                || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                || uri.Scheme != Uri.UriSchemeHttps) continue;
+            if (!seen.Add(NormalizeUrl(url))) continue;
+
+            var name = Truncate(GetString(item, "name"), MaxNameLength);
+            var type = GetString(item, "type")?.ToLowerInvariant();
+            result.Add(new SourceProposal(
+                url,
+                string.IsNullOrEmpty(name) ? uri.Host : name,
+                // Webvondsten zijn per definitie hooguit zo betrouwbaar
+                // als hun type-inschatting; onbekende labels degraderen
+                // naar community (docs/KNOWLEDGE.md: trust is heilig).
+                type is "official" or "partner" ? type : "community",
+                Truncate(GetString(item, "motivation"), MaxMotivationLength) ?? ""));
         }
+        return result;
     }
 
     /// <summary>Vergelijkingsvorm voor URL-dedupe: case- en
     /// trailing-slash-ongevoelig, maar verder de URL zoals opgegeven.</summary>
     public static string NormalizeUrl(string url) => url.Trim().TrimEnd('/');
 
-    /// <summary>Pakt het JSON-blok uit het antwoord: het object- of
-    /// array-blok dat als eerste begint (research-antwoorden bevatten vaak
-    /// tekst en een "Bronnen:"-sectie rond de JSON).</summary>
-    private static string? ExtractJson(string raw)
+    /// <summary>Kandidaat-JSON-blokken in het antwoord, objecten vóór arrays
+    /// (het contract is een object; een kale array is een terugvaloptie).
+    /// Gebalanceerd en string-bewust gescand in plaats van first/last-index,
+    /// zodat prose vóór de JSON, ```json-fences en het "Bronnen:"-blok erna
+    /// (rb-ai's research-contract, met "[1]"-achtige markers) niet storen —
+    /// de eerste live run (#63) strandde precies daarop.</summary>
+    private static IEnumerable<string> JsonCandidates(string raw)
     {
-        var objStart = raw.IndexOf('{');
-        var arrStart = raw.IndexOf('[');
-        var useArray = arrStart >= 0 && (objStart < 0 || arrStart < objStart);
-        var start = useArray ? arrStart : objStart;
-        var end = useArray ? raw.LastIndexOf(']') : raw.LastIndexOf('}');
-        return start < 0 || end <= start ? null : raw[start..(end + 1)];
+        foreach (var open in new[] { '{', '[' })
+            for (var i = raw.IndexOf(open); i >= 0; i = raw.IndexOf(open, i + 1))
+                if (BalancedBlock(raw, i) is { } block)
+                    yield return block;
+    }
+
+    /// <summary>Het gebalanceerde blok dat op <paramref name="start"/> opent,
+    /// met JSON-strings (incl. escapes) overgeslagen; null als het blok niet
+    /// sluit of met het verkeerde haakje sluit.</summary>
+    private static string? BalancedBlock(string raw, int start)
+    {
+        var close = raw[start] == '{' ? '}' : ']';
+        var depth = 0;
+        var inString = false;
+        for (var i = start; i < raw.Length; i++)
+        {
+            var c = raw[i];
+            if (inString)
+            {
+                if (c == '\\') i++;
+                else if (c == '"') inString = false;
+            }
+            else if (c == '"') inString = true;
+            else if (c is '{' or '[') depth++;
+            else if (c is '}' or ']' && --depth == 0)
+            {
+                return c == close ? raw[start..(i + 1)] : null;
+            }
+        }
+        return null;
     }
 
     private static string? GetString(JsonElement obj, string key) =>
