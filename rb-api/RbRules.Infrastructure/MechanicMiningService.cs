@@ -51,8 +51,11 @@ public class MechanicMiningService(RbRulesDbContext db, RbAiClient ai)
             await db.SaveChangesAsync(ct);
         }
 
+        // Zelfde predicaat als de todo-query (review-fix: zonder het
+        // VariantOf-filter werd Remaining nooit 0 zolang er varianten bestaan).
         var remaining = await db.Cards.CountAsync(
-            c => c.Mechanics == null && c.TextPlain != null && c.TextPlain != "", ct);
+            c => c.Mechanics == null && c.TextPlain != null && c.TextPlain != ""
+                 && c.VariantOf == null, ct);
         return new(mined, remaining, failed);
     }
 }

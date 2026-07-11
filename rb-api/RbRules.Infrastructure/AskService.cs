@@ -17,7 +17,8 @@ public record AskCard(
 
 public record AskResult(
     string Answer, IReadOnlyList<Citation> Citations,
-    IReadOnlyList<AskCard> Cards, string QuestionType);
+    IReadOnlyList<AskCard> Cards, string QuestionType,
+    bool Ok = true);
 
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
@@ -55,8 +56,14 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         string question, IReadOnlyList<RbAiClient.AiImage>? images = null,
         CancellationToken ct = default)
     {
-        // 0. Interne router: vraagtype stuurt structuur en bronnen-bias.
-        var mentionsCard = await MentionsCardAsync(question, ct);
+        // 0. Kaartnamenlijst één keer per request (review-fix: werd 3× geladen)
+        // + interne router: vraagtype stuurt structuur en bronnen-bias.
+        var cardNames = await db.Cards.AsNoTracking()
+            .Where(c => c.VariantOf == null)
+            .Select(c => new CardName(c.RiftboundId, c.Name))
+            .ToListAsync(ct);
+        var qLower = question.ToLowerInvariant();
+        var mentionsCard = cardNames.Any(n => Matches(qLower, n.Name));
         var type = QuestionRouter.Classify(question, mentionsCard);
 
         // 1. Vector-kanaal
@@ -103,7 +110,8 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         var topIds = scores.OrderByDescending(kv => kv.Value).Take(TopK).Select(kv => kv.Key).ToList();
         if (topIds.Count == 0)
-            return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.", [], [], type.ToString());
+            return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.",
+                [], [], type.ToString(), Ok: false);
 
         var chunks = await db.RuleChunks
             .Where(c => topIds.Contains(c.Id))
@@ -113,7 +121,10 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
                 s.Name, s.Url, s.TrustTier,
             })
             .ToListAsync(ct);
-        var ordered = topIds.Select(id => chunks.First(c => c.Id == id)).ToList();
+        // Dictionary-lookup: een chunk kan tussen de twee query's verdwenen
+        // zijn (her-index) — dan overslaan i.p.v. InvalidOperationException.
+        var chunksById = chunks.ToDictionary(c => c.Id);
+        var ordered = topIds.Where(chunksById.ContainsKey).Select(id => chunksById[id]).ToList();
 
         // PDF-bestands-URL's voor deeplinks (…rules.pdf#page=N).
         var docIds = ordered.Select(c => c.DocumentId).Distinct().ToList();
@@ -131,7 +142,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
         // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
         // regels het keyword niet expliciet definiëren.
-        var cardBlock = await CardContextAsync(question, qv, ct);
+        var cardBlock = await CardContextAsync(question, qLower, qv, cardNames, ct);
 
         // 4b. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend blok.
         var banBlock = "";
@@ -168,44 +179,39 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
               string.Join("\n", rulings.Select(r => $"- {r}"));
 
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
-        var answer = await ai.AskAsync(
+        var aiAnswer = await ai.AskAsync(
             $"Context-fragmenten:\n{context}{cardBlock}{banBlock}{rulingBlock}\n\nVraag: {question}",
             $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}",
             task: images is { Count: > 0 } ? "hard" : "cheap",
-            images: images, ct: ct)
-            ?? "AI is niet beschikbaar — probeer het later opnieuw.";
+            images: images, ct: ct);
+        var answer = aiAnswer ?? "AI is niet beschikbaar — probeer het later opnieuw.";
 
         // Betrokken kaarten (herkend in vraag én antwoord) voor de kaart-
         // uitklap op de ruling-pagina.
-        var cards = await MatchCardsAsync($"{question}\n{answer}", ct);
-        return new(answer, citations, cards, type.ToString());
+        var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", cardNames, ct);
+        return new(answer, citations, cards, type.ToString(), Ok: aiAnswer is not null);
     }
 
-    private async Task<bool> MentionsCardAsync(string question, CancellationToken ct)
-    {
-        var q = question.ToLowerInvariant();
-        var names = await db.Cards
-            .Where(c => c.VariantOf == null)
-            .Select(c => c.Name)
-            .ToListAsync(ct);
-        return names.Any(n => n.Length >= 4 && q.Contains(n.ToLowerInvariant()));
-    }
+    private sealed record CardName(string RiftboundId, string Name);
 
-    private async Task<List<AskCard>> MatchCardsAsync(string text, CancellationToken ct)
+    /// <summary>Kaartnaam-match: substring op lowercase, minimaal 4 tekens
+    /// (review-fix: één matcher voor alle drie de kanalen).</summary>
+    private static bool Matches(string lowerText, string cardName) =>
+        cardName.Length >= 4 && lowerText.Contains(cardName.ToLowerInvariant());
+
+    private async Task<List<AskCard>> MatchCardsAsync(
+        string lowerText, List<CardName> names, CancellationToken ct)
     {
-        var t = text.ToLowerInvariant();
-        var names = await db.Cards
-            .Where(c => c.VariantOf == null)
-            .Select(c => new { c.RiftboundId, c.Name })
-            .ToListAsync(ct);
         var hits = names
-            .Where(c => c.Name.Length >= 4 && t.Contains(c.Name.ToLowerInvariant()))
+            .Where(c => Matches(lowerText, c.Name))
             .Select(c => c.RiftboundId)
             .Take(6)
             .ToList();
         if (hits.Count == 0) return [];
 
-        var cards = await db.Cards.Where(c => hits.Contains(c.RiftboundId)).ToListAsync(ct);
+        var cards = await db.Cards.AsNoTracking()
+            .Where(c => hits.Contains(c.RiftboundId))
+            .ToListAsync(ct);
         var banned = await db.BanEntries
             .Where(b => b.CardRiftboundId != null && hits.Contains(b.CardRiftboundId))
             .Select(b => b.CardRiftboundId!)
@@ -219,17 +225,12 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
     /// mechaniek-keywords ("wat is Deflect?" → kaarten mét Deflect) en
     /// semantische buren van de vraag. Zo is er áltijd kaart-bewijs, ook als
     /// de regels-PDF een keyword niet expliciet definieert.</summary>
-    private async Task<string> CardContextAsync(string question, Vector qv, CancellationToken ct)
+    private async Task<string> CardContextAsync(
+        string question, string qLower, Vector qv, List<CardName> names, CancellationToken ct)
     {
-        var q = question.ToLowerInvariant();
-
         // 1. Exacte naam-matches (gezaghebbend voor de genoemde kaarten).
-        var names = await db.Cards
-            .Where(c => c.VariantOf == null)
-            .Select(c => new { c.RiftboundId, c.Name })
-            .ToListAsync(ct);
         var nameHits = names
-            .Where(c => c.Name.Length >= 4 && q.Contains(c.Name.ToLowerInvariant()))
+            .Where(c => Matches(qLower, c.Name))
             .Take(3)
             .Select(c => c.RiftboundId)
             .ToList();
@@ -281,8 +282,10 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .Select(b => b.CardRiftboundId!)
             .ToListAsync(ct);
 
+        var cardsById = cards.ToDictionary(c => c.RiftboundId);
         var lines = ids
-            .Select(id => cards.First(c => c.RiftboundId == id))
+            .Where(cardsById.ContainsKey)
+            .Select(id => cardsById[id])
             .Select(c =>
                 $"- {c.Name} — {string.Join(" ", new[] { c.Supertype, c.Type }.Where(s => s != null))}. " +
                 $"Domains: {string.Join(", ", c.Domains)}. Energy {c.Energy?.ToString() ?? "—"}, Might {c.Might?.ToString() ?? "—"}. " +

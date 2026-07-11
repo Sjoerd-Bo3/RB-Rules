@@ -357,8 +357,17 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
+        // Projectie zonder Embedding — 1024 floats per rij horen niet in JSON.
         admin.MapGet("/corrections", async (RbRulesDbContext db) =>
-            await db.Corrections.OrderByDescending(c => c.CreatedAt).Take(200).ToListAsync());
+            await db.Corrections.AsNoTracking()
+                .OrderByDescending(c => c.CreatedAt)
+                .Take(200)
+                .Select(c => new
+                {
+                    c.Id, c.Scope, c.Ref, c.Text, c.Question,
+                    c.Provenance, c.Status, c.CreatedAt, c.VerifiedAt,
+                })
+                .ToListAsync());
 
         admin.MapPost("/corrections/{id:long}/verify", async (
             long id, RbRulesDbContext db, EmbeddingService embeddings) =>

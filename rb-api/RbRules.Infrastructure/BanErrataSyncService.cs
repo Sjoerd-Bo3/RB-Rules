@@ -32,6 +32,9 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
                 var extracted = BanErrataExtractor.ParseBans(raw);
                 if (extracted.Count > 0)
                 {
+                    // Rebuild in één transactie: nooit een venster met lege
+                    // banlijst als het middenin misgaat (review-fix).
+                    await using var tx = await db.Database.BeginTransactionAsync(ct);
                     await db.BanEntries.ExecuteDeleteAsync(ct);
                     foreach (var b in extracted)
                     {
@@ -45,6 +48,7 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
                         bans++;
                     }
                     await db.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
                 }
             }
         }
@@ -61,6 +65,7 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
                 var extracted = BanErrataExtractor.ParseErrata(raw);
                 if (extracted.Count > 0)
                 {
+                    await using var tx = await db.Database.BeginTransactionAsync(ct);
                     await db.Errata.ExecuteDeleteAsync(ct);
                     foreach (var e in extracted)
                     {
@@ -74,6 +79,7 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
                         errata++;
                     }
                     await db.SaveChangesAsync(ct);
+                    await tx.CommitAsync(ct);
                 }
             }
         }

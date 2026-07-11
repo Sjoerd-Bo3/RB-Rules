@@ -69,10 +69,14 @@ export const actions: Actions = {
 	toggle: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
 		const form = await request.formData();
-		await adminApi(`/api/admin/sources/${form.get('id')}`, {
-			method: 'PATCH',
-			body: JSON.stringify({ enabled: form.get('enabled') === 'true' })
-		});
-		return { ok: true };
+		try {
+			await adminApi(`/api/admin/sources/${form.get('id')}`, {
+				method: 'PATCH',
+				body: JSON.stringify({ enabled: form.get('enabled') === 'true' })
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
 	}
 };
