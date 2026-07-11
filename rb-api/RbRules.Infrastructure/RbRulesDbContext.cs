@@ -24,6 +24,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<SimilarityExplanation> SimilarityExplanations => Set<SimilarityExplanation>();
     public DbSet<AskMetric> AskMetrics => Set<AskMetric>();
     public DbSet<AskTrace> AskTraces => Set<AskTrace>();
+    public DbSet<KnowledgeDoc> KnowledgeDocs => Set<KnowledgeDoc>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -146,6 +147,14 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("ask_trace");
             e.HasIndex(x => x.CreatedAt);
+        });
+
+        b.Entity<KnowledgeDoc>(e =>
+        {
+            e.ToTable("knowledge_doc");
+            e.HasIndex(x => new { x.Kind, x.Topic }).IsUnique();
+            e.HasIndex(x => x.Status);
+            e.Property(x => x.Embedding).HasColumnType(vectorType);
         });
     }
 }

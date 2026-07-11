@@ -152,6 +152,21 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var context = string.Join("\n\n", ordered.Select((c, i) =>
             $"[{i + 1}] ({c.Name}, trust {c.TrustTier}{(c.SectionCode is null ? "" : $", §{c.SectionCode}")})\n{c.Text}"));
 
+        // 3b. Spelbegrip-primer (kennislaag 1, #49): goedgekeurde concept-docs
+        // die semantisch bij de vraag passen — geeft het model de flow van het
+        // spel, niet alleen losse §'s.
+        var primerDocs = await db.KnowledgeDocs.AsNoTracking()
+            .Where(k => k.Kind == "primer" && k.Status == "approved" && k.Embedding != null)
+            .OrderBy(k => k.Embedding!.CosineDistance(qv))
+            .Take(3)
+            .Select(k => new { k.Title, k.Body })
+            .ToListAsync(ct);
+        var primerBlock = primerDocs.Count == 0
+            ? ""
+            : "\n\nSPELBEGRIP (achtergrond, gedistilleerd uit de officiële regels; " +
+              "de regels zelf blijven normatief):\n" +
+              string.Join("\n\n", primerDocs.Select(p => $"[{p.Title}]\n{p.Body}"));
+
         // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
         // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
         // regels het keyword niet expliciet definiëren.
@@ -194,7 +209,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
         var aiAnswer = await ai.AskAsync(
-            $"Context-fragmenten:\n{context}{cardBlock}{banBlock}{rulingBlock}\n\nVraag: {question}",
+            $"Context-fragmenten:\n{context}{primerBlock}{cardBlock}{banBlock}{rulingBlock}\n\nVraag: {question}",
             $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}",
             task: images is { Count: > 0 } ? "hard" : "cheap",
             images: images, ct: ct);
@@ -218,6 +233,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
                 Sections = string.Join(", ", citations
                     .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
                 ContextCards = string.Join(", ", cardContext.CardNames),
+                PrimerDocs = string.Join(", ", primerDocs.Select(p => p.Title)),
                 VerifiedRulings = rulings.Count,
                 Model = images is { Count: > 0 } ? "hard" : "cheap",
                 HadImage = images is { Count: > 0 },
