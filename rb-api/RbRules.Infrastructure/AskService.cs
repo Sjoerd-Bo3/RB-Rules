@@ -34,6 +34,15 @@ public record AskResult(
     IReadOnlyList<AskCard> Cards, string QuestionType,
     bool Ok = true, IReadOnlyList<AskClaim>? Claims = null);
 
+/// <summary>Vroege metadata voor het streamingpad (#31): vraagtype, citaties
+/// en community-claims staan al vast vóór de LLM-call — de UI kan daarmee de
+/// citatielijst en [[rule:…]]-widgets renderen terwijl het antwoord nog
+/// binnenstroomt. Betrokken kaarten volgen pas in het slotframe (die worden
+/// tegen het volledige antwoord gematcht).</summary>
+public record AskStreamMeta(
+    string QuestionType, IReadOnlyList<Citation> Citations,
+    IReadOnlyList<AskClaim>? Claims);
+
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
 /// kaartfeiten + geverifieerde rulings + antwoord via rb-ai met [n]-citaten.</summary>
@@ -96,10 +105,29 @@ public class AskService(
     private const int MaxHistoryTurns = 3;
     private const int MaxHistoryAnswerChars = 900;
 
-    public async Task<AskResult> AskAsync(
+    public Task<AskResult> AskAsync(
         string question, IReadOnlyList<RbAiClient.AiImage>? images = null,
         IReadOnlyList<AskTurn>? history = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        AskCoreAsync(question, images, history, onMeta: null, onDelta: null, ct);
+
+    /// <summary>Streamende variant (#31): identieke retrieval en afronding als
+    /// <see cref="AskAsync"/> (één pass), maar het antwoord komt via
+    /// <paramref name="onDelta"/> woord-voor-woord binnen en de citaties gaan
+    /// vooraf via <paramref name="onMeta"/>. Het resultaat is hetzelfde
+    /// AskResult als slotframe — inclusief dezelfde degradatie bij AI-uitval.</summary>
+    public Task<AskResult> AskStreamingAsync(
+        string question, IReadOnlyList<RbAiClient.AiImage>? images,
+        IReadOnlyList<AskTurn>? history,
+        Func<AskStreamMeta, Task> onMeta, Func<string, Task> onDelta,
+        CancellationToken ct = default) =>
+        AskCoreAsync(question, images, history, onMeta, onDelta, ct);
+
+    private async Task<AskResult> AskCoreAsync(
+        string question, IReadOnlyList<RbAiClient.AiImage>? images,
+        IReadOnlyList<AskTurn>? history,
+        Func<AskStreamMeta, Task>? onMeta, Func<string, Task>? onDelta,
+        CancellationToken ct)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         // Doorvragen (#41): eerdere rondes gaan gecapt mee; de retrieval
@@ -329,14 +357,21 @@ public class AskService(
                   $"Vraag: {t.Question}\nAntwoord: {(t.Answer.Length > MaxHistoryAnswerChars ? t.Answer[..MaxHistoryAnswerChars] + "…" : t.Answer)}"));
         var questionLabel = turns.Count == 0 ? "Vraag" : "Vervolgvraag";
 
+        // Streaming (#31): citaties/claims/vraagtype staan nu vast — vroeg
+        // naar de UI zodat die alvast kan renderen terwijl het antwoord komt.
+        if (onMeta is not null)
+            await onMeta(new AskStreamMeta(type.ToString(), citations, askClaims));
+
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
         // Blok-volgorde = de kennispiramide van #51: officieel (fragmenten,
         // rulings, kaartfeiten, banlijst) > primer > community-interpretatie.
-        var aiAnswer = await ai.AskAsync(
-            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{historyBlock}\n\n{questionLabel}: {question}",
-            $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}",
-            task: images is { Count: > 0 } ? "hard" : "cheap",
-            images: images, ct: ct);
+        var prompt =
+            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{historyBlock}\n\n{questionLabel}: {question}";
+        var system = $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}";
+        var task = images is { Count: > 0 } ? "hard" : "cheap";
+        var aiAnswer = onDelta is null
+            ? await ai.AskAsync(prompt, system, task, images, ct)
+            : await StreamAnswerAsync(prompt, system, task, images, onDelta, ct);
         var answer = aiAnswer ?? RbAiClient.UnavailableAnswer;
 
         // Betrokken kaarten (herkend in vraag én antwoord) voor de kaart-
@@ -392,6 +427,32 @@ public class AskService(
 
         return new(answer, citations, cards, type.ToString(),
             Ok: aiAnswer is not null, Claims: askClaims);
+    }
+
+    /// <summary>Consumeert de rb-ai-stream: deltas door naar de UI, het
+    /// done-frame is het volledige antwoord. Een error-frame of een stream
+    /// zonder done levert null — daarmee degradeert AskCoreAsync precies zoals
+    /// bij de niet-streamende route (UnavailableAnswer, Ok=false).</summary>
+    private async Task<string?> StreamAnswerAsync(
+        string prompt, string system, string task,
+        IReadOnlyList<RbAiClient.AiImage>? images,
+        Func<string, Task> onDelta, CancellationToken ct)
+    {
+        string? answer = null;
+        await foreach (var frame in ai.AskStreamAsync(prompt, system, task, images, ct))
+        {
+            switch (frame.Type)
+            {
+                case "delta" when !string.IsNullOrEmpty(frame.Text):
+                    await onDelta(frame.Text);
+                    break;
+                case "done":
+                    answer = string.IsNullOrWhiteSpace(frame.Answer) ? null : frame.Answer;
+                    break;
+                // "error" bewust genegeerd: answer blijft null → degradatie.
+            }
+        }
+        return answer;
     }
 
     /// <summary>Canonieke kaarten waarvan de naam letterlijk in de (lowercase)
