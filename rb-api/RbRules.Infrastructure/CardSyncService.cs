@@ -50,35 +50,24 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
     /// <summary>Groepeert printings van dezelfde kaart: één canonieke kaart,
     /// de rest (alt-art/showcase/promo/herdruk) verwijst ernaar via VariantOf.
     /// Groepering op basisnaam: Riot noemt varianten "Naam (Alternate Art)",
-    /// "(Signature)", "(Overnumbered)" — die horen bij dezelfde kaart.</summary>
+    /// "(Signature)", "(Overnumbered)" — die horen bij dezelfde kaart. Nieuwe
+    /// printings van bestaande namen (set 7-scenario, #57) groeperen zo
+    /// automatisch; de keuze van de canonieke printing is gepind in
+    /// VariantGrouping.ChooseCanonical zodat een herdruk geen churn geeft.</summary>
     private async Task RegroupVariantsAsync(CancellationToken ct)
     {
         var cards = await db.Cards.ToListAsync(ct);
         foreach (var group in cards.GroupBy(c => CardText.BaseName(c.Name)))
         {
-            var canonical = group
-                .OrderBy(c => c.Name == CardText.BaseName(c.Name) ? 0 : 1)
-                .ThenBy(AltPrintingRank)
-                .ThenBy(c => c.Rarity == "Showcase" ? 1 : 0)
-                .ThenBy(c => c.RiftboundId, StringComparer.Ordinal)
-                .First();
-            foreach (var c in group)
+            var members = group.ToList();
+            var canonical = VariantGrouping.ChooseCanonical(members);
+            foreach (var c in members)
             {
                 var variantOf = ReferenceEquals(c, canonical) ? null : canonical.RiftboundId;
                 if (c.VariantOf != variantOf) c.VariantOf = variantOf;
             }
         }
         await db.SaveChangesAsync(ct);
-    }
-
-    /// <summary>'ogn-119-298' = basisprinting (0); 'ogn-119a-298',
-    /// 'sfd-227-star-221' en 'ven-sp3-006' zijn alt-varianten (1).</summary>
-    private static int AltPrintingRank(Card c)
-    {
-        var parts = c.RiftboundId.Split('-');
-        var numeric = parts.Length >= 2 && parts[1].Length > 0 && parts[1].All(char.IsAsciiDigit)
-            && (parts.Length < 3 || (parts[2].Length > 0 && parts[2].All(char.IsAsciiDigit)));
-        return numeric ? 0 : 1;
     }
 
     /// <summary>Alle bestaande kaarten één keer laden (review-fix #43: geen

@@ -46,16 +46,23 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
 
         await using var session = driver.AsyncSession();
 
-        // Eerder gesyncte variant-knopen opruimen (#57) — de graph is vóór
-        // de variantgroepering gevuld.
-        await session.RunAsync(
+        // Eén transactie rond de hele rebuild (conventie): opruimen en de
+        // nieuwe stand schrijven slagen of falen samen — een fout halverwege
+        // mag geen half leeggeruimde graph achterlaten. Dispose zonder commit
+        // = rollback.
+        await using var tx = await session.BeginTransactionAsync();
+
+        // Knopen die geen canonieke kaart (meer) zijn opruimen (#57): de graph
+        // is vóór de variantgroepering gevuld, en ook een latere canonical-
+        // wissel zou het oude id als wees achterlaten.
+        await tx.RunAsync(
             "MATCH (c:Card) WHERE NOT c.id IN $ids DETACH DELETE c",
             new Dictionary<string, object>
             {
                 ["ids"] = cards.Select(c => (object)c.RiftboundId).ToList(),
             });
 
-        await session.RunAsync(
+        await tx.RunAsync(
             """
             UNWIND $rows AS row
             MERGE (c:Card {id: row.id})
@@ -67,12 +74,22 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             """,
             new Dictionary<string, object> { ["rows"] = cardRows });
 
-        await RunPairsAsync(session,
+        await RunPairsAsync(tx,
             "MERGE (d:Domain {name: p.value}) MERGE (c)-[:HAS_DOMAIN]->(d)", domainPairs);
-        await RunPairsAsync(session,
+        await RunPairsAsync(tx,
             "MERGE (t:Tag {name: p.value}) MERGE (c)-[:HAS_TAG]->(t)", tagPairs);
-        await RunPairsAsync(session,
+        await RunPairsAsync(tx,
             "MERGE (m:Mechanic {name: p.value}) MERGE (c)-[:HAS_MECHANIC]->(m)", mechanicPairs);
+
+        // Facet-knopen die na de opruiming nergens meer aan hangen (bijv. een
+        // promo-set die alleen variant-printings bevatte) verdwijnen mee.
+        await tx.RunAsync(
+            """
+            MATCH (n) WHERE (n:Set OR n:Domain OR n:Tag OR n:Mechanic)
+              AND NOT (n)--() DELETE n
+            """);
+
+        await tx.CommitAsync();
 
         return new(
             cardRows.Count,
@@ -82,9 +99,9 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
     }
 
     private static async Task RunPairsAsync(
-        IAsyncSession session, string mergeClause, List<object> pairs)
+        IAsyncQueryRunner runner, string mergeClause, List<object> pairs)
     {
-        await session.RunAsync(
+        await runner.RunAsync(
             $"UNWIND $pairs AS p MATCH (c:Card {{id: p.id}}) {mergeClause}",
             new Dictionary<string, object> { ["pairs"] = pairs });
     }

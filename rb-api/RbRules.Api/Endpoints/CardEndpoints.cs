@@ -118,28 +118,15 @@ public static class CardEndpoints
         });
 
         // ── Interacties (S3) ───────────────────────────────────────────
+        // Variantgroep-bewust (#57): een alt-art-pagina toont de interacties
+        // van zijn canonieke kaart, en rijen van vóór de variantgroepering
+        // die nog aan een variant-id hangen tellen gewoon mee.
         app.MapGet("/api/cards/{id}/interactions", async (string id, RbRulesDbContext db) =>
         {
-            var rows = await db.CardInteractions
-                .Where(x => x.CardAId == id || x.CardBId == id)
-                .OrderBy(x => x.Kind)
-                .Take(40)
-                .ToListAsync();
-            var otherIds = rows.Select(r => r.CardAId == id ? r.CardBId : r.CardAId).ToList();
-            var names = await db.Cards
-                .Where(c => otherIds.Contains(c.RiftboundId))
-                .ToDictionaryAsync(c => c.RiftboundId, c => c.Name);
-            return Results.Ok(rows.Select(r =>
-            {
-                var otherId = r.CardAId == id ? r.CardBId : r.CardAId;
-                return new
-                {
-                    OtherId = otherId,
-                    OtherName = names.GetValueOrDefault(otherId, otherId),
-                    r.Kind,
-                    r.Explanation,
-                };
-            }));
+            var card = await db.Cards.FindAsync(id);
+            if (card is null) return Results.NotFound();
+            var neighbors = await GroupInteractionsAsync(db, CardText.CanonicalId(card), take: 40);
+            return Results.Ok(neighbors);
         });
 
         // ── Semantisch kaartzoeken (S1) ────────────────────────────────
@@ -254,18 +241,24 @@ public static class CardEndpoints
         }).RequireRateLimiting("llm");
 
         // Graph-verkenner (#29): buren van een kaart via gedeelde mechanieken,
-        // domeinen en geverifieerde interacties.
+        // domeinen en geverifieerde interacties. Een variant-id als center
+        // resolvet naar de canonieke kaart (#57): mining en graph kennen
+        // alleen canonieke printings, dus deeplinks vanaf een alt-art-pagina
+        // blijven zo gewoon werken.
         app.MapGet("/api/graph/neighbors", async (string card, RbRulesDbContext db) =>
         {
             var center = await db.Cards.FindAsync(card);
             if (center is null) return Results.NotFound();
+            if (center.VariantOf is not null)
+                center = await db.Cards.FindAsync(center.VariantOf) ?? center;
+            var centerId = center.RiftboundId;
 
             var mechanics = center.Mechanics ?? [];
             var mechanicGroups = new List<object>();
             foreach (var m in mechanics.Take(6))
             {
                 var sharing = await db.Cards
-                    .Where(c => c.RiftboundId != card && c.VariantOf == null &&
+                    .Where(c => c.RiftboundId != centerId && c.VariantOf == null &&
                                 c.Mechanics != null && c.Mechanics.Contains(m))
                     .OrderBy(c => c.Name)
                     .Take(6)
@@ -274,31 +267,13 @@ public static class CardEndpoints
                 mechanicGroups.Add(new { Mechanic = m, Cards = sharing });
             }
 
-            var interactions = await db.CardInteractions
-                .Where(x => x.CardAId == card || x.CardBId == card)
-                .Take(12)
-                .ToListAsync();
-            var otherIds = interactions
-                .Select(x => x.CardAId == card ? x.CardBId : x.CardAId)
-                .ToList();
-            var names = await db.Cards
-                .Where(c => otherIds.Contains(c.RiftboundId))
-                .ToDictionaryAsync(c => c.RiftboundId, c => c.Name);
+            var interactions = await GroupInteractionsAsync(db, centerId, take: 12);
 
             return Results.Ok(new
             {
                 Center = new { center.RiftboundId, center.Name, center.ImageUrl, center.Domains },
                 Mechanics = mechanicGroups,
-                Interactions = interactions.Select(x =>
-                {
-                    var otherId = x.CardAId == card ? x.CardBId : x.CardAId;
-                    return new
-                    {
-                        OtherId = otherId,
-                        OtherName = names.GetValueOrDefault(otherId, otherId),
-                        x.Kind,
-                    };
-                }),
+                Interactions = interactions.Select(n => new { n.OtherId, n.OtherName, n.Kind }),
             });
         });
 
@@ -339,6 +314,40 @@ public static class CardEndpoints
 
             return Results.Ok(new { Errata = errata, RelevantRules = relevantRules });
         });
+    }
+
+    /// <summary>Geverifieerde interacties variantgroep-bewust ophalen (#57):
+    /// match op alle printing-ids van de groep (rijen van vóór de groepering
+    /// kunnen nog variant-ids bevatten) en canonicaliseer de buren.</summary>
+    private static async Task<List<InteractionNeighbor>> GroupInteractionsAsync(
+        RbRulesDbContext db, string canonicalId, int take)
+    {
+        var groupIds = await db.Cards.AsNoTracking()
+            .Where(c => c.RiftboundId == canonicalId || c.VariantOf == canonicalId)
+            .Select(c => c.RiftboundId)
+            .ToListAsync();
+        if (groupIds.Count == 0) groupIds = [canonicalId];
+
+        var rows = await db.CardInteractions.AsNoTracking()
+            .Where(x => groupIds.Contains(x.CardAId) || groupIds.Contains(x.CardBId))
+            .OrderBy(x => x.Kind)
+            .Take(take)
+            .ToListAsync();
+
+        var groupSet = groupIds.ToHashSet();
+        var otherIds = rows
+            .Select(r => groupSet.Contains(r.CardAId) ? r.CardBId : r.CardAId)
+            .ToList();
+        // Projectie zonder embedding-vectoren (#43).
+        var others = await db.Cards.AsNoTracking()
+            .Where(c => otherIds.Contains(c.RiftboundId))
+            .Select(c => new Card
+            {
+                RiftboundId = c.RiftboundId, Name = c.Name, VariantOf = c.VariantOf,
+            })
+            .ToDictionaryAsync(c => c.RiftboundId, c => c);
+
+        return VariantGrouping.InteractionNeighbors(rows, groupSet, others);
     }
 
     /// <summary>Set-releasedatums één keer laden (handvol rijen) en per kaart
