@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { renderMarkdown } from '$lib/markdown';
+	import { stripDuplicateRuleRefs } from '$lib/answerFormat';
 	import RuleWidget from '$lib/RuleWidget.svelte';
 	import CardWidget from '$lib/CardWidget.svelte';
 
@@ -20,7 +21,9 @@
 	type Seg = { kind: 'md' | 'rule' | 'card'; value: string };
 
 	const parsed = $derived.by(() => {
-		let text = answer;
+		// Vangnet (#69): een "Regelbasis"-blok of §-tabel die alleen de
+		// citatielijst onderaan dubbelt wordt niet nogmaals getoond.
+		let text = stripDuplicateRuleRefs(answer, citations);
 		let oordeel: string | null = null;
 		let zekerheid: string | null = null;
 		// Twee vormen accepteren: "**Oordeel:** zin" én "## Oordeel\n\nzin"

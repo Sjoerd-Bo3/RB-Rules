@@ -52,6 +52,13 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         - Kaartgegevens in de context zijn gezaghebbend voor stats/mechanieken.
         - Kort is beter: geen inleiding, geen herhaling van de vraag.
 
+        CITATEN — de site toont de meegegeven fragmenten zelf als uitklapbare
+        citatielijst onder het antwoord; die lijst is de enige plek waar de
+        regelsecties staan. Verwijs in de lopende tekst met [1], [2], … (de
+        nummers van de fragmenten) op de plek waar je op een fragment leunt.
+        Bouw NOOIT een eigen "Regelbasis"-sectie, markdown-tabel of opsomming
+        die alleen §-nummers/bronnen herhaalt — dat dubbelt de lijst onderaan.
+
         Bij een meegestuurde foto (board state): begin de Uitleg met stap 1 =
         een feitelijke beschrijving van wat je op de foto ziet (welke kaarten,
         zones, exhausted/ready) en benoem expliciet wat je NIET zeker kunt

@@ -46,4 +46,14 @@ public class QuestionRouterTests
         foreach (var t in Enum.GetValues<QuestionType>())
             Assert.False(string.IsNullOrWhiteSpace(QuestionRouter.StructureFor(t)));
     }
+
+    [Fact]
+    public void StructureFor_NeverAsksForOwnRuleBasisSection()
+    {
+        // #69: de citatielijst onder het antwoord is de enige plek met
+        // regelsecties — geen enkel vraagtype mag het model een eigen
+        // "Regelbasis"-blok laten bouwen; verwijzen gaat met [n] in de tekst.
+        foreach (var t in Enum.GetValues<QuestionType>())
+            Assert.DoesNotContain("Regelbasis", QuestionRouter.StructureFor(t));
+    }
 }

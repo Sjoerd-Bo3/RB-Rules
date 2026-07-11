@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import RbText from '$lib/RbText.svelte';
 	import AnswerView from '$lib/AnswerView.svelte';
+	import { citationEssence } from '$lib/answerFormat';
 
 	let { data, form } = $props();
 	let busy = $state(false);
@@ -212,11 +213,13 @@
 			{#if form?.citations?.length}
 				<h2>Geciteerde regelsecties</h2>
 				{#each form.citations as c (c.n)}
+					{@const essence = citationEssence(c.text)}
 					<details class="cite">
 						<summary>
 							<span class="cite-n">[{c.n}]</span>
 							{#if c.section}<strong>§ {c.section}</strong>{/if}
 							<span class="meta">{c.sourceName} · trust {c.trust}</span>
+							{#if essence}<span class="cite-essence">{essence}</span>{/if}
 						</summary>
 						{#if c.parents?.length}
 							<!-- Bovenliggende regels: zonder § 466.2 is 466.2.c onleesbaar -->
@@ -385,6 +388,13 @@
 	.cite summary { cursor: pointer; }
 	.cite-n { color: var(--muted); font-size: 0.85rem; margin-right: 4px; }
 	.cite summary .meta { margin-left: 8px; font-size: 0.82rem; }
+	/* Eén regel essentie, dichtgeklapt; truncaten zodat 390px nooit
+	   horizontaal scrollt. Open toont de volledige tekst al — dan weg. */
+	.cite-essence {
+		display: block; margin-top: 2px; font-size: 0.9rem;
+		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	}
+	.cite[open] .cite-essence { display: none; }
 	.parents { border-left: 2px solid var(--border); margin: 8px 0 0; padding-left: 10px; }
 	.parent { margin: 4px 0; color: var(--muted); font-size: 0.85rem; }
 	.parent a { color: var(--muted); font-weight: 700; text-decoration: none; }

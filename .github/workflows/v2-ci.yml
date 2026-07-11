@@ -36,6 +36,7 @@ jobs:
           npm ci
           npx svelte-kit sync
           npx svelte-check
+          npm test
           npm run build
 
       - name: rb-ai — typecheck

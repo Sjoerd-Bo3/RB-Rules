@@ -65,9 +65,9 @@ public static partial class QuestionRouter
             VRAAGTYPE: definitie/concept. Gebruik deze structuur:
             **Definitie:** één of twee zinnen die het concept precies definiëren.
             ### Hoe het werkt
-            Korte genummerde stappen of een concreet spelvoorbeeld, met [n]-citaten.
-            ### Regelbasis
-            Per bron één regel. Sla 'Oordeel/Zekerheid' over — dit is uitleg, geen ruling.
+            Korte genummerde stappen of een concreet spelvoorbeeld, met
+            [n]-citaten in de tekst. Sla 'Oordeel/Zekerheid' over — dit is
+            uitleg, geen ruling.
             """,
         QuestionType.Kaart => """
             VRAAGTYPE: kaartvraag. Gebruik deze structuur:
@@ -82,16 +82,16 @@ public static partial class QuestionRouter
             VRAAGTYPE: legaliteit/deckbouw. Gebruik deze structuur:
             **Oordeel:** toegestaan of niet, in één zin.
             **Zekerheid:** Bevestigd | Afgeleid | Onzeker.
-            ### Regelbasis
-            De dragende deckbouw-/banlijstregels met [n]-citaten.
+            ### Uitleg
+            De dragende deckbouw-/banlijstregels, kort, met [n]-citaten in de tekst.
             ### Let op
             Relevante banlijst-items of aangekondigde wijzigingen; anders weglaten.
             De meegegeven BANLIJST is gezaghebbend en actueel.
             """,
         QuestionType.Toernooi => """
             VRAAGTYPE: toernooiprocedure. Gebruik het scheidsrechter-format
-            (Oordeel → Zekerheid → Uitleg → Regelbasis → Let op) en baseer je
-            primair op de Tournament Rules-fragmenten in de context.
+            (Oordeel → Zekerheid → Uitleg → Let op) en baseer je primair op de
+            Tournament Rules-fragmenten in de context; citeer per stap met [n].
             """,
         QuestionType.Lijst => """
             VRAAGTYPE: lijst/overzicht — de vraag vraagt om een verzameling kaarten.
@@ -103,12 +103,14 @@ public static partial class QuestionRouter
             kennis; kaarten die niet echt aan het criterium voldoen sla je over.
             Als de kaartgegevens melden dat de lijst is afgekapt ("eerste N van M"),
             zeg dat dan expliciet in het antwoord — nooit doen alsof de lijst compleet is.
-            ### Regelbasis
-            Alleen als een regel-§ het criterium verduidelijkt; anders weglaten.
+            Verduidelijkt een regel-§ het criterium, verwijs er dan inline naar met
+            [n] — geen eigen sectie of tabel met regelverwijzingen (#69: de
+            citatielijst onderaan is de enige plek waar regelsecties staan).
             """,
         _ => """
             VRAAGTYPE: ruling/interactie. Gebruik het volledige format:
-            Oordeel → Zekerheid → Uitleg (stappen in spelvolgorde) → Regelbasis → Let op.
+            Oordeel → Zekerheid → Uitleg (stappen in spelvolgorde, elk met
+            [n]-citaat) → Let op.
             """,
     };
 }
