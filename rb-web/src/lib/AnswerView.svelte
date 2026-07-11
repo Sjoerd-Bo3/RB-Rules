@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { renderMarkdown } from '$lib/markdown';
-	import { stripDuplicateRuleRefs } from '$lib/answerFormat';
+	import { certaintyLevel, stripDuplicateRuleRefs } from '$lib/answerFormat';
 	import RuleWidget from '$lib/RuleWidget.svelte';
 	import CardWidget from '$lib/CardWidget.svelte';
 
@@ -68,12 +68,7 @@
 		return { oordeel, zekerheid, segs };
 	});
 
-	const zLevel = $derived.by(() => {
-		const z = (parsed.zekerheid ?? '').toLowerCase();
-		if (z.startsWith('bevestigd')) return 'ok';
-		if (z.startsWith('afgeleid')) return 'warn';
-		return 'unsure';
-	});
+	const zLevel = $derived(certaintyLevel(parsed.zekerheid));
 </script>
 
 {#if parsed.oordeel}
@@ -106,6 +101,8 @@
 	}
 	.verdict.ok { border-color: var(--ok); background: var(--ok-soft); }
 	.verdict.warn { border-color: var(--warn); background: var(--warn-soft); }
+	/* Community-consensus (#51): eigen kleur — geen officiële bevestiging. */
+	.verdict.community { border-color: var(--accent); background: var(--accent-soft); }
 	.verdict.unsure { border-color: var(--border-strong); }
 	.verdict-text { margin: 0; font-size: 1.05rem; font-weight: 700; line-height: 1.5; }
 	.certainty { margin: 4px 0 0; color: var(--muted); font-size: 0.85rem; }

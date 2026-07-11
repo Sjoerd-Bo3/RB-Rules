@@ -46,7 +46,8 @@
 		id: number; question: string; questionType: string | null;
 		sourceBias: string | null; mentionsCard: boolean;
 		mechanicMatches: string | null; sections: string | null;
-		contextCards: string | null; verifiedRulings: number;
+		contextCards: string | null; primerDocs: string | null;
+		communityClaims: string | null; verifiedRulings: number;
 		model: string | null; hadImage: boolean; durationMs: number;
 		ok: boolean; createdAt: string;
 	}
@@ -341,6 +342,9 @@
 						<dd>{t.sections || '—'}</dd>
 						<dt>Kaartcontext</dt>
 						<dd>{t.contextCards || '—'}</dd>
+						<!-- Kennislagen (#51): welke lagen deden mee in de prompt -->
+						<dt>Kennislagen</dt>
+						<dd>primer: {t.primerDocs || '—'} · community: {t.communityClaims || '—'}</dd>
 						<dt>Overig</dt>
 						<dd>{t.verifiedRulings} geverifieerde rulings · model {t.model} · {t.ok ? 'geslaagd' : 'AI niet beschikbaar'}</dd>
 					</dl>

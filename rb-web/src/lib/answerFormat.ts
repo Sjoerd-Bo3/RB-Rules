@@ -9,6 +9,19 @@ export interface CitationRef {
 	section: string | null;
 }
 
+/** Kleur-niveau van het zekerheidslabel in de oordeel-banner. #51 breidt het
+ *  vocabulaire uit met "Community-consensus (N bronnen)" — een eigen niveau,
+ *  visueel onderscheiden van officieel bevestigd/afgeleid. */
+export function certaintyLevel(
+	zekerheid: string | null | undefined
+): 'ok' | 'warn' | 'community' | 'unsure' {
+	const z = (zekerheid ?? '').toLowerCase();
+	if (z.startsWith('bevestigd')) return 'ok';
+	if (z.startsWith('afgeleid')) return 'warn';
+	if (z.startsWith('community')) return 'community';
+	return 'unsure';
+}
+
 const stripMd = (s: string): string =>
 	s
 		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [tekst](url) → tekst

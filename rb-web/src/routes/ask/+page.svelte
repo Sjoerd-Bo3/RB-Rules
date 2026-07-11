@@ -114,6 +114,9 @@
 
 	const hasAnswer = $derived(Boolean(form?.answer));
 
+	// Community-consensus (#51): alleen http(s)-bronlinks renderen als link.
+	const isHttp = (url: string) => /^https?:\/\//.test(url);
+
 	const TYPE_LABELS: Record<string, string> = {
 		Ruling: 'Ruling',
 		Definitie: 'Uitleg',
@@ -245,6 +248,38 @@
 				{/each}
 			{/if}
 
+			{#if form?.claims?.length}
+				<!-- Community-consensus (#51): interpretatielaag, visueel apart
+				     van de officiële citaties — met trust-label en bronnen. -->
+				<h2 class="community-h">Community-consensus</h2>
+				<p class="meta small community-sub">Geen officiële bron — zo leest de community het. De officiële regels hierboven winnen altijd.</p>
+				{#each form.claims as cl (cl.topicRef + cl.statement)}
+					<details class="cite claim">
+						<summary>
+							<span class="community-badge">community</span>
+							<strong>{cl.topicRef}</strong>
+							<span class="meta">{cl.corroboration} {cl.corroboration === 1 ? 'bron leest' : 'bronnen lezen'} dit zo · trust {cl.trustScore.toFixed(2)}</span>
+							{#if cl.officialStatus === 'confirmed'}<span class="confirmed">officieel bevestigd</span>{/if}
+							<span class="cite-essence">{cl.statement}</span>
+						</summary>
+						<p class="cite-text">{cl.statement}</p>
+						{#if cl.sources?.length}
+							<ul class="claim-sources">
+								{#each cl.sources as s (s.url)}
+									<li class="meta">
+										{#if isHttp(s.url)}
+											<a href={s.url} target="_blank" rel="noopener noreferrer">{s.sourceName}</a>
+										{:else}
+											{s.sourceName}
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</details>
+				{/each}
+			{/if}
+
 			{#if form?.cards?.length}
 				<h2>Betrokken kaarten</h2>
 				{#each form.cards as k (k.riftboundId)}
@@ -288,6 +323,7 @@
 						<input type="hidden" name="answer" value={form?.answer ?? ''} />
 						<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
 						<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
+						<input type="hidden" name="claims" value={JSON.stringify(form?.claims ?? [])} />
 						<input type="hidden" name="verdict" value="up" />
 						<button class="fb">Ja</button>
 					</form>
@@ -300,6 +336,7 @@
 					<input type="hidden" name="answer" value={form?.answer ?? ''} />
 					<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
 					<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
+					<input type="hidden" name="claims" value={JSON.stringify(form?.claims ?? [])} />
 					<input type="hidden" name="verdict" value="down" />
 					<textarea name="text" rows="3" placeholder="Wat is het juiste antwoord? Verwijs waar mogelijk naar een §-sectie."></textarea>
 					<button type="submit">Verstuur correctie</button>
@@ -398,6 +435,26 @@
 		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 	}
 	.cite[open] .cite-essence { display: none; }
+	/* Community-consensus (#51): visueel onderscheiden van de officiële
+	   citaties — accentrand + badge; de summary wrapt zodat 390px nooit
+	   horizontaal scrollt. */
+	.community-h { margin-bottom: 2px; }
+	.community-sub { margin: 0 0 8px; }
+	.claim { border-left: 3px solid var(--accent); }
+	.claim summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+	.claim summary .cite-essence { flex-basis: 100%; }
+	.community-badge {
+		font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+		letter-spacing: 0.06em; background: var(--accent-soft); color: var(--accent);
+		border-radius: 999px; padding: 2px 9px;
+	}
+	.confirmed {
+		font-size: 0.7rem; text-transform: uppercase;
+		background: var(--ok-soft); color: var(--ok); border-radius: 999px; padding: 2px 8px;
+	}
+	.claim-sources { list-style: none; margin: 4px 0 4px; padding: 0; }
+	.claim-sources li { margin: 3px 0; overflow-wrap: anywhere; }
+	.claim-sources a { color: var(--ok); text-decoration: none; font-weight: 600; }
 	.parents { border-left: 2px solid var(--border); margin: 8px 0 0; padding-left: 10px; }
 	.parent { margin: 4px 0; color: var(--muted); font-size: 0.85rem; }
 	.parent a { color: var(--muted); font-weight: 700; text-decoration: none; }
