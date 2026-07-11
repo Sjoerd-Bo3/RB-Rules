@@ -32,6 +32,7 @@
 		{ name: 'graph', label: 'Graph synchroniseren', hint: 'Neo4j bijwerken' },
 		{ name: 'interactions', label: 'Interacties minen', hint: 'kandidaten zoeken en LLM-verifiëren' },
 		{ name: 'classify', label: 'Classificaties aanvullen', hint: 'changes zonder samenvatting/duiding alsnog classificeren' },
+		{ name: 'claims', label: 'Claims minen', hint: 'community-claims destilleren uit registerbronnen (trust 3+), met corroboratie en toets tegen de officiële regels' },
 		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten worden als voorstel gelogd, nooit automatisch toegevoegd' }
 	];
 
@@ -100,7 +101,8 @@
 		{ key: 'interactions', label: 'Interacties', slug: 'interacties' },
 		{ key: 'changes', label: 'Wijzigingen', slug: 'wijzigingen' },
 		{ key: 'openCorrections', label: 'Open correcties', slug: 'correcties' },
-		{ key: 'knowledge', label: 'Spelbegrip-docs', slug: 'primer' }
+		{ key: 'knowledge', label: 'Spelbegrip-docs', slug: 'primer' },
+		{ key: 'claims', label: 'Claims', slug: 'claims' }
 	];
 </script>
 

@@ -32,6 +32,18 @@ public record ChangeOverviewItem(
     long Id, string SourceId, string SourceName, string ChangeType, string Severity,
     string? Summary, string? Meaning, DateTimeOffset DetectedAt);
 
+public record ClaimSourceOverviewItem(
+    string SourceId, string SourceName, string Url, string? Quote, DateTimeOffset SeenAt);
+public record ClaimOverviewItem(
+    long Id, string TopicType, string TopicRef, string Statement,
+    int Corroboration, double TrustScore, string Status, string? StatusReason,
+    string OfficialStatus, DateTimeOffset FirstSeen, DateTimeOffset LastSeen,
+    IReadOnlyList<ClaimSourceOverviewItem> Sources);
+public record ClaimStatusCount(string Status, int Count);
+public record ClaimOverview(
+    int Total, int Page, int PageSize,
+    IReadOnlyList<ClaimStatusCount> StatusCounts, IReadOnlyList<ClaimOverviewItem> Items);
+
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
 /// server-side gepagineerd waar lijsten groot zijn.</summary>
@@ -148,6 +160,59 @@ public class AdminOverviewService(RbRulesDbContext db)
                 i.DetectedAt))
             .ToList();
         return new(total, page, PageSize, items);
+    }
+
+    /// <summary>Claims-overzicht (#50): status-chips + per claim de bronnen
+    /// (twee stappen, zelfde patroon als Interactions — geen joins over alles;
+    /// embeddings blijven buiten de projectie).</summary>
+    public async Task<ClaimOverview> ClaimsAsync(string? status, int page)
+    {
+        page = ClampPage(page);
+        var statusCounts = (await db.Claims.AsNoTracking()
+                .GroupBy(c => c.Status)
+                .Select(g => new { g.Key, Count = g.Count() })
+                .OrderBy(s => s.Key)
+                .ToListAsync())
+            .Select(s => new ClaimStatusCount(s.Key, s.Count))
+            .ToList();
+
+        var query = db.Claims.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(c => c.Status == status);
+
+        var total = await query.CountAsync();
+        var rows = await query
+            .OrderByDescending(c => c.LastSeen).ThenBy(c => c.Id)
+            .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
+            .Select(c => new
+            {
+                c.Id, c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
+                c.TrustScore, c.Status, c.StatusReason, c.OfficialStatus,
+                c.FirstSeen, c.LastSeen,
+            })
+            .ToListAsync();
+
+        var ids = rows.Select(c => c.Id).ToList();
+        var sources = await db.ClaimSources.AsNoTracking()
+            .Where(cs => ids.Contains(cs.ClaimId))
+            .Join(db.Sources, cs => cs.SourceId, s => s.Id, (cs, s) => new
+            {
+                cs.ClaimId, cs.SourceId, s.Name, cs.Url, cs.QuoteExcerpt, cs.SeenAt,
+            })
+            .ToListAsync();
+        var bySrc = sources
+            .GroupBy(s => s.ClaimId)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<ClaimSourceOverviewItem>)
+                [.. g.OrderBy(s => s.SeenAt).Select(s =>
+                    new ClaimSourceOverviewItem(s.SourceId, s.Name, s.Url, s.QuoteExcerpt, s.SeenAt))]);
+
+        var items = rows.Select(c => new ClaimOverviewItem(
+                c.Id, c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
+                c.TrustScore, c.Status, c.StatusReason, c.OfficialStatus,
+                c.FirstSeen, c.LastSeen,
+                bySrc.GetValueOrDefault(c.Id, [])))
+            .ToList();
+        return new(total, page, PageSize, statusCounts, items);
     }
 
     public async Task<Paged<ChangeOverviewItem>> ChangesAsync(int page)

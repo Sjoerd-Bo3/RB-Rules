@@ -13,7 +13,12 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
     // Dagelijks: nieuwe sets/reveals verschijnen in Riot's gallery en komen zo
     // binnen een dag automatisch binnen (incl. embeddings + mining via de tick).
     private static readonly TimeSpan CardSyncInterval = TimeSpan.FromDays(1);
+    // Nachtelijke claims-harvest (#50): community-documenten worden hooguit
+    // wekelijks gescand, dus één keer per dag minen is ruim voldoende — en
+    // idempotent (al geminede documenten worden overgeslagen).
+    private static readonly TimeSpan ClaimsMineInterval = TimeSpan.FromDays(1);
     private DateTimeOffset _lastCardSync = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastClaimsMine = DateTimeOffset.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -93,6 +98,24 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Embed-pijplijn overgeslagen (Ollama onbereikbaar?)");
+                }
+
+                // Nachtelijke claims-harvest (#50): community-interpretatie
+                // destilleren uit de register-bronnen. Best-effort — de run
+                // logt zelf per bron naar run_log.
+                if (DateTimeOffset.UtcNow - _lastClaimsMine >= ClaimsMineInterval)
+                {
+                    try
+                    {
+                        var claims = scope.ServiceProvider.GetRequiredService<ClaimMiningService>();
+                        var c = await claims.RunAsync(ct: ct);
+                        _lastClaimsMine = DateTimeOffset.UtcNow;
+                        if (c.Documents > 0) logger.LogInformation("Claims: {Detail}", c.Message);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Claims-harvest overgeslagen (rb-ai/Ollama onbereikbaar?)");
+                    }
                 }
 
                 // Mine mechanieken voor nieuwe kaarten + sync de graph (best-effort).

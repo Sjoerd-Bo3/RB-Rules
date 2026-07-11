@@ -39,6 +39,17 @@
 		id: number; kind: string; topic: string; title: string; body: string;
 		sectionRefs: string | null; status: string; updatedAt: string;
 	}
+	interface ClaimSourceItem {
+		sourceId: string; sourceName: string; url: string; quote: string | null; seenAt: string;
+	}
+	interface ClaimItem {
+		id: number; topicType: string; topicRef: string; statement: string;
+		corroboration: number; trustScore: number; status: string;
+		statusReason: string | null; officialStatus: string;
+		firstSeen: string; lastSeen: string; sources: ClaimSourceItem[];
+	}
+	interface ClaimStatusCount { status: string; count: number; }
+	interface ClaimOverview extends Paged<ClaimItem> { statusCounts: ClaimStatusCount[]; }
 
 	const TITLES: Record<string, { title: string; sub: string }> = {
 		kaarten: { title: 'Kaarten', sub: 'alle kaarten in de database, doorklikbaar naar de kaartpagina' },
@@ -50,7 +61,8 @@
 		interacties: { title: 'Interacties', sub: 'LLM-geverifieerde kaart-interacties' },
 		wijzigingen: { title: 'Wijzigingen', sub: 'de wijzigingshistorie die de feed voedt' },
 		correcties: { title: 'Correcties', sub: 'feedback op antwoorden en geverifieerde rulings' },
-		primer: { title: 'Spelbegrip-primer', sub: 'alle spelbegrip-docs, bewerkbaar — goedgekeurde docs voeden elke ruling' }
+		primer: { title: 'Spelbegrip-primer', sub: 'alle spelbegrip-docs, bewerkbaar — goedgekeurde docs voeden elke ruling' },
+		claims: { title: 'Community-claims', sub: 'beweringen uit community-bronnen met corroboratie en bron-trust — geaccepteerde claims worden het community-kanaal (#51)' }
 	};
 	const meta = $derived(TITLES[data.kind]);
 
@@ -63,6 +75,18 @@
 	const changes = $derived(data.kind === 'wijzigingen' ? (data.data as Paged<ChangeItem> | null) : null);
 	const corrections = $derived(data.kind === 'correcties' ? ((data.data ?? []) as CorrectionItem[]) : []);
 	const knowledge = $derived(data.kind === 'primer' ? ((data.data ?? []) as KnowledgeItem[]) : []);
+	const claims = $derived(data.kind === 'claims' ? (data.data as ClaimOverview | null) : null);
+
+	// Status-vocabulaire van de claims-pipeline (#50): kleur + NL-label.
+	const CLAIM_STATUS: Record<string, { label: string; badge: string }> = {
+		unreviewed: { label: 'te reviewen', badge: 'warn-b' },
+		accepted: { label: 'geaccepteerd', badge: 'ok-b' },
+		rejected: { label: 'verworpen', badge: 'err' },
+		superseded: { label: 'verouderd', badge: 'err' }
+	};
+	function claimStatus(status: string): { label: string; badge: string } {
+		return CLAIM_STATUS[status] ?? { label: status, badge: 'warn-b' };
+	}
 
 	// saveKnowledge-fouten dragen het doc-id mee zodat de melding bij het
 	// juiste bewerkformulier landt; andere actie-fouten hebben geen id.
@@ -76,7 +100,7 @@
 		editing = null;
 	});
 
-	const paged = $derived(cards ?? chunks ?? interactions ?? changes);
+	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims);
 	const totalPages = $derived(paged ? Math.max(1, Math.ceil(paged.total / paged.pageSize)) : 1);
 
 	function href(overrides: { page?: number; filter?: string; source?: string }): string {
@@ -123,6 +147,14 @@
 			<div class="chips">
 				<a class="chip" class:active={data.filter === 'mined'} aria-current={data.filter === 'mined' ? 'page' : undefined} href={href({ filter: 'mined', page: 1 })}>Geanalyseerd</a>
 				<a class="chip" class:active={data.filter === 'unmined'} aria-current={data.filter === 'unmined' ? 'page' : undefined} href={href({ filter: 'unmined', page: 1 })}>Nog niet geanalyseerd</a>
+			</div>
+		{:else if data.kind === 'claims' && claims}
+			<div class="chips">
+				<!-- Som over de statussen: claims.total is het gefilterde totaal. -->
+				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({claims.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
+				{#each claims.statusCounts as s (s.status)}
+					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{claimStatus(s.status).label} ({s.count})</a>
+				{/each}
 			</div>
 		{:else if chunks && chunks.sources.length > 1}
 			<div class="chips">
@@ -351,6 +383,45 @@
 				</div>
 			{/each}
 			{#if !knowledge.length}<p class="meta">Nog geen spelbegrip-docs — draai "Primer genereren" in het beheer.</p>{/if}
+		{/if}
+
+		<!-- Community-claims (#50): bewering + bewijsvoering + review-acties -->
+		{#if claims}
+			{#each claims.items as c (c.id)}
+				<div class="panel item corr">
+					<div class="corr-body">
+						<p class="item-head">
+							<span class="badge {claimStatus(c.status).badge}">{claimStatus(c.status).label}</span>
+							{#if c.officialStatus === 'confirmed'}<span class="badge ok-b">officieel bevestigd</span>
+							{:else if c.officialStatus === 'contradicted'}<span class="badge err">officieel tegengesproken</span>{/if}
+							<span class="meta">{c.topicType} · {c.topicRef} · {c.corroboration} {c.corroboration === 1 ? 'bron' : 'bronnen'} · trust {c.trustScore.toFixed(2)} · {fmtDate(c.lastSeen)}</span>
+						</p>
+						<p class="pre">{c.statement}</p>
+						{#if c.statusReason}<p class="meta refs">{c.statusReason}</p>{/if}
+						{#each c.sources as s (s.sourceId)}
+							<p class="meta refs">
+								<a href={s.url}>{s.sourceName}</a>
+								{#if s.quote}<span> — "{s.quote}"</span>{/if}
+							</p>
+						{/each}
+					</div>
+					<div class="corr-actions">
+						{#if c.status !== 'accepted'}
+							<form method="POST" action="?/acceptClaim" use:enhance>
+								<input type="hidden" name="id" value={c.id} />
+								<button class="small" title="Geaccepteerde claims worden het community-kanaal in de vraagbaak (#51)">Bevestig</button>
+							</form>
+						{/if}
+						{#if c.status !== 'rejected'}
+							<form method="POST" action="?/rejectClaim" use:enhance>
+								<input type="hidden" name="id" value={c.id} />
+								<button class="ghost small">Verwerp</button>
+							</form>
+						{/if}
+					</div>
+				</div>
+			{/each}
+			{#if !claims.items.length}<p class="meta">Geen claims{data.filter ? ' met deze status' : ' — draai "Claims minen" in het beheer'}.</p>{/if}
 		{/if}
 
 		<!-- Paginering -->

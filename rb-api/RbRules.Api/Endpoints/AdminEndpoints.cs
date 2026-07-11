@@ -173,6 +173,7 @@ public static class AdminEndpoints
                     Interactions = await db.CardInteractions.CountAsync(),
                     OpenCorrections = await db.Corrections.CountAsync(c => c.Status == "unverified"),
                     Knowledge = await db.KnowledgeDocs.CountAsync(),
+                    Claims = await db.Claims.CountAsync(),
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
             });
@@ -342,6 +343,32 @@ public static class AdminEndpoints
         admin.MapGet("/overview/changes", async (
                 int? page, AdminOverviewService overview) =>
             Results.Ok(await overview.ChangesAsync(page ?? 1)));
+
+        admin.MapGet("/overview/claims", async (
+                string? status, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.ClaimsAsync(status, page ?? 1)));
+
+        // Claims-review (#50): accepteren maakt een claim retrieval-baar
+        // (het /ask-kanaal zelf is #51); verwerpen houdt hem uit beeld.
+        admin.MapPost("/claims/{id:long}/accept", async (long id, RbRulesDbContext db) =>
+        {
+            var claim = await db.Claims.FindAsync(id);
+            if (claim is null) return Results.NotFound();
+            claim.Status = "accepted";
+            claim.StatusReason = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/claims/{id:long}/reject", async (long id, RbRulesDbContext db) =>
+        {
+            var claim = await db.Claims.FindAsync(id);
+            if (claim is null) return Results.NotFound();
+            claim.Status = "rejected";
+            claim.StatusReason = "door de beheerder afgewezen";
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
 
         // Denkstappen-traces van de vraag-pipeline (#40).
         admin.MapGet("/asktraces", async (RbRulesDbContext db) =>

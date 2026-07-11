@@ -56,6 +56,7 @@ builder.Services.AddScoped<CardSimilarityService>();
 builder.Services.AddScoped<SimilarityExplainService>();
 builder.Services.AddScoped<RuleBrowserService>();
 builder.Services.AddScoped<GraphQueryService>();
+builder.Services.AddScoped<ClaimMiningService>();
 builder.Services.AddSingleton<JobRunner>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddHostedService<ScanScheduler>();
