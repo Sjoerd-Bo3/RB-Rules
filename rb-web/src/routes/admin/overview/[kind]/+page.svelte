@@ -72,6 +72,15 @@
 	interface GapsReport {
 		coverage: GapCoverage; questions: GapQuestion[]; sources: GapSource[];
 	}
+	interface UserItem {
+		id: number; email: string; blocked: boolean; dailyQuota: number; dailyPhotoQuota: number;
+		createdAt: string; lastLoginAt: string | null;
+		questions: number; photos: number; cheap: number; hard: number;
+		failed: number; avgDurationMs: number;
+	}
+	interface UserOverview extends Paged<UserItem> {
+		period: string; anonQuestions: number; anonPhotos: number;
+	}
 
 	const TITLES: Record<string, { title: string; sub: string }> = {
 		kaarten: { title: 'Kaarten', sub: 'alle kaarten in de database, doorklikbaar naar de kaartpagina' },
@@ -86,7 +95,8 @@
 		primer: { title: 'Spelbegrip-primer', sub: 'alle spelbegrip-docs, bewerkbaar — goedgekeurde docs voeden elke ruling' },
 		claims: { title: 'Community-claims', sub: 'beweringen uit community-bronnen met corroboratie en bron-trust — geaccepteerde claims worden het community-kanaal (#51)' },
 		voorstellen: { title: 'Bronvoorstellen', sub: 'webvondsten van de scout — accepteren zet de bron uitgeschakeld in het register, aanzetten gaat daarna via de bronnen-tabel' },
-		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' }
+		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' },
+		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — de cheap/hard-verdeling is de kosten-indicatie; quota en blokkade zijn hier bij te stellen' }
 	};
 	const meta = $derived(TITLES[data.kind]);
 
@@ -124,6 +134,14 @@
 	}
 
 	const gaps = $derived(data.kind === 'gaten' ? (data.data as GapsReport | null) : null);
+	const users = $derived(data.kind === 'gebruikers' ? (data.data as UserOverview | null) : null);
+
+	// Meetperiode voor het gebruikers-overzicht (#42): chip-label per waarde.
+	const PERIODS: { value: string; label: string }[] = [
+		{ value: 'vandaag', label: 'Vandaag' },
+		{ value: '7d', label: 'Laatste 7 dagen' },
+		{ value: '30d', label: 'Laatste 30 dagen' }
+	];
 
 	// Vraag-signalen gegroepeerd per signaal, in vaste presentatievolgorde.
 	const SIGNALS: Record<string, { label: string; hint: string }> = {
@@ -155,7 +173,7 @@
 		editing = null;
 	});
 
-	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims ?? proposals);
+	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims ?? proposals ?? users);
 	const totalPages = $derived(paged ? Math.max(1, Math.ceil(paged.total / paged.pageSize)) : 1);
 
 	function href(overrides: { page?: number; filter?: string; source?: string }): string {
@@ -217,6 +235,12 @@
 				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({proposals.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
 				{#each proposals.statusCounts as s (s.status)}
 					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{proposalStatus(s.status).label} ({s.count})</a>
+				{/each}
+			</div>
+		{:else if data.kind === 'gebruikers'}
+			<div class="chips">
+				{#each PERIODS as p (p.value)}
+					<a class="chip" class:active={data.filter === p.value} aria-current={data.filter === p.value ? 'page' : undefined} href={href({ filter: p.value, page: 1 })}>{p.label}</a>
 				{/each}
 			</div>
 		{:else if chunks && chunks.sources.length > 1}
@@ -601,6 +625,61 @@
 			</div>
 		{/if}
 
+		<!-- Gebruikers + kosteninzicht (#42): gebruik per account in de gekozen
+		     periode; quota en blokkade direct in de rij bij te stellen. -->
+		{#if users}
+			<p class="meta count">
+				Anoniem gebruik in deze periode: {users.anonQuestions}
+				{users.anonQuestions === 1 ? 'vraag' : 'vragen'}{users.anonPhotos
+					? `, waarvan ${users.anonPhotos} met foto`
+					: ''} — anonieme bezoekers vallen onder de per-IP-limiet.
+			</p>
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>Gebruiker</th><th>Status</th><th>Vragen</th><th>Foto's</th>
+							<th>Cheap / hard</th><th>Mislukt</th><th>Gem. duur</th>
+							<th>Quota per dag</th><th></th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each users.items as u (u.id)}
+							<tr>
+								<td>
+									<strong>{u.email}</strong><br />
+									<span class="meta">sinds {fmtDate(u.createdAt)} · laatst ingelogd {fmtDate(u.lastLoginAt)}</span>
+								</td>
+								<td><span class="badge {u.blocked ? 'err' : 'ok-b'}">{u.blocked ? 'geblokkeerd' : 'actief'}</span></td>
+								<td class="meta">{u.questions}</td>
+								<td class="meta">{u.photos}</td>
+								<td class="meta">{u.cheap} / {u.hard}</td>
+								<td class="meta">{u.failed}</td>
+								<td class="meta">{u.questions ? `${Math.round(u.avgDurationMs / 1000)}s` : '—'}</td>
+								<td>
+									<form method="POST" action="?/saveUser" use:enhance class="quota-form">
+										<input type="hidden" name="id" value={u.id} />
+										<label>vragen <input type="number" name="dailyQuota" value={u.dailyQuota} min="0" max="10000" /></label>
+										<label>foto's <input type="number" name="dailyPhotoQuota" value={u.dailyPhotoQuota} min="0" max="10000" /></label>
+										<button class="small">Opslaan</button>
+									</form>
+									{#if form?.error && formDocId === u.id}<p class="warn">{form.error}</p>{/if}
+								</td>
+								<td>
+									<form method="POST" action="?/saveUser" use:enhance>
+										<input type="hidden" name="id" value={u.id} />
+										<input type="hidden" name="blocked" value={u.blocked ? 'false' : 'true'} />
+										<button class="ghost small" title={u.blocked ? 'Account mag weer vragen stellen' : 'Account per direct geen vragen meer laten stellen'}>{u.blocked ? 'Deblokkeer' : 'Blokkeer'}</button>
+									</form>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			{#if !users.items.length}<p class="meta">Nog geen accounts — het eerste account ontstaat bij de eerste voltooide magic-link-login.</p>{/if}
+		{/if}
+
 		<!-- Paginering -->
 		{#if paged && totalPages > 1}
 			<nav class="pager">
@@ -664,6 +743,14 @@
 		border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
 		font-size: 16px; /* iOS zoomt in op form-controls kleiner dan 16px */
 		font-family: inherit; line-height: 1.55;
+	}
+	/* Quota-bewerking in de gebruikersrij (#42). */
+	.quota-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; }
+	.quota-form label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 0.75rem; }
+	.quota-form input {
+		width: 76px; background: var(--surface-deep); color: var(--text);
+		border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+		font-size: 16px; /* iOS zoomt in op form-controls kleiner dan 16px */
 	}
 	.gap-h { color: var(--accent); font-size: 1.02rem; margin: 22px 0 10px; }
 	.gap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
