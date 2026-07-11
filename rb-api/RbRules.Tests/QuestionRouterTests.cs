@@ -14,8 +14,22 @@ public class QuestionRouterTests
     [InlineData("Hoeveel tijd is er per ronde in een toernooi?", false, QuestionType.Toernooi)]
     [InlineData("Wanneer mag een judge ingrijpen?", false, QuestionType.Toernooi)]
     [InlineData("Wat doet Teemo - Swift Scout?", true, QuestionType.Kaart)]
+    [InlineData("Welke gearkillers zijn er?", false, QuestionType.Lijst)]
+    [InlineData("Welke kaarten kunnen een gear vernietigen?", false, QuestionType.Lijst)]
+    [InlineData("Which cards can destroy a gear?", false, QuestionType.Lijst)]
+    [InlineData("Geef een overzicht van alle removal spells", false, QuestionType.Lijst)]
+    [InlineData("Wat speelt iedereen in de meta?", false, QuestionType.Lijst)]
     public void Classify_RoutesByQuestionKind(string q, bool mentionsCard, QuestionType expected) =>
         Assert.Equal(expected, QuestionRouter.Classify(q, mentionsCard));
+
+    [Fact]
+    public void ListQuestion_AboutBans_StaysLegality()
+    {
+        // Volgorde-grens (#67): een lijstvraag over de banlijst hoort bij
+        // Legaliteit — daar is de banlijst het gezaghebbende contextblok.
+        Assert.Equal(QuestionType.Legaliteit,
+            QuestionRouter.Classify("Welke kaarten zijn banned?"));
+    }
 
     [Fact]
     public void Definition_WithCardName_FallsBackToRuling()
