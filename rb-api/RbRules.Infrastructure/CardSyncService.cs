@@ -165,7 +165,7 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
             SetId = (c["set"]?["set_id"]?.GetValue<string>() ?? fallbackSetId).ToUpperInvariant(),
             SetLabel = c["set"]?["label"]?.GetValue<string>(),
             CollectorNumber = c["collector_number"]?.GetValue<int?>(),
-            TextPlain = CardText.HumanizeIcons(c["text"]?["plain"]?.GetValue<string>()),
+            TextPlain = c["text"]?["plain"]?.GetValue<string>(),
             ImageUrl = c["media"]?["image_url"]?.GetValue<string>(),
             Tags = c["tags"] is JsonArray t
                 ? [.. t.Select(x => x?.GetValue<string>()).OfType<string>()]

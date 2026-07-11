@@ -73,6 +73,47 @@ a { color: inherit; }
 	to { transform: rotate(360deg); }
 }
 
+/* Kaarttekst-iconen (:rb_…:-tokens uit Riot-teksten) */
+.tok {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	vertical-align: -2px;
+	margin: 0 1px;
+}
+.tok-energy {
+	width: 17px;
+	height: 17px;
+	border-radius: 50%;
+	background: var(--surface-deep);
+	border: 1.5px solid var(--accent);
+	color: var(--accent);
+	font-size: 11px;
+	font-weight: 700;
+	font-style: normal;
+	line-height: 1;
+}
+.tok-svg { width: 15px; height: 15px; }
+.tok-might path { fill: #e5766a; }
+.tok-exhaust path { fill: var(--muted); }
+.tok-rune {
+	width: 11px;
+	height: 11px;
+	border-radius: 3px;
+	transform: rotate(45deg);
+	border: 1px solid rgba(0, 0, 0, 0.45);
+	margin: 0 3px;
+}
+.tok-rune-fury { background: #e5484d; }
+.tok-rune-calm { background: #4fbf8b; }
+.tok-rune-mind { background: #5b9dd9; }
+.tok-rune-body { background: #d98a4e; }
+.tok-rune-order { background: #e0c66e; }
+.tok-rune-chaos { background: #a86fd1; }
+.tok-rune-rainbow {
+	background: conic-gradient(#e5484d, #e0c66e, #4fbf8b, #5b9dd9, #a86fd1, #e5484d);
+}
+
 /* Markdown-weergave (rulings) */
 .md :is(h1, h2, h3) { font-size: 1.02rem; color: var(--accent); margin: 18px 0 6px; }
 .md p { margin: 8px 0; }

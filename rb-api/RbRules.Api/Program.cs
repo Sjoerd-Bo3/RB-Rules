@@ -203,7 +203,17 @@ app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
 {
     if (string.IsNullOrWhiteSpace(req.Question))
         return Results.BadRequest(new { error = "question is verplicht" });
-    var result = await ask.AskAsync(req.Question.Trim());
+    // Optionele board-state-foto('s): max 2, alleen gangbare beeldformaten.
+    var images = (req.Images ?? [])
+        .Where(i => !string.IsNullOrWhiteSpace(i.Data))
+        .Take(2)
+        .Select(i => new RbAiClient.AiImage(i.MediaType, i.Data))
+        .ToList();
+    if (images.Any(i => i.MediaType is not ("image/jpeg" or "image/png" or "image/webp" or "image/gif")))
+        return Results.BadRequest(new { error = "afbeeldingstype niet ondersteund" });
+    if (images.Any(i => i.Data.Length > 8_000_000))
+        return Results.BadRequest(new { error = "afbeelding te groot (max ~6 MB)" });
+    var result = await ask.AskAsync(req.Question.Trim(), images.Count > 0 ? images : null);
     return Results.Ok(result);
 });
 
@@ -331,7 +341,7 @@ app.MapGet("/api/cards/{id}/similar/{otherId}/explain", async (
     string Describe(RbRules.Domain.Card c) =>
         $"{c.Name} ({c.Supertype} {c.Type}, {string.Join("/", c.Domains)}, energy {c.Energy?.ToString() ?? "—"})" +
         (c.Mechanics is { Length: > 0 } m ? $", mechanieken: {string.Join(", ", m)}" : "") +
-        (c.TextPlain is null ? "" : $"\nTekst: {c.TextPlain}");
+        (c.TextPlain is null ? "" : $"\nTekst: {CardText.HumanizeIcons(c.TextPlain)}");
 
     var raw = await ai.AskAsync(
         $"Kaart 1: {Describe(cardA)}\n\nKaart 2: {Describe(cardB)}",
@@ -552,10 +562,17 @@ app.MapGet("/api/rules/section/{code}", async (string code, string? source, RbRu
         .OrderBy(c => c.ChunkIndex)
         .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
         {
-            c.SourceId, SourceName = s.Name, SourceUrl = s.Url, c.ChunkIndex, c.Text,
+            c.SourceId, SourceName = s.Name, SourceUrl = s.Url,
+            c.ChunkIndex, c.Text, c.Page, c.DocumentId,
         })
         .ToListAsync();
     if (chunks.Count == 0) return Results.NotFound();
+
+    // PDF-deeplink: werkelijke bestands-URL + beginpagina van de sectie.
+    var fileUrl = await db.Documents
+        .Where(d => d.Id == chunks[0].DocumentId)
+        .Select(d => d.FileUrl)
+        .FirstOrDefaultAsync();
 
     // Bij codes die in meerdere bronnen voorkomen: houd één bron aan.
     var srcId = chunks[0].SourceId;
@@ -578,6 +595,8 @@ app.MapGet("/api/rules/section/{code}", async (string code, string? source, RbRu
         chunks[0].SourceName,
         chunks[0].SourceUrl,
         Text = string.Join("\n\n", chunks.Select(c => c.Text)),
+        PdfUrl = fileUrl,
+        chunks[0].Page,
         Prev = idx > 0 ? distinct[idx - 1] : null,
         Next = idx >= 0 && idx < distinct.Count - 1 ? distinct[idx + 1] : null,
     });
@@ -924,7 +943,9 @@ static IQueryable<RbRules.Domain.Card> ApplyCardFilters(
 public record SourcePatch(
     string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled);
 
-public record AskRequest(string Question);
+public record AskRequest(string Question, List<AskImageDto>? Images = null);
+
+public record AskImageDto(string MediaType, string Data);
 
 public record ResolveRequest(string[] CardIds);
 

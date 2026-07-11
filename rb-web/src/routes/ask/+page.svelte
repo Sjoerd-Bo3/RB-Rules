@@ -1,12 +1,42 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { renderMarkdown } from '$lib/markdown';
+	import RbText from '$lib/RbText.svelte';
 
 	let { form } = $props();
 	let busy = $state(false);
 	let phase = $state(0);
 	let question = $state('');
 	let correcting = $state(false);
+
+	// Board-state-foto: client verkleint naar max 1600px JPEG vóór upload.
+	let photoInput = $state<HTMLInputElement | null>(null);
+	let photoPreview = $state<string | null>(null);
+
+	async function downscale(file: File): Promise<Blob> {
+		const bitmap = await createImageBitmap(file);
+		const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+		if (scale === 1 && file.size < 1_500_000) return file;
+		const canvas = document.createElement('canvas');
+		canvas.width = Math.round(bitmap.width * scale);
+		canvas.height = Math.round(bitmap.height * scale);
+		canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+		return new Promise((resolve) =>
+			canvas.toBlob((b) => resolve(b ?? file), 'image/jpeg', 0.85)
+		);
+	}
+
+	function onPhotoChange() {
+		const f = photoInput?.files?.[0];
+		if (photoPreview) URL.revokeObjectURL(photoPreview);
+		photoPreview = f ? URL.createObjectURL(f) : null;
+	}
+
+	function clearPhoto() {
+		if (photoInput) photoInput.value = '';
+		if (photoPreview) URL.revokeObjectURL(photoPreview);
+		photoPreview = null;
+	}
 
 	const EXAMPLES = [
 		'Wanneer mag ik een unit moven, en wat telt niet als move?',
@@ -41,6 +71,14 @@
 	}
 
 	const answerHtml = $derived(form?.answer ? renderMarkdown(form.answer) : null);
+
+	const TYPE_LABELS: Record<string, string> = {
+		Ruling: 'Ruling',
+		Definitie: 'Uitleg',
+		Kaart: 'Kaartvraag',
+		Legaliteit: 'Legaliteit',
+		Toernooi: 'Toernooiregels'
+	};
 </script>
 
 <svelte:head><title>Vraag een ruling — RB Rules</title></svelte:head>
@@ -58,12 +96,17 @@
 	<form
 		method="POST"
 		action="?/ask"
-		use:enhance={({ formData }) => {
+		enctype="multipart/form-data"
+		use:enhance={async ({ formData }) => {
 			busy = true;
 			const q = String(formData.get('question') ?? '').trim();
 			if (q) remember(q);
+			const f = photoInput?.files?.[0];
+			if (f) formData.set('photo', await downscale(f), 'board.jpg');
+			else formData.delete('photo');
 			return async ({ update }) => {
 				busy = false;
+				clearPhoto();
 				await update();
 			};
 		}}
@@ -75,7 +118,30 @@
 			placeholder="Beschrijf de situatie of stel je regelvraag…"
 			bind:value={question}
 		></textarea>
-		<button type="submit" disabled={busy}>{busy ? 'Bezig…' : 'Vraag'}</button>
+		<div class="form-row">
+			<button type="submit" disabled={busy}>{busy ? 'Bezig…' : 'Vraag'}</button>
+			<input
+				bind:this={photoInput}
+				type="file"
+				name="photo"
+				accept="image/*"
+				capture="environment"
+				class="hidden-input"
+				onchange={onPhotoChange}
+			/>
+			<button type="button" class="fb" onclick={() => photoInput?.click()}>
+				{photoPreview ? 'Andere foto' : 'Foto van de tafel toevoegen'}
+			</button>
+			{#if photoPreview}
+				<span class="photo-chip">
+					<img src={photoPreview} alt="Board state" />
+					<button type="button" class="fb" onclick={clearPhoto}>Verwijder</button>
+				</span>
+			{/if}
+		</div>
+		{#if photoPreview}
+			<p class="meta small">De foto gaat mee als board state — de ruling benoemt eerst wat er zichtbaar is.</p>
+		{/if}
 	</form>
 
 	{#if busy}
@@ -92,22 +158,62 @@
 
 	{#if answerHtml && !busy}
 		<article class="panel answer-panel">
-			{#if form?.question}<p class="asked meta">Vraag: {form.question}</p>{/if}
+			{#if form?.question}
+				<p class="asked meta">
+					{#if form?.questionType}<span class="qtype">{TYPE_LABELS[form.questionType] ?? form.questionType}</span>{/if}
+					Vraag: {form.question}
+				</p>
+			{/if}
 			<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
 			<div class="md">{@html answerHtml}</div>
 			{#if form?.citations?.length}
-				<h2>Bronnen</h2>
-				<ol>
-					{#each form.citations as c (c.n)}
-						<li>
-							<a href={c.url} target="_blank" rel="noreferrer">{c.sourceName}</a>
-							<span class="meta">(trust {c.trust})</span>
+				<h2>Geciteerde regelsecties</h2>
+				{#each form.citations as c (c.n)}
+					<details class="cite">
+						<summary>
+							<span class="cite-n">[{c.n}]</span>
+							{#if c.section}<strong>§ {c.section}</strong>{/if}
+							<span class="meta">{c.sourceName} · trust {c.trust}</span>
+						</summary>
+						{#if c.text}<p class="cite-text">{c.text}</p>{/if}
+						<p class="cite-links meta">
 							{#if c.section}
-								<a class="sec" href="/rules/{encodeURIComponent(c.section)}">§ {c.section}</a>
+								<a href="/rules/{encodeURIComponent(c.section)}">Sectiepagina</a>
 							{/if}
-						</li>
-					{/each}
-				</ol>
+							{#if c.pdfUrl}
+								· <a href="{c.pdfUrl}{c.page ? `#page=${c.page}` : ''}" target="_blank" rel="noopener">
+									Officiële PDF{c.page ? ` (pagina ${c.page})` : ''}</a>
+							{:else}
+								· <a href={c.url} target="_blank" rel="noreferrer">Officiële bron</a>
+							{/if}
+						</p>
+					</details>
+				{/each}
+			{/if}
+
+			{#if form?.cards?.length}
+				<h2>Betrokken kaarten</h2>
+				{#each form.cards as k (k.riftboundId)}
+					<details class="cite card-detail">
+						<summary>
+							<strong>{k.name}</strong>
+							<span class="meta">{[k.supertype, k.type].filter(Boolean).join(' ')} · {k.domains.join('/') || '—'}</span>
+							{#if k.banned}<span class="ban">Verboden</span>{/if}
+						</summary>
+						<div class="card-body">
+							{#if k.imageUrl}<img src={k.imageUrl} alt={k.name} loading="lazy" />{/if}
+							<div>
+								<p class="meta">
+									{#if k.energy !== null}Energy {k.energy}{/if}
+									{#if k.might !== null}&nbsp;· Might {k.might}{/if}
+									{#if k.mechanics?.length}&nbsp;· {k.mechanics.join(', ')}{/if}
+								</p>
+								{#if k.textPlain}<p class="oracle"><RbText text={k.textPlain} /></p>{/if}
+								<a href="/cards/{k.riftboundId}">Naar kaartpagina →</a>
+							</div>
+						</div>
+					</details>
+				{/each}
 			{/if}
 
 			<!-- Self-learning: feedback wordt beoordeeld en stuurt daarna antwoorden -->
@@ -124,6 +230,7 @@
 						<input type="hidden" name="question" value={form?.question ?? ''} />
 						<input type="hidden" name="answer" value={form?.answer ?? ''} />
 						<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
+						<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
 						<input type="hidden" name="verdict" value="up" />
 						<button class="fb">Ja</button>
 					</form>
@@ -135,6 +242,7 @@
 					<input type="hidden" name="question" value={form?.question ?? ''} />
 					<input type="hidden" name="answer" value={form?.answer ?? ''} />
 					<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
+					<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
 					<input type="hidden" name="verdict" value="down" />
 					<textarea name="text" rows="3" placeholder="Wat is het juiste antwoord? Verwijs waar mogelijk naar een §-sectie."></textarea>
 					<button type="submit">Verstuur correctie</button>
@@ -171,20 +279,48 @@
 		resize: vertical;
 	}
 	button[type='submit'] {
-		margin-top: 10px; background: var(--accent); color: var(--accent-ink); border: 0;
+		background: var(--accent); color: var(--accent-ink); border: 0;
 		border-radius: 8px; padding: 9px 18px; font-weight: 600; cursor: pointer;
 	}
 	button[type='submit']:disabled { opacity: 0.55; }
+	.form-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+	.hidden-input { display: none; }
+	.photo-chip { display: inline-flex; align-items: center; gap: 8px; }
+	.photo-chip img {
+		height: 44px; border-radius: 6px; border: 1px solid var(--border);
+	}
+	.small { font-size: 0.78rem; margin: 8px 0 0; }
 	.waiting { display: flex; gap: 14px; align-items: center; padding: 16px; margin-bottom: 16px; }
 	.phase { margin: 0 0 2px; font-weight: 600; }
 	.waiting .meta { margin: 0; font-size: 0.85rem; }
 	.answer-panel { padding: 18px 20px; }
 	.asked { margin: 0 0 4px; font-size: 0.85rem; }
+	.qtype {
+		display: inline-block; font-size: 0.7rem; font-weight: 700;
+		text-transform: uppercase; letter-spacing: 0.06em;
+		background: var(--accent-soft); color: var(--accent);
+		border-radius: 999px; padding: 2px 9px; margin-right: 8px;
+	}
 	h2 { font-size: 1rem; color: var(--accent); margin: 16px 0 6px; }
-	ol { margin: 0; padding-left: 20px; }
-	.sec {
-		color: var(--ok); text-decoration: none; font-weight: 600;
-		background: var(--ok-soft); border-radius: 999px; padding: 1px 9px; margin-left: 6px;
+	.cite {
+		background: var(--surface-deep); border: 1px solid var(--border);
+		border-radius: 8px; padding: 8px 12px; margin-bottom: 6px;
+	}
+	.cite summary { cursor: pointer; }
+	.cite-n { color: var(--muted); font-size: 0.85rem; margin-right: 4px; }
+	.cite summary .meta { margin-left: 8px; font-size: 0.82rem; }
+	.cite-text { margin: 8px 0 4px; line-height: 1.6; }
+	.cite-links a { color: var(--ok); text-decoration: none; font-weight: 600; }
+	.card-body { display: flex; gap: 14px; margin-top: 8px; }
+	.card-body img { width: 120px; border-radius: 8px; border: 1px solid var(--border); align-self: flex-start; }
+	.card-body .oracle {
+		background: var(--surface); border: 1px solid var(--border);
+		border-radius: 8px; padding: 8px 10px; margin: 6px 0;
+	}
+	.card-body a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+	.ban {
+		font-size: 0.7rem; text-transform: uppercase; margin-left: 8px;
+		background: var(--err-soft); color: var(--err); border-radius: 999px; padding: 2px 8px;
 	}
 	.feedback {
 		display: flex; align-items: center; gap: 10px;
