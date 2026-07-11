@@ -17,6 +17,12 @@ name: v2 deploy to VM
 # Bij workflow_dispatch: input image_tag (default latest) — 'latest' voor de
 # oude flow, of een commit-SHA om een specifieke build te (her)deployen.
 #
+# Job-gate (issue #45, derde praktijkvondst): de check op het merge-moment
+# dekt het gat tot de daadwerkelijke deploy niet — een admin-job die tijdens
+# de publish-doorlooptijd start werd alsnog afgebroken door de herstart.
+# Daarom pollt de stap "Wacht op lopende admin-job" hier, vlak vóór
+# 'compose up', de admin-status op de VM en wacht zolang er een job draait.
+#
 # Vereiste secrets:
 #   DEPLOY_SSH_KEY   — private key voor sjoerd@20.123.137.64 (altijd)
 #   POSTGRES_PASSWORD, NEO4J_PASSWORD, ADMIN_PASSWORD,
@@ -131,6 +137,58 @@ jobs:
           scp -i ~/.ssh/id_deploy \
             deploy/server-setup-v2/docker-compose.yml \
             "$VM_USER@$VM_HOST:$VM_PATH/docker-compose.yml"
+
+      - name: Wacht op lopende admin-job
+        # Bij bootstrap is er nog geen stack (en geen .env) om te bevragen.
+        if: steps.check.outputs.enabled == 'true' && inputs.bootstrap != true
+        run: |
+          # Issue #45 (derde praktijkvondst): 'compose up' herstart rb-api en
+          # breekt een lopende admin-job af. Poll daarom eerst de admin-status
+          # (zelfde curl-in-intern-netwerk-patroon als de verify-stap) en
+          # wacht — elke 30s, max ~20 min — tot er geen job meer draait.
+          # Bewuste keuze: is rb-api onbereikbaar (bv. crash-loop van een
+          # vorige deploy) of ontbreekt de .env, dan slaan we de gate over
+          # met een notice in plaats van te falen — anders kan een
+          # fix-forward-deploy nooit landen en zit productie muurvast.
+          ADMIN_KEY=$($SSHCMD "grep '^ADMIN_PASSWORD=' $VM_PATH/.env | cut -d= -f2-" 2>/dev/null || true)
+          if [ -z "$ADMIN_KEY" ]; then
+            echo "::notice::geen ADMIN_PASSWORD in $VM_PATH/.env gevonden — job-gate overgeslagen (stack nog niet ge-bootstrapt?)"
+            exit 0
+          fi
+          echo "::add-mask::$ADMIN_KEY"
+
+          # /api/admin/status: compacte camelCase-JSON met top-level
+          # "running":null (vrij) of "running":{"name":...} (job actief).
+          probe() {
+            $SSHCMD "docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS -m 10 -H 'X-Admin-Key: $ADMIN_KEY' http://rb-v2-api:8080/api/admin/status" 2>/dev/null
+          }
+
+          down=0
+          for i in $(seq 1 40); do
+            if body=$(probe); then
+              down=0
+              if printf '%s' "$body" | grep -q '"running":null'; then
+                echo "OK: geen admin-job actief — deploy gaat door (poging $i)"
+                exit 0
+              fi
+              job=$(printf '%s' "$body" | sed -n 's/.*"running":{"name":"\([^"]*\)".*/\1/p')
+              echo "admin-job '${job:-onbekend}' draait — 30s wachten (poging $i/40)"
+              sleep 30
+            else
+              # -fsS: ook een 401 (key geweigerd) telt als onbereikbaar; drie
+              # opeenvolgende missers voordat we overslaan, zodat één hikje de
+              # gate niet omzeilt terwijl er wél een job draait.
+              down=$((down+1))
+              if [ "$down" -ge 3 ]; then
+                echo "::notice::rb-api onbereikbaar (of key geweigerd) — job-gate overgeslagen zodat een fix-forward-deploy kan landen"
+                exit 0
+              fi
+              echo "admin-status antwoordt niet (misser $down/3) — 10s wachten"
+              sleep 10
+            fi
+          done
+          echo "::error::na ~20 min draait er nog steeds een admin-job — deploy afgebroken om de job niet te onderbreken. Herstart deze run zodra de job klaar is (of deploy via workflow_dispatch)."
+          exit 1
 
       - name: Pull & (re)start stack
         if: steps.check.outputs.enabled == 'true'
