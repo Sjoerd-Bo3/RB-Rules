@@ -373,13 +373,7 @@
 		font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em;
 		border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; margin-left: 6px;
 	}
-	.badge {
-		font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
-		padding: 2px 8px; border-radius: 999px; font-weight: 700;
-	}
-	.badge.ok-b { background: var(--ok-soft); color: var(--ok); }
-	.badge.warn-b { background: var(--warn-soft); color: var(--warn); }
-	.badge.err { background: var(--err-soft); color: var(--err); }
+	/* .badge-stijlen: gedeelde bouwsteen in app.css (#59). */
 	.warn { color: var(--err); }
 	a { color: inherit; }
 </style>

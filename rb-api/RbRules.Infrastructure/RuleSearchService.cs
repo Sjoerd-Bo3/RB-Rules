@@ -9,14 +9,12 @@ public record RuleSearchHit(
     long Id, string SourceId, string SectionCode, int? Page, string Snippet, string? FileUrl);
 
 /// <summary>Hybride zoeken voor de regels-browser (#72): vector-zoek op de
-/// sectie-embeddings + Postgres full-text over dezelfde chunks, gefuseerd met
-/// RRF. De RRF-fusie is hier bewust minimaal gedupliceerd uit AskService —
-/// extractie naar één gedeelde helper volgt via #59. Ollama-uitval is een
+/// sectie-embeddings + Postgres full-text over dezelfde chunks, gefuseerd
+/// met RRF (gedeelde Domain-helper RrfFusion, #44). Ollama-uitval is een
 /// verwacht pad: dan degradeert het zoeken naar alleen-FTS.</summary>
 public class RuleSearchService(
     RbRulesDbContext db, EmbeddingService embeddings, ILogger<RuleSearchService> logger)
 {
-    private const int RrfK = 60;
     private const int SnippetChars = 180;
 
     /// <summary>Cap op de embed-call: een publieke zoekopdracht mag nooit
@@ -65,21 +63,8 @@ public class RuleSearchService(
             .Select(c => c.Id)
             .ToListAsync(ct);
 
-        // 3. RRF-fusie — zelfde vorm als AskService, zonder bron-bias (#59).
-        var scores = new Dictionary<long, double>();
-        void Accumulate(List<long> ids)
-        {
-            for (var rank = 0; rank < ids.Count; rank++)
-                scores[ids[rank]] = scores.GetValueOrDefault(ids[rank]) + 1.0 / (RrfK + rank + 1);
-        }
-        Accumulate(vectorIds);
-        Accumulate(textIds);
-
-        var rankedIds = scores
-            .OrderByDescending(kv => kv.Value)
-            .Take(fetch)
-            .Select(kv => kv.Key)
-            .ToList();
+        // 3. RRF-fusie via de gedeelde Domain-helper (#44), zonder bron-bias.
+        var rankedIds = RrfFusion.Fuse([vectorIds, textIds], take: fetch);
         if (rankedIds.Count == 0) return [];
 
         // Projectie zonder embeddings; net genoeg tekst voor het snippet.

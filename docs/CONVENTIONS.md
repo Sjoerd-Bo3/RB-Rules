@@ -42,7 +42,9 @@ RbRules.Api  →  RbRules.Infrastructure  →  RbRules.Domain
 
 - **Domain**: entiteiten, pure logica (parsers, routers, tekst-utils). Geen
   EF-, HTTP- of framework-afhankelijkheden. Alles hier is unit-testbaar
-  zonder infrastructuur.
+  zonder infrastructuur. Bewuste, enige uitzondering (#44): het kale
+  `Pgvector`-pakket voor het `Vector`-datatype op entiteiten — dat is een
+  datatype, geen I/O; EF Core en Npgsql zelf blijven buiten Domain.
 - **Infrastructure**: services met I/O — EF Core (`RbRulesDbContext`), HTTP
   (RbAiClient, sync-services), Neo4j, Ollama. Publieke API van een service is
   een of twee methoden met een duidelijk resultaat-record.

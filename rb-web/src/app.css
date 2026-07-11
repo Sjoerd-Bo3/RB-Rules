@@ -96,6 +96,15 @@ a { color: inherit; }
 .status-dot.ok { background: var(--ok); }
 .status-dot.warn { background: var(--warn); }
 .status-dot.err { background: var(--err); }
+
+/* Statusbadges (#59: stond identiek dubbel in admin- en overzichtspagina). */
+.badge {
+	font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+	padding: 2px 8px; border-radius: 999px; font-weight: 700;
+}
+.badge.ok-b { background: var(--ok-soft); color: var(--ok); }
+.badge.warn-b { background: var(--warn-soft); color: var(--warn); }
+.badge.err { background: var(--err-soft); color: var(--err); }
 .status-dot.busy {
 	background: var(--accent);
 	animation: pulse 1.2s ease-in-out infinite;

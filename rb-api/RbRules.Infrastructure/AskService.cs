@@ -30,7 +30,6 @@ public record AskResult(
 public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai)
 {
     private const int TopK = 8;
-    private const int RrfK = 60;
 
     // De "ruling-skill": toon en spelregels — de structuur komt per vraagtype
     // uit QuestionRouter.StructureFor (interne router, geen extra LLM-call).
@@ -104,9 +103,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         // + interne router: vraagtype stuurt structuur en bronnen-bias.
         var qLower = $"{string.Join("\n", turns.Select(t => t.Question))}\n{question}"
             .ToLowerInvariant();
-        var mentionsCard = await db.Cards
-            .AnyAsync(c => c.VariantOf == null && c.Name.Length >= 4 &&
-                           qLower.Contains(c.Name.ToLower()), ct);
+        var mentionsCard = await CardsNamedIn(qLower).AnyAsync(ct);
         var type = QuestionRouter.Classify(question, mentionsCard);
 
         // 0b. #66: query-herformulering via één goedkope LLM-call — typo's
@@ -152,33 +149,28 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .Select(c => new { c.Id, c.SourceId })
             .ToListAsync(ct);
 
-        // 3. RRF-fusie, met bron-bias per vraagtype: toernooivragen tillen
-        // Tournament Rules-chunks op, gewone rulings de Core Rules.
+        // 3. RRF-fusie (gedeelde Domain-helper, #44), met bron-bias per
+        // vraagtype: toernooivragen tillen Tournament Rules-chunks op,
+        // gewone rulings de Core Rules.
         var sourceBias = type switch
         {
             QuestionType.Toernooi => "tournament",
             QuestionType.Ruling or QuestionType.Definitie => "core",
             _ => null,
         };
-        var scores = new Dictionary<long, double>();
-        void Accumulate(IEnumerable<(long Id, string SourceId)> hits)
-        {
-            var rank = 0;
-            foreach (var (id, sourceId) in hits)
-            {
-                var bonus = sourceBias != null &&
-                    sourceId.Contains(sourceBias, StringComparison.OrdinalIgnoreCase) ? 0.008 : 0;
-                scores[id] = scores.GetValueOrDefault(id) + 1.0 / (RrfK + rank + 1) + bonus;
-                rank++;
-            }
-        }
-        foreach (var list in vectorLists) Accumulate(list);
-        Accumulate(textHits.Select(h => (h.Id, h.SourceId)));
-
-        var topIds = scores.OrderByDescending(kv => kv.Value).Take(TopK).Select(kv => kv.Key).ToList();
+        var topIds = RrfFusion.Fuse(
+            [.. vectorLists, textHits.Select(h => (h.Id, h.SourceId)).ToList()],
+            hit => hit.Id,
+            take: TopK,
+            bonus: hit => sourceBias != null &&
+                hit.SourceId.Contains(sourceBias, StringComparison.OrdinalIgnoreCase) ? 0.008 : 0);
         if (topIds.Count == 0)
+        {
+            sw.Stop();
+            await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false);
             return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.",
                 [], [], type.ToString(), Ok: false);
+        }
 
         var chunks = await db.RuleChunks
             .Where(c => topIds.Contains(c.Id))
@@ -195,8 +187,11 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         // PDF-bestands-URL's voor deeplinks (…rules.pdf#page=N).
         var docIds = ordered.Select(c => c.DocumentId).Distinct().ToList();
+        // Projectie: de Content-kolom (volledige PDF-tekst) hoort niet over
+        // de lijn voor een id->FileUrl-map (review-fix refactor-golf).
         var fileUrls = await db.Documents
             .Where(d => docIds.Contains(d.Id) && d.FileUrl != null)
+            .Select(d => new { d.Id, d.FileUrl })
             .ToDictionaryAsync(d => d.Id, d => d.FileUrl, ct);
 
         // Ouderketen per citatie (#39): een subregel als 466.2.c is zonder
@@ -294,6 +289,10 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", ct);
         sw.Stop();
 
+        // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
+        // pagina (#59: uit het endpoint — de service meet hier toch al).
+        await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null);
+
         // Denkstappen-trace voor het beheer (#40) — best-effort.
         try
         {
@@ -336,13 +335,51 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         return new(answer, citations, cards, type.ToString(), Ok: aiAnswer is not null);
     }
 
+    /// <summary>Canonieke kaarten waarvan de naam letterlijk in de (lowercase)
+    /// tekst voorkomt — naam-match in SQL (#43), en het predicaat op één plek
+    /// (#44: stond drie keer in deze service). Namen korter dan 4 tekens
+    /// matchen niet ("Ax" zou overal in triggeren).</summary>
+    private IQueryable<Card> CardsNamedIn(string lowerText) =>
+        db.Cards.AsNoTracking()
+            .Where(c => c.VariantOf == null && c.Name.Length >= 4 &&
+                        lowerText.Contains(c.Name.ToLower()));
+
+    /// <summary>Duurmeting per vraag — best-effort en bewust zonder request-
+    /// token: een afgebroken response mag een al gegeven antwoord niet uit de
+    /// statistiek houden.</summary>
+    private async Task RecordMetricAsync(
+        long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images, bool ok)
+    {
+        try
+        {
+            db.AskMetrics.Add(new AskMetric
+            {
+                DurationMs = (int)Math.Min(elapsedMs, int.MaxValue),
+                QuestionType = type.ToString(),
+                HadImage = images is { Count: > 0 },
+                Ok = ok,
+            });
+            await db.SaveChangesAsync();
+        }
+        catch
+        {
+            // Meting mag een antwoord nooit blokkeren — en een mislukte
+            // metric-rij mag niet als Added blijven hangen in de gedeelde
+            // context, anders faalt de trace-save erna mee (review-fix).
+            foreach (var entry in db.ChangeTracker.Entries<AskMetric>()
+                         .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+                         .ToList())
+                entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+        }
+    }
+
     private async Task<List<AskCard>> MatchCardsAsync(string lowerText, CancellationToken ct)
     {
-        // Naam-match in SQL (#43); ban-status per variantgroep (#44).
-        var cards = await db.Cards.AsNoTracking()
-            .Where(c => c.VariantOf == null && c.Name.Length >= 4 &&
-                        lowerText.Contains(c.Name.ToLower()))
+        // Ban-status per variantgroep (#44); zonder embedding-vectoren —
+        // de kaart-uitklap toont feiten (#43).
+        var cards = await CardsNamedIn(lowerText)
             .Take(6)
+            .WithoutEmbedding()
             .ToListAsync(ct);
         if (cards.Count == 0) return [];
 
@@ -387,9 +424,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var isList = type == QuestionType.Lijst;
 
         // 1. Exacte naam-matches, in SQL (#43).
-        var nameHits = await db.Cards
-            .Where(c => c.VariantOf == null && c.Name.Length >= 4 &&
-                        qLower.Contains(c.Name.ToLower()))
+        var nameHits = await CardsNamedIn(qLower)
             .Take(3)
             .Select(c => c.RiftboundId)
             .ToListAsync(ct);

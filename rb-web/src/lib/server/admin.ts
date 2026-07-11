@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { env } from '$env/dynamic/private';
-
-const API = env.RB_API_URL ?? 'http://localhost:8080';
+import { API_BASE as API } from '$lib/api';
 
 export const ADMIN_COOKIE = 'rb_admin';
 

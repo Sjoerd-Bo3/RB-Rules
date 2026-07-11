@@ -230,6 +230,9 @@
 	.badge {
 		font-size: 0.72rem;
 		text-transform: uppercase;
+		/* De gedeelde .badge in app.css zet 0.04em letter-spacing; deze
+		   feed-badge had dat nooit — expliciet pixelgelijk houden (#59). */
+		letter-spacing: normal;
 		padding: 2px 8px;
 		border-radius: 999px;
 		font-weight: 700;
