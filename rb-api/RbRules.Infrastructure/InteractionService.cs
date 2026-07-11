@@ -201,7 +201,7 @@ public class InteractionService(
             uitsluitsel geven, zeg dat eerlijk. Antwoord in het Nederlands.
             """,
             task: "hard", ct: ct)
-            ?? "AI is niet beschikbaar — probeer het later opnieuw.";
+            ?? RbAiClient.UnavailableAnswer;
 
         return new(answer, citations);
     }
