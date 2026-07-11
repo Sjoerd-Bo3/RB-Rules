@@ -417,12 +417,6 @@
 	.pager { display: flex; align-items: center; gap: 14px; margin: 16px 0; }
 	.pager a { color: var(--accent); text-decoration: none; font-weight: 600; }
 	.meta { color: var(--muted); font-size: 0.85rem; }
-	.badge {
-		font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
-		padding: 2px 8px; border-radius: 999px; font-weight: 700;
-	}
-	.badge.ok-b { background: var(--ok-soft); color: var(--ok); }
-	.badge.warn-b { background: var(--warn-soft); color: var(--warn); }
-	.badge.err { background: var(--err-soft); color: var(--err); }
+	/* .badge-stijlen: gedeelde bouwsteen in app.css (#59). */
 	.warn { color: var(--err); }
 </style>

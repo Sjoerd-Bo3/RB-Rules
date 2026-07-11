@@ -177,8 +177,12 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         var topIds = scores.OrderByDescending(kv => kv.Value).Take(TopK).Select(kv => kv.Key).ToList();
         if (topIds.Count == 0)
+        {
+            sw.Stop();
+            await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false);
             return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.",
                 [], [], type.ToString(), Ok: false);
+        }
 
         var chunks = await db.RuleChunks
             .Where(c => topIds.Contains(c.Id))
@@ -294,6 +298,10 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", ct);
         sw.Stop();
 
+        // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
+        // pagina (#59: uit het endpoint — de service meet hier toch al).
+        await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null);
+
         // Denkstappen-trace voor het beheer (#40) — best-effort.
         try
         {
@@ -334,6 +342,29 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         }
 
         return new(answer, citations, cards, type.ToString(), Ok: aiAnswer is not null);
+    }
+
+    /// <summary>Duurmeting per vraag — best-effort en bewust zonder request-
+    /// token: een afgebroken response mag een al gegeven antwoord niet uit de
+    /// statistiek houden.</summary>
+    private async Task RecordMetricAsync(
+        long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images, bool ok)
+    {
+        try
+        {
+            db.AskMetrics.Add(new AskMetric
+            {
+                DurationMs = (int)Math.Min(elapsedMs, int.MaxValue),
+                QuestionType = type.ToString(),
+                HadImage = images is { Count: > 0 },
+                Ok = ok,
+            });
+            await db.SaveChangesAsync();
+        }
+        catch
+        {
+            // meting mag een antwoord nooit blokkeren
+        }
     }
 
     private async Task<List<AskCard>> MatchCardsAsync(string lowerText, CancellationToken ct)

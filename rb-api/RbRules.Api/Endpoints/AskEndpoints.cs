@@ -9,7 +9,7 @@ public static class AskEndpoints
     public static void MapAskEndpoints(this IEndpointRouteBuilder app)
     {
         // ── Rulings-Q&A (S2): hybrid retrieval + §-citaten ─────────────
-        app.MapPost("/api/ask", async (AskRequest req, AskService ask, RbRulesDbContext db) =>
+        app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
         {
             if (string.IsNullOrWhiteSpace(req.Question))
                 return Results.BadRequest(new { error = "question is verplicht" });
@@ -33,27 +33,10 @@ public static class AskEndpoints
                     t.Answer.Length > 6000 ? t.Answer[..6000] : t.Answer))
                 .ToList();
 
-            var sw = System.Diagnostics.Stopwatch.StartNew();
+            // De duurmeting voor de "gemiddeld ±Xs"-indicatie zit in AskService.
             var result = await ask.AskAsync(
                 req.Question.Trim(), images.Count > 0 ? images : null,
                 history.Count > 0 ? history : null);
-            sw.Stop();
-            try
-            {
-                // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraagpagina.
-                db.AskMetrics.Add(new AskMetric
-                {
-                    DurationMs = (int)Math.Min(sw.ElapsedMilliseconds, int.MaxValue),
-                    QuestionType = result.QuestionType,
-                    HadImage = images.Count > 0,
-                    Ok = result.Ok,
-                });
-                await db.SaveChangesAsync();
-            }
-            catch
-            {
-                // meting mag een antwoord nooit blokkeren
-            }
             return Results.Ok(result);
         }).RequireRateLimiting("llm");
 

@@ -99,6 +99,51 @@ public class InteractionService(
         return new(candidates.Count, verified);
     }
 
+    /// <summary>Geverifieerde interacties van een kaart, variantgroep-bewust
+    /// (#57, #59 — uit de endpoints): match op alle printing-ids van de groep
+    /// (rijen van vóór de groepering kunnen nog variant-ids bevatten) en
+    /// canonicaliseer de buren. Null als de kaart niet bestaat.</summary>
+    public async Task<List<InteractionNeighbor>?> NeighborsForCardAsync(
+        string cardId, int take, CancellationToken ct = default)
+    {
+        var card = await db.Cards.FindAsync([cardId], ct);
+        if (card is null) return null;
+        return await NeighborsAsync(CardText.CanonicalId(card), take, ct);
+    }
+
+    /// <summary>Als <see cref="NeighborsForCardAsync"/>, maar op een al
+    /// gecanonicaliseerd groeps-id.</summary>
+    public async Task<List<InteractionNeighbor>> NeighborsAsync(
+        string canonicalId, int take, CancellationToken ct = default)
+    {
+        var groupIds = await db.Cards.AsNoTracking()
+            .Where(c => c.RiftboundId == canonicalId || c.VariantOf == canonicalId)
+            .Select(c => c.RiftboundId)
+            .ToListAsync(ct);
+        if (groupIds.Count == 0) groupIds = [canonicalId];
+
+        var rows = await db.CardInteractions.AsNoTracking()
+            .Where(x => groupIds.Contains(x.CardAId) || groupIds.Contains(x.CardBId))
+            .OrderBy(x => x.Kind)
+            .Take(take)
+            .ToListAsync(ct);
+
+        var groupSet = groupIds.ToHashSet();
+        var otherIds = rows
+            .Select(r => groupSet.Contains(r.CardAId) ? r.CardBId : r.CardAId)
+            .ToList();
+        // Projectie zonder embedding-vectoren (#43).
+        var others = await db.Cards.AsNoTracking()
+            .Where(c => otherIds.Contains(c.RiftboundId))
+            .Select(c => new Card
+            {
+                RiftboundId = c.RiftboundId, Name = c.Name, VariantOf = c.VariantOf,
+            })
+            .ToDictionaryAsync(c => c.RiftboundId, c => c, ct);
+
+        return VariantGrouping.InteractionNeighbors(rows, groupSet, others);
+    }
+
     /// <summary>Resolver: 2-3 kaartnamen → gecombineerd antwoord (effectieve
     /// teksten + mechanieken + relevante regelsecties met §-citaten).</summary>
     public async Task<ResolveResult?> ResolveAsync(string[] cardIds, CancellationToken ct = default)
