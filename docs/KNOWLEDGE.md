@@ -25,6 +25,16 @@ antwoordformat scheidt "Regelbasis" (laag 0) van "Community-consensus"
 
 ## Laag 1 — Game-primer (quick win, lost het kernprobleem op)
 
+**Officieel bronmateriaal voor de primer** (gevonden en geverifieerd):
+- "How to Play – Quick Start Guide" en "Gameplay Guide – Core Rules" —
+  officiële Riot-artikelen, het learn-to-play-"boekje" in webvorm; als
+  bronnen `how-to-play` en `gameplay-guide` in het register (trust 1)
+- De officiële Learn to Play-video (YouTube DMXztr0OOXc, gelinkt vanaf de
+  how-to-play-pagina) — transcript als primer-input in de claims-pipeline
+- Het gedrukte boekje/learn-to-play-kaartjes uit de pakjes staan níet als
+  PDF online; als de beheerder ze fotografeert kunnen we ze transcriberen
+  naar een primer-doc (de vision-keten bestaat al)
+
 - Een set concept-documenten (~10-15 stuks, elk 200-400 woorden): de beurt,
   runes/energy, showdowns & combat, prioriteit en reacties, zones en
   kaartstromen, winnen/scoren, elk kern-keyword praktisch uitgelegd.
