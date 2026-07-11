@@ -113,4 +113,20 @@ describe('stripDuplicateRuleRefs', () => {
 		const answer = 'Je verliest 150 punten; zie § 466.2.c [1] voor de details.';
 		expect(stripDuplicateRuleRefs(answer, CITES)).toBe(answer);
 	});
+
+	it('matcht ook als de citatie-sectie een §-prefix draagt', () => {
+		const cites: CitationRef[] = [
+			{ n: 1, section: '§ 466.2.c' },
+			{ n: 2, section: '§150' }
+		];
+		const answer = [
+			'Oordeel [1].',
+			'### Regelbasis',
+			'| § | Inhoud |',
+			'| --- | --- |',
+			'| §466.2.c | Hidden-regel |',
+			'| §150 | Gear-regel |'
+		].join('\n');
+		expect(stripDuplicateRuleRefs(answer, cites)).toBe('Oordeel [1].');
+	});
 });

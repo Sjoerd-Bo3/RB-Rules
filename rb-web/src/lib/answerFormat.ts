@@ -35,8 +35,12 @@ export function citationEssence(text: string | null | undefined, maxLen = 110): 
  *  altijd staan — bij twijfel niets weghalen. */
 export function stripDuplicateRuleRefs(answer: string, citations: CitationRef[]): string {
 	if (!answer || citations.length === 0) return answer;
+	// Sectiecodes genormaliseerd zonder §-prefix — de parser slaat ze zonder
+	// op, maar wees robuust voor beide vormen.
 	const sections = new Set(
-		citations.flatMap((c) => (c.section ? [c.section.toLowerCase()] : []))
+		citations.flatMap((c) =>
+			c.section ? [c.section.replace(/^§\s*/, '').trim().toLowerCase()] : []
+		)
 	);
 	const numbers = new Set(citations.map((c) => c.n));
 
