@@ -3,9 +3,17 @@
 	import { renderMarkdown } from '$lib/markdown';
 	import RbText from '$lib/RbText.svelte';
 
-	let { form } = $props();
+	let { data, form } = $props();
 	let busy = $state(false);
 	let phase = $state(0);
+
+	// Echte duurstatistiek (mediaan/p90 van de laatste vragen) i.p.v. schatting.
+	const stats = $derived(data.stats);
+	const waitText = $derived(
+		stats.count > 0 && stats.medianMs
+			? `Meestal ±${Math.round(stats.medianMs / 1000)}s, uitschieters tot ~${Math.round((stats.p90Ms ?? stats.medianMs) / 1000)}s — gemeten over de laatste ${stats.count} ${stats.count === 1 ? 'vraag' : 'vragen'}.`
+			: 'Eerste metingen lopen nog — dit kan even duren.'
+	);
 	let question = $state('');
 	let correcting = $state(false);
 
@@ -45,7 +53,7 @@
 		'Wat gebeurt er met een Hidden unit die getarget wordt?'
 	];
 
-	// Antwoorden duren 10–30s (LLM op abonnement) — toon wat er gebeurt.
+	// Fase-tekst tijdens het wachten; tempo geschaald op de echte mediaan.
 	const PHASES = [
 		'Vraag insturen',
 		'Relevante regelsecties zoeken (semantisch + full-text)',
@@ -54,7 +62,8 @@
 	];
 	$effect(() => {
 		if (!busy) { phase = 0; return; }
-		const t = setInterval(() => { if (phase < PHASES.length - 1) phase += 1; }, 6000);
+		const interval = Math.max(2000, Math.round((stats.medianMs ?? 24_000) / PHASES.length));
+		const t = setInterval(() => { if (phase < PHASES.length - 1) phase += 1; }, interval);
 		return () => clearInterval(t);
 	});
 
@@ -149,7 +158,7 @@
 			<span class="spin"></span>
 			<div>
 				<p class="phase">{PHASES[phase]}</p>
-				<p class="meta">Een goed onderbouwde ruling kost 10–30 seconden.</p>
+				<p class="meta">{waitText}</p>
 			</div>
 		</div>
 	{/if}

@@ -199,7 +199,7 @@ app.MapGet("/api/cards/{id}", async (string id, RbRulesDbContext db) =>
 });
 
 // ── Rulings-Q&A (S2): hybrid retrieval + §-citaten ─────────────
-app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
+app.MapPost("/api/ask", async (AskRequest req, AskService ask, RbRulesDbContext db) =>
 {
     if (string.IsNullOrWhiteSpace(req.Question))
         return Results.BadRequest(new { error = "question is verplicht" });
@@ -213,8 +213,47 @@ app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
         return Results.BadRequest(new { error = "afbeeldingstype niet ondersteund" });
     if (images.Any(i => i.Data.Length > 8_000_000))
         return Results.BadRequest(new { error = "afbeelding te groot (max ~6 MB)" });
+
+    var sw = System.Diagnostics.Stopwatch.StartNew();
     var result = await ask.AskAsync(req.Question.Trim(), images.Count > 0 ? images : null);
+    sw.Stop();
+    try
+    {
+        // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraagpagina.
+        db.AskMetrics.Add(new AskMetric
+        {
+            DurationMs = (int)Math.Min(sw.ElapsedMilliseconds, int.MaxValue),
+            QuestionType = result.QuestionType,
+            HadImage = images.Count > 0,
+            Ok = !result.Answer.StartsWith("AI is niet beschikbaar"),
+        });
+        await db.SaveChangesAsync();
+    }
+    catch
+    {
+        // meting mag een antwoord nooit blokkeren
+    }
     return Results.Ok(result);
+});
+
+// Echte duurstatistiek (laatste 100 geslaagde vragen) voor de wachtindicatie.
+app.MapGet("/api/ask/stats", async (RbRulesDbContext db) =>
+{
+    var recent = await db.AskMetrics
+        .Where(m => m.Ok)
+        .OrderByDescending(m => m.CreatedAt)
+        .Take(100)
+        .Select(m => m.DurationMs)
+        .ToListAsync();
+    if (recent.Count == 0) return Results.Ok(new { Count = 0 });
+    var sorted = recent.OrderBy(x => x).ToList();
+    return Results.Ok(new
+    {
+        Count = recent.Count,
+        AvgMs = (int)recent.Average(),
+        MedianMs = sorted[sorted.Count / 2],
+        P90Ms = sorted[(int)(sorted.Count * 0.9)],
+    });
 });
 
 app.MapGet("/api/bans", async (RbRulesDbContext db) =>
