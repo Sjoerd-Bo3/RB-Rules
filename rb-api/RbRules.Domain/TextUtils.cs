@@ -40,6 +40,22 @@ public static partial class TextUtils
         return WhitespaceRegex().Replace(text, " ").Trim();
     }
 
+    /// <summary>Zoekresultaat-snippet (#72): de eerste ~max tekens, afgekapt
+    /// op een woordgrens waar dat kan, met ellipsis als er tekst wegvalt.
+    /// Bewust buiten de EF-projectie gehouden — eigen methodes vertalen niet
+    /// in expression trees, dus de aanroeper materialiseert eerst.</summary>
+    public static string Snippet(string text, int max = 180)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length <= max) return trimmed;
+        var cut = trimmed[..max];
+        var lastSpace = cut.LastIndexOf(' ');
+        // Alleen op een woordgrens breken als dat geen half snippet oplevert
+        // (codes zonder spaties, zoals lange URL's, worden hard afgekapt).
+        if (lastSpace > max / 2) cut = cut[..lastSpace];
+        return cut.TrimEnd() + "…";
+    }
+
     [GeneratedRegex(@"<script[\s\S]*?</script>", RegexOptions.IgnoreCase)]
     private static partial Regex ScriptRegex();
 
