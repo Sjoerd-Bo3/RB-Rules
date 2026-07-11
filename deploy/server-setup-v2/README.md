@@ -41,8 +41,12 @@ opnieuw gevuld door de v2-embed-pijplijn.
 
 ## Auto-deploy
 Push naar `main` → `v2-ci.yml` draait **eerst de tests** en publiceert dan
-`ghcr.io/sjoerd-bo3/rb-rules-{rb-api,rb-web,rb-ai}:latest` → `v2-deploy.yml`
-synct de compose-file, pullt en herstart de stack via SSH en verifieert de
-health-endpoints. Deploys zijn geserialiseerd (concurrency-group `v2-deploy`).
-Watchtower staat op deze services expliciet **uit** — push-to-deploy is het
-enige updatemechanisme (issue #45).
+`ghcr.io/sjoerd-bo3/rb-rules-{rb-api,rb-web,rb-ai}` met de tags `:latest` én
+`:<commit-SHA>` → `v2-deploy.yml` synct de compose-file, pullt en herstart de
+stack via SSH en verifieert de health-endpoints. De deploy **pint de
+commit-SHA** van de publish die hem triggerde (IMAGE_TAG-export op het
+SSH-commando), zodat een :latest-race tussen parallelle publishes nooit meer
+bepaalt wat er uitrolt; handmatig `docker compose up -d` op de VM valt terug
+op `:latest`. Deploys én publishes zijn geserialiseerd (concurrency-groups
+`v2-deploy` en `v2-publish-*`). Watchtower staat op deze services expliciet
+**uit** — push-to-deploy is het enige updatemechanisme (issue #45).
