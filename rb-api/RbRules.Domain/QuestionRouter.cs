@@ -103,8 +103,9 @@ public static partial class QuestionRouter
             kennis; kaarten die niet echt aan het criterium voldoen sla je over.
             Als de kaartgegevens melden dat de lijst is afgekapt ("eerste N van M"),
             zeg dat dan expliciet in het antwoord — nooit doen alsof de lijst compleet is.
-            ### Regelbasis
-            Alleen als een regel-§ het criterium verduidelijkt; anders weglaten.
+            Verduidelijkt een regel-§ het criterium, verwijs er dan inline naar met
+            [n] — geen eigen sectie of tabel met regelverwijzingen (#69: de
+            citatielijst onderaan is de enige plek waar regelsecties staan).
             """,
         _ => """
             VRAAGTYPE: ruling/interactie. Gebruik het volledige format:
