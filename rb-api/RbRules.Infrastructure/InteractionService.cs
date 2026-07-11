@@ -106,9 +106,13 @@ public class InteractionService(
     public async Task<List<InteractionNeighbor>?> NeighborsForCardAsync(
         string cardId, int take, CancellationToken ct = default)
     {
-        var card = await db.Cards.FindAsync([cardId], ct);
+        // Alleen het groeps-id is nodig — niet de hele rij met embedding (#43).
+        var card = await db.Cards.AsNoTracking()
+            .Where(c => c.RiftboundId == cardId)
+            .Select(c => new { c.RiftboundId, c.VariantOf })
+            .FirstOrDefaultAsync(ct);
         if (card is null) return null;
-        return await NeighborsAsync(CardText.CanonicalId(card), take, ct);
+        return await NeighborsAsync(card.VariantOf ?? card.RiftboundId, take, ct);
     }
 
     /// <summary>Als <see cref="NeighborsForCardAsync"/>, maar op een al
@@ -148,8 +152,11 @@ public class InteractionService(
     /// teksten + mechanieken + relevante regelsecties met §-citaten).</summary>
     public async Task<ResolveResult?> ResolveAsync(string[] cardIds, CancellationToken ct = default)
     {
-        var cards = await db.Cards
+        // Prompt-invoer, geen updates: zonder tracking en zonder de
+        // embedding-vectoren die DescribeForPrompt toch niet gebruikt (#43).
+        var cards = await db.Cards.AsNoTracking()
             .Where(c => cardIds.Contains(c.RiftboundId))
+            .WithoutEmbedding()
             .ToListAsync(ct);
         if (cards.Count < 2) return null;
 

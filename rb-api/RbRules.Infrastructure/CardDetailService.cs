@@ -29,8 +29,12 @@ public class CardDetailService(RbRulesDbContext db, CardResolver resolver)
 {
     public async Task<CardDetail?> GetAsync(string id, CancellationToken ct = default)
     {
+        // Zonder embedding-vector (#43): de detailpagina toont kaartfeiten,
+        // niet de 1024 floats.
         var c = await db.Cards.AsNoTracking()
-            .FirstOrDefaultAsync(x => x.RiftboundId == id, ct);
+            .Where(x => x.RiftboundId == id)
+            .WithoutEmbedding()
+            .FirstOrDefaultAsync(ct);
         if (c is null) return null;
 
         // Ban geldt voor de hele variantgroep (#44) — een ban op één

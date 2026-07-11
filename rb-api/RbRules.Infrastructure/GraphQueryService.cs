@@ -23,7 +23,12 @@ public class GraphQueryService(
     public async Task<GraphNeighbors?> NeighborsAsync(
         string cardId, CancellationToken ct = default)
     {
-        var center = await db.Cards.FindAsync([cardId], ct);
+        // Read-only en zonder embedding-vector (#43): het center toont naam,
+        // beeld, domeinen en mechanieken — geen 1024 floats, geen tracking.
+        var center = await db.Cards.AsNoTracking()
+            .Where(c => c.RiftboundId == cardId)
+            .WithoutEmbedding()
+            .FirstOrDefaultAsync(ct);
         if (center is null) return null;
         center = await resolver.CanonicalAsync(center, ct);
         var centerId = center.RiftboundId;

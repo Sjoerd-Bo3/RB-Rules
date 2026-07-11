@@ -369,11 +369,13 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
     private async Task<List<AskCard>> MatchCardsAsync(string lowerText, CancellationToken ct)
     {
-        // Naam-match in SQL (#43); ban-status per variantgroep (#44).
+        // Naam-match in SQL (#43); ban-status per variantgroep (#44);
+        // zonder embedding-vectoren — de kaart-uitklap toont feiten (#43).
         var cards = await db.Cards.AsNoTracking()
             .Where(c => c.VariantOf == null && c.Name.Length >= 4 &&
                         lowerText.Contains(c.Name.ToLower()))
             .Take(6)
+            .WithoutEmbedding()
             .ToListAsync(ct);
         if (cards.Count == 0) return [];
 

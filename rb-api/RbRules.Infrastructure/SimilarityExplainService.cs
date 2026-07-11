@@ -28,8 +28,13 @@ public class SimilarityExplainService(RbRulesDbContext db, RbAiClient ai)
             .FirstOrDefaultAsync(e => e.CardAId == a && e.CardBId == b, ct);
         if (cached is not null) return new(cached.Text, Cached: true);
 
-        var cardA = await db.Cards.FindAsync([id], ct);
-        var cardB = await db.Cards.FindAsync([otherId], ct);
+        // Prompt-invoer: kaartfeiten zonder embedding-vector of tracking (#43).
+        var pair = await db.Cards.AsNoTracking()
+            .Where(c => c.RiftboundId == id || c.RiftboundId == otherId)
+            .WithoutEmbedding()
+            .ToListAsync(ct);
+        var cardA = pair.FirstOrDefault(c => c.RiftboundId == id);
+        var cardB = pair.FirstOrDefault(c => c.RiftboundId == otherId);
         if (cardA is null || cardB is null) return new(null, Cached: false, Found: false);
 
         var raw = await ai.AskAsync(
