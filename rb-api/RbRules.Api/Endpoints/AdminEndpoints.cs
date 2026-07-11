@@ -273,6 +273,15 @@ public static class AdminEndpoints
                         .MineAsync(progress: report, ct: ct);
                     return $"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd";
                 },
+                // Backfill (#58): álle changes zonder samenvatting/duiding of met
+                // type "unknown" alsnog classificeren — de scan-retry pakt alleen
+                // de laatste 14 dagen. Best-effort: wat mislukt blijft staan.
+                "classify" => async (sp, report, ct) =>
+                {
+                    var r = await sp.GetRequiredService<ChangeClassificationService>()
+                        .ClassifyPendingAsync(progress: report, ct: ct);
+                    return $"{r.Classified} changes alsnog geclassificeerd, {r.Failed} mislukt, {r.Remaining} resterend";
+                },
                 _ => null,
             };
             if (work is null) return Results.NotFound(new { error = $"onbekende job '{name}'" });

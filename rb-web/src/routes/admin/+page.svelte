@@ -30,7 +30,8 @@
 		{ name: 'bans', label: 'Bans en errata structureren', hint: 'uit de officiële documenten' },
 		{ name: 'primer', label: 'Primer genereren', hint: 'spelbegrip-docs destilleren uit de regels (drafts ter review)' },
 		{ name: 'graph', label: 'Graph synchroniseren', hint: 'Neo4j bijwerken' },
-		{ name: 'interactions', label: 'Interacties minen', hint: 'kandidaten zoeken en LLM-verifiëren' }
+		{ name: 'interactions', label: 'Interacties minen', hint: 'kandidaten zoeken en LLM-verifiëren' },
+		{ name: 'classify', label: 'Classificaties aanvullen', hint: 'changes zonder samenvatting/duiding alsnog classificeren' }
 	];
 
 	interface Correction {

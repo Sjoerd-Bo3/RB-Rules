@@ -111,3 +111,103 @@ public class ClassifierTests
     public void Parse_ReturnsNullOnGarbage() =>
         Assert.Null(Classifier.Parse("geen json hier"));
 }
+
+/// <summary>#58: naclassificatie van changes die bij rb-ai-uitval zonder
+/// samenvatting/duiding zijn opgeslagen.</summary>
+public class ClassificationBackfillTests
+{
+    /// <summary>Zoals IngestService een change opslaat als de LLM-call faalde.</summary>
+    private static Change UnclassifiedChange() => new()
+    {
+        SourceId = "core-rules",
+        ChangeType = "unknown",
+        Severity = "medium",
+        Summary = null,
+        Meaning = null,
+        Diff = "+ toegevoegd: Regel 601.2 nieuw.",
+    };
+
+    [Fact]
+    public void NeedsClassification_TrueForUnclassifiedScanResult() =>
+        Assert.True(Classifier.NeedsClassification(UnclassifiedChange()));
+
+    [Fact]
+    public void NeedsClassification_TrueWhenSummaryWhitespace()
+    {
+        var change = UnclassifiedChange();
+        change.ChangeType = "errata";
+        change.Summary = "   ";
+        change.Meaning = "Duiding.";
+        Assert.True(Classifier.NeedsClassification(change));
+    }
+
+    [Fact]
+    public void NeedsClassification_TrueWhenTypeUnknownDespiteSummary()
+    {
+        var change = UnclassifiedChange();
+        change.Summary = "Samenvatting.";
+        change.Meaning = "Duiding.";
+        Assert.True(Classifier.NeedsClassification(change));
+    }
+
+    [Fact]
+    public void NeedsClassification_FalseWhenComplete()
+    {
+        var change = UnclassifiedChange();
+        change.ChangeType = "errata";
+        change.Summary = "Samenvatting.";
+        change.Meaning = "Duiding.";
+        Assert.False(Classifier.NeedsClassification(change));
+    }
+
+    [Fact]
+    public void Apply_FullClassification_FillsAllFieldsAndCompletes()
+    {
+        var change = UnclassifiedChange();
+        var done = Classifier.Apply(change,
+            new Classification("ban", "high", "Kaart X gebanned", "Check je deck."));
+        Assert.True(done);
+        Assert.Equal("ban", change.ChangeType);
+        Assert.Equal("high", change.Severity);
+        Assert.Equal("Kaart X gebanned", change.Summary);
+        Assert.Equal("Check je deck.", change.Meaning);
+    }
+
+    [Fact]
+    public void Apply_Null_LeavesChangeUntouched()
+    {
+        // rb-ai-uitval tijdens de backfill zelf: change blijft staan voor een
+        // volgende run, niets wordt overschreven.
+        var change = UnclassifiedChange();
+        Assert.False(Classifier.Apply(change, null));
+        Assert.Equal("unknown", change.ChangeType);
+        Assert.Null(change.Summary);
+        Assert.Null(change.Meaning);
+    }
+
+    [Fact]
+    public void Apply_ParseWithMissingFields_KeepsChangePending()
+    {
+        // Parse vult ontbrekende keys met lege strings — dat mag een change
+        // niet als "geclassificeerd" markeren.
+        var change = UnclassifiedChange();
+        var cls = Classifier.Parse("{\"change_type\": \"errata\"}");
+        Assert.False(Classifier.Apply(change, cls));
+        Assert.Equal("errata", change.ChangeType);
+        Assert.Null(change.Summary);
+    }
+
+    [Fact]
+    public void Apply_DoesNotDegradeExistingValues()
+    {
+        // Een eerdere (deels) geslaagde poging mag niet worden weggegumd door
+        // een latere mislukte parse met lege velden of type "unknown".
+        var change = UnclassifiedChange();
+        change.ChangeType = "errata";
+        change.Summary = "Bestaande samenvatting";
+        var done = Classifier.Apply(change, new Classification("unknown", "medium", "", ""));
+        Assert.False(done);
+        Assert.Equal("errata", change.ChangeType);
+        Assert.Equal("Bestaande samenvatting", change.Summary);
+    }
+}

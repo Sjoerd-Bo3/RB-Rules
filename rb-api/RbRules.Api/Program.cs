@@ -44,6 +44,7 @@ builder.Services.AddScoped<PrimerService>();
 builder.Services.AddScoped<BanErrataSyncService>();
 builder.Services.AddScoped<InteractionService>();
 builder.Services.AddScoped<AdminOverviewService>();
+builder.Services.AddScoped<ChangeClassificationService>();
 builder.Services.AddSingleton<JobRunner>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddHostedService<ScanScheduler>();
