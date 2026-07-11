@@ -17,13 +17,25 @@ export interface Change {
 	trustTier: number;
 }
 
+/** Aankomende set (#52): bekend via de releasedatum uit de kaart-sync. */
+export interface UpcomingSet {
+	setId: string;
+	name: string;
+	publishedOn: string;
+	cardCount: number | null;
+}
+
 export const load: PageServerLoad = async ({ cookies }) => {
 	const isAdmin = authed(cookies);
 	try {
-		const changes = await api<Change[]>('/api/changes');
-		return { changes, apiDown: false, isAdmin };
+		const [changes, upcoming] = await Promise.all([
+			api<Change[]>('/api/changes'),
+			// Signaal, geen kernfunctie: zonder dit blijft de feed gewoon werken.
+			api<UpcomingSet[]>('/api/sets/upcoming').catch(() => [] as UpcomingSet[])
+		]);
+		return { changes, upcoming, apiDown: false, isAdmin };
 	} catch {
-		return { changes: [] as Change[], apiDown: true, isAdmin };
+		return { changes: [] as Change[], upcoming: [] as UpcomingSet[], apiDown: true, isAdmin };
 	}
 };
 

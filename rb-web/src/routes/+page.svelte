@@ -107,6 +107,14 @@
 		const time = d.toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 		return days === 0 ? `vandaag ${d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : time;
 	}
+
+	// Aankomende set (#52): releasedatum → "31 juli 2026 (over 20 dagen)".
+	function fmtRelease(publishedOn: string): string {
+		const d = new Date(publishedOn);
+		const days = Math.ceil((d.getTime() - Date.now()) / 86_400_000);
+		const date = d.toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' });
+		return days === 1 ? `${date} (morgen)` : `${date} (over ${days} dagen)`;
+	}
 </script>
 
 <svelte:head>
@@ -125,6 +133,19 @@
 			</button>
 		{/if}
 	</div>
+
+	<!-- Aankomende-set-signaal (#52): zichtbaar zodra de kaart-sync een
+	     releasedatum in de toekomst kent; kaarten zijn tot die dag niet legaal. -->
+	{#each data.upcoming as s (s.setId)}
+		<aside class="upcoming">
+			<span class="badge up-badge">aankomende set</span>
+			<strong>{s.name}{s.name !== s.setId ? ` (${s.setId})` : ''}</strong>
+			<span class="up-when">
+				release {fmtRelease(s.publishedOn)}{s.cardCount ? ` · ${s.cardCount} kaarten` : ''}
+				— tot de release niet legaal in constructed
+			</span>
+		</aside>
+	{/each}
 
 	{#if data.apiDown}
 		<p class="warn">rb-api is niet bereikbaar.</p>
@@ -203,6 +224,13 @@
 	.push-toggle.on { color: #7fd1a8; border-color: #4fbf8b; }
 	.push-toggle:disabled { opacity: 0.5; }
 	.subtitle, .meta, .empty { color: #9fb0cc; }
+	.upcoming {
+		display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+		background: var(--accent-soft); border: 1px solid var(--accent);
+		border-radius: var(--radius); padding: 10px 14px; margin: 14px 0 4px;
+	}
+	.up-badge { background: var(--accent); color: var(--accent-ink); }
+	.up-when { color: var(--muted); font-size: 0.88rem; }
 	.filters { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 4px; }
 	.fgroup { display: flex; flex-wrap: wrap; gap: 6px; }
 	.chip {

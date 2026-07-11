@@ -45,6 +45,9 @@ public static class JobCatalog
             // Kennislaag 2 (#50): claims destilleren uit community-bronnen in
             // het register (trust >= 3), met corroboratie en officiële toets.
             new("claims", ClaimsAsync),
+            // Evolutie-raamwerk (#52): de volledige set-release-keten
+            // (sync -> nieuwe mechanieken -> embeddings -> graph -> primer).
+            new("setrelease", SetReleaseAsync),
         }.ToDictionary(j => j.Name);
 
     private static async Task<string> RunAllAsync(
@@ -214,4 +217,7 @@ public static class JobCatalog
             .RunAsync(progress: report, ct: ct);
         return r.Message;
     }
+    private static Task<string> SetReleaseAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct) =>
+        sp.GetRequiredService<SetReleaseService>().RunChainAsync(report, ct);
 }

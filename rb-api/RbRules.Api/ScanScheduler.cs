@@ -77,6 +77,29 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                     }
                 }
 
+                // Set-release als event (#52): heeft de classifier een
+                // set-release herkend die nog niet is afgehandeld — via de
+                // scan van zonet óf via de classify-backfill (#58) — dan
+                // draait de volledige keten: card-sync, mechanieken
+                // (+keyword-kandidaten), embeddings, graph, primer-herziening.
+                // Elke tick gecheckt (goedkoop als er niets openstaat); het
+                // run_log-grootboek voorkomt dubbele triggers.
+                try
+                {
+                    var setRelease = scope.ServiceProvider.GetRequiredService<SetReleaseService>();
+                    var sr = await setRelease.RunForPendingAsync(ct: ct);
+                    if (sr.Triggers > 0)
+                    {
+                        _lastCardSync = DateTimeOffset.UtcNow; // keten deed al een card-sync
+                        logger.LogInformation("Set-release-keten ({Triggers} release(s)): {Detail}",
+                            sr.Triggers, sr.Detail);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Set-release-keten overgeslagen");
+                }
+
                 if (DateTimeOffset.UtcNow - _lastCardSync >= CardSyncInterval)
                 {
                     var cards = scope.ServiceProvider.GetRequiredService<CardSyncService>();

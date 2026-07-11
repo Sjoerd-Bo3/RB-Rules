@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace RbRules.Domain;
 
@@ -7,11 +8,13 @@ public record MinedCard(string Id, string[] Mechanics, string[] Triggers, string
 
 /// <summary>Prompt + parser voor LLM-mining van kaartmechanieken (F3).
 /// De LLM-call zelf loopt via rb-ai; dit deel is puur en getest.
-/// Seed-vocabulaire normaliseert casing/aliassen; niet-gelist maar duidelijk
-/// als keyword gebruikte mechanieken mogen ook — beheer kan later cureren.</summary>
-public static class MechanicMiner
+/// Het vocabulaire = seed + door de beheerder geaccepteerde keywords (#52);
+/// het normaliseert casing/aliassen. Niet-gelist maar duidelijk als keyword
+/// gebruikte mechanieken mogen ook — beheer cureert via de kandidatenqueue.</summary>
+public static partial class MechanicMiner
 {
-    /// <summary>Bekende Riftbound-mechanieken (uitbreidbaar; alleen normalisatie-hint).</summary>
+    /// <summary>Bekende Riftbound-mechanieken (basislijst; groeit via
+    /// geaccepteerde MechanicKeywords, zie Vocabulary).</summary>
     public static readonly string[] SeedVocabulary =
     [
         "Accelerate", "Tank", "Deflect", "Hidden", "Shield", "Legion",
@@ -35,8 +38,23 @@ public static class MechanicMiner
         Geen tekst buiten de JSON.
         """;
 
-    public static string GetSystemPrompt() =>
-        SystemPrompt.Replace("{VOCAB}", string.Join(", ", SeedVocabulary));
+    /// <summary>Effectief vocabulaire: seed + geaccepteerde keywords,
+    /// gededupliceerd (case-insensitive, seed-spelling wint).</summary>
+    public static IReadOnlyList<string> Vocabulary(IEnumerable<string>? accepted = null)
+    {
+        if (accepted is null) return SeedVocabulary;
+        var seen = new HashSet<string>(SeedVocabulary, StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>(SeedVocabulary);
+        foreach (var term in accepted)
+        {
+            var t = term.Trim();
+            if (t.Length > 0 && seen.Add(t)) result.Add(t);
+        }
+        return result;
+    }
+
+    public static string GetSystemPrompt(IEnumerable<string>? acceptedKeywords = null) =>
+        SystemPrompt.Replace("{VOCAB}", string.Join(", ", Vocabulary(acceptedKeywords)));
 
     public static string BuildPrompt(IEnumerable<Card> cards)
     {
@@ -50,11 +68,13 @@ public static class MechanicMiner
         return sb.ToString();
     }
 
-    public static IReadOnlyList<MinedCard> ParseBatch(string raw)
+    public static IReadOnlyList<MinedCard> ParseBatch(
+        string raw, IEnumerable<string>? acceptedKeywords = null)
     {
         var start = raw.IndexOf('[');
         var end = raw.LastIndexOf(']');
         if (start < 0 || end <= start) return [];
+        var vocabulary = Vocabulary(acceptedKeywords);
         try
         {
             using var doc = JsonDocument.Parse(raw[start..(end + 1)]);
@@ -66,9 +86,9 @@ public static class MechanicMiner
                 if (string.IsNullOrWhiteSpace(id)) continue;
                 results.Add(new MinedCard(
                     id!,
-                    Strings(item, "mechanics"),
-                    Strings(item, "triggers"),
-                    Strings(item, "effects")));
+                    Strings(item, "mechanics", vocabulary),
+                    Strings(item, "triggers", vocabulary),
+                    Strings(item, "effects", vocabulary)));
             }
             return results;
         }
@@ -78,7 +98,39 @@ public static class MechanicMiner
         }
     }
 
-    private static string[] Strings(JsonElement obj, string key)
+    /// <summary>Keyword-kandidaten in een kaarttekst (#52): bracketed termen
+    /// ("[Ganking]", "[Assault 2]") die niet in het vocabulaire staan. Puur en
+    /// deterministisch — geen LLM nodig. Numerieke parameters worden gestript
+    /// ("Assault 2" → "Assault"); ruis als "[&gt;]" (icoon-pijl) en "[NO TEXT]"
+    /// valt af doordat een keyword met een hoofdletter + kleine letter begint
+    /// en verder alleen uit letters/spaties/koppeltekens bestaat.</summary>
+    public static IReadOnlyList<string> ExtractKeywordCandidates(
+        string? textPlain, IEnumerable<string> vocabulary)
+    {
+        if (string.IsNullOrWhiteSpace(textPlain)) return [];
+        var known = new HashSet<string>(vocabulary, StringComparer.OrdinalIgnoreCase);
+        var found = new List<string>();
+        foreach (Match m in BracketedTerm().Matches(textPlain))
+        {
+            var term = NumericParameter().Replace(m.Groups[1].Value.Trim(), "");
+            if (!KeywordShape().IsMatch(term) || term.Length > 30) continue;
+            if (known.Add(term)) found.Add(term); // dedupe + vocab-filter ineen
+        }
+        return found;
+    }
+
+    [GeneratedRegex(@"\[([^\[\]]+)\]")]
+    private static partial Regex BracketedTerm();
+
+    /// <summary>Trailing numeriek argument van een keyword ("Deflect 2").</summary>
+    [GeneratedRegex(@"\s+\d+$")]
+    private static partial Regex NumericParameter();
+
+    [GeneratedRegex(@"^[A-Z][a-z][A-Za-z' -]*$")]
+    private static partial Regex KeywordShape();
+
+    private static string[] Strings(
+        JsonElement obj, string key, IReadOnlyList<string> vocabulary)
     {
         if (!obj.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array)
             return [];
@@ -86,14 +138,14 @@ public static class MechanicMiner
             .Where(x => x.ValueKind == JsonValueKind.String)
             .Select(x => x.GetString()!)
             .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Select(Normalize)
+            .Select(s => Normalize(s, vocabulary))
             .Distinct()];
     }
 
-    /// <summary>Normaliseer tegen het seed-vocabulaire (case-insensitive).</summary>
-    private static string Normalize(string value)
+    /// <summary>Normaliseer tegen het vocabulaire (case-insensitive).</summary>
+    private static string Normalize(string value, IReadOnlyList<string> vocabulary)
     {
-        var match = SeedVocabulary.FirstOrDefault(
+        var match = vocabulary.FirstOrDefault(
             v => v.Equals(value.Trim(), StringComparison.OrdinalIgnoreCase));
         return match ?? value.Trim();
     }

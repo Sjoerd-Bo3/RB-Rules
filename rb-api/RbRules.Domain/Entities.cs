@@ -299,6 +299,23 @@ public class ClaimSource
     public DateTimeOffset SeenAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>Evolutie-raamwerk (#52): groeiend mechaniek-vocabulaire. De miner
+/// rapporteert bracketed termen uit kaartteksten die niet in het vocabulaire
+/// staan als kandidaat; de beheerder accepteert of verwerpt ze. Geaccepteerde
+/// termen tellen mee in het mining-vocabulaire en de betrokken kaarten worden
+/// opnieuw gemined — zo kent het systeem "Overwhelm" op de dag dat de eerste
+/// kaart ermee verschijnt.</summary>
+public class MechanicKeyword
+{
+    public long Id { get; set; }
+    public required string Term { get; set; }
+    public string Status { get; set; } = "candidate";   // candidate|accepted|rejected
+    /// <summary>In hoeveel kaartteksten de term voorkomt (review-sortering).</summary>
+    public int Occurrences { get; set; }
+    public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ReviewedAt { get; set; }
+}
+
 /// <summary>S3: LLM-geverifieerde kaart↔kaart-interactie (kandidaten komen uit
 /// trigger↔effect/mechanic-overlap; alleen geverifieerde paren worden bewaard).</summary>
 public class CardInteraction
