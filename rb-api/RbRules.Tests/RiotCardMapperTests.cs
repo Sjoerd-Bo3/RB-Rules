@@ -74,6 +74,23 @@ public class RiotCardMapperTests
         Assert.Equal("4Y1QN9_bmiQlSZfXckICU", id);
     }
 
+    [Theory]
+    [InlineData("Teemo - Swift Scout (Alternate Art)", "Teemo - Swift Scout")]
+    [InlineData("Teemo - Swift Scout (Signature)", "Teemo - Swift Scout")]
+    [InlineData("Teemo - Swift Scout (Overnumbered)", "Teemo - Swift Scout")]
+    [InlineData("Teemo - Swift Scout", "Teemo - Swift Scout")]
+    public void BaseName_StripsPrintingSuffix(string input, string expected) =>
+        Assert.Equal(expected, CardText.BaseName(input));
+
+    [Fact]
+    public void HumanizeIcons_MakesTokensReadable()
+    {
+        Assert.Equal(
+            "You may pay (1) to hide a card with [Hidden] instead of [rune rainbow].(1), [exhaust]: Put a Teemo unit you own into your hand.",
+            CardText.HumanizeIcons(
+                "You may pay :rb_energy_1: to hide a card with [Hidden] instead of :rb_rune_rainbow:.:rb_energy_1:, :rb_exhaust:: Put a Teemo unit you own into your hand."));
+    }
+
     [Fact]
     public void MapCard_HandlesMissingOptionalFields()
     {
@@ -83,5 +100,16 @@ public class RiotCardMapperTests
         Assert.Null(card.Energy);
         Assert.Empty(card.Domains);
         Assert.Empty(card.Tags);
+    }
+
+    [Fact]
+    public void MapCard_HandlesEmptyTypeList()
+    {
+        // Live-regressie: token-kaarten (unl-t04/t08) hebben cardType.type = []
+        // — dat gaf 'Index was out of range' en brak de hele kaarten-sync.
+        var card = RiotCardMapper.MapCard((JsonObject)JsonNode.Parse(
+            """{"id": "unl-t04", "name": "Mushroom Token", "cardType": {"label": "Card Type", "type": []}}""")!);
+        Assert.Equal("unl-t04", card.RiftboundId);
+        Assert.Null(card.Type);
     }
 }

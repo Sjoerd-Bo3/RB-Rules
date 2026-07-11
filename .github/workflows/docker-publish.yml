@@ -1,10 +1,9 @@
-name: Build & publish image
+name: Build & publish image (PoP — gearchiveerd)
 
-# Bouwt en pusht het app-image naar GHCR bij elke push naar main.
-# Watchtower op de VM pullt het daarna automatisch (per uur).
+# PoP-image (Next.js, riftbound.bo3.dev). Vervangen door de v2-stack
+# (v2-ci.yml). Alleen nog handmatig te starten; faalde anders rood op
+# elke push terwijl v2 gewoon groen was.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

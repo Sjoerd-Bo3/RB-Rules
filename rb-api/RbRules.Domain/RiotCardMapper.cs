@@ -63,7 +63,11 @@ public static partial class RiotCardMapper
         {
             RiftboundId = c["id"]!.GetValue<string>(),
             Name = c["name"]!.GetValue<string>(),
-            Type = c["cardType"]?["type"]?[0]?["label"]?.GetValue<string>(),
+            // Token-kaarten (unl-t04/t08) hebben een lege type-lijst — ?[0]
+            // op een lege JsonArray gooit een index-fout.
+            Type = c["cardType"]?["type"] is JsonArray { Count: > 0 } types
+                ? types[0]?["label"]?.GetValue<string>()
+                : null,
             Rarity = c["rarity"]?["value"]?["label"]?.GetValue<string>(),
             Domains = DomainsOf(c),
             Energy = NumOf(c["energy"]?["value"]),
@@ -72,7 +76,7 @@ public static partial class RiotCardMapper
             SetId = c["set"]?["value"]?["id"]?.GetValue<string>()?.ToUpperInvariant(),
             SetLabel = c["set"]?["value"]?["label"]?.GetValue<string>(),
             CollectorNumber = c["collectorNumber"]?.GetValue<int?>(),
-            TextPlain = textHtml is null ? null : TextUtils.HtmlToText(textHtml),
+            TextPlain = textHtml is null ? null : CardText.HumanizeIcons(TextUtils.HtmlToText(textHtml)),
             ImageUrl = c["cardImage"]?["url"]?.GetValue<string>(),
             Tags = c["tags"]?["tags"] is JsonArray t
                 ? [.. t.Select(x => x?.GetValue<string>()).OfType<string>()]

@@ -26,6 +26,15 @@ public class RuleSectionParserTests
     }
 
     [Fact]
+    public void Parse_StripsSectionCodeFromBody()
+    {
+        // Het nummer zit al in Code — niet nogmaals in de tekst tonen.
+        var sections = RuleSectionParser.Parse("000. Golden and Silver Rules\n001. Golden Rule");
+        Assert.Equal("Golden and Silver Rules", sections.First(s => s.Code == "000").Text);
+        Assert.Equal("Golden Rule", sections.First(s => s.Code == "001").Text);
+    }
+
+    [Fact]
     public void Parse_NormalizesAttachedLetterSubsections()
     {
         // PDF-extractie levert soms "601.2d." zonder punt vóór de letter —

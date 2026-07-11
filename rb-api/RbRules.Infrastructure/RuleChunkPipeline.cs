@@ -13,7 +13,7 @@ public class RuleChunkPipeline(RbRulesDbContext db, EmbeddingService embeddings)
     private const int EmbedBatch = 16;
 
     public async Task<List<RuleIndexResult>> RunAsync(
-        Action<string>? progress = null, CancellationToken ct = default)
+        bool force = false, Action<string>? progress = null, CancellationToken ct = default)
     {
         var results = new List<RuleIndexResult>();
         var sources = await db.Sources.Where(s => s.Enabled).ToListAsync(ct);
@@ -27,8 +27,10 @@ public class RuleChunkPipeline(RbRulesDbContext db, EmbeddingService embeddings)
                 .FirstOrDefaultAsync(ct);
             if (doc is null) continue;
 
+            // force herbouwt ook al geïndexeerde documenten (bijv. na een
+            // parser-verbetering); standaard alleen nieuwe documenten.
             var alreadyIndexed = await db.RuleChunks.AnyAsync(c => c.DocumentId == doc.Id, ct);
-            if (alreadyIndexed) continue;
+            if (alreadyIndexed && !force) continue;
 
             var sections = RuleSectionParser.Parse(doc.Content);
             if (sections.Count == 0) continue;
