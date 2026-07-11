@@ -140,7 +140,7 @@
 			{#each data.rules.errata as e (e.detectedAt)}
 				<div class="rulebox errata-box">
 					<span class="badge">Errata</span>
-					<p>{e.newText}</p>
+					<p><RbText text={e.newText} /></p>
 					<p class="meta">
 						{new Date(e.detectedAt).toLocaleDateString('nl-NL')}
 						{#if e.sourceUrl}· <a href={e.sourceUrl} target="_blank" rel="noopener">bron</a>{/if}
