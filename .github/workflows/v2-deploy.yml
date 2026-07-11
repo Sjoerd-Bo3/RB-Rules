@@ -8,7 +8,8 @@ name: v2 deploy to VM
 #
 # Vereiste secrets:
 #   DEPLOY_SSH_KEY   — private key voor sjoerd@20.123.137.64 (altijd)
-#   POSTGRES_PASSWORD, ADMIN_PASSWORD, CLAUDE_CODE_OAUTH_TOKEN — voor bootstrap
+#   POSTGRES_PASSWORD, NEO4J_PASSWORD, ADMIN_PASSWORD,
+#   CLAUDE_CODE_OAUTH_TOKEN — voor bootstrap
 # Zonder DEPLOY_SSH_KEY wordt de job netjes overgeslagen.
 # DNS (riftbound-v2.bo3.dev → VM-IP) blijft handmatig bij de registrar.
 on:
@@ -22,6 +23,13 @@ on:
         description: "Eerste deploy: .env + Caddy-route + model + kickoff"
         type: boolean
         default: false
+
+# Serialiseer deploys: vijf snelle merges gaven vijf racende runs met
+# containernaam-conflicten op de VM (issue #45). Nieuwe runs wachten netjes
+# op elkaar; cancel-in-progress: false zodat elke publish alsnog uitrolt.
+concurrency:
+  group: v2-deploy
+  cancel-in-progress: false
 
 env:
   VM_HOST: 20.123.137.64
@@ -58,7 +66,10 @@ jobs:
       - name: "Bootstrap: schrijf .env uit secrets"
         if: steps.check.outputs.enabled == 'true' && inputs.bootstrap == true
         run: |
-          for s in POSTGRES_PASSWORD ADMIN_PASSWORD; do
+          # Secrets-hygiëne (issue #45): geen hardcoded NEO4J_PASSWORD meer en
+          # CLAUDE_CODE_OAUTH_TOKEN wordt óók gevalideerd — een bootstrap
+          # zonder AI-token levert anders een stilletjes kreupele stack op.
+          for s in POSTGRES_PASSWORD NEO4J_PASSWORD ADMIN_PASSWORD CLAUDE_CODE_OAUTH_TOKEN; do
             if [ -z "${!s:-}" ]; then echo "::error::secret $s ontbreekt (nodig voor bootstrap)"; exit 1; fi
           done
           # Caddy-netwerknaam op de VM ontdekken (niet raden)
@@ -69,7 +80,7 @@ jobs:
           cat > env.tmp <<EOF
           CADDY_NETWORK=$CADDY_NETWORK
           POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-          NEO4J_PASSWORD=rbrules-neo4j
+          NEO4J_PASSWORD=$NEO4J_PASSWORD
           NEO4J_HEAP_MAX=512m
           NEO4J_PAGECACHE=384m
           ADMIN_PASSWORD=$ADMIN_PASSWORD
@@ -81,6 +92,7 @@ jobs:
           rm env.tmp
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
@@ -98,19 +110,41 @@ jobs:
           # Docker maakt de /mnt/data bind-mount-mappen zelf aan (daemon = root).
           $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 pull -q && docker compose --project-name rb-rules-v2 up -d && docker compose --project-name rb-rules-v2 ps"
 
+      - name: Verifieer deploy
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          # Issue #45: een deploy die niets verifieert is geen deploy. Wacht
+          # tot rb-api én rb-web echt antwoorden (max ~3 min — EF-migraties
+          # bij opstart kunnen even duren); anders faalt de run zichtbaar.
+          verify() {
+            $SSHCMD "docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS -m 10 -o /dev/null $1"
+          }
+          for i in $(seq 1 18); do
+            if verify http://rb-v2-api:8080/health && verify http://rb-v2-web:3000/; then
+              echo "OK: rb-api en rb-web antwoorden (poging $i)"
+              exit 0
+            fi
+            echo "nog niet gezond (poging $i/18) — 10s wachten"
+            sleep 10
+          done
+          echo "::error::rb-api of rb-web antwoordt niet na de deploy"
+          $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 ps && docker compose --project-name rb-rules-v2 logs --tail 50 rb-api rb-web"
+          exit 1
+
       - name: "Bootstrap: embeddings-model, Caddy-route, kickoff"
         if: steps.check.outputs.enabled == 'true' && inputs.bootstrap == true
         run: |
           # 1. Meertalig embeddingmodel (idempotent)
           $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 exec -T ollama ollama pull bge-m3"
 
-          # 2. Caddy-route toevoegen als die er nog niet staat + reload
-          $SSHCMD "grep -q '$DOMAIN' ~/compose/caddy/Caddyfile || printf '\n%s {\n\tencode gzip\n\treverse_proxy rb-v2-web:3000\n}\n' '$DOMAIN' >> ~/compose/caddy/Caddyfile"
+          # 2. Caddy-route toevoegen als die er nog niet staat + reload.
+          #    Security-headers (issue #45); CSP bewust niet — die vergt eerst
+          #    testen tegen de SvelteKit-app (inline scripts/PWA) en hoort
+          #    niet blind in een bootstrap.
+          $SSHCMD "grep -q '$DOMAIN' ~/compose/caddy/Caddyfile || printf '\n%s {\n\tencode gzip\n\theader {\n\t\tStrict-Transport-Security \"max-age=31536000\"\n\t\tX-Content-Type-Options nosniff\n\t\tX-Frame-Options DENY\n\t\tReferrer-Policy strict-origin-when-cross-origin\n\t}\n\treverse_proxy rb-v2-web:3000\n}\n' '$DOMAIN' >> ~/compose/caddy/Caddyfile"
           $SSHCMD "docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
 
           # 3. Kickoff: kaart-sync (secret komt uit de .env op de VM, niet uit
           #    de commandline van de runner). Daarna doet de scheduler de rest.
+          #    De stack is hierboven al geverifieerd gezond.
           $SSHCMD "cd $VM_PATH && . ./.env && docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS -m 300 -X POST -H \"X-Admin-Key: \$ADMIN_PASSWORD\" http://rb-v2-api:8080/api/admin/cards/sync" || echo "::warning::kaart-sync-kickoff faalde — kan later via /admin"
-
-          # 4. Health-check
-          $SSHCMD "docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS http://rb-v2-api:8080/health && docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS -o /dev/null -w '%{http_code}\n' http://rb-v2-web:3000/"

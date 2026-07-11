@@ -17,6 +17,12 @@ Testfase (subdomein):
 ```
 riftbound-v2.bo3.dev {
 	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
 	reverse_proxy rb-v2-web:3000
 }
 ```
@@ -35,4 +41,8 @@ opnieuw gevuld door de v2-embed-pijplijn.
 
 ## Auto-deploy
 Push naar `main` → `v2-ci.yml` draait **eerst de tests** en publiceert dan
-`ghcr.io/sjoerd-bo3/rb-rules-{rb-api,rb-web,rb-ai}:latest` → Watchtower pakt ze op.
+`ghcr.io/sjoerd-bo3/rb-rules-{rb-api,rb-web,rb-ai}:latest` → `v2-deploy.yml`
+synct de compose-file, pullt en herstart de stack via SSH en verifieert de
+health-endpoints. Deploys zijn geserialiseerd (concurrency-group `v2-deploy`).
+Watchtower staat op deze services expliciet **uit** — push-to-deploy is het
+enige updatemechanisme (issue #45).
