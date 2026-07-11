@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RbRules.Domain;
 using RbRules.Infrastructure;
@@ -6,38 +7,35 @@ namespace RbRules.Api.Endpoints;
 
 public static class AskEndpoints
 {
+    /// <summary>Zelfde casing als Results.Ok (camelCase) voor de NDJSON-frames.</summary>
+    private static readonly JsonSerializerOptions StreamJson = new(JsonSerializerDefaults.Web);
+
     public static void MapAskEndpoints(this IEndpointRouteBuilder app)
     {
         // ── Rulings-Q&A (S2): hybrid retrieval + §-citaten ─────────────
         app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
         {
-            if (string.IsNullOrWhiteSpace(req.Question))
-                return Results.BadRequest(new { error = "question is verplicht" });
-            // Optionele board-state-foto('s): max 2, alleen gangbare beeldformaten.
-            var images = (req.Images ?? [])
-                .Where(i => !string.IsNullOrWhiteSpace(i.Data))
-                .Take(2)
-                .Select(i => new RbAiClient.AiImage(i.MediaType, i.Data))
-                .ToList();
-            if (images.Any(i => i.MediaType is not ("image/jpeg" or "image/png" or "image/webp" or "image/gif")))
-                return Results.BadRequest(new { error = "afbeeldingstype niet ondersteund" });
-            if (images.Any(i => i.Data.Length > 8_000_000))
-                return Results.BadRequest(new { error = "afbeelding te groot (max ~6 MB)" });
-
-            // Doorvraag-historie (#41): gecapt op 3 rondes, tekstlengte begrensd.
-            var history = (req.History ?? [])
-                .Where(t => !string.IsNullOrWhiteSpace(t.Question))
-                .TakeLast(3)
-                .Select(t => new AskTurn(
-                    t.Question.Length > 2000 ? t.Question[..2000] : t.Question,
-                    t.Answer.Length > 6000 ? t.Answer[..6000] : t.Answer))
-                .ToList();
-
+            if (ValidateAsk(req, out var images, out var history) is { } bad) return bad;
             // De duurmeting voor de "gemiddeld ±Xs"-indicatie zit in AskService.
             var result = await ask.AskAsync(
                 req.Question.Trim(), images.Count > 0 ? images : null,
                 history.Count > 0 ? history : null);
             return Results.Ok(result);
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+
+        // ── Streamende variant (#31): NDJSON-frames ────────────────────
+        // meta (citaties/claims vóór het antwoord) → delta* → final|error.
+        // Zelfde retrieval en afronding als /api/ask (AskService is de bron);
+        // AI-uitval eindigt in een final-frame met de gedegradeerde tekst,
+        // precies zoals de niet-streamende route. Zelfde quota-poort (#42):
+        // de filter vuurt vóór de eerste frame-byte, dus 401/403/429 zijn
+        // hier nog gewone JSON-responses.
+        app.MapPost("/api/ask/stream", (AskRequest req, AskService ask, HttpContext http) =>
+        {
+            if (ValidateAsk(req, out var images, out var history) is { } bad) return bad;
+            return Results.Stream(
+                body => StreamAskAsync(ask, req.Question.Trim(), images, history, http, body),
+                "application/x-ndjson");
         }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
 
         // Echte duurstatistiek (laatste 100 geslaagde vragen) voor de wachtindicatie.
@@ -98,5 +96,82 @@ public static class AskEndpoints
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+    }
+
+    /// <summary>Gedeelde validatie/normalisatie voor /api/ask en
+    /// /api/ask/stream — beide routes accepteren exact hetzelfde request.
+    /// Geeft een BadRequest terug bij fouten, anders null.</summary>
+    private static IResult? ValidateAsk(
+        AskRequest req, out List<RbAiClient.AiImage> images, out List<AskTurn> history)
+    {
+        images = [];
+        history = [];
+        if (string.IsNullOrWhiteSpace(req.Question))
+            return Results.BadRequest(new { error = "question is verplicht" });
+        // Optionele board-state-foto('s): max 2, alleen gangbare beeldformaten.
+        images = [.. (req.Images ?? [])
+            .Where(i => !string.IsNullOrWhiteSpace(i.Data))
+            .Take(2)
+            .Select(i => new RbAiClient.AiImage(i.MediaType, i.Data))];
+        if (images.Any(i => i.MediaType is not ("image/jpeg" or "image/png" or "image/webp" or "image/gif")))
+            return Results.BadRequest(new { error = "afbeeldingstype niet ondersteund" });
+        if (images.Any(i => i.Data.Length > 8_000_000))
+            return Results.BadRequest(new { error = "afbeelding te groot (max ~6 MB)" });
+
+        // Doorvraag-historie (#41): gecapt op 3 rondes, tekstlengte begrensd.
+        history = [.. (req.History ?? [])
+            .Where(t => !string.IsNullOrWhiteSpace(t.Question))
+            .TakeLast(3)
+            .Select(t => new AskTurn(
+                t.Question.Length > 2000 ? t.Question[..2000] : t.Question,
+                t.Answer.Length > 6000 ? t.Answer[..6000] : t.Answer))];
+        return null;
+    }
+
+    /// <summary>Schrijft de NDJSON-frames voor /api/ask/stream. Elk frame wordt
+    /// direct geflusht zodat het antwoord woord-voor-woord bij de browser komt.
+    /// Een weggelopen client (RequestAborted) is geen fout — dan gewoon stoppen;
+    /// de metric-afronding in AskService gebruikt bewust geen request-token.</summary>
+    private static async Task StreamAskAsync(
+        AskService ask, string question, List<RbAiClient.AiImage> images,
+        List<AskTurn> history, HttpContext http, Stream body)
+    {
+        await using var writer = new StreamWriter(body);
+        async Task WriteFrameAsync(object frame)
+        {
+            await writer.WriteLineAsync(JsonSerializer.Serialize(frame, StreamJson));
+            await writer.FlushAsync(http.RequestAborted);
+        }
+        try
+        {
+            var result = await ask.AskStreamingAsync(
+                question, images.Count > 0 ? images : null,
+                history.Count > 0 ? history : null,
+                onMeta: m => WriteFrameAsync(new
+                {
+                    type = "meta", questionType = m.QuestionType,
+                    citations = m.Citations, claims = m.Claims,
+                }),
+                onDelta: text => WriteFrameAsync(new { type = "delta", text }),
+                http.RequestAborted);
+            await WriteFrameAsync(new { type = "final", result });
+        }
+        catch (OperationCanceledException)
+        {
+            // Client is weg — niets meer te schrijven.
+        }
+        catch (Exception ex)
+        {
+            // Onverwachte fout ná de 200: als frame melden (best-effort),
+            // zodat de UI kan terugvallen i.p.v. eeuwig wachten.
+            try
+            {
+                await WriteFrameAsync(new { type = "error", error = ex.Message });
+            }
+            catch
+            {
+                // response al kapot — dan valt er niets meer te melden
+            }
+        }
     }
 }

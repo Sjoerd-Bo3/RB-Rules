@@ -22,6 +22,20 @@ export function certaintyLevel(
 	return 'unsure';
 }
 
+/** Streaming (#31): markdown/widget-parsing is pas zinvol op afgeronde
+ *  regels. Splits het groeiende antwoord op de laatste newline: `settled`
+ *  gaat door AnswerView (stripDuplicateRuleRefs, widgets, markdown), de
+ *  `tail` — de nog binnenstromende regel — rendert als kale tekst. Een
+ *  widget-marker aan het staart-einde wordt verborgen — half ([[rule:46…)
+ *  én compleet ([[rule:466.2.c]], wachtend op de newline die hem settelt):
+ *  dat is machine-syntax, geen leestekst (review-fix). */
+export function splitSettled(text: string): { settled: string; tail: string } {
+	const i = text.lastIndexOf('\n');
+	const settled = i < 0 ? '' : text.slice(0, i + 1);
+	const tail = (i < 0 ? text : text.slice(i + 1)).replace(/\[\[[^\]]*(\]\]?)?$/, '');
+	return { settled, tail };
+}
+
 const stripMd = (s: string): string =>
 	s
 		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [tekst](url) → tekst

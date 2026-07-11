@@ -68,26 +68,44 @@ async function* userMessage(prompt: string, images: AskImage[]) {
   };
 }
 
-/** Stuur één prompt (optioneel met afbeeldingen) naar Claude. */
+/** Stuur één prompt (optioneel met afbeeldingen) naar Claude.
+ *
+ * Met `onDelta` (#31, streaming) levert de Agent SDK naast de gewone
+ * berichten ook partial-message-events (`includePartialMessages`); elke
+ * text-delta gaat direct naar de callback zodat de aanroeper het antwoord
+ * woord-voor-woord kan doorsturen. De return-waarde blijft in beide gevallen
+ * het volledige eindantwoord — de niet-streamende route verandert niet. */
 export async function askClaude(opts: {
   prompt: string;
   system?: string;
   task?: Task;
   images?: AskImage[];
+  onDelta?: (text: string) => void | Promise<void>;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { prompt, system, task = "cheap", images = [] } = opts;
+  const { prompt, system, task = "cheap", images = [], onDelta, signal } = opts;
   const research = task === "research";
 
   const systemPrompt = research
     ? [system, RESEARCH_CONTRACT].filter(Boolean).join("\n\n")
     : system;
 
-  // Harde timeout alleen voor research: de andere taken zijn één beurt en
-  // kennen dit risico niet.
-  const controller = research ? new AbortController() : undefined;
-  const timer = controller
-    ? setTimeout(() => controller.abort(), RESEARCH_TIMEOUT_MS)
+  // Eén AbortController voor álle taken (review #31): server.ts koppelt er
+  // de client-verbinding aan (`signal`), zodat een weggelopen client de
+  // Claude-call afbreekt in plaats van hem op abonnementskosten af te laten
+  // maken. De harde timeout blijft research-only: de andere taken zijn één
+  // beurt en kennen dat risico niet.
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = research
+    ? setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, RESEARCH_TIMEOUT_MS)
     : undefined;
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
 
   const options: Options = {
     model: MODEL[task],
@@ -101,10 +119,13 @@ export async function askClaude(opts: {
           // geweigerd in plaats van op een prompt te blijven hangen.
           allowedTools: RESEARCH_TOOLS,
           permissionMode: "dontAsk" as const,
-          ...(controller ? { abortController: controller } : {}),
         }
       : {}),
+    abortController: controller,
     ...(systemPrompt ? { systemPrompt } : {}),
+    // Streaming (#31): partial messages alleen aanzetten als er een
+    // delta-afnemer is — anders blijft het berichtenverkeer zoals het was.
+    ...(onDelta ? { includePartialMessages: true } : {}),
   };
 
   const arg = {
@@ -124,8 +145,21 @@ export async function askClaude(opts: {
         text?: string;
         result?: string;
         message?: { content?: Array<{ type: string; text?: string }> };
+        event?: { type?: string; delta?: { type?: string; text?: string } };
       };
-      if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+      if (m.type === "stream_event") {
+        // Partial-message-event: alleen echte text-deltas doorgeven; het
+        // volledige antwoord komt daarnaast gewoon als assistant/result
+        // binnen (dus hier NIET aan assistantText/resultText toevoegen).
+        const ev = m.event;
+        if (
+          onDelta &&
+          ev?.type === "content_block_delta" &&
+          ev.delta?.type === "text_delta" &&
+          ev.delta.text
+        )
+          await onDelta(ev.delta.text);
+      } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
         for (const block of m.message.content) {
           if (block.type === "text" && block.text) assistantText += block.text;
         }
@@ -136,16 +170,21 @@ export async function askClaude(opts: {
       }
     }
   } catch (e) {
-    // Timeout herkenbaar maken voor de aanroeper (run_log); overige fouten
-    // ongewijzigd doorgeven — server.ts vertaalt ze naar een nette 500.
-    if (controller?.signal.aborted) {
+    // Timeout en client-abort herkenbaar maken voor de aanroeper (run_log);
+    // overige fouten ongewijzigd doorgeven — server.ts vertaalt ze naar een
+    // nette 500 of een error-frame.
+    if (timedOut) {
       throw new Error(
         `research-call afgebroken na ${RESEARCH_TIMEOUT_MS / 1000}s (harde timeout)`,
       );
     }
+    if (controller.signal.aborted) {
+      throw new Error("aanroep afgebroken: client heeft de verbinding gesloten");
+    }
     throw e;
   } finally {
     if (timer) clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
   return (resultText || assistantText).trim();
 }

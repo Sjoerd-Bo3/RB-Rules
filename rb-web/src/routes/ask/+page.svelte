@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { applyAction, deserialize, enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import RbText from '$lib/RbText.svelte';
 	import AnswerView from '$lib/AnswerView.svelte';
-	import { citationEssence } from '$lib/answerFormat';
+	import { citationEssence, splitSettled } from '$lib/answerFormat';
+	import { quotaMessage } from '$lib/quota';
 
 	let { data, form } = $props();
 	let busy = $state(false);
@@ -114,6 +116,266 @@
 
 	const hasAnswer = $derived(Boolean(form?.answer));
 
+	// ── Streaming (#31) ────────────────────────────────────────────────
+	// Het antwoord komt via /ask/stream (NDJSON-proxy naar rb-api) woord
+	// voor woord binnen. `live` is de groeiende tussenstand; het slotframe
+	// wordt via applyAction het gewone `form`-resultaat, zodat voorlezen,
+	// feedback en doorvragen ongewijzigd op het eindantwoord werken.
+	interface Turn {
+		question: string;
+		answer: string;
+	}
+	interface LiveAsk {
+		question: string;
+		history: Turn[];
+		questionType: string | null;
+		citations: unknown[];
+		answer: string;
+	}
+	let live = $state<LiveAsk | null>(null);
+	let liveError = $state<string | null>(null);
+	// Brak de verbinding ná response-start maar vóór het eerste frame, dan
+	// kán rb-api al aan de (betaalde) LLM-call begonnen zijn: geen stille
+	// automatische herkansing, maar een expliciete "Opnieuw proberen"-knop.
+	let retryPending = $state<{ fd: FormData; clearQuestion: boolean } | null>(null);
+	// Afronding voor screenreaders: het groeiende antwoord zelf is bewust
+	// géén live-region (elke delta zou opnieuw voorgelezen worden).
+	let announce = $state('');
+	// Markdown/widget-parsing is pas zinvol op afgeronde regels: alleen het
+	// deel t/m de laatste newline gaat door AnswerView, de staart als kale
+	// tekst. Het slotframe her-rendert daarna het volledige antwoord.
+	const liveParts = $derived(live ? splitSettled(live.answer) : { settled: '', tail: '' });
+
+	const canStream = () =>
+		typeof ReadableStream === 'function' && typeof TextDecoder === 'function';
+
+	async function blobToBase64(blob: Blob): Promise<string> {
+		const bytes = new Uint8Array(await blob.arrayBuffer());
+		let bin = '';
+		for (let i = 0; i < bytes.length; i += 0x8000)
+			bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+		return btoa(bin);
+	}
+
+	/** Vangnet: de bestaande niet-streamende form action, handmatig
+	 *  aangeroepen. Automatisch alléén als de stream-fetch faalde vóór er
+	 *  response-headers waren of met een nette foutstatus antwoordde — rb-api
+	 *  is dan (vrijwel zeker) nooit aan een antwoord begonnen. Brak een
+	 *  gestárte response af, dan loopt dit uitsluitend via de expliciete
+	 *  "Opnieuw proberen"-knop (retryPending) om stille dubbele LLM-kosten
+	 *  te vermijden. */
+	async function fallbackAsk(formData: FormData, clearQuestion: boolean) {
+		try {
+			const res = await fetch('?/ask', {
+				method: 'POST',
+				headers: { 'x-sveltekit-action': 'true' },
+				body: formData
+			});
+			const result = deserialize(await res.text());
+			if (result.type === 'success') {
+				// Zelfde afronding als de oude update()-flow: formulier leeg en
+				// duurstatistiek ("Meestal ±Xs") vers.
+				if (clearQuestion) question = '';
+				await invalidateAll();
+			}
+			await applyAction(result);
+			announce = result.type === 'success' ? 'Antwoord compleet.' : 'Antwoord mislukt.';
+		} catch (e) {
+			await applyAction({
+				type: 'failure',
+				status: 500,
+				data: { error: `Vraag mislukt (${e instanceof Error ? e.message : e})` }
+			});
+		}
+	}
+
+	/** De expliciete herkansing na een afgebroken maar wél gestarte stream —
+	 *  via de niet-streamende route, zodat het antwoord in één keer landt. */
+	async function retryAsk() {
+		const pending = retryPending;
+		if (!pending || busy) return;
+		retryPending = null;
+		busy = true;
+		try {
+			await fallbackAsk(pending.fd, pending.clearQuestion);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function streamAsk(
+		q: string,
+		turns: Turn[],
+		photo: Blob | null,
+		formData: FormData,
+		clearQuestion: boolean
+	) {
+		busy = true;
+		liveError = null;
+		live = null;
+		retryPending = null;
+		announce = '';
+		let sawFrame = false;
+		try {
+			const images = photo
+				? // mediaType uit het bestand zelf: downscale() kan het originele
+					// File (PNG/WebP) teruggeven — een vast 'image/jpeg'-label laat
+					// de Anthropic-API de mismatch weigeren (review-fix).
+					[{ mediaType: photo.type || 'image/jpeg', data: await blobToBase64(photo) }]
+				: undefined;
+			let res: Response;
+			try {
+				res = await fetch('/ask/stream', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({
+						question: q,
+						history: turns.length ? turns : undefined,
+						images
+					})
+				});
+			} catch {
+				// Geen response-headers gezien: veilige automatische terugval.
+				await fallbackAsk(formData, clearQuestion);
+				return;
+			}
+			const gate = quotaMessage(res.status);
+			if (gate) {
+				// Rate-limit/quota/sessiepoort (#42): terugvallen raakt exact
+				// dezelfde poort — gewoon melden, met dezelfde tekst als de
+				// niet-streamende route.
+				await applyAction({
+					type: 'failure',
+					status: res.status,
+					data: { error: gate, question: q, history: turns }
+				});
+				return;
+			}
+			if (!res.ok || !res.body) {
+				// Nette foutstatus vóór het streamen. De proxy markeert met
+				// retry:true dat rb-api al aan het werk kán zijn (verbinding brak
+				// i.p.v. geweigerd) — dan expliciete knop, geen stille terugval.
+				let retry = false;
+				try {
+					retry = Boolean(((await res.json()) as { retry?: boolean }).retry);
+				} catch {
+					// geen JSON-body — behandel als veilige terugval
+				}
+				if (retry) {
+					retryPending = { fd: formData, clearQuestion };
+					announce = 'Antwoord mislukt.';
+					return;
+				}
+				await fallbackAsk(formData, clearQuestion);
+				return;
+			}
+
+			live = { question: q, history: turns, questionType: null, citations: [], answer: '' };
+			const reader = res.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+			let finalData: Record<string, unknown> | null = null;
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				let nl: number;
+				while ((nl = buffer.indexOf('\n')) >= 0) {
+					const line = buffer.slice(0, nl).trim();
+					buffer = buffer.slice(nl + 1);
+					if (!line) continue;
+					let frame: {
+						type?: string;
+						text?: string;
+						questionType?: string;
+						citations?: unknown[];
+						result?: Record<string, unknown>;
+						error?: string;
+					};
+					try {
+						frame = JSON.parse(line);
+					} catch {
+						continue; // half frame door een weggevallen verbinding
+					}
+					sawFrame = true;
+					if (frame.type === 'meta' && live) {
+						// Citaties zijn vóór het antwoord al bekend: daarmee kunnen
+						// [[rule:…]]-widgets tijdens het streamen al renderen.
+						live = {
+							...live,
+							questionType: frame.questionType ?? null,
+							citations: frame.citations ?? []
+						};
+					} else if (frame.type === 'delta' && live && typeof frame.text === 'string') {
+						live = { ...live, answer: live.answer + frame.text };
+					} else if (frame.type === 'final') {
+						finalData = frame.result ?? null;
+					} else if (frame.type === 'error') {
+						throw new Error(String(frame.error ?? 'stream-fout'));
+					}
+				}
+			}
+			if (finalData) {
+				if (finalData.ok === false && live?.answer) {
+					// AI viel halverwege uit: het deelantwoord dat er al staat is
+					// meer waard dan de kale uitvalmelding in het slotframe —
+					// behouden + melden, net als bij een weggevallen verbinding.
+					liveError = 'De AI viel halverwege uit — dit antwoord is mogelijk onvolledig.';
+					announce = 'Antwoord onderbroken.';
+				} else {
+					// Slotframe = het volledige AskResult: her-render via het gewone
+					// form-pad (incl. citaties, kaarten, claims, feedback, doorvragen).
+					// Zelfde afronding als de oude update()-flow: formulier leeg en
+					// duurstatistiek vers (review-fix).
+					if (clearQuestion) question = '';
+					await invalidateAll();
+					await applyAction({
+						type: 'success',
+						status: 200,
+						data: { question: q, history: turns, hadPhoto: Boolean(photo), ...finalData }
+					});
+					live = null;
+					announce = 'Antwoord compleet.';
+				}
+			} else if (!sawFrame) {
+				// Response gestart maar gebroken vóór het eerste frame: rb-api kan
+				// al aan de LLM-call begonnen zijn — expliciete knop, geen stille
+				// dubbele kosten (review-fix).
+				live = null;
+				retryPending = { fd: formData, clearQuestion };
+				announce = 'Antwoord mislukt.';
+			} else {
+				// Midden in het antwoord gebroken: partial behouden (fail-paden
+				// laten het antwoord niet verdwijnen), geen dure herkansing.
+				liveError = 'De verbinding viel weg — dit antwoord is mogelijk onvolledig.';
+				announce = 'Antwoord onderbroken.';
+			}
+		} catch (e) {
+			if (sawFrame && live?.answer) {
+				liveError = 'De verbinding viel weg — dit antwoord is mogelijk onvolledig.';
+				announce = 'Antwoord onderbroken.';
+			} else if (!sawFrame) {
+				live = null;
+				retryPending = { fd: formData, clearQuestion };
+				announce = 'Antwoord mislukt.';
+			} else {
+				live = null;
+				await applyAction({
+					type: 'failure',
+					status: 500,
+					data: {
+						error: `Vraag mislukt (${e instanceof Error ? e.message : e})`,
+						question: q,
+						history: turns
+					}
+				});
+			}
+		} finally {
+			busy = false;
+			clearPhoto();
+		}
+	}
+
 	// Community-consensus (#51): alleen http(s)-bronlinks renderen als link.
 	const isHttp = (url: string) => /^https?:\/\//.test(url);
 
@@ -142,13 +404,27 @@
 		method="POST"
 		action="?/ask"
 		enctype="multipart/form-data"
-		use:enhance={async ({ formData }) => {
+		use:enhance={async ({ formData, cancel }) => {
+			// Guard meteen dicht (review-fix): tijdens 'await downscale' mag een
+			// tweede klik geen tweede (betaalde) request kunnen starten.
+			if (busy) {
+				cancel();
+				return;
+			}
 			busy = true;
 			const q = String(formData.get('question') ?? '').trim();
 			if (q) remember(q);
 			const f = photoInput?.files?.[0];
-			if (f) formData.set('photo', await downscale(f), 'board.jpg');
+			const photo = f ? await downscale(f) : null;
+			if (photo) formData.set('photo', photo, 'board.jpg');
 			else formData.delete('photo');
+			// Streaming (#31) waar de browser het kan; anders loopt de
+			// bestaande niet-streamende action gewoon door.
+			if (q && canStream()) {
+				cancel();
+				void streamAsk(q, [], photo, formData, true);
+				return;
+			}
 			return async ({ update }) => {
 				busy = false;
 				clearPhoto();
@@ -189,7 +465,7 @@
 		{/if}
 	</form>
 
-	{#if busy}
+	{#if busy && !live?.answer}
 		<div class="panel waiting">
 			<span class="spin"></span>
 			<div>
@@ -199,9 +475,42 @@
 		</div>
 	{/if}
 
-	{#if form?.error}<p class="warn">{form.error}</p>{/if}
+	{#if form?.error && !live}<p class="warn">{form.error}</p>{/if}
 
-	{#if hasAnswer && !busy}
+	<!-- Screenreader-status (review-fix): alleen de afronding wordt
+	     aangekondigd; het groeiende antwoord zelf is géén live-region, anders
+	     wordt bij elke delta het hele antwoord opnieuw voorgelezen. -->
+	<p class="visually-hidden" role="status">{announce}</p>
+
+	{#if retryPending && !busy}
+		<div class="panel waiting">
+			<div>
+				<p class="phase">De verbinding brak voordat het antwoord binnenkwam.</p>
+				<p class="meta">
+					Mogelijk was er al een antwoord onderweg; daarom proberen we niet automatisch
+					opnieuw.
+				</p>
+				<button type="button" class="retry" onclick={retryAsk}>Opnieuw proberen</button>
+			</div>
+		</div>
+	{/if}
+
+	{#if live?.answer}
+		<!-- Streaming (#31): het antwoord groeit woord voor woord. Afgeronde
+		     regels gaan door de gewone AnswerView (widgets werken al via de
+		     meta-citaties); de staart is kale tekst met een cursor. -->
+		<article class="panel answer-panel" aria-busy={!liveError}>
+			<p class="asked meta">
+				{#if live.questionType}<span class="qtype">{TYPE_LABELS[live.questionType] ?? live.questionType}</span>{/if}
+				Vraag: {live.question}
+			</p>
+			<AnswerView answer={liveParts.settled} citations={live.citations} cards={[]} />
+			<p class="md-tail">{liveParts.tail}{#if !liveError}<span class="cursor"></span>{/if}</p>
+			{#if liveError}<p class="warn">{liveError}</p>{/if}
+		</article>
+	{/if}
+
+	{#if hasAnswer && !busy && !live}
 		<article class="panel answer-panel">
 			{#if form?.question}
 				<p class="asked meta">
@@ -345,15 +654,32 @@
 		</article>
 	{/if}
 
-	{#if hasAnswer && !busy}
+	{#if hasAnswer && !busy && !live}
 		<!-- Doorvragen (#41): bouwt voort op het gesprek, met alle context -->
 		<form
 			method="POST"
 			action="?/ask"
-			use:enhance={({ formData }) => {
+			use:enhance={({ formData, cancel }) => {
+				if (busy) {
+					cancel();
+					return;
+				}
 				busy = true;
 				const q = String(formData.get('question') ?? '').trim();
 				if (q) remember(q);
+				if (q && canStream()) {
+					// Doorvragen streamt ook (#31); de historie reist mee.
+					let turns: Turn[] = [];
+					try {
+						turns = JSON.parse(String(formData.get('history') ?? '[]'));
+					} catch {
+						turns = [];
+					}
+					cancel();
+					followUp = '';
+					void streamAsk(q, turns.slice(-3), null, formData, false);
+					return;
+				}
 				return async ({ update }) => {
 					busy = false;
 					followUp = '';
@@ -413,6 +739,24 @@
 	.phase { margin: 0 0 2px; font-weight: 600; }
 	.waiting .meta { margin: 0; font-size: 0.85rem; }
 	.answer-panel { padding: 18px 20px; }
+	/* Alleen voor screenreaders: visueel volledig verborgen statusregel. */
+	.visually-hidden {
+		position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+		overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+	}
+	.retry {
+		margin-top: 8px; background: var(--accent); color: var(--accent-ink);
+		border: 0; border-radius: 8px; padding: 7px 14px; font-weight: 600;
+		cursor: pointer;
+	}
+	/* Streaming (#31): staart van de binnenstromende regel + cursor. */
+	.md-tail { margin: 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+	.cursor {
+		display: inline-block; width: 8px; height: 1em; margin-left: 2px;
+		background: var(--accent); vertical-align: text-bottom;
+		animation: blink 1s steps(2) infinite;
+	}
+	@keyframes blink { 50% { opacity: 0; } }
 	.asked { margin: 0 0 4px; font-size: 0.85rem; }
 	.qtype {
 		display: inline-block; font-size: 0.7rem; font-weight: 700;
