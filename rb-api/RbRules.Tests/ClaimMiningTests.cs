@@ -52,6 +52,79 @@ public class ClaimMinerTests
         Assert.Null(ClaimMiner.ParseClaims(raw));
 
     [Fact]
+    public void ParseClaims_JsonCodeFence_IsHandled()
+    {
+        // Realistische respons-vorm: modellen zetten "alleen JSON"-antwoorden
+        // geregeld in een ```json-fence.
+        var raw = """
+            ```json
+            {"claims": [{"topicType": "mechanic", "topicRef": "Deflect", "statement": "Deflect verhoogt de kosten van gerichte spells."}]}
+            ```
+            """;
+        var r = ClaimMiner.ParseClaims(raw);
+        Assert.NotNull(r);
+        Assert.Equal("Deflect", Assert.Single(r).TopicRef);
+    }
+
+    [Fact]
+    public void ParseClaims_ProseWithBracketMarkersBeforeJson_StillFindsClaims()
+    {
+        // Regressie #93 (zelfde klasse als de scout-bug uit PR #87): prose vóór
+        // de JSON met een "[1]"-bronmarker liet de oude first/last-index-
+        // extractie een kapot array-blok kiezen in plaats van het JSON-object.
+        var raw = """
+            Uit de gids [1] destilleer ik deze claims:
+            {"claims": [{"topicType": "concept", "topicRef": "mulligan", "statement": "Je mag één keer je starthand omruilen."}]}
+            """;
+        var r = ClaimMiner.ParseClaims(raw);
+        Assert.NotNull(r);
+        Assert.Equal("mulligan", Assert.Single(r).TopicRef);
+    }
+
+    [Fact]
+    public void ParseClaims_TrailingBronnenBlock_IsIgnored()
+    {
+        // Realistische respons-vorm: een "Bronnen:"-blok met markers ná de
+        // JSON (het research-contract van rb-ai; ook cheap-antwoorden sluiten
+        // soms zo af). De haakjes daarin mogen de extractie niet breken.
+        var raw = """
+            {"claims": [{"topicType": "concept", "topicRef": "scoren", "statement": "Je scoort door een battlefield te houden."}]}
+
+            Bronnen:
+            [1] https://example.com/gids (geraadpleegd 2026-07-11)
+            """;
+        var r = ClaimMiner.ParseClaims(raw);
+        Assert.NotNull(r);
+        Assert.Equal("scoren", Assert.Single(r).TopicRef);
+    }
+
+    [Fact]
+    public void ParseClaims_GarbageObjectBeforeRealJson_IsSkipped()
+    {
+        // Een eerder {}-blok zonder claims-property (of onparseerbaar) mag de
+        // echte JSON verderop niet verdringen: kandidaten worden doorlopen.
+        var raw = """
+            Denkstap: {eerst kijken naar de mechanics}.
+            {"claims": [{"topicType": "card", "topicRef": "Viktor", "statement": "Viktor's effect werkt tijdens de showdown."}]}
+            """;
+        var r = ClaimMiner.ParseClaims(raw);
+        Assert.NotNull(r);
+        Assert.Equal("Viktor", Assert.Single(r).TopicRef);
+    }
+
+    [Fact]
+    public void ParseClaims_OnlyBracketMarkers_ReturnsNull() =>
+        // Alleen een bronvermelding met "[1]"-markers, geen JSON-object: dat
+        // is onbruikbaar — géén geldige lege lijst (die zou het document als
+        // "gemined" markeren, #92/#93).
+        Assert.Null(ClaimMiner.ParseClaims("""
+            Ik vond geen claims.
+
+            Bronnen:
+            [1] https://example.com/gids
+            """));
+
+    [Fact]
     public void ParseClaims_EmptyList_ReturnsEmpty()
     {
         var r = ClaimMiner.ParseClaims("""{"claims": []}""");
@@ -192,6 +265,24 @@ public class ClaimJudgeTests
         Assert.Null(ClaimJudge.Parse(raw, candidateCount: 3));
 
     [Fact]
+    public void Parse_ProseAndFenceAroundJson_IsTolerated()
+    {
+        // Zelfde tolerantie als de claims-extractie (#93): prose met een
+        // "[1]"-marker vóór de JSON en een fence eromheen mogen het oordeel
+        // niet onbruikbaar maken.
+        var raw = """
+            Bewering [1] komt overeen met kandidaat 2:
+            ```json
+            {"verdict": "same", "match": 2}
+            ```
+            """;
+        var j = ClaimJudge.Parse(raw, candidateCount: 3);
+        Assert.NotNull(j);
+        Assert.Equal("same", j.Verdict);
+        Assert.Equal(2, j.Match);
+    }
+
+    [Fact]
     public void BuildPrompt_NumbersCandidatesOneBased()
     {
         var p = ClaimJudge.BuildPrompt("nieuw", ["eerste", "tweede"]);
@@ -238,6 +329,19 @@ public class OfficialCheckTests
             $$"""{"verdict": "contradicted", "reason": "{{new string('r', 900)}}"}""");
         Assert.NotNull(v);
         Assert.Equal(OfficialCheck.MaxReasonLength, v.Reason!.Length);
+    }
+
+    [Fact]
+    public void Parse_ProseWithBracketMarkerBeforeJson_IsTolerated()
+    {
+        // Zelfde first-bracket-regressie als de extractie (#93): een
+        // §-verwijzing met haakjes vóór de JSON mag het oordeel niet breken.
+        var v = OfficialCheck.Parse("""
+            Op basis van [1] (§534.1):
+            {"verdict": "confirmed", "reason": "§534.1 bevestigt dit."}
+            """);
+        Assert.NotNull(v);
+        Assert.Equal("confirmed", v.Verdict);
     }
 
     [Fact]
@@ -313,4 +417,29 @@ public class ClaimScoringTests
     [InlineData(9, 0.3)] // onbekend-lage trust degradeert naar de bodem
     public void TierWeight_FollowsRegisterTrustTiers(short tier, double expected) =>
         Assert.Equal(expected, ClaimScoring.TierWeight(tier));
+}
+
+/// <summary>Diagnose-snippet voor run_log (#93, gedeeld met de scout): plat,
+/// afgekapt, nooit leeg — de beheerder moet altijd íets zien.</summary>
+public class LlmJsonSnippetTests
+{
+    [Fact]
+    public void Snippet_FlattensWhitespace_AndTruncatesWithEllipsis()
+    {
+        var raw = "regel één\n\n  regel   twee\t" + new string('x', 500);
+        var s = LlmJson.Snippet(raw, 30);
+        Assert.Equal(31, s.Length); // 30 tekens + ellipsis
+        Assert.StartsWith("regel één regel twee", s);
+        Assert.EndsWith("…", s);
+    }
+
+    [Fact]
+    public void Snippet_ShortAnswer_StaysIntact() =>
+        Assert.Equal("kort antwoord", LlmJson.Snippet("kort antwoord", 400));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \n\t ")]
+    public void Snippet_EmptyAnswer_GetsPlaceholder(string raw) =>
+        Assert.Equal("(leeg antwoord)", LlmJson.Snippet(raw, 400));
 }
