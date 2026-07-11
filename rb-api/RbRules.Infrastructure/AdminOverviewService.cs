@@ -39,12 +39,22 @@ public class AdminOverviewService(RbRulesDbContext db)
 {
     private const int PageSize = 60;
 
+    /// <summary>Bovengrens tegen int-overflow in de Skip-berekening
+    /// (page * 60 moet ruim binnen int.MaxValue blijven).</summary>
+    private static int ClampPage(int page) => Math.Clamp(page, 1, 100_000);
+
+    /// <summary>LIKE-metatekens in gebruikersinvoer escapen zodat "%"/"_" in
+    /// een zoekterm letterlijk matchen (Npgsql-escape is backslash).</summary>
+    private static string EscapeLike(string s) =>
+        s.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
+
     /// <summary>Kaartenlijst achter de tegels Kaarten/Geëmbed/Geanalyseerd.
     /// Mechanics onderscheidt de drie mining-toestanden: null = nog niet
     /// gemined, leeg = gemined zonder vondst, gevuld = vondsten.</summary>
     public async Task<Paged<CardOverviewItem>> CardsAsync(
         string? filter, string? q, int page)
     {
+        page = ClampPage(page);
         var query = db.Cards.AsNoTracking();
         query = filter switch
         {
@@ -55,7 +65,10 @@ public class AdminOverviewService(RbRulesDbContext db)
             _ => query,
         };
         if (!string.IsNullOrWhiteSpace(q))
-            query = query.Where(c => EF.Functions.ILike(c.Name, $"%{q}%"));
+        {
+            var pattern = $"%{EscapeLike(q)}%";
+            query = query.Where(c => EF.Functions.ILike(c.Name, pattern));
+        }
 
         var total = await query.CountAsync();
         var items = await query
@@ -71,6 +84,7 @@ public class AdminOverviewService(RbRulesDbContext db)
     /// <summary>Regelsecties per bron, met tellingen als bronfilter-chips.</summary>
     public async Task<RuleChunkOverview> RuleChunksAsync(string? sourceId, int page)
     {
+        page = ClampPage(page);
         // Record-constructors vertalen niet binnen GroupBy — eerst anoniem, dan mappen.
         var sources = (await db.RuleChunks.AsNoTracking()
                 .GroupBy(rc => rc.SourceId)
@@ -114,6 +128,7 @@ public class AdminOverviewService(RbRulesDbContext db)
     /// pagina ophalen, dan namen voor precies die kaarten — geen joins over alles).</summary>
     public async Task<Paged<InteractionOverviewItem>> InteractionsAsync(int page)
     {
+        page = ClampPage(page);
         var total = await db.CardInteractions.CountAsync();
         var rows = await db.CardInteractions.AsNoTracking()
             .OrderByDescending(i => i.DetectedAt).ThenBy(i => i.Id)
@@ -137,6 +152,7 @@ public class AdminOverviewService(RbRulesDbContext db)
 
     public async Task<Paged<ChangeOverviewItem>> ChangesAsync(int page)
     {
+        page = ClampPage(page);
         var total = await db.Changes.CountAsync();
         var items = await db.Changes.AsNoTracking()
             .OrderByDescending(c => c.DetectedAt).ThenBy(c => c.Id)

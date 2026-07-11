@@ -20,9 +20,10 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 export const load: PageServerLoad = async ({ params, url, cookies }) => {
 	if (!authed(cookies)) throw redirect(303, '/admin');
 	const kind = params.kind;
-	if (!(kind in KIND_FILTERS)) throw error(404, 'Onbekend overzicht');
+	// Object.hasOwn: `in` kijkt ook in de prototype-keten ("constructor" → 500).
+	if (!Object.hasOwn(KIND_FILTERS, kind)) throw error(404, 'Onbekend overzicht');
 
-	const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+	const page = Math.min(100_000, Math.max(1, Math.trunc(Number(url.searchParams.get('page'))) || 1));
 	const q = url.searchParams.get('q')?.trim() ?? '';
 	const source = url.searchParams.get('source') ?? '';
 	const filterRule = KIND_FILTERS[kind];

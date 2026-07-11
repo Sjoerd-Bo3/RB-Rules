@@ -92,30 +92,33 @@
 		<!-- Filters -->
 		{#if data.kind === 'kaarten'}
 			<form method="GET" class="filters">
-				<input type="search" name="q" value={data.q} placeholder="Zoek op kaartnaam" />
+				<input type="search" name="q" value={data.q} placeholder="Zoek op kaartnaam" aria-label="Zoek op kaartnaam" />
 				<button type="submit">Zoek</button>
 			</form>
 		{:else if data.kind === 'embeddings'}
 			<div class="chips">
-				<a class="chip" class:active={data.filter === 'embedded'} href={href({ filter: 'embedded', page: 1 })}>Geëmbed</a>
-				<a class="chip" class:active={data.filter === 'unembedded'} href={href({ filter: 'unembedded', page: 1 })}>Nog niet geëmbed</a>
+				<a class="chip" class:active={data.filter === 'embedded'} aria-current={data.filter === 'embedded' ? 'page' : undefined} href={href({ filter: 'embedded', page: 1 })}>Geëmbed</a>
+				<a class="chip" class:active={data.filter === 'unembedded'} aria-current={data.filter === 'unembedded' ? 'page' : undefined} href={href({ filter: 'unembedded', page: 1 })}>Nog niet geëmbed</a>
 			</div>
 		{:else if data.kind === 'analyse'}
 			<div class="chips">
-				<a class="chip" class:active={data.filter === 'mined'} href={href({ filter: 'mined', page: 1 })}>Geanalyseerd</a>
-				<a class="chip" class:active={data.filter === 'unmined'} href={href({ filter: 'unmined', page: 1 })}>Nog niet geanalyseerd</a>
+				<a class="chip" class:active={data.filter === 'mined'} aria-current={data.filter === 'mined' ? 'page' : undefined} href={href({ filter: 'mined', page: 1 })}>Geanalyseerd</a>
+				<a class="chip" class:active={data.filter === 'unmined'} aria-current={data.filter === 'unmined' ? 'page' : undefined} href={href({ filter: 'unmined', page: 1 })}>Nog niet geanalyseerd</a>
 			</div>
 		{:else if chunks && chunks.sources.length > 1}
 			<div class="chips">
-				<a class="chip" class:active={!data.source} href={href({ source: '', page: 1 })}>Alle bronnen ({chunks.total})</a>
+				<!-- Som over de bronnen: chunks.total is het gefilterde totaal. -->
+				<a class="chip" class:active={!data.source} aria-current={!data.source ? 'page' : undefined} href={href({ source: '', page: 1 })}>Alle bronnen ({chunks.sources.reduce((a, s) => a + s.count, 0)})</a>
 				{#each chunks.sources as s (s.sourceId)}
-					<a class="chip" class:active={data.source === s.sourceId} href={href({ source: s.sourceId, page: 1 })}>{s.sourceId} ({s.count})</a>
+					<a class="chip" class:active={data.source === s.sourceId} aria-current={data.source === s.sourceId ? 'page' : undefined} href={href({ source: s.sourceId, page: 1 })}>{s.sourceId} ({s.count})</a>
 				{/each}
 			</div>
 		{/if}
 
 		{#if paged}
 			<p class="meta count">{paged.total} totaal{totalPages > 1 ? ` · pagina ${paged.page} van ${totalPages}` : ''}</p>
+		{:else if data.kind === 'correcties' && corrections.length}
+			<p class="meta count">{corrections.length} getoond{corrections.length >= 200 ? ' (de laatste 200 — oudere correcties vallen buiten dit overzicht)' : ''}</p>
 		{/if}
 
 		<!-- Kaart-overzichten (kaarten / embeddings / analyse) -->
