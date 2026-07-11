@@ -46,15 +46,18 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         return result;
     }
 
-    /// <summary>Groepeert printings met dezelfde naam: één canonieke kaart,
-    /// de rest (alt-art/showcase/promo/herdruk) verwijst ernaar via VariantOf.</summary>
+    /// <summary>Groepeert printings van dezelfde kaart: één canonieke kaart,
+    /// de rest (alt-art/showcase/promo/herdruk) verwijst ernaar via VariantOf.
+    /// Groepering op basisnaam: Riot noemt varianten "Naam (Alternate Art)",
+    /// "(Signature)", "(Overnumbered)" — die horen bij dezelfde kaart.</summary>
     private async Task RegroupVariantsAsync(CancellationToken ct)
     {
         var cards = await db.Cards.ToListAsync(ct);
-        foreach (var group in cards.GroupBy(c => c.Name))
+        foreach (var group in cards.GroupBy(c => CardText.BaseName(c.Name)))
         {
             var canonical = group
-                .OrderBy(AltPrintingRank)
+                .OrderBy(c => c.Name == CardText.BaseName(c.Name) ? 0 : 1)
+                .ThenBy(AltPrintingRank)
                 .ThenBy(c => c.Rarity == "Showcase" ? 1 : 0)
                 .ThenBy(c => c.RiftboundId, StringComparer.Ordinal)
                 .First();
@@ -162,7 +165,7 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
             SetId = (c["set"]?["set_id"]?.GetValue<string>() ?? fallbackSetId).ToUpperInvariant(),
             SetLabel = c["set"]?["label"]?.GetValue<string>(),
             CollectorNumber = c["collector_number"]?.GetValue<int?>(),
-            TextPlain = c["text"]?["plain"]?.GetValue<string>(),
+            TextPlain = CardText.HumanizeIcons(c["text"]?["plain"]?.GetValue<string>()),
             ImageUrl = c["media"]?["image_url"]?.GetValue<string>(),
             Tags = c["tags"] is JsonArray t
                 ? [.. t.Select(x => x?.GetValue<string>()).OfType<string>()]

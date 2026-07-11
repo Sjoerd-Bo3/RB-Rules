@@ -764,8 +764,11 @@ admin.MapPost("/jobs/{name}", (string name, JobRunner jobs) =>
         },
         "rules" => async (sp, report, ct) =>
         {
-            var r = await sp.GetRequiredService<RuleChunkPipeline>().RunAsync(report, ct);
-            return $"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen";
+            // Handmatige run = volledige herbouw, zodat parser-verbeteringen
+            // ook op bestaande documenten landen.
+            var r = await sp.GetRequiredService<RuleChunkPipeline>()
+                .RunAsync(force: true, report, ct);
+            return $"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen (herbouwd)";
         },
         "bans" => async (sp, report, ct) =>
         {

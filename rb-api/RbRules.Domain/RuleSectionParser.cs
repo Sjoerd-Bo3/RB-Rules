@@ -38,7 +38,9 @@ public static partial class RuleSectionParser
 
         for (var i = 0; i < matches.Count; i++)
         {
-            var start = matches[i].Index;
+            // Body begint ná de kop: het sectienummer staat al in Code en
+            // hoort niet dubbel in de tekst ("§ 000 — 000. Golden…").
+            var start = matches[i].Index + matches[i].Length;
             var end = i + 1 < matches.Count ? matches[i + 1].Index : text.Length;
             var code = NormalizeCode(matches[i].Groups[1].Value);
             var body = Clean(text[start..end]);
