@@ -205,6 +205,10 @@ public class KnowledgeDoc
     public string Status { get; set; } = "draft";       // draft | approved
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Wanneer de relatie-mining (#116) dit doc als anker verwerkte;
+    /// null = nog niet. Zelf-invaliderend: een run pakt docs waarvan
+    /// relations_mined_at vóór updated_at ligt vanzelf opnieuw op.</summary>
+    public DateTimeOffset? RelationsMinedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -458,4 +462,49 @@ public class CardInteraction
     public required string Kind { get; set; }       // combo | synergy | counter | nonbo
     public required string Explanation { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Dynamische LLM-relatie tussen twee brein-knopen (#116): het
+/// INTERACTS_WITH/claims-patroon veralgemeniseerd. Van/naar zijn BrainRefs
+/// (docs/BRAIN.md §2.1) over álle kennislagen heen; het kind is een open maar
+/// gereviewd vocabulaire (RelationKind). LLM-relaties gaan NOOIT rechtstreeks
+/// de graph in: Postgres is de bron, de graph-rebuild projecteert alleen
+/// accepted/unreviewed relaties waarvan het kind geaccepteerd is.</summary>
+public class Relation
+{
+    public long Id { get; set; }
+    public required string FromRef { get; set; }        // bv. "mechanic:Deflect"
+    public required string ToRef { get; set; }          // bv. "section:core-rules-pdf/7.4"
+    /// <summary>Genormaliseerd kind-label (RelationMiner.NormalizeKind),
+    /// bv. "counters" of "wordt beperkt door".</summary>
+    public required string Kind { get; set; }
+    /// <summary>Waarom deze relatie bestaat (LLM, NL) — gaat als property mee
+    /// de graph in zodat tools de relatie kunnen duiden.</summary>
+    public required string Explanation { get; set; }
+    /// <summary>Bewijsbron/anker van de mining, bv. "concept:combat" of
+    /// "mechanics-overzicht" — herleidbaarheid per voorstel.</summary>
+    public required string Provenance { get; set; }
+    /// <summary>Trust van de bewijsbron (0..1, ClaimScoring-schaal) — de
+    /// kennispiramide blijft leidend, ook op relaties.</summary>
+    public double Trust { get; set; }
+    public string Status { get; set; } = "unreviewed";  // unreviewed|accepted|rejected
+    public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ReviewedAt { get; set; }
+}
+
+/// <summary>Kandidaat-vocabulaire voor relatie-kinds (#116, patroon
+/// MechanicKeyword uit #52): de LLM mag nieuwe kinds voorstellen; onbekende
+/// kinds landen hier als kandidaat. Pas geaccepteerde kinds (plus de
+/// seed-lijst in RelationMiner) doen mee in de graph-projectie.</summary>
+public class RelationKind
+{
+    public long Id { get; set; }
+    /// <summary>Genormaliseerd (RelationMiner.NormalizeKind).</summary>
+    public required string Kind { get; set; }
+    public string Status { get; set; } = "candidate";   // candidate|accepted|rejected
+    /// <summary>Aantal opgeslagen relatievoorstellen met dit kind
+    /// (review-sortering op impact).</summary>
+    public int Occurrences { get; set; }
+    public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ReviewedAt { get; set; }
 }

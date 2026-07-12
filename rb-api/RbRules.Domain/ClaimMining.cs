@@ -63,7 +63,7 @@ public static partial class ClaimMiner
     /// binnen het antwoord (zelfde genormaliseerde bewering) vallen weg.</summary>
     public static IReadOnlyList<ExtractedClaim>? ParseClaims(string raw)
     {
-        var items = ExtractItems(raw, "claims");
+        var items = LlmJson.ExtractItems(raw, "claims");
         if (items is null) return null;
 
         var seen = new HashSet<string>();
@@ -95,45 +95,6 @@ public static partial class ClaimMiner
     public static string NormalizeStatement(string statement) =>
         WhitespaceRegex().Replace(statement, " ").Trim().TrimEnd('.', '!', '?', ' ')
             .ToLowerInvariant();
-
-    /// <summary>Pakt de JSON uit het antwoord en geeft de array-items terug:
-    /// object met <paramref name="property"/>, of een kale array
-    /// (prompt-afwijkingstolerantie). null als er niets bruikbaars staat.
-    /// Kandidaat-blokken via <see cref="LlmJson.Candidates"/> — de oude
-    /// first/last-bracket-extractie brak op prose rond de JSON met
-    /// "[1]"-achtige markers (zelfde bug als de scout, PR #87 / #93).</summary>
-    internal static List<JsonElement>? ExtractItems(string raw, string property)
-    {
-        foreach (var json in LlmJson.Candidates(raw))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(json);
-                var root = doc.RootElement;
-                if (root.ValueKind == JsonValueKind.Object
-                    && root.TryGetProperty(property, out var p)
-                    && p.ValueKind == JsonValueKind.Array)
-                {
-                    // Clone: de elementen moeten het JsonDocument overleven.
-                    return [.. p.EnumerateArray().Select(e => e.Clone())];
-                }
-                // Kale array — tolerantie voor prompt-afwijking, maar alleen
-                // als er echt item-objecten in staan (of hij leeg is): "[1]"
-                // uit een bronvermelding is géén item-lijst (scout-les, #87).
-                if (root.ValueKind == JsonValueKind.Array
-                    && (root.GetArrayLength() == 0
-                        || root.EnumerateArray().Any(i => i.ValueKind == JsonValueKind.Object)))
-                {
-                    return [.. root.EnumerateArray().Select(e => e.Clone())];
-                }
-            }
-            catch (JsonException)
-            {
-                // geen geldige JSON op deze positie — volgende kandidaat
-            }
-        }
-        return null;
-    }
 
     internal static string? GetString(JsonElement obj, string key) =>
         obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
