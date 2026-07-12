@@ -23,11 +23,17 @@ public record GapSourceStatus(
 public record GapDrift(
     bool GraphAvailable, string? Detail, IReadOnlyList<GraphDriftEntry> Entries);
 
+/// <summary>Verouderingssignaal (#119): kennis die door een verwerkte
+/// regelwijziging is hertoetst — een primer-doc terug in de reviewqueue
+/// (kind "primer") of een claim die verouderd raakte (kind "claim").</summary>
+public record GapAgingSignal(string Kind, string Title, string Reason, DateTimeOffset At);
+
 public record KnowledgeGapsReport(
     GapCoverage Coverage,
     IReadOnlyList<GapQuestion> Questions,
     IReadOnlyList<GapSourceStatus> Sources,
-    GapDrift Drift);
+    GapDrift Drift,
+    IReadOnlyList<GapAgingSignal> Aging);
 
 /// <summary>Kennis-gaten-rapport (#52): meet waar de kennisbank dun is in
 /// plaats van te raden. Vier invalshoeken: dekking (kaarten zonder
@@ -133,7 +139,35 @@ public class KnowledgeGapsService(RbRulesDbContext db, BrainGraphService graph)
                 openCandidates, traces.Count),
             questions,
             sources,
-            await BuildDriftAsync(ct));
+            await BuildDriftAsync(ct),
+            await BuildAgingAsync(ct));
+    }
+
+    /// <summary>Verouderingssignalen (#119): wat heeft een verwerkte
+    /// regelwijziging teruggelegd voor review? Primer-drafts dragen hun reden
+    /// als kanttekening vooraan in de tekst (bewust zonder migratie),
+    /// verouderde claims als StatusReason-prefix — beide herkenbaar en hier
+    /// bijeengeraapt zodat de beheerder veroudering meet in plaats van raadt.</summary>
+    private async Task<IReadOnlyList<GapAgingSignal>> BuildAgingAsync(CancellationToken ct)
+    {
+        var agingDocs = (await db.KnowledgeDocs.AsNoTracking()
+                .Where(k => k.Kind == "primer" && k.Status == "draft")
+                .Select(k => new { k.Title, k.Body, k.UpdatedAt })
+                .ToListAsync(ct))
+            .SelectMany(k => KnowledgeRecheck.MarkerReasons(k.Body)
+                .Select(reason => new GapAgingSignal("primer", k.Title, reason, k.UpdatedAt)));
+
+        var agingClaims = (await db.Claims.AsNoTracking()
+                .Where(c => c.Status == "superseded" && c.StatusReason != null
+                            && c.StatusReason.StartsWith(KnowledgeRecheck.ClaimReasonPrefix))
+                .OrderByDescending(c => c.LastSeen)
+                .Take(50)
+                .Select(c => new { c.TopicType, c.TopicRef, c.StatusReason, c.LastSeen })
+                .ToListAsync(ct))
+            .Select(c => new GapAgingSignal(
+                "claim", $"{c.TopicType}: {c.TopicRef}", c.StatusReason!, c.LastSeen));
+
+        return [.. agingDocs.Concat(agingClaims).OrderByDescending(a => a.At)];
     }
 
     /// <summary>Graph-drift (#108, docs/BRAIN.md §4): telt per knooptype wat
