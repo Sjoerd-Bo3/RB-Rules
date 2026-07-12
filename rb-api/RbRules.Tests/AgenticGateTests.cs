@@ -83,4 +83,48 @@ public class AgenticGateTests
     public void Auto_GewoneVraagZonderTriggers_EscaleertNiet() =>
         Assert.False(AgenticGate.ShouldEscalate(
             QuestionType.Ruling, 0, emptyRetrieval: false, AgenticMode.Auto));
+
+    // ── Foto-vragen escaleren nooit (review #107): het Opus-visionpad
+    //    is daar bewust, en de brein-tools zijn tekst-only ───────────────
+
+    [Theory]
+    [InlineData(AgenticMode.Force)] // ook force: verificatie mag vision niet downgraden
+    [InlineData(AgenticMode.Auto)]
+    public void FotoVraag_EscaleertNooit(AgenticMode mode) =>
+        Assert.False(AgenticGate.ShouldEscalate(
+            QuestionType.Ruling, 2, emptyRetrieval: true, mode, hasImage: true));
+
+    [Fact]
+    public void ZonderFoto_BlijftForceEscaleren() =>
+        Assert.True(AgenticGate.ShouldEscalate(
+            QuestionType.Ruling, 0, emptyRetrieval: false, AgenticMode.Force, hasImage: false));
+
+    // ── Mention-telling (review #107): substring-matches dedupliceren ──
+    //    "Jinx" matcht ook binnen "Jinx, Loose Cannon" — één genoemde
+    //    kaart mag nooit als twee mentions tellen.
+
+    [Fact]
+    public void CountDistinctMentions_LeegBlijftNul() =>
+        Assert.Equal(0, AgenticGate.CountDistinctMentions([]));
+
+    [Fact]
+    public void CountDistinctMentions_TweeEchteNamen_TeltTwee() =>
+        Assert.Equal(2, AgenticGate.CountDistinctMentions(["Viktor", "Yasuo"]));
+
+    [Fact]
+    public void CountDistinctMentions_SubstringVanLangereNaam_TeltEen() =>
+        Assert.Equal(1, AgenticGate.CountDistinctMentions(["Jinx", "Jinx, Loose Cannon"]));
+
+    [Fact]
+    public void CountDistinctMentions_SubstringDedupIsHoofdletterongevoelig() =>
+        Assert.Equal(1, AgenticGate.CountDistinctMentions(["jinx", "JINX, Loose Cannon"]));
+
+    [Fact]
+    public void CountDistinctMentions_DubbeleNaam_TeltEen() =>
+        Assert.Equal(1, AgenticGate.CountDistinctMentions(["Ahri", "ahri"]));
+
+    [Fact]
+    public void CountDistinctMentions_MengselTeltAlleenLangsteNamen() =>
+        Assert.Equal(2, AgenticGate.CountDistinctMentions(
+            ["Viktor", "Jinx", "Jinx, Loose Cannon"]));
 }
