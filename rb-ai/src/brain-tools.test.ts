@@ -75,6 +75,30 @@ test("formatNeighbors: richting/edge/ref per regel; NL 'richting' én 'direction
   assert.equal(formatNeighbors([]), "geen buren gevonden voor deze ref.");
 });
 
+test("formatNeighbors: kind en uitleg van dynamische relaties expliciet in de regel (#116)", () => {
+  const out = formatNeighbors([
+    {
+      ref: "section:core-rules-pdf/7.4",
+      name: "7.4",
+      edge: "RELATES_TO",
+      richting: "uit",
+      props: {
+        kind: "wordt beperkt door",
+        explanation: "Deflect werkt alleen op combat-schade.",
+        trust: 0.75,
+        status: "unreviewed",
+      },
+    },
+  ]);
+  // Kind in het edge-label, uitleg als leesbare tekst, de rest als props-JSON
+  // (trust/status blijven zichtbaar — kennispiramide-labels, §2.4).
+  assert.match(out, /- uit \[RELATES_TO:wordt beperkt door\] section:core-rules-pdf\/7\.4 \(7\.4\)/);
+  assert.match(out, /— Deflect werkt alleen op combat-schade\./);
+  assert.match(out, /"trust":0\.75/);
+  assert.match(out, /"status":"unreviewed"/);
+  assert.ok(!out.includes('"kind"'), "kind niet dubbel in de props-JSON");
+});
+
 test("formatPath: keten [node, edge, node, …] wordt een leesbare bewijsketen (§2.3)", () => {
   const out = formatPath([
     { ref: "card:OGN-042", name: "Yasuo" },
@@ -88,6 +112,15 @@ test("formatPath: keten [node, edge, node, …] wordt een leesbare bewijsketen (
     "card:OGN-042 (Yasuo) -[HAS_MECHANIC]-> mechanic:Deflect -[EXPLAINS]-> concept:combat",
   );
   assert.equal(formatPath({ path: [] }), "geen pad gevonden tussen deze refs.");
+});
+
+test("formatPath: kind-dragende schakels tonen EDGE:kind (#116)", () => {
+  const out = formatPath([
+    { ref: "mechanic:Deflect", name: "Deflect" },
+    { edge: "RELATES_TO", kind: "counters" },
+    { ref: "mechanic:Tank" },
+  ]);
+  assert.equal(out, "mechanic:Deflect (Deflect) -[RELATES_TO:counters]-> mechanic:Tank");
 });
 
 test("compactJson: nulls weg, lange strings en lijsten afgekapt", () => {
@@ -119,7 +152,10 @@ test("run: bouwt §2.3-paden en -parameters, refs URL-ge-encodeerd", async () =>
   await session.run("semantic_search", { q: "hoe werkt deflect", layers: "rules,claims", take: 5 });
   await session.run("get_node", { ref: "section:CR/7.4.2" });
   await session.run("neighbors", { ref: "card:OGN-042", edges: "INTERACTS_WITH", take: 10 });
+  // #116: kind is een aparte, optionele queryparameter naast het edge-filter.
+  await session.run("neighbors", { ref: "mechanic:Deflect", edges: "RELATES_TO", kind: "counters" });
   await session.run("path", { from: "card:OGN-042", to: "mechanic:Deflect", maxLen: 4 });
+  await session.run("path", { from: "mechanic:Deflect", to: "mechanic:Tank", kind: "counters" });
   await session.run("evidence", { claimRef: "claim:42" });
   await session.run("contradictions", { topic: "mechanic:Deflect" });
 
@@ -129,11 +165,13 @@ test("run: bouwt §2.3-paden en -parameters, refs URL-ge-encodeerd", async () =>
     // §2.3: GET /api/brain/node/{ref} — section-refs bevatten '/', dus %2F
     "http://stub:1/api/brain/node/section%3ACR%2F7.4.2",
     "http://stub:1/api/brain/neighbors/card%3AOGN-042?edges=INTERACTS_WITH&take=10",
+    "http://stub:1/api/brain/neighbors/mechanic%3ADeflect?edges=RELATES_TO&kind=counters",
     "http://stub:1/api/brain/path?from=card%3AOGN-042&to=mechanic%3ADeflect&maxLen=4",
+    "http://stub:1/api/brain/path?from=mechanic%3ADeflect&to=mechanic%3ATank&kind=counters",
     "http://stub:1/api/brain/evidence/claim%3A42",
     "http://stub:1/api/brain/contradictions?topic=mechanic%3ADeflect",
   ]);
-  assert.equal(session.callCount(), 6);
+  assert.equal(session.callCount(), 8);
 });
 
 test("run: rb-api onbereikbaar → 'brein niet beschikbaar' als toolresultaat, geen exception", async () => {
