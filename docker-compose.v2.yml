@@ -32,6 +32,9 @@ services:
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Brein-tools (#106/#107): de agentic-taak praat via de brein-API terug
+      # met rb-api (compose-intern).
+      RB_API_URL: http://rb-api:8080
     # geen ports: alleen intern bereikbaar
 
   postgres:
