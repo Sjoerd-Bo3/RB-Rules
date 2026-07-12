@@ -161,8 +161,10 @@ public class AskServiceMisconceptionTests
     /// (ClaimRetrieval.SelectMisconceptions) doet daarna het echte werk.</summary>
     private class ProductionPathAskService(
         RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai)
-        : AskService(db, embeddings, ai, new RequestUserContext(),
-            NullLogger<AskService>.Instance)
+        : AskService(db, embeddings, ai,
+            new AgenticRelationService(db, new BrainService(
+                db, embeddings, new CardResolver(db), NullLogger<BrainService>.Instance)),
+            new RequestUserContext(), NullLogger<AskService>.Instance)
     {
         private readonly RbRulesDbContext _db = db;
 
