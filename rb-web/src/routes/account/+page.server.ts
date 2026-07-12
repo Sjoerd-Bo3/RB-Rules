@@ -3,8 +3,8 @@ import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
 import { USER_COOKIE, userHeaders } from '$lib/server/user';
 
-// Account met magic-link (#42): e-mail invullen → link in de mail → sessie.
-// Wachtwoorden bestaan hier bewust niet.
+// Account (#42/#109): passkey is de primaire login (geen mailafhankelijkheid),
+// de magic-link blijft als secundair pad. Wachtwoorden bestaan hier bewust niet.
 export interface AccountInfo {
 	email: string;
 	blocked: boolean;
@@ -15,18 +15,30 @@ export interface AccountInfo {
 	createdAt: string;
 }
 
+export interface PasskeyInfo {
+	id: number;
+	name: string;
+	createdAt: string;
+	lastUsedAt: string | null;
+}
+
 export const load: PageServerLoad = async ({ cookies }) => {
-	if (!cookies.get(USER_COOKIE)) return { account: null, apiDown: false };
+	if (!cookies.get(USER_COOKIE)) return { account: null, passkeys: [], apiDown: false };
 	try {
 		const account = await api<AccountInfo>('/api/auth/me', { headers: userHeaders(cookies) });
-		return { account, apiDown: false };
+		// Best-effort: zonder passkey-lijst is de accountpagina nog steeds
+		// bruikbaar (de beheersectie meldt dan gewoon "geen passkeys").
+		const passkeys = await api<PasskeyInfo[]>('/api/auth/passkeys', {
+			headers: userHeaders(cookies)
+		}).catch(() => [] as PasskeyInfo[]);
+		return { account, passkeys, apiDown: false };
 	} catch (e) {
 		// 401 = sessie verlopen of ingetrokken: cookie opruimen, opnieuw inloggen.
 		if (e instanceof Error && e.message.includes('401')) {
 			cookies.delete(USER_COOKIE, { path: '/' });
-			return { account: null, apiDown: false };
+			return { account: null, passkeys: [], apiDown: false };
 		}
-		return { account: null, apiDown: true };
+		return { account: null, passkeys: [], apiDown: true };
 	}
 };
 
@@ -61,5 +73,26 @@ export const actions: Actions = {
 		}
 		cookies.delete(USER_COOKIE, { path: '/' });
 		return { loggedOut: true };
+	},
+	// Passkey verwijderen (#109). De bevestiging (inclusief de waarschuwing
+	// bij de laatste passkey) zit in de UI; rb-api verwijdert alleen keys van
+	// het eigen account.
+	removePasskey: async ({ request, cookies }) => {
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		if (!Number.isInteger(id) || id <= 0)
+			return fail(400, { passkeyError: 'Ongeldige passkey — herlaad de pagina.' });
+		try {
+			await api(`/api/auth/passkeys/${id}`, {
+				method: 'DELETE',
+				headers: userHeaders(cookies)
+			});
+			return { removed: true };
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			if (msg.includes('401'))
+				return fail(401, { passkeyError: 'Je sessie is verlopen — log opnieuw in.' });
+			return fail(502, { passkeyError: `Verwijderen mislukt (${msg}) — probeer het opnieuw.` });
+		}
 	}
 };
