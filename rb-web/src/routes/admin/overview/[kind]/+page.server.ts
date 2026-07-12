@@ -16,12 +16,18 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	wijzigingen: null,
 	correcties: null,
 	primer: null,
-	// Claims (#50): status-chips; leeg = alle statussen.
-	claims: { allowed: ['unreviewed', 'accepted', 'rejected', 'superseded'], fallback: '' },
-	// Relatievoorstellen (#116): zelfde chip-patroon als claims.
-	relaties: { allowed: ['unreviewed', 'accepted', 'rejected'], fallback: '' },
-	// Bronvoorstellen uit de scout (#63): zelfde chip-patroon als claims.
-	voorstellen: { allowed: ['proposed', 'accepted', 'rejected'], fallback: '' },
+	// Claims (#50/#124): status-chips; leeg = default-weergave (alleen wat
+	// aandacht vraagt: te reviewen, niet gearchiveerd). Afgehandeld, archief
+	// en alles zitten achter de chips.
+	claims: {
+		allowed: ['unreviewed', 'accepted', 'rejected', 'superseded', 'archived', 'all'],
+		fallback: ''
+	},
+	// Relatievoorstellen (#116/#124): zelfde chip-patroon als claims.
+	relaties: { allowed: ['unreviewed', 'accepted', 'rejected', 'archived', 'all'], fallback: '' },
+	// Bronvoorstellen uit de scout (#63): de bestaande statussen zíjn hier het
+	// archief (#124, KISS) — default alleen te beoordelen, "all" toont alles.
+	voorstellen: { allowed: ['proposed', 'accepted', 'rejected', 'all'], fallback: 'proposed' },
 	gaten: null,
 	// Gebruikers + kosteninzicht (#42): de chips kiezen de meetperiode.
 	gebruikers: { allowed: ['vandaag', '7d', '30d'], fallback: '7d' }
@@ -82,7 +88,8 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 			}
 			case 'voorstellen': {
 				const qs = new URLSearchParams({ page: String(page) });
-				if (filter) qs.set('status', filter);
+				// rb-api kent hier geen "all": geen status-parameter = alles.
+				if (filter && filter !== 'all') qs.set('status', filter);
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/proposals?${qs}`) };
 			}
 			case 'gaten':
@@ -99,6 +106,82 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 		return { ...base, apiDown: true, data: null };
 	}
 };
+
+// Reviewqueue-acties voor claims en relaties (#124) delen hun vorm: id (+
+// eventuele notitie) uit het formulier, POST naar rb-api, en fouten mét
+// item-id terug zodat de melding bij het juiste item landt en de getypte
+// notitie niet verdwijnt (#42-patroon).
+type CookieJar = { get(name: string): string | undefined };
+
+async function reviewDecision(
+	cookies: CookieJar,
+	request: Request,
+	resource: 'claims' | 'relations',
+	decision: 'accept' | 'reject'
+) {
+	if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+	const form = await request.formData();
+	const id = Number(form.get('id'));
+	const note = String(form.get('note') ?? '').trim();
+	try {
+		await adminApi(`/api/admin/${resource}/${id}/${decision}`, {
+			method: 'POST',
+			body: JSON.stringify({ note: note || null })
+		});
+		return { ok: true };
+	} catch (e) {
+		return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+	}
+}
+
+async function itemAction(
+	cookies: CookieJar,
+	request: Request,
+	resource: 'claims' | 'relations',
+	action: 'archive' | 'unarchive'
+) {
+	if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+	const form = await request.formData();
+	const id = Number(form.get('id'));
+	try {
+		await adminApi(`/api/admin/${resource}/${id}/${action}`, { method: 'POST' });
+		return { ok: true };
+	} catch (e) {
+		return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+	}
+}
+
+async function archiveHandled(cookies: CookieJar, resource: 'claims' | 'relations') {
+	if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+	try {
+		const r = await adminApi<{ archived: number }>(`/api/admin/${resource}/archive-handled`, {
+			method: 'POST'
+		});
+		return { ok: true, archived: r.archived };
+	} catch (e) {
+		return fail(502, { error: e instanceof Error ? e.message : String(e) });
+	}
+}
+
+async function promoteNote(
+	cookies: CookieJar,
+	request: Request,
+	resource: 'claims' | 'relations'
+) {
+	if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+	const form = await request.formData();
+	const id = Number(form.get('id'));
+	const note = String(form.get('note') ?? '').trim();
+	try {
+		const r = await adminApi<{ embedded: boolean }>(
+			`/api/admin/${resource}/${id}/promote-note`,
+			{ method: 'POST', body: JSON.stringify({ note: note || null }) }
+		);
+		return { ok: true, promoted: true, embedded: r.embedded, id };
+	} catch (e) {
+		return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+	}
+}
 
 // Correcties houden hun verifieer/verwijder-actie ook in het overzicht.
 export const actions: Actions = {
@@ -172,51 +255,36 @@ export const actions: Actions = {
 			return fail(502, { error: e instanceof Error ? e.message : String(e) });
 		}
 	},
-	// Claims-review (#50): bevestigen maakt een claim straks retrieval-baar
-	// (#51); verwerpen houdt hem uit beeld.
-	acceptClaim: async ({ request, cookies }) => {
-		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
-		const form = await request.formData();
-		try {
-			await adminApi(`/api/admin/claims/${form.get('id')}/accept`, { method: 'POST' });
-			return { ok: true };
-		} catch (e) {
-			return fail(502, { error: e instanceof Error ? e.message : String(e) });
-		}
-	},
-	rejectClaim: async ({ request, cookies }) => {
-		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
-		const form = await request.formData();
-		try {
-			await adminApi(`/api/admin/claims/${form.get('id')}/reject`, { method: 'POST' });
-			return { ok: true };
-		} catch (e) {
-			return fail(502, { error: e instanceof Error ? e.message : String(e) });
-		}
-	},
-	// Relatie-review (#116): accepteren maakt het voorstel definitief (mee in
-	// de graph zodra ook het kind geaccepteerd is); verwerpen haalt het uit
-	// de projectie en voorkomt her-voorstellen.
-	acceptRelation: async ({ request, cookies }) => {
-		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
-		const form = await request.formData();
-		try {
-			await adminApi(`/api/admin/relations/${form.get('id')}/accept`, { method: 'POST' });
-			return { ok: true };
-		} catch (e) {
-			return fail(502, { error: e instanceof Error ? e.message : String(e) });
-		}
-	},
-	rejectRelation: async ({ request, cookies }) => {
-		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
-		const form = await request.formData();
-		try {
-			await adminApi(`/api/admin/relations/${form.get('id')}/reject`, { method: 'POST' });
-			return { ok: true };
-		} catch (e) {
-			return fail(502, { error: e instanceof Error ? e.message : String(e) });
-		}
-	},
+	// Claims-review (#50/#124): bevestigen maakt een claim retrieval-baar
+	// (#51); verwerpen houdt hem uit beeld. Beide nemen de optionele
+	// beheerder-notitie mee; bij verwerpen is die de zichtbare reden.
+	// Fail-paden dragen het item-id mee zodat de fout bij het juiste item
+	// landt en de paginastate (getypte notitie incluis) blijft staan (#42).
+	acceptClaim: async ({ request, cookies }) => reviewDecision(cookies, request, 'claims', 'accept'),
+	rejectClaim: async ({ request, cookies }) => reviewDecision(cookies, request, 'claims', 'reject'),
+	// Archief (#124): uit de default-weergave, terugvindbaar via de chip;
+	// status (en dus /ask-deelname of graph-projectie) verandert niet.
+	archiveClaim: async ({ request, cookies }) => itemAction(cookies, request, 'claims', 'archive'),
+	unarchiveClaim: async ({ request, cookies }) =>
+		itemAction(cookies, request, 'claims', 'unarchive'),
+	archiveHandledClaims: async ({ cookies }) => archiveHandled(cookies, 'claims'),
+	// Notitie → geverifieerde ruling (#124): de uitleg van de beheerder wordt
+	// een Correction (bestaand verify-pad) en stuurt voortaan de antwoorden.
+	promoteClaimNote: async ({ request, cookies }) => promoteNote(cookies, request, 'claims'),
+	// Relatie-review (#116/#124): accepteren maakt het voorstel definitief
+	// (mee in de graph zodra ook het kind geaccepteerd is); verwerpen haalt
+	// het uit de projectie en voorkomt her-voorstellen.
+	acceptRelation: async ({ request, cookies }) =>
+		reviewDecision(cookies, request, 'relations', 'accept'),
+	rejectRelation: async ({ request, cookies }) =>
+		reviewDecision(cookies, request, 'relations', 'reject'),
+	archiveRelation: async ({ request, cookies }) =>
+		itemAction(cookies, request, 'relations', 'archive'),
+	unarchiveRelation: async ({ request, cookies }) =>
+		itemAction(cookies, request, 'relations', 'unarchive'),
+	archiveHandledRelations: async ({ cookies }) => archiveHandled(cookies, 'relations'),
+	promoteRelationNote: async ({ request, cookies }) =>
+		promoteNote(cookies, request, 'relations'),
 	// Kind-vocabulaire (#116, patroon mechanieken): accepteren laat relaties
 	// met dit kind meedoen in de graph-projectie; verwerpen houdt het kind
 	// (en nieuwe voorstellen ermee) uit beeld.
