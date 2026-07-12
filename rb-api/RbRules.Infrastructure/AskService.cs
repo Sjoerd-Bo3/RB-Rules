@@ -150,6 +150,19 @@ public class AskService(
         var mentionsCard = await CardsNamedIn(qLower).AnyAsync(ct);
         var type = QuestionRouter.Classify(question, mentionsCard);
 
+        // Agentic-gate-invoer (#107, review): trigger (a) is een
+        // interactievráág, dus alleen kaartnamen in de HUIDIGE vraag tellen —
+        // anders blijft na één interactievraag élke follow-up escaleren.
+        // Gededupliceerd op langste naam (Domain), omdat de substring-match
+        // "Jinx" ook binnen "Jinx, Loose Cannon" raakt. Alleen berekend als
+        // de flag aan staat: het off-pad doet géén extra query.
+        var agenticMode = AgenticGate.ParseMode(Environment.GetEnvironmentVariable("ASK_AGENTIC"));
+        var gateCardMentions = 0;
+        if (agenticMode != AgenticMode.Off)
+            gateCardMentions = AgenticGate.CountDistinctMentions(
+                await CardsNamedIn(question.ToLowerInvariant())
+                    .Select(c => c.Name).Distinct().ToListAsync(ct));
+
         // 0b. #66: query-herformulering via één goedkope LLM-call — typo's
         // corrigeren, NL→EN speltermen, zoekqueries en lexicale termen. Bij
         // doorvragen (#41) gaat de gespreks-historie mee als context.
@@ -279,15 +292,22 @@ public class AskService(
         // query-vector (embedding-uitval, #100) vervalt dit kanaal.
         var primerTitles = new List<string>();
         var primerBlock = "";
+        var primerRelevant = false;
         if (qv is not null)
         {
+            // Distance gaat mee voor het lege-retrieval-signaal (#107): de
+            // top-3 zelf is een kale nearest-neighbour (altijd gevuld zodra
+            // er één approved doc bestaat) en zegt dus niets over relevantie.
             var primerDocs = await db.KnowledgeDocs.AsNoTracking()
                 .Where(k => k.Kind == "primer" && k.Status == "approved" && k.Embedding != null)
                 .OrderBy(k => k.Embedding!.CosineDistance(qv))
                 .Take(3)
-                .Select(k => new { k.Title, k.Body })
+                .Select(k => new { k.Title, k.Body, Distance = k.Embedding!.CosineDistance(qv) })
                 .ToListAsync(ct);
             primerTitles = [.. primerDocs.Select(p => p.Title)];
+            // Zelfde afstandsplafond als de claims-retrieval (#51): daarboven
+            // is een buur wel "dichtstbijzijnd" maar niet aantoonbaar relevant.
+            primerRelevant = primerDocs.Any(p => p.Distance <= ClaimRetrieval.MaxDistance);
             if (primerDocs.Count > 0)
                 primerBlock =
                     "\n\nSPELBEGRIP (achtergrond, gedistilleerd uit de officiële regels; " +
@@ -408,10 +428,93 @@ public class AskService(
             $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{historyBlock}\n\n{questionLabel}: {question}";
         var system = $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}";
         var task = images is { Count: > 0 } ? "hard" : "cheap";
-        var aiAnswer = onDelta is null
-            ? await ai.AskAsync(prompt, system, task, images, ct)
-            : await StreamAnswerAsync(prompt, system, task, images, onDelta, ct);
+
+        // Agentic-gate (#107, docs/BRAIN.md §2.4): pas ná de retrieval
+        // beslissen of deze vraag mag door-redeneren over het brein.
+        //
+        // Lege-retrieval-signaal, geherformuleerd (review #107): de letterlijke
+        // gaps-definitie ("lege trace-velden", #52) is in gezonde productie
+        // onbereikbaar — de nearest-neighbour-kanalen (vector-top-K, primer-
+        // top-3, semantische kaartburen) geven áltijd wel iets terug, relevant
+        // of niet. "De bank weet aantoonbaar niets" meten we daarom op de
+        // kanalen die alleen bij een échte match iets opleveren: full-text
+        // (textHits), kaartnaam/mechaniek/lexicaal (cardContext) en een
+        // afstandsplafond op de primer-match. Semantische kaartburen tellen
+        // bewust niet mee (kale top-K, geen bewijs). Embedding-uitval
+        // (qv null, #100) kwalificeert bewust NIET: dan is de semantic_search
+        // van het brein zelf óók degraded en zou het dure pad pieken op het
+        // moment van minste opbrengst. Flag default off: zonder env verandert
+        // er niets. NB: vindt de retrieval helemaal níets (topIds leeg), dan
+        // is de vraag al vóór deze gate beantwoord met een eerlijke melding —
+        // bewuste beperking: een lege kennisbank heeft de agent ook niets te
+        // bieden.
+        var emptyRetrieval = qv is not null
+            && textHits.Count == 0
+            && !cardContext.LexicalEvidence
+            && !primerRelevant;
+        var agentic = AgenticGate.ShouldEscalate(
+            type, gateCardMentions, emptyRetrieval, agenticMode,
+            hasImage: images is { Count: > 0 });
+
+        // Bij escalatie vervángt de agentic call de finale LLM-call, mét
+        // dezelfde contextblokken als startpunt (§2.4: de agent hoeft niet te
+        // her-ontdekken wat de retrieval al vond). Bewust niet-streamend, óók
+        // op de streamingroute: een multi-turn-agent streamt anders zijn
+        // tussenstappen als deltas de UI in, en bij vangnet-inzet zouden twee
+        // delta-stromen door elkaar lopen. Op succes gaat het antwoord als
+        // één delta naar de UI; het final-frame blijft identiek.
+        string? aiAnswer = null;
+        string? brainSteps = null;
+        var agentAnswered = false;
+        var clientGone = false;
+        if (agentic)
+        {
+            try
+            {
+                var agenticAnswer = await ai.AskAgenticAsync(prompt, system, images, ct);
+                if (agenticAnswer?.Answer is { } agentText)
+                {
+                    aiAnswer = agentText;
+                    agentAnswered = true;
+                    brainSteps = agenticAnswer.Steps ?? "(agent deed geen tool-calls)";
+                    if (onDelta is not null) await onDelta(agentText);
+                }
+                else
+                {
+                    // Vangnet (§2.4): agent faalt/timeout/leeg → de klassieke
+                    // single-pass draait alsnog (hieronder). Geen dubbele
+                    // kosten bij succes; de gebruiker merkt alleen extra
+                    // wachttijd. Tool-calls die de agent vóór de uitval wél
+                    // deed (uit rb-ai's fout-body) blijven in de trace staan.
+                    brainSteps = (agenticAnswer?.Steps is { } partial ? partial + "\n" : "")
+                        + "[vangnet: agent gaf geen antwoord — klassieke single-pass gedraaid]";
+                    logger.LogWarning(
+                        "agentic ask gaf geen antwoord — vangnet: klassieke single-pass");
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Client weggelopen tijdens de agentic call of de delta-flush
+                // (review #107, zelfde invariant als #110/StreamAnswerAsync):
+                // rb-ai aborteert de agent zelf al via de verbroken verbinding.
+                // Hier géén vangnet meer starten — nieuwe LLM-kosten zonder
+                // luisteraar — maar de afronding (metric/trace/quota) moet
+                // wél landen; die draait hieronder op CancellationToken.None.
+                clientGone = true;
+                brainSteps ??= "[client afgehaakt tijdens de agentic call]";
+            }
+        }
+        if (aiAnswer is null && !clientGone)
+            aiAnswer = onDelta is null
+                ? await ai.AskAsync(prompt, system, task, images, ct)
+                : await StreamAnswerAsync(prompt, system, task, images, onDelta, ct);
         var answer = aiAnswer ?? RbAiClient.UnavailableAnswer;
+
+        // Kosten-eerlijkheid (#42, review #107): Model boekt het pad dat het
+        // antwoord écht leverde — "agentic" (Sonnet-agent) alleen wanneer de
+        // agent antwoordde; bij vangnet of niet-escaleren het gewone model.
+        var usedModel = agentAnswered ? "agentic"
+            : images is { Count: > 0 } ? "hard" : "cheap";
 
         // Vanaf hier bewust ZONDER request-token (review #31): de (LLM-)kosten
         // zijn gemaakt, dus de afronding — kaart-match, metric, trace — moet
@@ -427,7 +530,9 @@ public class AskService(
 
         // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
         // pagina (#59: uit het endpoint — de service meet hier toch al).
-        await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null);
+        await RecordMetricAsync(
+            sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null,
+            agentic: agentAnswered, model: usedModel);
 
         // Denkstappen-trace voor het beheer (#40) — best-effort.
         try
@@ -454,9 +559,15 @@ public class AskService(
                 PrimerDocs = string.Join(", ", primerTitles),
                 CommunityClaims = string.Join(", ", claimTraceRefs),
                 VerifiedRulings = rulings.Count,
-                Model = images is { Count: > 0 } ? "hard" : "cheap",
+                Model = usedModel,
                 HadImage = images is { Count: > 0 },
                 DurationMs = (int)sw.ElapsedMilliseconds,
+                // Agentic ask (#107): Agentic = de agent leverde het antwoord;
+                // vangnet-inzet en client-aborts blijven zichtbaar via de
+                // marker in BrainSteps — dezelfde controleerbaarheid als de
+                // denkstappen.
+                Agentic = agentAnswered,
+                BrainSteps = brainSteps,
                 Ok = aiAnswer is not null,
                 UserId = userContext.User?.Id,
             });
@@ -547,7 +658,8 @@ public class AskService(
     /// token: een afgebroken response mag een al gegeven antwoord niet uit de
     /// statistiek houden.</summary>
     private async Task RecordMetricAsync(
-        long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images, bool ok)
+        long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images,
+        bool ok, bool agentic = false, string? model = null)
     {
         try
         {
@@ -558,9 +670,12 @@ public class AskService(
                 HadImage = images is { Count: > 0 },
                 Ok = ok,
                 // Account-koppeling + modelkeuze (#42): voedt de per-account-
-                // quota en het kosten-overzicht in het beheer.
+                // quota en het kosten-overzicht in het beheer. Model = het
+                // pad dat het antwoord echt leverde (cheap|hard|agentic).
                 UserId = userContext.User?.Id,
-                Model = images is { Count: > 0 } ? "hard" : "cheap",
+                Model = model ?? (images is { Count: > 0 } ? "hard" : "cheap"),
+                // #107: duurstatistiek toont het agentic-pad apart.
+                Agentic = agentic,
             });
             await db.SaveChangesAsync();
         }
@@ -607,8 +722,14 @@ public class AskService(
     private Task<Dictionary<string, DateOnly?>> SetDatesAsync(CancellationToken ct) =>
         db.CardSets.AsNoTracking().ToDictionaryAsync(s => s.SetId, s => s.PublishedOn, ct);
 
+    /// <summary>LexicalEvidence (#107): had minstens één níet-semantisch
+    /// kanaal (kaartnaam, mechaniek-keyword of lexicale tekst-match) een hit?
+    /// De semantische buren tellen niet — die zijn kale nearest-neighbour en
+    /// dus altijd gevuld; voor het lege-retrieval-signaal is alleen echt
+    /// bewijs relevant.</summary>
     private sealed record CardContextResult(
-        string Block, IReadOnlyList<string> Mechanics, IReadOnlyList<string> CardNames);
+        string Block, IReadOnlyList<string> Mechanics, IReadOnlyList<string> CardNames,
+        bool LexicalEvidence);
 
     /// <summary>Ruimere limiet voor lijst-/opsommingsvragen (#67).</summary>
     private const int ListCardLimit = 40;
@@ -709,7 +830,9 @@ public class AskService(
         var merged = nameHits.Concat(lexicalIds).Concat(mechanicCardIds)
             .Concat(semanticIds).Distinct().ToList();
         var ids = merged.Take(cap).ToList();
-        if (ids.Count == 0) return new("", matchedMechanics, []);
+        var lexicalEvidence = nameHits.Count > 0 || matchedMechanics.Count > 0
+            || lexicalIds.Count > 0;
+        if (ids.Count == 0) return new("", matchedMechanics, [], lexicalEvidence);
 
         // Afkap-melding (#67): nooit stilzwijgend inkorten — de prompt moet
         // "eerste N van M" kunnen zeggen.
@@ -755,7 +878,7 @@ public class AskService(
             .Where(cardsById.ContainsKey)
             .Select(id => cardsById[id].Name)
             .ToList();
-        return new(block, matchedMechanics, includedNames);
+        return new(block, matchedMechanics, includedNames, lexicalEvidence);
     }
 
     /// <summary>Kaarten voor de prompt, geprojecteerd zónder embedding —

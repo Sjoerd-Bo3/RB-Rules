@@ -109,6 +109,9 @@ services:
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Brein-tools (#106/#107): de agentic-taak praat via de brein-API terug
+      # met rb-api (compose-intern, containernaam zoals RB_AI_URL hierboven).
+      RB_API_URL: http://rb-v2-api:8080
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

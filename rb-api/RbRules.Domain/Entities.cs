@@ -177,10 +177,16 @@ public class AskMetric
     /// <summary>Ingelogde vrager (#42) — voedt de per-account-dagquota en het
     /// kosten-overzicht in het beheer. Null = anonieme vraag.</summary>
     public long? UserId { get; set; }
-    /// <summary>cheap|hard — kostenindicatie per vraag (#42). AskTrace kent het
-    /// model ook, maar die tabel bewaart alleen de laatste 200 traces; hier
-    /// blijft de verdeling over langere periodes optelbaar.</summary>
+    /// <summary>cheap|hard|agentic — het pad dat het antwoord écht leverde
+    /// (kostenindicatie, #42/#107). AskTrace kent het model ook, maar die
+    /// tabel bewaart alleen de laatste 200 traces; hier blijft de verdeling
+    /// over langere periodes optelbaar.</summary>
     public string? Model { get; set; }
+    /// <summary>Agentic ask (#107, docs/BRAIN.md §2.4): het antwoord kwam
+    /// daadwerkelijk van de agent — zo toont de duurstatistiek beide paden
+    /// apart. Vangnet-inzet (agent faalde, single-pass antwoordde) telt als
+    /// false en is herkenbaar aan de marker in AskTrace.BrainSteps.</summary>
+    public bool Agentic { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -226,9 +232,18 @@ public class AskTrace
     /// als "topicType:topicRef", komma-gescheiden.</summary>
     public string? CommunityClaims { get; set; }
     public int VerifiedRulings { get; set; }
-    public string? Model { get; set; }                  // cheap|hard
+    public string? Model { get; set; }                  // cheap|hard|agentic
     public bool HadImage { get; set; }
     public int DurationMs { get; set; }
+    /// <summary>Agentic ask (#107): het antwoord kwam daadwerkelijk van de
+    /// agent (docs/BRAIN.md §2.4). Escalaties die op het vangnet eindigden
+    /// staan op false en zijn herkenbaar aan de marker in BrainSteps.</summary>
+    public bool Agentic { get; set; }
+    /// <summary>Brein-stappen van de agent (#107): één regel per tool-call
+    /// (toolnaam + argumenten), zoals rb-ai ze teruggeeft — bij vangnet-inzet
+    /// de vóór de uitval al gedane stappen plus een expliciete marker; null
+    /// zolang de vraag niet escaleerde.</summary>
+    public string? BrainSteps { get; set; }
     public bool Ok { get; set; } = true;
     /// <summary>Ingelogde vrager (#42); null = anoniem.</summary>
     public long? UserId { get; set; }

@@ -49,6 +49,7 @@
 		contextCards: string | null; primerDocs: string | null;
 		communityClaims: string | null; verifiedRulings: number;
 		model: string | null; hadImage: boolean; durationMs: number;
+		agentic: boolean; brainSteps: string | null;
 		ok: boolean; createdAt: string;
 	}
 
@@ -335,6 +336,7 @@
 				<details class="trace panel">
 					<summary>
 						<span class="badge {t.ok ? 'ok-b' : 'err'}">{t.questionType ?? '?'}</span>
+						{#if t.agentic}<span class="badge warn-b">agentic</span>{/if}
 						<span class="trace-q">{t.question}</span>
 						<span class="meta">{(t.durationMs / 1000).toFixed(1)}s{t.hadImage ? ' · foto' : ''} · {new Date(t.createdAt).toLocaleTimeString('nl-NL')}</span>
 					</summary>
@@ -348,6 +350,12 @@
 						<!-- Kennislagen (#51): welke lagen deden mee in de prompt -->
 						<dt>Kennislagen</dt>
 						<dd>primer: {t.primerDocs || '—'} · community: {t.communityClaims || '—'}</dd>
+						<!-- Agentic ask (#107): de brein-stappen van de agent — dezelfde
+						     controleerbaarheid als de denkstappen hierboven -->
+						{#if t.agentic}
+							<dt>Brein-stappen</dt>
+							<dd class="brain-steps">{t.brainSteps || '—'}</dd>
+						{/if}
 						<dt>Overig</dt>
 						<dd>{t.verifiedRulings} geverifieerde rulings · model {t.model} · {t.ok ? 'geslaagd' : 'AI niet beschikbaar'}</dd>
 					</dl>
@@ -426,6 +434,12 @@
 	.trace dl { margin: 10px 0 2px; }
 	.trace dt { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 8px; }
 	.trace dd { margin: 2px 0 0; font-size: 0.9rem; }
+	/* Brein-stappen (#107): één tool-call per regel, monospace — leesbaar
+	   zonder de JSON-argumenten te laten overlopen. */
+	.brain-steps {
+		white-space: pre-line; overflow-wrap: anywhere;
+		font-family: ui-monospace, monospace; font-size: 0.82rem;
+	}
 	.correction { display: flex; gap: 14px; padding: 12px 14px; margin-bottom: 8px; }
 	.correction-body { flex: 1; }
 	.correction .q { margin: 0 0 4px; color: var(--muted); font-size: 0.88rem; }

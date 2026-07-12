@@ -66,6 +66,89 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         }
     }
 
+    /// <summary>Antwoord van het agent-pad (#107): het antwoord plus de
+    /// brein-stappen (één regel per tool-call) die rb-ai bij task="agentic"
+    /// meestuurt — voedt AskTrace.BrainSteps in het beheer. Answer is null
+    /// wanneer de agent faalde maar er wél al tool-calls gedaan waren
+    /// (rb-ai's fout-body draagt die steps): de aanroeper draait dan het
+    /// vangnet, maar de gedane stappen blijven controleerbaar.</summary>
+    public record AgenticAnswer(string? Answer, string? Steps);
+
+    /// <summary>Agentic ask (#107, docs/BRAIN.md §2.4): zelfde /ask-koppelvlak
+    /// als <see cref="AskAsync"/> maar met task="agentic" én de tool-call-log
+    /// uit de respons. Bij uitval, timeout of leeg antwoord is Answer null
+    /// (of het hele resultaat null) — de aanroeper (AskService) draait dan
+    /// het vangnet: de klassieke single-pass. De harde rem zit in rb-ai zelf
+    /// (maxTurns, tool-cap, 120s-timeout); loopt zelfs die vast, dan maakt
+    /// de 6-minuten-HttpClient-timeout hier alsnog een vangnet-null van.</summary>
+    public async Task<AgenticAnswer?> AskAgenticAsync(
+        string prompt, string? system = null,
+        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var payload = new
+            {
+                prompt, system, task = "agentic",
+                images = images?.Select(i => new { mediaType = i.MediaType, data = i.Data }),
+            };
+            var res = await http.PostAsJsonAsync("/ask", payload, ct);
+            if (!res.IsSuccessStatusCode)
+            {
+                // rb-ai's fout/timeout-pad stuurt de vóór de uitval gedane
+                // tool-calls als steps in de fout-body mee (#107): bewaren,
+                // zodat de beheerder juist de mislukte run kan inspecteren.
+                logger.LogWarning("rb-ai /ask gaf {Status} (task=agentic)", (int)res.StatusCode);
+                var errorBody = await TryReadBodyAsync(res, ct);
+                return JoinSteps(errorBody?.Steps) is { } partial
+                    ? new AgenticAnswer(null, partial)
+                    : null;
+            }
+            var body = await res.Content.ReadFromJsonAsync<AskResponse>(ct);
+            if (string.IsNullOrWhiteSpace(body?.Answer))
+                return JoinSteps(body?.Steps) is { } steps ? new AgenticAnswer(null, steps) : null;
+            return new AgenticAnswer(body.Answer, JoinSteps(body.Steps));
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // HttpClient-timeout manifesteert zich als TaskCanceledException
+            // zónder geannuleerd token; het catch-filter hieronder zou hem
+            // laten doorbubbelen en daarmee het vangnet omzeilen (review
+            // #107). Voor het agent-pad is timeout juist hét scenario
+            // waarvoor het vangnet bestaat — dus null. Echte client-
+            // annulering (ct wél geannuleerd) bubbelt door.
+            logger.LogWarning("rb-ai-aanroep verlopen op de HttpClient-timeout (task=agentic)");
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "rb-ai-aanroep mislukt (task=agentic)");
+            return null;
+        }
+    }
+
+    /// <summary>Fout-body van rb-ai lezen is best-effort: geen (geldige)
+    /// JSON betekent alleen géén steps — de fout zelf is al gelogd.</summary>
+    private static async Task<AskResponse?> TryReadBodyAsync(
+        HttpResponseMessage res, CancellationToken ct)
+    {
+        try
+        {
+            return await res.Content.ReadFromJsonAsync<AskResponse>(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    private static string? JoinSteps(string[]? steps)
+    {
+        if (steps is not { Length: > 0 }) return null;
+        var joined = string.Join("\n", steps.Where(s => !string.IsNullOrWhiteSpace(s)));
+        return string.IsNullOrWhiteSpace(joined) ? null : joined;
+    }
+
     /// <summary>Streamende variant van <see cref="AskAsync"/> (#31): levert de
     /// NDJSON-frames van rb-ai's /ask/stream één voor één op. Uitval is —
     /// net als bij AskAsync — verwacht pad: de enumeratie eindigt dan met een
@@ -139,5 +222,8 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         }
     }
 
-    private record AskResponse(string? Answer);
+    /// <summary>Steps komt alleen mee bij task="agentic" (#107) en blijft bij
+    /// alle andere taken afwezig — de respons-vorm van cheap/hard/research is
+    /// onveranderd.</summary>
+    private record AskResponse(string? Answer, string[]? Steps = null);
 }

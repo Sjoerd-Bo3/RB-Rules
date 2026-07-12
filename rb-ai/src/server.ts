@@ -49,8 +49,26 @@ const server = createServer(async (req, res) => {
       // brein-tools (MCP → rb-api, zie ai.ts/brain-tools.ts).
       const parsed = parseAskRequest(await readJson(req));
       if (!parsed.ok) return send(400, { error: parsed.error });
-      const answer = await askClaude({ ...parsed.request, signal: abort.signal });
-      return send(200, { answer });
+      // Brein-stappen (#107): alléén bij task="agentic" gaan de tool-calls
+      // als `steps` mee terug (rb-api legt ze vast in AskTrace.BrainSteps);
+      // de respons van alle andere taken blijft byte-gelijk ({answer}).
+      const agentic = parsed.request.task === "agentic";
+      const steps: string[] = [];
+      try {
+        const answer = await askClaude({
+          ...parsed.request,
+          signal: abort.signal,
+          ...(agentic ? { onBrainStep: (s: string) => steps.push(s) } : {}),
+        });
+        return send(200, agentic ? { answer, steps } : { answer });
+      } catch (e) {
+        // Agentic faalt/timeout (#107): de tool-calls die vóór de uitval al
+        // gedaan waren gaan mee in de fout-body — juist de hangende run wil
+        // de beheerder in de trace kunnen inspecteren. Overige taken volgen
+        // het bestaande pad (outer catch → 500 {error}).
+        if (agentic) return send(500, { error: String(e), steps });
+        throw e;
+      }
     }
 
     if (req.method === "POST" && req.url === "/ask/stream") {

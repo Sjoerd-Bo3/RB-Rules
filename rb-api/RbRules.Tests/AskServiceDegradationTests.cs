@@ -17,7 +17,11 @@ namespace RbRules.Tests;
 /// geeft (patroon ClaimMiningServiceTests, EF InMemory) — het antwoordpad
 /// moet blijven werken met FTS-citaties, zonder exception naar buiten. Het
 /// FTS-kanaal zelf is in de test vervangen (tsvector vertaalt alleen naar
-/// Postgres); de degradatie draait juist om de pipeline eromheen.</summary>
+/// Postgres); de degradatie draait juist om de pipeline eromheen.
+/// In dezelfde xUnit-collectie als AskServiceAgenticTests (#107): die tests
+/// zetten de proces-brede ASK_AGENTIC-env en mogen dus niet parallel aan
+/// andere AskService-tests draaien.</summary>
+[Collection("ask-service-env")]
 public class AskServiceDegradationTests
 {
     private const string SourceId = "riot-core-rules";
