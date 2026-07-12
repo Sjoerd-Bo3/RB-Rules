@@ -92,4 +92,19 @@ public class RrfFusionTests
         var fused = RrfFusion.Fuse([[5L, 6L], [6L, 5L]], take: 10);
         Assert.Equal(2, fused.Count);
     }
+
+    [Fact]
+    public void FuseScored_ScoresMatchTheRrfFormula_AndOrderEqualsFuse()
+    {
+        // De brein-API (#105) geeft de fusiescore door: pin dat de score de
+        // som van 1/(k + rang + 1) is en dat de volgorde die van Fuse blijft.
+        var scored = RrfFusion.FuseScored([[1L, 2L], [2L]], id => id, take: 2, k: 0);
+        Assert.Equal(2L, scored[0].Key);          // 1/2 + 1/1 = 1.5
+        Assert.Equal(1.5, scored[0].Score, 10);
+        Assert.Equal(1L, scored[1].Key);          // 1/1 = 1.0
+        Assert.Equal(1.0, scored[1].Score, 10);
+        Assert.Equal(
+            RrfFusion.Fuse([[1L, 2L], [2L]], take: 2, k: 0),
+            scored.Select(s => s.Key).ToList());
+    }
 }
