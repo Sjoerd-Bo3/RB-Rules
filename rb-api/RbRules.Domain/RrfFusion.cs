@@ -16,6 +16,17 @@ public static class RrfFusion
         Func<TItem, TKey> key,
         int take,
         Func<TItem, double>? bonus = null,
+        int k = DefaultK) where TKey : notnull =>
+        [.. FuseScored(rankedLists, key, take, bonus, k).Select(x => x.Key)];
+
+    /// <summary>Als <see cref="Fuse{TItem,TKey}"/>, maar mét de fusiescore per
+    /// sleutel — de brein-API (#105) geeft die score door zodat een afnemer de
+    /// rangorde kan wegen zonder de fusie te herhalen.</summary>
+    public static List<(TKey Key, double Score)> FuseScored<TItem, TKey>(
+        IEnumerable<IEnumerable<TItem>> rankedLists,
+        Func<TItem, TKey> key,
+        int take,
+        Func<TItem, double>? bonus = null,
         int k = DefaultK) where TKey : notnull
     {
         var scores = new Dictionary<TKey, double>();
@@ -34,7 +45,7 @@ public static class RrfFusion
         return [.. scores
             .OrderByDescending(kv => kv.Value)
             .Take(take)
-            .Select(kv => kv.Key)];
+            .Select(kv => (kv.Key, kv.Value))];
     }
 
     /// <summary>Variant voor lijsten die zelf al de sleutel zijn (id-lijsten).</summary>

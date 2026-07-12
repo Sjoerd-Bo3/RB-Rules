@@ -60,6 +60,10 @@ builder.Services.AddScoped<ClaimMiningService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();
+// Brein-API (#105): Postgres-kant (search/node/evidence/contradictions) en
+// Neo4j-kant (neighbors/path) gescheiden — degradatie per koppelvlak.
+builder.Services.AddScoped<BrainService>();
+builder.Services.AddScoped<BrainGraphService>();
 // Accounts + per-gebruiker-quota (#42); passkey-login (#109).
 builder.Services.AddScoped<UserAccountService>();
 builder.Services.AddScoped<PasskeyService>();
@@ -164,6 +168,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "rb-api" }
 app.MapCardEndpoints();
 app.MapRuleEndpoints();
 app.MapKnowledgeEndpoints();
+app.MapBrainEndpoints();
 app.MapAskEndpoints();
 app.MapAuthEndpoints();
 app.MapFeedEndpoints();
