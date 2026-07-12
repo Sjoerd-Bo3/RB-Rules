@@ -509,6 +509,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Q8 | Community-claim spreekt officiële § tegen | Claim wordt niet als kennis gepresenteerd; officieel wint altijd; weerlegde claims alleen via `contradictions`, gelabeld | `AskService.BasePrompt`, `GraphSyncService` (scope) |
 | Q9 | VM-reboot, Postgres nog niet klaar | rb-api retriet de migratie kort en begrensd; anders faalt de start hard en vangt de deploy-verify het | `Program.cs`, `docker-compose.yml` healthcheck |
 | Q10 | Regressie in domeinlogica | Elke productie-bug krijgt eerst een regressietest; CI is de poort (test-gate vóór publish) | `docs/CONVENTIONS.md`, `RbRules.Tests/`, `v2-ci.yml` |
+| Q11 | Server-chunk importeert een package dat de runtime-image mist | De chunk-laadpoort in de rb-web-image-build importeert élke server-chunk met de runtime-node_modules en faalt de publish, niet de route in productie | `rb-web/Dockerfile`, `rb-web/scripts/check-server-chunks.mjs` (#140) |
 
 ---
 
