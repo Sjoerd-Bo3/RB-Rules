@@ -29,26 +29,27 @@ elke nieuwe set (nieuwe mechanieken, keywords, kaarten).
   +server.ts-proxy's).
 - **Deploy**: merge naar main → CI (test-gate) publiceert 3 GHCR-images →
   `v2-deploy.yml` deployt via SSH naar de Azure-VM (~/compose/rb-rules-v2,
-  centrale Caddy, /mnt/data-binds). Compose-file wordt door de workflow
-  gesynct. Watchtower draait ook nog (dubbel mechanisme — zie issue #45).
+  centrale Caddy, /mnt/data-binds), **gepind op commit-SHA** en met een
+  admin-job-gate in de workflow zelf. Compose-file wordt door de workflow
+  gesynct; Watchtower staat uit voor de v2-stack (labels). Details:
+  docs/ARCHITECTURE.md §7.
 
-## Kernfeatures (allemaal live)
-Wijzigingen-feed met bron + voor/na-diff en flip-flop-suppressie ·
-regels-browser (/rules, hoofdstuk-hiërarchie, §-permalinks, PDF-deeplinks
-`#page=N`) · kaartbrowser met facetten + semantisch zoeken ·
-variantgroepering op basisnaam ("Naam (Alternate Art)" = zelfde kaart;
-canoniek = naamloze printing) · kaartdetail met similar-why, versies,
-gekoppelde regels/errata · /ask met vraag-router (Ruling/Definitie/Kaart/
-Legaliteit/Toernooi → eigen structuur + bronnen-bias), scheidsrechter-format
-(Oordeel → Zekerheid → Uitleg → Regelbasis → Let op), uitklap-citaties met
-ouderregels, betrokken kaarten, board-state-foto's (vision), widget-markers
-`[[rule:…]]`/`[[card:…]]` → interactieve blokken, echte duurstatistiek ·
-kaarttekst-icoontokens (`:rb_energy_1:` e.d.) als échte iconen (rbtokens.ts)
-· self-learning (feedback → reviewqueue → geverifieerde rulings semantisch
-in de prompt) · game-primer (12 concepten, draft → approve in admin) ·
-levendige admin (jobs met live voortgang, "Alles bijwerken"-keten,
-vraag-traces, reviewqueues) · PWA + web-push (VAPID in .env) ·
-graph-verkenner (/graph).
+## Kernfeatures
+De actuele, volledige feature-inventaris staat in **docs/PRD.md §4**
+(bindend bijgehouden per PR — zie werkafspraak 10); hier alleen de
+hoofdlijnen. Wijzigingen-feed met diff en flip-flop-suppressie ·
+regels-browser met §-permalinks, semantisch zoeken en sectie-dossiers ·
+kaartbrowser + kaartdetail met dossier (rulings, claims, relaties,
+ban-historie) en variantgroepering · doorzoekbare /rulings-databank · /ask
+met vraag-router, scheidsrechter-format, streaming + voorlezen, doorvragen,
+board-state-foto's, query-rewrite, citaties/widget-markers en
+misvattingen-kanaal · kennisbank/brein: kennispiramide, primer,
+claims-pipeline, brein-API, agentic ask (flag) met relatie-terugkoppeling,
+dynamische relaties, kennis-levenscyclus, graph-verkenner · beheer: jobs met
+live voortgang, aanklikbare tegels, reviewqueues met bewijs/archief/notities,
+vraag-traces, token-metering, kennis-gaten-rapport, periodieke
+zelfverrijking · platform: PWA + web-push, accounts (magic-link + passkeys)
+met quota en rate-limiting.
 
 ## Werkafspraken met Sjoerd (belangrijk!)
 1. **Nederlands** antwoorden; Engelse speltermen onvertaald.
@@ -73,6 +74,13 @@ graph-verkenner (/graph).
 9. Kennisbank-visie en gelaagdheid: **docs/KNOWLEDGE.md** (officieel >
    geverifieerde rulings > primer > community-claims met bron-trust en
    corroboratie > meta; alles expliciet gelabeld in de prompt).
+10. **Levende documentatie is bindend** (#134): elke PR die endpoints,
+    datamodel, services, UI-routes of de deploy raakt, werkt
+    **docs/ARCHITECTURE.md** (arc42) bij; elke PR die features of gedrag
+    wijzigt, werkt **docs/PRD.md** bij. Beide documenten hebben een
+    Onderhoud-hoofdstuk met de tabel *soort wijziging → sectie*. Geen
+    doc-delta nodig? Motiveer dat in de PR-body. Dit geldt óók voor dit
+    bestand: raak je een werkafspraak of valkuil, werk CLAUDE.md mee.
 
 ## Valkuilen uit de praktijk (duur betaald)
 - Riot's domein is **playriftbound.com**; PDF-links zijn opake Sanity-CDN-
@@ -87,10 +95,7 @@ graph-verkenner (/graph).
 - iOS zoomt op form-controls < 16px (app.css-fix aanwezig).
 
 ## Waar het werk staat
-- **#55** masterplan-draaiboek · **#60** actuele handoff (stand + volgorde)
-- Openstaand o.a.: #59 service-extractie ronde 2, #41 doorvragen, #31
-  streaming/voorlezen, #42 accounts+quota (+rate-limit quick-win), #22
-  set-legaliteit, #45 ops-hardening, #50–#53 kennisbank-lagen, #57
-  varianten toekomstvast, #58 classificatie-backfill, #38-rest mobile.
+- Roadmap: **docs/PRD.md §6** (uit de open issues, in-flight PR's
+  gemarkeerd) — dat is de actuele bron, niet dit bestand. Handoff: **#60**.
 - Na elke deploy met datamigraties: admin → "Alles bijwerken" (en drafts
   reviewen bij primer-wijzigingen).

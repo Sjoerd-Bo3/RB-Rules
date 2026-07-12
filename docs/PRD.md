@@ -3,9 +3,9 @@
 Levend product-document voor de Riftbound Rules Companion (live op
 <https://riftbound-v2.bo3.dev>). Het beschrijft *wat* het product is en voor
 *wie*, wélke features vandaag op `main` staan, en waar het heen gaat. Het is
-bewust gescheiden van het *hoe*: architectuur staat in `docs/BRAIN.md` en
-`docs/CONVENTIONS.md`, de kennisvisie in `docs/KNOWLEDGE.md`, een
-arc42-architectuurdocument volgt uit #134.
+bewust gescheiden van het *hoe*: de architectuur staat in
+`docs/ARCHITECTURE.md` (arc42, eveneens #134) met `docs/BRAIN.md` en
+`docs/CONVENTIONS.md` als verdieping, de kennisvisie in `docs/KNOWLEDGE.md`.
 
 Dit document is een anker: elke PR die features of gedrag wijzigt, werkt het in
 dezelfde PR bij (zie het slothoofdstuk **Onderhoud**).
@@ -129,6 +129,16 @@ apart in §6.
   full-text) zoeken door de secties.
   *Routes* `/rules`, `/rules/[code]` · *endpoints* `/api/rules/toc`,
   `/api/rules/search`, `/api/rules/section/{code}`.
+- **Sectie-dossier** — per § de kennis die erop leunt: kaarten die naar de
+  sectie verwijzen, primer-docs (EXPLAINS), community-claims en
+  regelwijzigingen (AFFECTS, via het brein; Neo4j-uitval degradeert het
+  dossier zonder changes). *Route* `/rules/[code]` · *endpoint*
+  `/api/rules/section/{code}/dossier`.
+- **Rulings-databank** — doorzoekbare collectie van geverifieerde correcties
+  en officieel bevestigde claims, met trust-labels, bron en citaat per item,
+  §-chips en permalink-anchors; hybride zoeken (best-effort embed → vector +
+  FTS → RRF, degradatie naar alleen-FTS eerlijk gemeld).
+  *Route* `/rulings` · *endpoint* `/api/rulings`.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed
   en gekoppeld aan kaarten. *Endpoint* `/api/bans`.
 
@@ -144,6 +154,11 @@ apart in §6.
   *Route* `/cards/[id]` · *endpoints* `/api/cards/{id}`, `/api/cards/{id}/rules`,
   `/api/cards/{id}/interactions`, `/api/cards/{id}/similar`,
   `/api/cards/{id}/similar/{otherId}/explain`.
+- **Kaart-dossier (verdieping)** — op dezelfde pagina: geverifieerde rulings
+  (kaart-scoped én naam-vermeldingen, met klikbare §-verwijzingen),
+  geaccepteerde claims met trust-label en bron/citaat, relaties achter
+  dezelfde reviewpoort als de graph-projectie, en de volledige ban-historie
+  per variantgroep. *Endpoint* `/api/cards/{id}/dossier`.
 - **Variantgroepering op basisnaam** — "Naam (Alternate Art)" telt als dezelfde
   kaart; de naamloze printing is canoniek, ook toekomstvast bij herdrukken
   (canonical-flip). Alleen canonieke printings gaan de graph in.
@@ -202,7 +217,9 @@ apart in §6.
 - **Agentic ask** — voor kwalificerende vragen (interactievraag met ≥2
   kaartnamen, of lege retrieval) mag rb-ai als agent over het brein redeneren
   via de brein-tools, achter een feature-flag met vangnet naar single-pass; de
-  brein-stappen staan in de trace.
+  brein-stappen staan in de trace. Verbanden die de agent onderweg ontdekt
+  komen als relatievoorstel in de reviewqueue (#120) — het brein verrijkt
+  zichzelf al antwoordend, altijd achter de reviewpoort.
 - **Dynamische relaties** — één generiek edge-type `RELATES_TO {kind, trust,
   explanation, status}` met een open, gereviewd vocabulaire; LLM-relaties gaan
   nooit rechtstreeks de graph in (Postgres is de bron, projectie na review).
@@ -232,6 +249,12 @@ apart in §6.
   `/api/admin/proposals/{id}/accept|reject`.
 - **Vraag-traces** — per vraag welke kennislagen en brein-stappen meededen
   (#40). *Endpoint* `/api/admin/asktraces`.
+- **Token-metering & kostenoverzicht** — echte input/output-tokens per vraag
+  (rb-ai geeft usage door, geboekt op `ask_metric`), getotaliseerd per pad
+  (cheap/hard/agentic) en per account in het kostenoverzicht (#121).
+- **Periodieke zelfverrijking** — relatie-mining nachtelijk en de
+  bronnen-scout wekelijks in de scheduler-tick, met job-gate,
+  run_log-vensters en degradatiepaden (#122).
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest. *Endpoint* `/api/admin/overview/gaps`.
 - **Primer- & correctie-beheer** — drafts goedkeuren/intrekken; correcties
@@ -307,29 +330,14 @@ Uit de openstaande GitHub-issues, gegroepeerd op thema. **In-flight** =
 openstaande PR.
 
 **Kennisbank verdiepen**
-- **#125** Misvattingen-laag: verworpen/ontzenuwde claims als negatieve kennis
-  in antwoorden ("hoe het wél én niet zit"), met weerlegging en bron.
-- **#120** Agentic-terugkoppeling: door de ask-agent ontdekte verbanden
-  achterlaten als relatievoorstel — het brein verrijkt zichzelf al antwoordend.
-
-**Kennis publiek ontsluiten**
-- **#127** *(in-flight, PR #133)* De complete databank: kaart- en
-  sectie-dossiers plus een doorzoekbare publieke `/rulings`-collectie, gevoed
-  door de brein-API.
+- **#125** *(in-flight, PR #136)* Misvattingen-laag: verworpen/ontzenuwde
+  claims als negatieve kennis in antwoorden ("hoe het wél én niet zit"), met
+  weerlegging en bron.
 
 **Beheer & reviewqueues**
-- **#124** Reviewqueues: verworpen/afgehandelde items uit de default-weergave,
-  een archief voor álle queues, en beheerder-notities die doorwerken (optioneel
-  als geverifieerde correctie).
-
-**Automatisering**
-- **#122** Periodieke zelfverrijking: relatie-mining nachtelijk en de scout
-  wekelijks in de bestaande scheduler-tick, met de bestaande job-gate en
-  degradatiepaden.
-
-**Meetbaarheid & kosten**
-- **#121** *(in-flight, PR #131)* Token-metering: echte input/output-tokens per
-  vraag, pad (cheap/hard/agentic) en gebruiker in het kostenoverzicht.
+- **#124** *(in-flight, PR #137)* Reviewqueues: verworpen/afgehandelde items
+  uit de default-weergave, een archief voor álle queues, en
+  beheerder-notities die doorwerken (optioneel als geverifieerde correctie).
 
 **Ops & platform**
 - **#45** Ops-hardening voor de 8GB-VM: memory-limits, healthchecks +
@@ -353,9 +361,10 @@ openstaande PR.
 ## 7. Succesmetrieken
 
 **Wat het product vandaag al meet**
-- **Antwoordduur** (`ask_metric`, `/api/ask/stats`): count, gemiddelde, mediaan
-  en P90 over de recente vragen — de latency die de gebruiker voelt, apart per
-  pad zodra token-metering (#121) landt.
+- **Antwoordduur & tokens** (`ask_metric`, `/api/ask/stats`): count,
+  gemiddelde, mediaan en P90 over de recente vragen — de latency die de
+  gebruiker voelt — plus sinds #121 echte input/output-tokens per vraag, pad
+  en account.
 - **Feedback-/reviewdoorstroom**: denk-feedback op `/ask` → reviewqueue →
   geverifieerde correcties; het aantal geaccepteerde vs. openstaande claims,
   relaties en mechaniek-kandidaten in de overzichten is de gezondheidsmeter van
@@ -369,8 +378,8 @@ openstaande PR.
 **Zinnige volgende metrieken**
 - **Dekking**: aandeel `/ask`-antwoorden met een "Zeker/Redelijk zeker"-label
   vs. "Onzeker", en het aandeel met minstens één officiële §-regelbasis.
-- **Kosten per vraag**: tokens en (geschatte) kosten per pad na #121, als
-  budgetbewaking naast de puur informatieve tokentotalen.
+- **Kosten per vraag**: (geschatte) kosten in euro's bovenop de tokentotalen
+  van #121, als budgetbewaking naast de puur informatieve tellingen.
 - **Kennis-versheid**: doorlooptijd van set-release/erratum tot bijgewerkte
   primer/claims (invalidatie → hertoetsing → re-review).
 - **Drift** (brein): aantallen per knooptype in Postgres vs. Neo4j, om een

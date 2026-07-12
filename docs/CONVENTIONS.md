@@ -140,3 +140,9 @@ Endpoint-regels:
 - Feature-werk op de werkbranch, PR naar main; merge naar main = deploy
   (CI publiceert images, deploy-workflow rolt uit).
 - Secrets alleen via GitHub Secrets / VM-`.env`; nooit in code, logs of chat.
+- **Levende documentatie (#134)** — elke PR die endpoints, datamodel,
+  services, UI-routes of de deploy raakt, werkt `docs/ARCHITECTURE.md`
+  (arc42) bij; elke PR die features of gedrag wijzigt, werkt `docs/PRD.md`
+  bij. De Onderhoud-hoofdstukken in beide documenten zeggen per soort
+  wijziging welke sectie. Geen doc-delta nodig? Motiveer dat kort in de
+  PR-body. De PR-template bevat de checklist.
