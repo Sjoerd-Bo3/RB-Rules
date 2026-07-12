@@ -70,12 +70,29 @@ export interface AskClaim {
 	officialStatus: string;
 	sources: AskClaimSource[];
 }
+/** Misvattingen-kanaal (#125): verworpen community-claims mét officiële
+ *  weerlegging — het misvatting-blok toont beide bewijzen (community-citaat
+ *  met bron-link én de weerlegging, met §-link waar herleidbaar). */
+export interface AskMisconceptionSource {
+	sourceName: string;
+	url: string;
+	quote: string | null;
+}
+export interface AskMisconception {
+	topicType: string;
+	topicRef: string;
+	statement: string;
+	rebuttal: string;
+	rebuttalSection: string | null;
+	sources: AskMisconceptionSource[];
+}
 interface AskResult {
 	answer: string;
 	citations: Citation[];
 	cards: AskCard[];
 	questionType: string;
 	claims: AskClaim[] | null;
+	misconceptions: AskMisconception[] | null;
 }
 
 export const actions: Actions = {
@@ -137,17 +154,27 @@ export const actions: Actions = {
 		let citations: Citation[] = [];
 		let cards: AskCard[] = [];
 		let claims: AskClaim[] = [];
+		let misconceptions: AskMisconception[] = [];
 		try {
 			citations = JSON.parse(String(form.get('citations') ?? '[]'));
 			cards = JSON.parse(String(form.get('cards') ?? '[]'));
 			claims = JSON.parse(String(form.get('claims') ?? '[]'));
+			misconceptions = JSON.parse(String(form.get('misconceptions') ?? '[]'));
 		} catch {
 			/* corrupt doorgegeven state — dan zonder */
 		}
 		// Ook bij fouten antwoord+citaties teruggeven, anders verdwijnt het
 		// zojuist gegeven antwoord van de pagina.
 		if (!question || !['up', 'down'].includes(verdict)) {
-			return fail(400, { error: 'Ongeldige feedback.', question, answer, citations, cards, claims });
+			return fail(400, {
+				error: 'Ongeldige feedback.',
+				question,
+				answer,
+				citations,
+				cards,
+				claims,
+				misconceptions
+			});
 		}
 		try {
 			await api('/api/corrections', {
@@ -155,7 +182,7 @@ export const actions: Actions = {
 				headers: { 'x-client-ip': getClientAddress(), ...userHeaders(cookies) },
 				body: JSON.stringify({ question, verdict, text })
 			});
-			return { question, answer, citations, cards, claims, feedbackSent: verdict };
+			return { question, answer, citations, cards, claims, misconceptions, feedbackSent: verdict };
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
 			return fail(500, {
@@ -164,7 +191,8 @@ export const actions: Actions = {
 				answer,
 				citations,
 				cards,
-				claims
+				claims,
+				misconceptions
 			});
 		}
 	}

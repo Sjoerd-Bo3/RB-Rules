@@ -601,6 +601,46 @@
 				{/each}
 			{/if}
 
+			{#if form?.misconceptions?.length}
+				<!-- Misvattingen (#125): verworpen community-lezingen mét officiële
+				     weerlegging — naast de community-consensus, herkenbaar als
+				     negatieve kennis: zo zit het dus níet. -->
+				<h2 class="misconception-h">Veelgemaakte misvatting</h2>
+				<p class="meta small misconception-sub">Community-lezing die door de officiële regels is weerlegd — zo zit het dus niet.</p>
+				{#each form.misconceptions as m (m.topicRef + m.statement)}
+					<details class="cite misconception">
+						<summary>
+							<span class="misconception-badge">misvatting</span>
+							<strong>{m.topicRef}</strong>
+							{#if m.rebuttalSection}<span class="meta">weerlegd door § {m.rebuttalSection}</span>{/if}
+							<span class="cite-essence">{m.statement}</span>
+						</summary>
+						<p class="cite-text misread">{m.statement}</p>
+						{#if m.sources?.length}
+							<ul class="claim-sources">
+								{#each m.sources as s (s.url)}
+									<li class="meta">
+										{#if s.quote}<span class="misconception-quote">"{s.quote}"</span> — {/if}
+										{#if isHttp(s.url)}
+											<a href={s.url} target="_blank" rel="noopener noreferrer">{s.sourceName}</a>
+										{:else}
+											{s.sourceName}
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						{/if}
+						<p class="rebuttal">
+							<span class="rebuttal-label">Officiële weerlegging</span>
+							{m.rebuttal}
+							{#if m.rebuttalSection}
+								<a href="/rules/{encodeURIComponent(m.rebuttalSection)}">§ {m.rebuttalSection}</a>
+							{/if}
+						</p>
+					</details>
+				{/each}
+			{/if}
+
 			{#if form?.cards?.length}
 				<h2>Betrokken kaarten</h2>
 				{#each form.cards as k (k.riftboundId)}
@@ -645,6 +685,7 @@
 						<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
 						<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
 						<input type="hidden" name="claims" value={JSON.stringify(form?.claims ?? [])} />
+						<input type="hidden" name="misconceptions" value={JSON.stringify(form?.misconceptions ?? [])} />
 						<input type="hidden" name="verdict" value="up" />
 						<button class="fb">Ja</button>
 					</form>
@@ -658,6 +699,7 @@
 					<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
 					<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
 					<input type="hidden" name="claims" value={JSON.stringify(form?.claims ?? [])} />
+						<input type="hidden" name="misconceptions" value={JSON.stringify(form?.misconceptions ?? [])} />
 					<input type="hidden" name="verdict" value="down" />
 					<textarea name="text" rows="3" placeholder="Wat is het juiste antwoord? Verwijs waar mogelijk naar een §-sectie."></textarea>
 					<button type="submit">Verstuur correctie</button>
@@ -811,6 +853,31 @@
 	.claim-sources { list-style: none; margin: 4px 0 4px; padding: 0; }
 	.claim-sources li { margin: 3px 0; overflow-wrap: anywhere; }
 	.claim-sources a { color: var(--ok); text-decoration: none; font-weight: 600; }
+	/* Misvattingen (#125): herkenbaar als negatieve kennis — err-rand + badge,
+	   de officiële weerlegging als groen gemarkeerde slotregel. Zelfde
+	   wrap-regels als .claim zodat 390px nooit horizontaal scrollt. */
+	.misconception-h { margin-bottom: 2px; }
+	.misconception-sub { margin: 0 0 8px; }
+	.misconception { border-left: 3px solid var(--err); }
+	.misconception summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+	.misconception summary .cite-essence { flex-basis: 100%; }
+	.misconception-badge {
+		font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+		letter-spacing: 0.06em; background: var(--err-soft); color: var(--err);
+		border-radius: 999px; padding: 2px 9px;
+	}
+	.misconception .misread { color: var(--muted); }
+	.misconception-quote { color: var(--text); font-style: italic; }
+	.rebuttal {
+		border-top: 1px solid var(--border); margin: 8px 0 4px; padding-top: 8px;
+		line-height: 1.6; overflow-wrap: anywhere;
+	}
+	.rebuttal-label {
+		display: block; font-size: 0.7rem; font-weight: 700;
+		text-transform: uppercase; letter-spacing: 0.06em; color: var(--ok);
+		margin-bottom: 2px;
+	}
+	.rebuttal a { color: var(--ok); text-decoration: none; font-weight: 600; }
 	.parents { border-left: 2px solid var(--border); margin: 8px 0 0; padding-left: 10px; }
 	.parent { margin: 4px 0; color: var(--muted); font-size: 0.85rem; }
 	.parent a { color: var(--muted); font-weight: 700; text-decoration: none; }
