@@ -5,9 +5,17 @@ using Microsoft.Extensions.Logging;
 
 namespace RbRules.Infrastructure;
 
+/// <summary>Echte token-tellingen van één rb-ai-call (#121): input telt de
+/// cache-tokens mee (rb-ai's volume-maat), bij multi-turn-taken opgeteld over
+/// alle beurten. Null waar usage hoort betekent: rb-ai (of een oudere versie
+/// ervan) gaf niets terug — onbekend, niet 0.</summary>
+public record AiUsage(long InputTokens, long OutputTokens);
+
 /// <summary>Eén NDJSON-frame uit de rb-ai-stream (#31):
-/// delta (tekststukje), done (volledig antwoord) of error.</summary>
-public record AiStreamFrame(string Type, string? Text = null, string? Answer = null, string? Error = null)
+/// delta (tekststukje), done (volledig antwoord, met usage #121) of error.</summary>
+public record AiStreamFrame(
+    string Type, string? Text = null, string? Answer = null, string? Error = null,
+    AiUsage? Usage = null)
 {
     /// <summary>Parse één NDJSON-regel; null bij lege of onleesbare regels
     /// (kapotte frames zijn gedegradeerd gedrag, geen crash).</summary>
@@ -23,12 +31,29 @@ public record AiStreamFrame(string Type, string? Text = null, string? Answer = n
                 root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
                     ? v.GetString() : null;
             var type = Prop("type");
-            return type is null ? null : new AiStreamFrame(type, Prop("text"), Prop("answer"), Prop("error"));
+            return type is null
+                ? null
+                : new AiStreamFrame(
+                    type, Prop("text"), Prop("answer"), Prop("error"), ParseUsage(root));
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    /// <summary>Usage uit het done-frame — best-effort (#121): een frame
+    /// zonder (of met een kapot) usage-object blijft gewoon bruikbaar.</summary>
+    private static AiUsage? ParseUsage(JsonElement root)
+    {
+        if (!root.TryGetProperty("usage", out var u) || u.ValueKind != JsonValueKind.Object)
+            return null;
+        return u.TryGetProperty("inputTokens", out var input)
+               && input.ValueKind == JsonValueKind.Number && input.TryGetInt64(out var inputTokens)
+               && u.TryGetProperty("outputTokens", out var output)
+               && output.ValueKind == JsonValueKind.Number && output.TryGetInt64(out var outputTokens)
+            ? new AiUsage(inputTokens, outputTokens)
+            : null;
     }
 }
 
@@ -41,7 +66,19 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
 
     public record AiImage(string MediaType, string Data);
 
+    /// <summary>Antwoord + token-usage van één /ask-call (#121). Usage is
+    /// null bij een oude rb-ai zonder usage-veld — geen breuk.</summary>
+    public record AiAnswer(string Answer, AiUsage? Usage);
+
     public async Task<string?> AskAsync(
+        string prompt, string? system = null, string task = "cheap",
+        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default) =>
+        (await AskWithUsageAsync(prompt, system, task, images, ct))?.Answer;
+
+    /// <summary>Als <see cref="AskAsync"/>, maar mét de token-usage uit de
+    /// respons (#121) — voor aanroepers die per vraag kosten boeken
+    /// (AskService → ask_metric). Overige aanroepers blijven op AskAsync.</summary>
+    public async Task<AiAnswer?> AskWithUsageAsync(
         string prompt, string? system = null, string task = "cheap",
         IReadOnlyList<AiImage>? images = null, CancellationToken ct = default)
     {
@@ -55,7 +92,9 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
             var res = await http.PostAsJsonAsync("/ask", payload, ct);
             if (!res.IsSuccessStatusCode) return null;
             var body = await res.Content.ReadFromJsonAsync<AskResponse>(ct);
-            return string.IsNullOrWhiteSpace(body?.Answer) ? null : body.Answer;
+            return string.IsNullOrWhiteSpace(body?.Answer)
+                ? null
+                : new AiAnswer(body.Answer, body.Usage);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -74,8 +113,11 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
     /// vangnet, maar de gedane stappen blijven controleerbaar. Relations
     /// (#120) is het rauwe relatievoorstellen-blok dat rb-ai van het antwoord
     /// afsplitste; null als de agent niets achterliet — de aanroeper parseert
-    /// en valideert het (AgenticRelationService).</summary>
-    public record AgenticAnswer(string? Answer, string? Steps, string? Relations = null);
+    /// en valideert het (AgenticRelationService). Usage (#121) is de
+    /// opgetelde token-teller over alle agent-beurten; null bij een oude
+    /// rb-ai of wanneer de run faalde vóór het result-bericht.</summary>
+    public record AgenticAnswer(
+        string? Answer, string? Steps, string? Relations = null, AiUsage? Usage = null);
 
     /// <summary>Agentic ask (#107, docs/BRAIN.md §2.4): zelfde /ask-koppelvlak
     /// als <see cref="AskAsync"/> maar met task="agentic" én de tool-call-log
@@ -111,7 +153,8 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
             if (string.IsNullOrWhiteSpace(body?.Answer))
                 return JoinSteps(body?.Steps) is { } steps ? new AgenticAnswer(null, steps) : null;
             return new AgenticAnswer(body.Answer, JoinSteps(body.Steps),
-                string.IsNullOrWhiteSpace(body.Relations) ? null : body.Relations);
+                string.IsNullOrWhiteSpace(body.Relations) ? null : body.Relations,
+                body.Usage);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -227,7 +270,9 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
     }
 
     /// <summary>Steps (#107) en Relations (#120) komen alleen mee bij
-    /// task="agentic" en blijven bij alle andere taken afwezig — de
-    /// respons-vorm van cheap/hard/research is onveranderd.</summary>
-    private record AskResponse(string? Answer, string[]? Steps = null, string? Relations = null);
+    /// task="agentic" en blijven bij alle andere taken afwezig; Usage (#121)
+    /// komt bij elke taak mee, maar best-effort — een oude rb-ai zonder
+    /// usage-veld levert gewoon null op.</summary>
+    private record AskResponse(
+        string? Answer, string[]? Steps = null, string? Relations = null, AiUsage? Usage = null);
 }

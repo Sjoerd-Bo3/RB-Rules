@@ -164,15 +164,22 @@ public class AskService(
                 await CardsNamedIn(question.ToLowerInvariant())
                     .Select(c => c.Name).Distinct().ToListAsync(ct));
 
+        // Token-teller per vraag (#121): opgeteld over álle rb-ai-calls die
+        // deze vraag kost (rewrite + antwoord; bij agentic de hele run).
+        // Blijft null zolang geen enkele call usage teruggaf (oude rb-ai,
+        // AI-uitval) — de metric boekt dan "onbekend", niet 0.
+        AiUsage? usage = null;
+
         // 0b. #66: query-herformulering via één goedkope LLM-call — typo's
         // corrigeren, NL→EN speltermen, zoekqueries en lexicale termen. Bij
         // doorvragen (#41) gaat de gespreks-historie mee als context.
         // Uitval of onzin-output = verwacht pad: rewrite blijft null en we
         // zoeken met de rauwe vraag(+historie), het gedrag van vóór #66.
         QueryRewrite? rewrite = null;
-        var rewriteRaw = await ai.AskAsync(
+        var rewriteRes = await ai.AskWithUsageAsync(
             QueryRewriter.BuildPrompt(retrievalText), QueryRewriter.SystemPrompt, ct: ct);
-        if (rewriteRaw is not null) rewrite = QueryRewriter.Parse(rewriteRaw);
+        usage = AddUsage(usage, rewriteRes?.Usage);
+        if (rewriteRes is not null) rewrite = QueryRewriter.Parse(rewriteRes.Answer);
         var searchText = rewrite?.NormalizedQuestion ?? retrievalText;
 
         // 1. Vector-kanaal: de genormaliseerde zoekzin plus de extra
@@ -236,7 +243,8 @@ public class AskService(
         if (topIds.Count == 0)
         {
             sw.Stop();
-            await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false);
+            // De rewrite-call is al gemaakt — die tokens tellen mee (#121).
+            await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false, usage: usage);
             // Gedegradeerd (#100) én geen tekst-match: eerlijk melden wat er
             // aan de hand is — niet doen alsof de index leeg is.
             return new(qv is null
@@ -474,6 +482,10 @@ public class AskService(
             try
             {
                 var agenticAnswer = await ai.AskAgenticAsync(prompt, system, images, ct);
+                // Usage van de agent-run (#121): de som over alle beurten die
+                // rb-ai rapporteert — ook bij het vangnet hieronder blijft
+                // een eventueel gemeten deel meetellen.
+                usage = AddUsage(usage, agenticAnswer?.Usage);
                 if (agenticAnswer?.Answer is { } agentText)
                 {
                     aiAnswer = agentText;
@@ -511,9 +523,13 @@ public class AskService(
             }
         }
         if (aiAnswer is null && !clientGone)
-            aiAnswer = onDelta is null
-                ? await ai.AskAsync(prompt, system, task, images, ct)
+        {
+            var single = onDelta is null
+                ? await ai.AskWithUsageAsync(prompt, system, task, images, ct)
                 : await StreamAnswerAsync(prompt, system, task, images, onDelta, ct);
+            aiAnswer = single?.Answer;
+            usage = AddUsage(usage, single?.Usage);
+        }
         var answer = aiAnswer ?? RbAiClient.UnavailableAnswer;
 
         // Kosten-eerlijkheid (#42, review #107): Model boekt het pad dat het
@@ -535,10 +551,11 @@ public class AskService(
         sw.Stop();
 
         // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
-        // pagina (#59: uit het endpoint — de service meet hier toch al).
+        // pagina (#59: uit het endpoint — de service meet hier toch al);
+        // de token-teller (#121) voedt het kostenoverzicht in het beheer.
         await RecordMetricAsync(
             sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null,
-            agentic: agentAnswered, model: usedModel);
+            agentic: agentAnswered, model: usedModel, usage: usage);
 
         // Agentic-terugkoppeling (#120): door de agent ontdekte verbanden als
         // relatievoorstel achterlaten — het brein verrijkt zichzelf al
@@ -619,15 +636,16 @@ public class AskService(
     }
 
     /// <summary>Consumeert de rb-ai-stream: deltas door naar de UI, het
-    /// done-frame is het volledige antwoord. Een error-frame of een stream
-    /// zonder done levert null — daarmee degradeert AskCoreAsync precies zoals
-    /// bij de niet-streamende route (UnavailableAnswer, Ok=false).</summary>
-    private async Task<string?> StreamAnswerAsync(
+    /// done-frame is het volledige antwoord (met de token-usage van de run,
+    /// #121). Een error-frame of een stream zonder done levert null — daarmee
+    /// degradeert AskCoreAsync precies zoals bij de niet-streamende route
+    /// (UnavailableAnswer, Ok=false).</summary>
+    private async Task<RbAiClient.AiAnswer?> StreamAnswerAsync(
         string prompt, string system, string task,
         IReadOnlyList<RbAiClient.AiImage>? images,
         Func<string, Task> onDelta, CancellationToken ct)
     {
-        string? answer = null;
+        RbAiClient.AiAnswer? answer = null;
         try
         {
             await foreach (var frame in ai.AskStreamAsync(prompt, system, task, images, ct))
@@ -638,7 +656,9 @@ public class AskService(
                         await onDelta(frame.Text);
                         break;
                     case "done":
-                        answer = string.IsNullOrWhiteSpace(frame.Answer) ? null : frame.Answer;
+                        answer = string.IsNullOrWhiteSpace(frame.Answer)
+                            ? null
+                            : new RbAiClient.AiAnswer(frame.Answer, frame.Usage);
                         break;
                     // "error" bewust genegeerd: answer blijft null → degradatie.
                 }
@@ -653,6 +673,13 @@ public class AskService(
         }
         return answer;
     }
+
+    /// <summary>Token-optelling per vraag (#121): null betekent "onbekend" en
+    /// mag een wél gemeten deel niet wegdrukken — null + x = x; pas als álle
+    /// calls zonder usage bleven, blijft het totaal null.</summary>
+    private static AiUsage? AddUsage(AiUsage? a, AiUsage? b) =>
+        a is null ? b : b is null ? a
+            : new AiUsage(a.InputTokens + b.InputTokens, a.OutputTokens + b.OutputTokens);
 
     /// <summary>Full-text-kanaal (Engels — de bronnen zijn Engels; de rewrite
     /// levert een Engelse zoekzin, dus die matcht hier beter dan NL). Virtual
@@ -687,7 +714,7 @@ public class AskService(
     /// statistiek houden.</summary>
     private async Task RecordMetricAsync(
         long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images,
-        bool ok, bool agentic = false, string? model = null)
+        bool ok, bool agentic = false, string? model = null, AiUsage? usage = null)
     {
         try
         {
@@ -704,6 +731,10 @@ public class AskService(
                 Model = model ?? (images is { Count: > 0 } ? "hard" : "cheap"),
                 // #107: duurstatistiek toont het agentic-pad apart.
                 Agentic = agentic,
+                // #121: echte token-tellingen (som over alle calls van deze
+                // vraag); null = geen usage ontvangen, onbekend ≠ 0.
+                InputTokens = usage?.InputTokens,
+                OutputTokens = usage?.OutputTokens,
             });
             await db.SaveChangesAsync();
         }
