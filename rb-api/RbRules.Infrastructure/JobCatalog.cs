@@ -46,6 +46,10 @@ public static class JobCatalog
             // Kennislaag 2 (#50): claims destilleren uit community-bronnen in
             // het register (trust >= 3), met corroboratie en officiële toets.
             new("claims", ClaimsAsync),
+            // Dynamische relaties (#116): de LLM ontdekt relaties over de
+            // kennislagen heen; voorstellen + nieuwe kind-labels landen in de
+            // reviewqueue en gaan pas via de graph-job de graph in.
+            new("relations", RelationsAsync),
             // Evolutie-raamwerk (#52): de volledige set-release-keten
             // (sync -> nieuwe mechanieken -> embeddings -> graph -> primer).
             new("setrelease", SetReleaseAsync),
@@ -174,11 +178,12 @@ public static class JobCatalog
     private static async Task<string> GraphAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
-        report("kaarten + facetten én de kennislagen (secties, concepten, claims, bronnen, errata, changes) naar Neo4j projecteren");
+        report("kaarten + facetten én de kennislagen (secties, concepten, claims, bronnen, errata, changes, relaties) naar Neo4j projecteren");
         var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
         return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics, "
             + $"{r.Sections} secties, {r.Concepts} concepten, {r.Claims} claims, "
-            + $"{r.Sources} bronnen, {r.Errata} errata, {r.Changes} changes";
+            + $"{r.Sources} bronnen, {r.Errata} errata, {r.Changes} changes, "
+            + $"{r.Relations} relaties";
     }
 
     private static async Task<string> PrimerAsync(
@@ -217,6 +222,14 @@ public static class JobCatalog
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<ClaimMiningService>()
+            .RunAsync(progress: report, ct: ct);
+        return r.Message;
+    }
+
+    private static async Task<string> RelationsAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<RelationMiningService>()
             .RunAsync(progress: report, ct: ct);
         return r.Message;
     }

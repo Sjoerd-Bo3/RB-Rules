@@ -44,6 +44,20 @@ public record ClaimOverview(
     int Total, int Page, int PageSize,
     IReadOnlyList<ClaimStatusCount> StatusCounts, IReadOnlyList<ClaimOverviewItem> Items);
 
+public record RelationOverviewItem(
+    long Id, string FromRef, string? FromName, string ToRef, string? ToName,
+    string Kind, string Explanation, string Provenance, double Trust,
+    string Status, DateTimeOffset DetectedAt);
+public record RelationKindOverviewItem(
+    long Id, string Kind, string Status, int Occurrences,
+    DateTimeOffset FirstSeen, DateTimeOffset? ReviewedAt);
+public record RelationStatusCount(string Status, int Count);
+public record RelationOverview(
+    int Total, int Page, int PageSize,
+    IReadOnlyList<RelationStatusCount> StatusCounts,
+    IReadOnlyList<RelationKindOverviewItem> Kinds,
+    IReadOnlyList<RelationOverviewItem> Items);
+
 public record ProposalOverviewItem(
     long Id, string Url, string Name, string Type, string Motivation,
     string Status, DateTimeOffset FoundAt, DateTimeOffset? ReviewedAt);
@@ -229,6 +243,62 @@ public class AdminOverviewService(RbRulesDbContext db)
                 bySrc.GetValueOrDefault(c.Id, [])))
             .ToList();
         return new(total, page, PageSize, statusCounts, items);
+    }
+
+    /// <summary>Relatievoorstellen (#116): status-chips + het kind-vocabulaire
+    /// (kandidaten eerst, MechanicVocabulary-sortering) + de voorstellen zelf.
+    /// Kaart-refs krijgen hun naam erbij (twee stappen, Interactions-patroon);
+    /// andere ref-soorten zijn zelf leesbaar (mechanic:Deflect).</summary>
+    public async Task<RelationOverview> RelationsAsync(string? status, int page)
+    {
+        page = ClampPage(page);
+        var statusCounts = (await db.Relations.AsNoTracking()
+                .GroupBy(r => r.Status)
+                .Select(g => new { g.Key, Count = g.Count() })
+                .OrderBy(s => s.Key)
+                .ToListAsync())
+            .Select(s => new RelationStatusCount(s.Key, s.Count))
+            .ToList();
+
+        var kinds = await db.RelationKinds.AsNoTracking()
+            .OrderBy(k => k.Status == "candidate" ? 0 : 1)
+            .ThenByDescending(k => k.Occurrences)
+            .ThenBy(k => k.Kind)
+            .Select(k => new RelationKindOverviewItem(
+                k.Id, k.Kind, k.Status, k.Occurrences, k.FirstSeen, k.ReviewedAt))
+            .ToListAsync();
+
+        var query = db.Relations.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(r => r.Status == status);
+
+        var total = await query.CountAsync();
+        var rows = await query
+            .OrderByDescending(r => r.DetectedAt).ThenBy(r => r.Id)
+            .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
+            .ToListAsync();
+
+        // Alleen card:-refs hebben een opzoekbare naam; de key is het id.
+        var cardIds = rows
+            .SelectMany(r => new[] { r.FromRef, r.ToRef })
+            .Where(r => r.StartsWith("card:", StringComparison.Ordinal))
+            .Select(r => r["card:".Length..])
+            .Distinct()
+            .ToList();
+        var names = await db.Cards.AsNoTracking()
+            .Where(c => cardIds.Contains(c.RiftboundId))
+            .Select(c => new { c.RiftboundId, c.Name })
+            .ToDictionaryAsync(c => c.RiftboundId, c => c.Name);
+        string? NameFor(string brainRef) =>
+            brainRef.StartsWith("card:", StringComparison.Ordinal)
+                ? names.GetValueOrDefault(brainRef["card:".Length..])
+                : null;
+
+        var items = rows.Select(r => new RelationOverviewItem(
+                r.Id, r.FromRef, NameFor(r.FromRef), r.ToRef, NameFor(r.ToRef),
+                r.Kind, r.Explanation, r.Provenance, r.Trust, r.Status, r.DetectedAt))
+            .ToList();
+        return new(total, page, PageSize, statusCounts, kinds, items);
     }
 
     /// <summary>Bronvoorstellen uit de scout (#63): status-chips + de

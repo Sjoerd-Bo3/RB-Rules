@@ -13,9 +13,15 @@ public record BrainNeighborsResponse(string Ref, IReadOnlyList<BrainNeighbor> Ne
 
 public record BrainPathNode(string Ref, string? Name);
 
-/// <summary>Kortste pad als keten [knoop, edge-type, knoop, …] (§2.3 — "de
-/// bewijsketen"): knopen zijn {ref, name}-objecten, edges zijn strings. Leeg
-/// pad = beide knopen bestaan maar zijn binnen maxLen niet verbonden.</summary>
+/// <summary>Pad-edge mét kind (#116): alleen gebruikt wanneer de relatie een
+/// kind-property draagt (RELATES_TO/INTERACTS_WITH); kind-loze edges blijven
+/// kale strings in de keten — de bestaande contractvorm.</summary>
+public record BrainPathEdge(string Edge, string Kind);
+
+/// <summary>Kortste pad als keten [knoop, edge, knoop, …] (§2.3 — "de
+/// bewijsketen"): knopen zijn {ref, name}-objecten, edges zijn strings of
+/// {edge, kind}-objecten. Leeg pad = beide knopen bestaan maar zijn binnen
+/// maxLen niet verbonden.</summary>
 public record BrainPathResponse(string From, string To, IReadOnlyList<object> Path);
 
 /// <summary>Graph-kant van de brein-API (#105, docs/BRAIN.md §2.3): buren en
@@ -51,11 +57,13 @@ public class BrainGraphService(IDriver driver)
     }
 
     /// <summary>Buren van één knoop, optioneel gefilterd op edge-types
-    /// (whitelist, al gevalideerd) en richting. Null = knoop niet in de graph
-    /// (404 bij het endpoint — de graph-job is dan mogelijk nog niet gedraaid).</summary>
+    /// (whitelist, al gevalideerd), kind (#116: property-waarde, alleen als
+    /// parameter — leeg = geen filter) en richting. Null = knoop niet in de
+    /// graph (404 bij het endpoint — de graph-job is dan mogelijk nog niet
+    /// gedraaid).</summary>
     public async Task<IReadOnlyList<BrainNeighbor>?> NeighborsAsync(
-        string label, string refValue, string[] edgeFilter, BrainDirection direction,
-        int take, CancellationToken ct = default)
+        string label, string refValue, string[] edgeFilter, string kind,
+        BrainDirection direction, int take, CancellationToken ct = default)
     {
         // Richting als vast patroon-drietal — geen gebruikerstekst.
         var pattern = direction switch
@@ -71,7 +79,8 @@ public class BrainGraphService(IDriver driver)
         var cypher = $$"""
             MATCH (n:{{label}} {ref: $ref})
             OPTIONAL MATCH {{pattern}}
-            WHERE size($edges) = 0 OR type(r) IN $edges
+            WHERE (size($edges) = 0 OR type(r) IN $edges)
+              AND ($kind = '' OR r.kind = $kind)
             RETURN m.ref AS ref,
                    {{NameCoalesce}} AS name,
                    type(r) AS edge,
@@ -87,6 +96,7 @@ public class BrainGraphService(IDriver driver)
         {
             ["ref"] = refValue,
             ["edges"] = edgeFilter.Cast<object>().ToList(),
+            ["kind"] = kind,
             ["take"] = (long)take,
         });
         var records = await cursor.ToListAsync(ct);
@@ -111,10 +121,13 @@ public class BrainGraphService(IDriver driver)
 
     /// <summary>Kortste pad tussen twee refs. maxLen is vooraf geclampt
     /// (1..6) — variabele padlengtes zijn in Cypher niet parametriseerbaar,
-    /// dus dit is de ene bewuste int-interpolatie.</summary>
+    /// dus dit is de ene bewuste int-interpolatie. Met een kind-filter (#116)
+    /// mag het pad alleen door edges zónder kind-property (structuur zoals
+    /// PART_OF/HAS_MECHANIC) of met exact dat kind — zo volgt de bewijsketen
+    /// één relatiesoort zonder alle structurele schakels te verliezen.</summary>
     public async Task<(PathOutcome Outcome, IReadOnlyList<object> Chain)> PathAsync(
         string fromLabel, string fromRef, string toLabel, string toRef,
-        int maxLen, CancellationToken ct = default)
+        int maxLen, string kind = "", CancellationToken ct = default)
     {
         await using var session = driver.AsyncSession();
 
@@ -135,14 +148,17 @@ public class BrainGraphService(IDriver driver)
             MATCH (a:{{fromLabel}} {ref: $from})
             MATCH (b:{{toLabel}} {ref: $to})
             MATCH p = shortestPath((a)-[*..{{maxLen}}]-(b))
+            WHERE $kind = '' OR all(r IN relationships(p)
+                  WHERE r.kind IS NULL OR r.kind = $kind)
             RETURN [x IN nodes(p) | [x.ref, {{NameCoalesce.Replace("m.", "x.")}}]] AS nodes,
-                   [r IN relationships(p) | type(r)] AS edges
+                   [r IN relationships(p) | [type(r), r.kind]] AS edges
             LIMIT 1
             """;
         var cursor = await session.RunAsync(cypher, new Dictionary<string, object>
         {
             ["from"] = fromRef,
             ["to"] = toRef,
+            ["kind"] = kind,
         });
         var records = await cursor.ToListAsync(ct);
         if (records.Count == 0) return (PathOutcome.NoPath, []);
@@ -156,8 +172,17 @@ public class BrainGraphService(IDriver driver)
                     pair.ElementAtOrDefault(1)?.ToString());
             })
             .ToList();
+        // Edge met kind-property (#116) → {edge, kind}-object; zonder kind de
+        // bestaande kale string — de rb-ai-tools verstaan beide vormen.
         var edges = records[0]["edges"].As<List<object>>()
-            .Select(e => e.ToString() ?? "?")
+            .Select(e =>
+            {
+                var pair = (e as IList<object>) ?? [];
+                var edgeType = pair.ElementAtOrDefault(0)?.ToString() ?? "?";
+                return pair.ElementAtOrDefault(1)?.ToString() is { } edgeKind
+                    ? (object)new BrainPathEdge(edgeType, edgeKind)
+                    : edgeType;
+            })
             .ToList();
 
         // Keten [knoop, edge, knoop, …] — het contract uit §2.3.

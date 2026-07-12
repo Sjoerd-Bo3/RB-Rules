@@ -28,6 +28,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<Claim> Claims => Set<Claim>();
     public DbSet<ClaimSource> ClaimSources => Set<ClaimSource>();
     public DbSet<MechanicKeyword> MechanicKeywords => Set<MechanicKeyword>();
+    public DbSet<Relation> Relations => Set<Relation>();
+    public DbSet<RelationKind> RelationKinds => Set<RelationKind>();
     public DbSet<SourceProposal> SourceProposals => Set<SourceProposal>();
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
@@ -197,6 +199,23 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("mechanic_keyword");
             e.HasIndex(x => x.Term).IsUnique();
+            e.HasIndex(x => x.Status);
+        });
+
+        // Dynamische relaties (#116): voorstellen + kind-vocabulaire.
+        b.Entity<Relation>(e =>
+        {
+            e.ToTable("relation");
+            // Eén voorstel per gerichte (van, naar, kind)-combinatie — de
+            // service dedupet genormaliseerd, de index borgt het hard.
+            e.HasIndex(x => new { x.FromRef, x.ToRef, x.Kind }).IsUnique();
+            e.HasIndex(x => x.Status);
+        });
+
+        b.Entity<RelationKind>(e =>
+        {
+            e.ToTable("relation_kind");
+            e.HasIndex(x => x.Kind).IsUnique();
             e.HasIndex(x => x.Status);
         });
 

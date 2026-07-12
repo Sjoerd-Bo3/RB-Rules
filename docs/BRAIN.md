@@ -240,6 +240,43 @@ tool-call-log: toolnaam + ref per stap); `AskMetric` krijgt `Agentic` zodat
 de duurstatistiek beide paden apart toont. De admin-trace-pagina toont de
 brein-stappen — dezelfde controleerbaarheid als de bestaande denkstappen.
 
+### 2.5 Dynamische relaties (#116): open vocabulaire, gereviewde projectie
+
+De vaste edge-types uit §2.2 dekken de structuur, niet de interessantste
+kennis ("counters", "enables", "wordt beperkt door"). Daarvoor bestaat één
+generiek edge-TYPE `RELATES_TO {kind, trust, explanation, status}` — het
+kind is een property-waarde uit een open maar gereviewd vocabulaire, geen
+nieuw edge-type per soort.
+
+**Architectuurregel: LLM-relaties gaan NOOIT rechtstreeks de graph in.**
+Het INTERACTS_WITH/claims-patroon is veralgemeniseerd:
+
+1. **Postgres is de bron**: `relation` (from_ref/to_ref als BrainRef, kind,
+   explanation, provenance, trust, status unreviewed/accepted/rejected) en
+   `relation_kind` (candidate/accepted/rejected — het
+   mechaniek-vocabulaire-patroon uit #52, met een seed-lijst in
+   `RelationMiner.SeedKinds`).
+2. **Mining** (`RelationMiningService`, job "relations"): cheap-calls per
+   anker (primer-concepten, zelf-invaliderend gemarkeerd via
+   `relations_mined_at`; plus één gecapte mechanieken-overzichtspass), met
+   de #93-discipline — gedeelde LlmJson-parser, rauwe respons in run_log
+   bij uitval, markeren pas na succes, dedupe op (van, naar, kind) over
+   álle statussen zodat verworpen voorstellen verworpen blijven. De LLM
+   mag alleen refs gebruiken die de prompt zelf aanbood.
+3. **Projectie** (`RelationProjection`, in de transactionele rebuild van
+   `GraphSyncService`): accepted én unreviewed (status als edge-property),
+   rejected nooit — en alléén met een geaccepteerd kind.
+4. **Bevraagbaar**: neighbors/path krijgen een kind-filter als
+   geparametriseerde property-waarde; de edge-TYPE-whitelist blijft vast.
+   De rb-ai-tools tonen kind en uitleg in de toolresultaten.
+5. **Beheer**: overview "relaties" (status-chips, van→naar klikbaar naar de
+   brein-verkenner, accepteer/verwerp) met de kandidaat-kinds als queue op
+   dezelfde pagina.
+
+Trust blijft leidend: een relatie draagt de trust van zijn bewijsbron
+(LLM-interpretatie van gecureerd/officieel materiaal weegt als tier-2 op de
+ClaimScoring-schaal).
+
 ## 3. Niet-doelen
 
 - **Geen meta-laag/archetypes** (`STAPLE_IN`): expliciet ná #15 (decks).

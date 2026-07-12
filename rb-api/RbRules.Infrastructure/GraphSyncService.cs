@@ -6,7 +6,8 @@ namespace RbRules.Infrastructure;
 
 public record GraphSyncResult(
     int Cards, int Domains, int Tags, int Mechanics,
-    int Sections, int Concepts, int Claims, int Sources, int Errata, int Changes);
+    int Sections, int Concepts, int Claims, int Sources, int Errata, int Changes,
+    int Relations);
 
 /// <summary>Neo4j-sync met batched UNWIND (audit-fix: de PoP deed ~4 queries
 /// per kaart; dit zijn er een handvol totaal). Tag ≠ Mechanic: facties/tribes
@@ -16,7 +17,9 @@ public record GraphSyncResult(
 /// (docs/BRAIN.md §2.2): RuleSection (+PART_OF), Concept (+EXPLAINS), Claim
 /// (+ABOUT/SUPPORTED_BY, alleen accepted/unreviewed), Source, Erratum
 /// (+SUPERSEDES) en Change (+AFFECTS); elke knoop draagt een ref-property
-/// volgens de BrainRef-conventie (§2.1).</summary>
+/// volgens de BrainRef-conventie (§2.1). Sinds #116 ook de dynamische
+/// LLM-relaties als RELATES_TO {kind, trust, explanation, status} — via de
+/// reviewpoort (RelationProjection), nooit rechtstreeks.</summary>
 public class GraphSyncService(RbRulesDbContext db, IDriver driver)
 {
     public async Task<GraphSyncResult> SyncAsync(CancellationToken ct = default)
@@ -94,6 +97,22 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         var changes = await db.Changes.AsNoTracking()
             .Select(c => new { c.Id, c.ChangeType, c.Severity, c.DetectedAt, c.Summary, c.Meaning, c.Diff })
             .ToListAsync(ct);
+
+        // Dynamische relaties (#116): LLM-relaties gaan nooit rechtstreeks de
+        // graph in — hier projecteert de rebuild wat de reviewpoort doorlaat.
+        // RelationProjection (Domain, getest): rejected nooit; accepted en
+        // unreviewed (status als edge-property) alleen met een geaccepteerd
+        // kind (seed + geaccepteerde RelationKinds).
+        var acceptedKindSet = RelationProjection.AcceptedKindSet(
+            await db.RelationKinds.AsNoTracking()
+                .Where(k => k.Status == "accepted")
+                .Select(k => k.Kind)
+                .ToListAsync(ct));
+        var relations = (await db.Relations.AsNoTracking()
+                .Select(r => new { r.FromRef, r.ToRef, r.Kind, r.Explanation, r.Trust, r.Status })
+                .ToListAsync(ct))
+            .Where(r => RelationProjection.ShouldProject(r.Status, r.Kind, acceptedKindSet))
+            .ToList();
 
         // Pure mappers (Domain): topic→ref voor claims, naam/§-match voor
         // change-AFFECTS. Niet te matchen doelen ⇒ knoop zonder edge.
@@ -263,6 +282,16 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             ["detectedAt"] = c.DetectedAt.UtcDateTime.ToString("o"),
         }).ToList();
 
+        var relationRows = relations.Select(r => (object)new Dictionary<string, object?>
+        {
+            ["from"] = r.FromRef,
+            ["to"] = r.ToRef,
+            ["kind"] = r.Kind,
+            ["trust"] = r.Trust,
+            ["explanation"] = r.Explanation,
+            ["status"] = r.Status,
+        }).ToList();
+
         var affectsSection = new List<object>();
         var affectsCard = new List<object>();
         foreach (var c in changes)
@@ -339,6 +368,13 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             DETACH DELETE n
             """);
 
+        // RELATES_TO (#116) volledig herbouwen: de DETACH DELETE hierboven
+        // ruimt alleen edges aan kennislaag-knopen op — tussen persistente
+        // knopen (Card/Mechanic/…) zouden verwijderde of inmiddels verworpen
+        // relaties anders blijven hangen. Deterministisch: de edges hieronder
+        // zijn exact wat de reviewpoort nú doorlaat.
+        await tx.RunAsync("MATCH ()-[r:RELATES_TO]->() DELETE r");
+
         await RunRowsAsync(tx,
             "CREATE (r:RuleSection {ref: row.ref, code: row.code, sourceId: row.sourceId})",
             sectionRows);
@@ -394,6 +430,25 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         await RunEdgesAsync(tx, "MATCH (ch:Change {ref: p.change}) MATCH (t:RuleSection {ref: p.target}) MERGE (ch)-[:AFFECTS]->(t)", affectsSection);
         await RunEdgesAsync(tx, "MATCH (ch:Change {ref: p.change}) MATCH (t:Card {id: p.target}) MERGE (ch)-[:AFFECTS]->(t)", affectsCard);
 
+        // RELATES_TO als laatste: beide eindpunten kunnen elke knoopsoort
+        // zijn, dus pas nadat álle knopen bestaan. Match op de ref-property
+        // (per constructie globaal uniek, §2.1) zonder label — een label-loze
+        // property-match is een scan, maar de aantallen zijn klein (§2.2) en
+        // de rebuild draait toch al batched. MERGE op kind: twee kinds tussen
+        // hetzelfde paar zijn twee edges. Refs zonder knoop (verdwenen
+        // mechaniek, verwijderd doc) vallen stil weg — knoop zonder edge is
+        // het bestaande ABOUT-gedrag.
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (a {ref: row.from})
+            MATCH (b {ref: row.to})
+            MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)
+              SET r.trust = row.trust, r.explanation = row.explanation,
+                  r.status = row.status
+            """,
+            new Dictionary<string, object> { ["rows"] = relationRows });
+
         await tx.CommitAsync();
 
         return new(
@@ -406,7 +461,8 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             claimRows.Count,
             sourceRows.Count,
             erratumRows.Count,
-            changeRows.Count);
+            changeRows.Count,
+            relationRows.Count);
     }
 
     private static async Task RunPairsAsync(

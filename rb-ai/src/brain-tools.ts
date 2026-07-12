@@ -124,7 +124,9 @@ export function formatSearch(payload: unknown): string {
 
 /** §2.3 neighbors: items `{ref, name, edge, richting, props}`. Het veld heet
  * in §2.3 letterlijk "richting" (NL); we accepteren ook "direction" voor het
- * geval deelissue 2 het contract-Engels trekt. */
+ * geval deelissue 2 het contract-Engels trekt. Relaties met een kind-property
+ * (#116: RELATES_TO, INTERACTS_WITH) tonen kind en uitleg expliciet in de
+ * regel — het dynamische vocabulaire is juist de informatie. */
 export function formatNeighbors(payload: unknown): string {
   const items = itemList(payload, "neighbors");
   if (!items) return compactJson(payload);
@@ -133,15 +135,23 @@ export function formatNeighbors(payload: unknown): string {
     const it = asRecord(raw);
     const richting = str(it.richting) || str(it.direction) || "?";
     const name = str(it.name);
-    const props = cleanForJson(it.props);
-    const propsJson =
-      props && typeof props === "object" && Object.keys(props).length > 0
-        ? ` ${JSON.stringify(props)}`
+    const props = asRecord(it.props);
+    const kind = str(props.kind);
+    const explanation = str(props.explanation);
+    const rest = cleanForJson(
+      Object.fromEntries(
+        Object.entries(props).filter(([k]) => k !== "kind" && k !== "explanation"),
+      ),
+    );
+    const restJson =
+      rest && typeof rest === "object" && Object.keys(rest).length > 0
+        ? ` ${JSON.stringify(rest)}`
         : "";
     return (
-      `- ${richting} [${str(it.edge) || "?"}] ${str(it.ref) || "?"}` +
+      `- ${richting} [${str(it.edge) || "?"}${kind ? `:${kind}` : ""}] ${str(it.ref) || "?"}` +
       (name ? ` (${name})` : "") +
-      propsJson
+      (explanation ? ` — ${truncate(explanation, MAX_SNIPPET)}` : "") +
+      restJson
     );
   });
   if (items.length > MAX_ITEMS) lines.push(`… (+${items.length - MAX_ITEMS} meer)`);
@@ -149,8 +159,10 @@ export function formatNeighbors(payload: unknown): string {
 }
 
 /** §2.3 path: "kortste pad als keten [node, edge, node, …]" — de bewijsketen.
- * Aanname: knopen zijn objecten met minimaal {ref} (en evt. name); edges zijn
- * strings of objecten met {edge} of {type}. Andere vormen → compacte JSON. */
+ * Knopen zijn objecten met minimaal {ref} (en evt. name); edges zijn strings
+ * of objecten met {edge} of {type} — sinds #116 dragen kind-dragende edges
+ * (RELATES_TO) ook {kind}, dat als `EDGE:kind` in de keten verschijnt.
+ * Andere vormen → compacte JSON. */
 export function formatPath(payload: unknown): string {
   const chain = itemList(payload, "path");
   if (!chain) return compactJson(payload);
@@ -168,7 +180,8 @@ export function formatPath(payload: unknown): string {
       parts.push(name ? `${ref} (${name})` : ref);
     } else {
       const edge = str(o.edge) || str(o.type);
-      if (edge) parts.push(`-[${edge}]->`);
+      const kind = str(o.kind);
+      if (edge) parts.push(`-[${edge}${kind ? `:${kind}` : ""}]->`);
       else return compactJson(payload); // onbekende ketenvorm: niets weggooien
     }
   }
@@ -227,16 +240,22 @@ export const BRAIN_TOOLS: BrainToolDef[] = [
     name: "neighbors",
     description:
       "Buren van een knoop in de kennisgraaf, optioneel gefilterd op edge-types " +
-      "(bv. HAS_MECHANIC, INTERACTS_WITH, ABOUT, EXPLAINS, SUPPORTED_BY, SUPERSEDES, AFFECTS, PART_OF).",
+      "(bv. HAS_MECHANIC, INTERACTS_WITH, ABOUT, EXPLAINS, SUPPORTED_BY, SUPERSEDES, AFFECTS, PART_OF, RELATES_TO) " +
+      "en op kind (#116: de relatiesoort van dynamische relaties, bv. counters of enables).",
     schema: {
       ref: z.string().describe("BrainRef van de startknoop"),
       edges: z.string().optional().describe("Optioneel kommagescheiden edge-typefilter"),
+      kind: z
+        .string()
+        .optional()
+        .describe("Optioneel kind-filter op relaties met een kind-property, bv. counters"),
       take: z.number().int().min(1).max(50).optional().describe("Max buren"),
     },
     request: (a) => ({
       path: `/api/brain/neighbors/${encodeURIComponent(str(a.ref))}`,
       query: {
         edges: str(a.edges) || undefined,
+        kind: str(a.kind) || undefined,
         take: typeof a.take === "number" ? String(a.take) : undefined,
       },
     }),
@@ -245,12 +264,17 @@ export const BRAIN_TOOLS: BrainToolDef[] = [
   {
     name: "path",
     description:
-      "Kortste pad tussen twee refs in de kennisgraaf — de bewijsketen die twee begrippen verbindt.",
+      "Kortste pad tussen twee refs in de kennisgraaf — de bewijsketen die twee begrippen verbindt. " +
+      "Met kind-filter volgen kind-dragende schakels (RELATES_TO) alleen dat kind.",
     schema: {
       from: z.string().describe("BrainRef van het startpunt"),
       to: z.string().describe("BrainRef van het eindpunt"),
       // §2.3: maxLen=4 is de default in het contract; wij cappen op 6.
       maxLen: z.number().int().min(1).max(6).optional().describe("Max padlengte (default 4)"),
+      kind: z
+        .string()
+        .optional()
+        .describe("Optioneel kind-filter op relaties met een kind-property, bv. counters"),
     },
     request: (a) => ({
       path: "/api/brain/path",
@@ -258,6 +282,7 @@ export const BRAIN_TOOLS: BrainToolDef[] = [
         from: str(a.from),
         to: str(a.to),
         maxLen: typeof a.maxLen === "number" ? String(a.maxLen) : undefined,
+        kind: str(a.kind) || undefined,
       },
     }),
     format: formatPath,

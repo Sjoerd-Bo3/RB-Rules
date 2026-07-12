@@ -71,8 +71,37 @@ public class BrainQueryTests
         [
             "FROM_SET", "HAS_DOMAIN", "HAS_TAG", "HAS_MECHANIC", "INTERACTS_WITH",
             "PART_OF", "EXPLAINS", "ABOUT", "SUPPORTED_BY", "SUPERSEDES", "AFFECTS",
+            "RELATES_TO",
         ];
         Assert.Equal(verwacht.Order(), BrainQuery.EdgeTypes.Order());
+    }
+
+    // ── kind (#116): property-waarde, geen whitelist ───────────────────
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void TryParseKind_Empty_MeansNoFilter(string? value)
+    {
+        Assert.True(BrainQuery.TryParseKind(value, out var kind, out _));
+        Assert.Equal("", kind);
+    }
+
+    [Fact]
+    public void TryParseKind_NormalizesLikeTheMiner()
+    {
+        // Zelfde normalisatie als opslag (RelationMiner): "Counters" filtert
+        // hetzelfde als "counters" — de waarde blijft een Cypher-parameter.
+        Assert.True(BrainQuery.TryParseKind("  Wordt_Beperkt  Door ", out var kind, out _));
+        Assert.Equal("wordt beperkt door", kind);
+    }
+
+    [Fact]
+    public void TryParseKind_UnusableValue_Fails()
+    {
+        Assert.False(BrainQuery.TryParseKind("...", out _, out var error));
+        Assert.Contains("kind", error);
     }
 
     // ── richting ───────────────────────────────────────────────────────

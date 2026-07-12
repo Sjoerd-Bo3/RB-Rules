@@ -22,11 +22,15 @@ public static class BrainQuery
 
     /// <summary>Alle relatie-types die de graph kent (GraphSyncService +
     /// InteractionService). Whitelist voor het edges-filter: onbekende types
-    /// zijn een 400, geen stille lege lijst.</summary>
+    /// zijn een 400, geen stille lege lijst. Het dynamische vocabulaire van
+    /// #116 leeft NIET hier: het edge-TYPE blijft vast (RELATES_TO), het kind
+    /// is een property-waarde met een eigen, geparametriseerd filter
+    /// (<see cref="TryParseKind"/>).</summary>
     public static readonly string[] EdgeTypes =
     [
         "FROM_SET", "HAS_DOMAIN", "HAS_TAG", "HAS_MECHANIC", "INTERACTS_WITH",
         "PART_OF", "EXPLAINS", "ABOUT", "SUPPORTED_BY", "SUPERSEDES", "AFFECTS",
+        "RELATES_TO",
     ];
 
     /// <summary>Kommagescheiden laag-filter → set van laagnamen. Leeg/afwezig
@@ -77,6 +81,28 @@ public static class BrainQuery
             if (!result.Contains(match)) result.Add(match);
         }
         edges = [.. result];
+        return true;
+    }
+
+    /// <summary>Kind-filter (#116): een open vocabulaire-waarde, dus bewust
+    /// géén whitelist — de waarde gaat uitsluitend als Cypher-parameter mee
+    /// (r.kind = $kind), nooit de query-tekst in. Normalisatie via
+    /// RelationMiner zodat "Counters" hetzelfde filtert als "counters";
+    /// onbruikbare invoer (leeg na normalisatie, of een halve zin) is een
+    /// fout. Leeg/afwezig = geen filter (lege string).</summary>
+    public static bool TryParseKind(string? value, out string kind, out string error)
+    {
+        kind = "";
+        error = "";
+        if (string.IsNullOrWhiteSpace(value)) return true;
+
+        if (RelationMiner.NormalizeKind(value) is not { } normalized)
+        {
+            error = $"onbruikbaar kind '{value}' — een kind is een kort relatielabel "
+                + "zoals counters, enables of wordt beperkt door";
+            return false;
+        }
+        kind = normalized;
         return true;
     }
 

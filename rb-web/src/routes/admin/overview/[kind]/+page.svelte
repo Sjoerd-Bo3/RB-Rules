@@ -50,6 +50,18 @@
 	}
 	interface ClaimStatusCount { status: string; count: number; }
 	interface ClaimOverview extends Paged<ClaimItem> { statusCounts: ClaimStatusCount[]; }
+	interface RelationItem {
+		id: number; fromRef: string; fromName: string | null; toRef: string; toName: string | null;
+		kind: string; explanation: string; provenance: string; trust: number;
+		status: string; detectedAt: string;
+	}
+	interface RelationKindItem {
+		id: number; kind: string; status: string; occurrences: number;
+		firstSeen: string; reviewedAt: string | null;
+	}
+	interface RelationOverview extends Paged<RelationItem> {
+		statusCounts: ClaimStatusCount[]; kinds: RelationKindItem[];
+	}
 	interface ProposalItem {
 		id: number; url: string; name: string; type: string; motivation: string;
 		status: string; foundAt: string; reviewedAt: string | null;
@@ -96,6 +108,7 @@
 		correcties: { title: 'Correcties', sub: 'feedback op antwoorden en geverifieerde rulings' },
 		primer: { title: 'Spelbegrip-primer', sub: 'alle spelbegrip-docs, bewerkbaar — goedgekeurde docs voeden elke ruling' },
 		claims: { title: 'Community-claims', sub: 'beweringen uit community-bronnen met corroboratie en bron-trust — geaccepteerde claims worden het community-kanaal (#51)' },
+		relaties: { title: 'Relaties', sub: 'LLM-ontdekte relaties tussen de kennislagen — de graph-sync projecteert alleen geaccepteerde en ongereviewde voorstellen met een geaccepteerd kind, verworpen nooit' },
 		voorstellen: { title: 'Bronvoorstellen', sub: 'webvondsten van de scout — accepteren zet de bron uitgeschakeld in het register, aanzetten gaat daarna via de bronnen-tabel' },
 		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' },
 		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — de cheap/hard-verdeling is de kosten-indicatie; quota en blokkade zijn hier bij te stellen' }
@@ -112,6 +125,9 @@
 	const corrections = $derived(data.kind === 'correcties' ? ((data.data ?? []) as CorrectionItem[]) : []);
 	const knowledge = $derived(data.kind === 'primer' ? ((data.data ?? []) as KnowledgeItem[]) : []);
 	const claims = $derived(data.kind === 'claims' ? (data.data as ClaimOverview | null) : null);
+	const relations = $derived(data.kind === 'relaties' ? (data.data as RelationOverview | null) : null);
+	const relationKindCandidates = $derived((relations?.kinds ?? []).filter((k) => k.status === 'candidate'));
+	const acceptedRelationKinds = $derived((relations?.kinds ?? []).filter((k) => k.status === 'accepted'));
 	const proposals = $derived(data.kind === 'voorstellen' ? (data.data as ProposalOverview | null) : null);
 
 	// Status-vocabulaire van de claims-pipeline (#50): kleur + NL-label.
@@ -175,7 +191,12 @@
 		editing = null;
 	});
 
-	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims ?? proposals ?? users);
+	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims ?? relations ?? proposals ?? users);
+
+	/** Deeplink naar de brein-verkenner: elke ref is daar klikbaar te verkennen. */
+	function graphHref(ref: string): string {
+		return `/graph?ref=${encodeURIComponent(ref)}`;
+	}
 	const totalPages = $derived(paged ? Math.max(1, Math.ceil(paged.total / paged.pageSize)) : 1);
 
 	function href(overrides: { page?: number; filter?: string; source?: string }): string {
@@ -228,6 +249,15 @@
 				<!-- Som over de statussen: claims.total is het gefilterde totaal. -->
 				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({claims.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
 				{#each claims.statusCounts as s (s.status)}
+					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{claimStatus(s.status).label} ({s.count})</a>
+				{/each}
+			</div>
+		{:else if data.kind === 'relaties' && relations}
+			<div class="chips">
+				<!-- Som over de statussen: relations.total is het gefilterde totaal;
+				     het statusvocabulaire deelt de claims-labels (#116). -->
+				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({relations.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
+				{#each relations.statusCounts as s (s.status)}
 					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{claimStatus(s.status).label} ({s.count})</a>
 				{/each}
 			</div>
@@ -511,6 +541,69 @@
 				</div>
 			{/each}
 			{#if !claims.items.length}<p class="meta">Geen claims{data.filter ? ' met deze status' : ' — draai "Claims minen" in het beheer'}.</p>{/if}
+		{/if}
+
+		<!-- Relaties (#116): kandidaat-kinds eerst (vocabulaire-poort), dan de
+		     voorstellen zelf — van→naar klikbaar naar de brein-verkenner. -->
+		{#if relations}
+			{#if relationKindCandidates.length}
+				<h2 class="gap-h">Kandidaat-kinds <span class="meta">({relationKindCandidates.length} open — relaties met een niet-geaccepteerd kind blijven buiten de graph)</span></h2>
+				{#each relationKindCandidates as k (k.id)}
+					<div class="panel item corr">
+						<div class="corr-body">
+							<p class="item-head">
+								<strong>{k.kind}</strong>
+								<span class="badge warn-b">kandidaat</span>
+								<span class="meta">{k.occurrences} {k.occurrences === 1 ? 'voorstel' : 'voorstellen'} · gezien {fmtDate(k.firstSeen)}</span>
+							</p>
+						</div>
+						<div class="corr-actions">
+							<form method="POST" action="?/acceptRelationKind" use:enhance>
+								<input type="hidden" name="id" value={k.id} />
+								<button class="small" title="Relaties met dit kind gaan mee bij de volgende graph-sync">Accepteer</button>
+							</form>
+							<form method="POST" action="?/rejectRelationKind" use:enhance>
+								<input type="hidden" name="id" value={k.id} />
+								<button class="ghost small" title="Komt niet opnieuw de queue in; nieuwe voorstellen met dit kind worden genegeerd">Verwerp</button>
+							</form>
+						</div>
+					</div>
+				{/each}
+			{/if}
+			{#if acceptedRelationKinds.length}
+				<p class="meta">Kind-vocabulaire naast de seed-lijst: {acceptedRelationKinds.map((k) => k.kind).join(', ')}</p>
+			{/if}
+
+			{#each relations.items as r (r.id)}
+				<div class="panel item corr">
+					<div class="corr-body">
+						<p class="item-head">
+							<span class="badge {claimStatus(r.status).badge}">{claimStatus(r.status).label}</span>
+							<span class="badge ok-b">{r.kind}</span>
+							<a href={graphHref(r.fromRef)} title="Verken deze knoop in de brein-verkenner"><strong>{r.fromName ?? r.fromRef}</strong></a>
+							<span class="meta">→</span>
+							<a href={graphHref(r.toRef)} title="Verken deze knoop in de brein-verkenner"><strong>{r.toName ?? r.toRef}</strong></a>
+						</p>
+						<p class="pre">{r.explanation}</p>
+						<p class="meta refs">bron: {r.provenance} · trust {r.trust.toFixed(2)} · {fmtDate(r.detectedAt)}{r.fromName ? ` · ${r.fromRef}` : ''}{r.toName ? ` → ${r.toRef}` : ''}</p>
+					</div>
+					<div class="corr-actions">
+						{#if r.status !== 'accepted'}
+							<form method="POST" action="?/acceptRelation" use:enhance>
+								<input type="hidden" name="id" value={r.id} />
+								<button class="small" title="Mee in de graph bij de volgende sync (mits het kind geaccepteerd is)">Bevestig</button>
+							</form>
+						{/if}
+						{#if r.status !== 'rejected'}
+							<form method="POST" action="?/rejectRelation" use:enhance>
+								<input type="hidden" name="id" value={r.id} />
+								<button class="ghost small" title="Uit de projectie; wordt niet opnieuw voorgesteld">Verwerp</button>
+							</form>
+						{/if}
+					</div>
+				</div>
+			{/each}
+			{#if !relations.items.length}<p class="meta">Geen relatievoorstellen{data.filter ? ' met deze status' : ' — draai "Relaties minen" in het beheer'}.</p>{/if}
 		{/if}
 
 		<!-- Bronvoorstellen (#63): url + type-inschatting + motivatie + reviewacties -->

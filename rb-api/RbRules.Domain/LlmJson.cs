@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace RbRules.Domain;
 
 /// <summary>Gedeelde tolerante JSON-vondst in LLM-antwoorden. Kandidaat-blokken
@@ -39,6 +41,46 @@ public static class LlmJson
             else if (c is '}' or ']' && --depth == 0)
             {
                 return c == close ? raw[start..(i + 1)] : null;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Pakt de JSON uit een LLM-antwoord en geeft de array-items
+    /// terug: een object met <paramref name="property"/>, of een kale array
+    /// (prompt-afwijkingstolerantie). null als er niets bruikbaars staat.
+    /// Gedeeld door de claims- en relatie-parsers (#93/#116): kandidaat-
+    /// blokken via <see cref="Candidates"/> — de oude first/last-bracket-
+    /// extractie brak op prose rond de JSON met "[1]"-achtige markers
+    /// (zelfde bug als de scout, PR #87).</summary>
+    public static List<JsonElement>? ExtractItems(string raw, string property)
+    {
+        foreach (var json in Candidates(raw))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object
+                    && root.TryGetProperty(property, out var p)
+                    && p.ValueKind == JsonValueKind.Array)
+                {
+                    // Clone: de elementen moeten het JsonDocument overleven.
+                    return [.. p.EnumerateArray().Select(e => e.Clone())];
+                }
+                // Kale array — tolerantie voor prompt-afwijking, maar alleen
+                // als er echt item-objecten in staan (of hij leeg is): "[1]"
+                // uit een bronvermelding is géén item-lijst (scout-les, #87).
+                if (root.ValueKind == JsonValueKind.Array
+                    && (root.GetArrayLength() == 0
+                        || root.EnumerateArray().Any(i => i.ValueKind == JsonValueKind.Object)))
+                {
+                    return [.. root.EnumerateArray().Select(e => e.Clone())];
+                }
+            }
+            catch (JsonException)
+            {
+                // geen geldige JSON op deze positie — volgende kandidaat
             }
         }
         return null;
