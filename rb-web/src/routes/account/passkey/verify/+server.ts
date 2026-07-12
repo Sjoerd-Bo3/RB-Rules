@@ -19,6 +19,13 @@ export const POST: RequestHandler = async ({ request, cookies, getClientAddress,
 			},
 			body: JSON.stringify({ token: body?.token ?? '', response: body?.response ?? null })
 		});
+		// De rate-limiter (429) antwoordt zonder body — geef daar een
+		// bruikbare melding voor terug in plaats van een parse-fout.
+		if (res.status === 429)
+			return json(
+				{ error: 'Te veel passkey-pogingen — probeer het over een kwartier opnieuw.' },
+				{ status: 429 }
+			);
 		const payload = await res
 			.json()
 			.catch(() => ({ error: 'Onleesbaar antwoord van de server — probeer het opnieuw.' }));

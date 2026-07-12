@@ -54,8 +54,8 @@ public static class AuthEndpoints
         });
 
         // ── Passkeys (#109): WebAuthn als primaire login, geen mail nodig ──
-        // Zelfde "auth"-rate-limit als de magic-link: de ceremonie-routes zijn
-        // publiek en mogen niet als gratis schrijf-/probeerkanaal dienen.
+        // Eigen "webauthn"-rate-limit: publiek en dus begrensd, maar ruimer
+        // dan de mail-route — elke ceremonie kost twee requests.
         app.MapPost("/api/auth/passkey/register/options", async (
             PasskeyRegisterOptionsDto body, HttpRequest req,
             UserAccountService accounts, PasskeyService passkeys) =>
@@ -66,7 +66,7 @@ public static class AuthEndpoints
             return r.Error is not null
                 ? Results.BadRequest(new { error = r.Error })
                 : CeremonyResponse(r.Ceremony!);
-        }).RequireRateLimiting("auth");
+        }).RequireRateLimiting("webauthn");
 
         app.MapPost("/api/auth/passkey/register/verify", async (
             PasskeyRegisterVerifyDto body, PasskeyService passkeys) =>
@@ -84,11 +84,11 @@ public static class AuthEndpoints
                 email = r.Session?.Email,
                 expiresAt = r.Session?.ExpiresAt,
             });
-        }).RequireRateLimiting("auth");
+        }).RequireRateLimiting("webauthn");
 
         app.MapPost("/api/auth/passkey/login/options", async (PasskeyService passkeys) =>
             CeremonyResponse(await passkeys.BeginLoginAsync()))
-            .RequireRateLimiting("auth");
+            .RequireRateLimiting("webauthn");
 
         app.MapPost("/api/auth/passkey/login/verify", async (
             PasskeyLoginVerifyDto body, PasskeyService passkeys) =>
@@ -97,7 +97,7 @@ public static class AuthEndpoints
                 : await passkeys.FinishLoginAsync(body.Token, body.Response) is { } s
                     ? Results.Ok(new { token = s.SessionToken, email = s.Email, expiresAt = s.ExpiresAt })
                     : Results.BadRequest(new { error = "de passkey kon niet geverifieerd worden — probeer het opnieuw" }))
-            .RequireRateLimiting("auth");
+            .RequireRateLimiting("webauthn");
 
         // Beheer van eigen passkeys — voedt de accountpagina in rb-web.
         app.MapGet("/api/auth/passkeys", async (

@@ -113,6 +113,20 @@ builder.Services.AddRateLimiter(o =>
             Window = TimeSpan.FromMinutes(15),
             QueueLimit = 0,
         }));
+    // Passkey-ceremonies (#109): ruimer dan "auth", want elke ceremonie kost
+    // twee requests (options + verify) en er is geen mail om te bombarderen —
+    // dit remt alleen challenge-rijen flooden (die bovendien elke options-
+    // aanroep opgeruimd worden). 8/15min bleek in de praktijk al te krap voor
+    // registreren + een paar keer in-/uitloggen achter één (gedeeld) IP.
+    o.AddPolicy("webauthn", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        "webauthn:" + (ctx.Request.Headers["X-Client-Ip"].FirstOrDefault()
+            ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "anon"),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 30,
+            Window = TimeSpan.FromMinutes(15),
+            QueueLimit = 0,
+        }));
 });
 
 var app = builder.Build();
