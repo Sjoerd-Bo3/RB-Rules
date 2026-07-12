@@ -66,6 +66,7 @@ builder.Services.AddScoped<RelationMiningService>();
 // Agentic-terugkoppeling (#120): voorstellen die de ask-agent achterlaat.
 builder.Services.AddScoped<AgenticRelationService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
+builder.Services.AddScoped<ReviewNoteService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();
 // Run_log-grootboek voor periodieke jobs (#122): vensters voor de scheduler

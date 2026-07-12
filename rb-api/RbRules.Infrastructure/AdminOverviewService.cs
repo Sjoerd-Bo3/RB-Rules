@@ -37,17 +37,19 @@ public record ClaimSourceOverviewItem(
 public record ClaimOverviewItem(
     long Id, string TopicType, string TopicRef, string Statement,
     int Corroboration, double TrustScore, string Status, string? StatusReason,
-    string OfficialStatus, DateTimeOffset FirstSeen, DateTimeOffset LastSeen,
+    string OfficialStatus, string? ReviewNote, DateTimeOffset? ArchivedAt,
+    DateTimeOffset FirstSeen, DateTimeOffset LastSeen,
     IReadOnlyList<ClaimSourceOverviewItem> Sources);
 public record ClaimStatusCount(string Status, int Count);
 public record ClaimOverview(
     int Total, int Page, int PageSize,
-    IReadOnlyList<ClaimStatusCount> StatusCounts, IReadOnlyList<ClaimOverviewItem> Items);
+    IReadOnlyList<ClaimStatusCount> StatusCounts, int Archived,
+    IReadOnlyList<ClaimOverviewItem> Items);
 
 public record RelationOverviewItem(
     long Id, string FromRef, string? FromName, string ToRef, string? ToName,
     string Kind, string Explanation, string Provenance, double Trust,
-    string Status, DateTimeOffset DetectedAt);
+    string Status, string? ReviewNote, DateTimeOffset? ArchivedAt, DateTimeOffset DetectedAt);
 /// <summary>Bewijs bij een kandidaat-kind (#123): een voorbeeldvoorstel
 /// dat het kind draagt, zodat reviewen geen gokken is.</summary>
 public record RelationKindExample(
@@ -59,7 +61,7 @@ public record RelationKindOverviewItem(
 public record RelationStatusCount(string Status, int Count);
 public record RelationOverview(
     int Total, int Page, int PageSize,
-    IReadOnlyList<RelationStatusCount> StatusCounts,
+    IReadOnlyList<RelationStatusCount> StatusCounts, int Archived,
     IReadOnlyList<RelationKindOverviewItem> Kinds,
     IReadOnlyList<RelationOverviewItem> Items);
 
@@ -206,31 +208,44 @@ public class AdminOverviewService(RbRulesDbContext db)
 
     /// <summary>Claims-overzicht (#50): status-chips + per claim de bronnen
     /// (twee stappen, zelfde patroon als Interactions — geen joins over alles;
-    /// embeddings blijven buiten de projectie).</summary>
+    /// embeddings blijven buiten de projectie). Default-weergave (#124): geen
+    /// status = alleen te-reviewen, niet-gearchiveerd — het overzicht toont
+    /// standaard wat aandacht vraagt; afgehandeld en archief zitten achter
+    /// chips ("archived"/"all"), met unreviewed bovenaan in de alles-weergave.</summary>
     public async Task<ClaimOverview> ClaimsAsync(string? status, int page)
     {
         page = ClampPage(page);
+        // Chip-tellingen: statussen over het niet-gearchiveerde deel, het
+        // archief als eigen teller (gearchiveerd is een zicht-, geen status-laag).
         var statusCounts = (await db.Claims.AsNoTracking()
+                .Where(c => c.ArchivedAt == null)
                 .GroupBy(c => c.Status)
                 .Select(g => new { g.Key, Count = g.Count() })
                 .OrderBy(s => s.Key)
                 .ToListAsync())
             .Select(s => new ClaimStatusCount(s.Key, s.Count))
             .ToList();
+        var archived = await db.Claims.CountAsync(c => c.ArchivedAt != null);
 
         var query = db.Claims.AsNoTracking();
-        if (!string.IsNullOrWhiteSpace(status))
-            query = query.Where(c => c.Status == status);
+        query = string.IsNullOrWhiteSpace(status) switch
+        {
+            true => query.Where(c => c.Status == "unreviewed" && c.ArchivedAt == null),
+            false when status == "all" => query,
+            false when status == "archived" => query.Where(c => c.ArchivedAt != null),
+            _ => query.Where(c => c.Status == status && c.ArchivedAt == null),
+        };
 
         var total = await query.CountAsync();
         var rows = await query
-            .OrderByDescending(c => c.LastSeen).ThenBy(c => c.Id)
+            .OrderBy(c => c.Status == "unreviewed" && c.ArchivedAt == null ? 0 : 1)
+            .ThenByDescending(c => c.LastSeen).ThenBy(c => c.Id)
             .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
             .Select(c => new
             {
                 c.Id, c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
                 c.TrustScore, c.Status, c.StatusReason, c.OfficialStatus,
-                c.FirstSeen, c.LastSeen,
+                c.ReviewNote, c.ArchivedAt, c.FirstSeen, c.LastSeen,
             })
             .ToListAsync();
 
@@ -251,26 +266,30 @@ public class AdminOverviewService(RbRulesDbContext db)
         var items = rows.Select(c => new ClaimOverviewItem(
                 c.Id, c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
                 c.TrustScore, c.Status, c.StatusReason, c.OfficialStatus,
-                c.FirstSeen, c.LastSeen,
+                c.ReviewNote, c.ArchivedAt, c.FirstSeen, c.LastSeen,
                 bySrc.GetValueOrDefault(c.Id, [])))
             .ToList();
-        return new(total, page, PageSize, statusCounts, items);
+        return new(total, page, PageSize, statusCounts, archived, items);
     }
 
     /// <summary>Relatievoorstellen (#116): status-chips + het kind-vocabulaire
     /// (kandidaten eerst, MechanicVocabulary-sortering) + de voorstellen zelf.
     /// Kaart-refs krijgen hun naam erbij (twee stappen, Interactions-patroon);
-    /// andere ref-soorten zijn zelf leesbaar (mechanic:Deflect).</summary>
+    /// andere ref-soorten zijn zelf leesbaar (mechanic:Deflect).
+    /// Default-weergave (#124, claims-patroon): geen status = alleen
+    /// te-reviewen en niet-gearchiveerd; archief/alles achter chips.</summary>
     public async Task<RelationOverview> RelationsAsync(string? status, int page)
     {
         page = ClampPage(page);
         var statusCounts = (await db.Relations.AsNoTracking()
+                .Where(r => r.ArchivedAt == null)
                 .GroupBy(r => r.Status)
                 .Select(g => new { g.Key, Count = g.Count() })
                 .OrderBy(s => s.Key)
                 .ToListAsync())
             .Select(s => new RelationStatusCount(s.Key, s.Count))
             .ToList();
+        var archived = await db.Relations.CountAsync(r => r.ArchivedAt != null);
 
         var kindRows = await db.RelationKinds.AsNoTracking()
             .OrderBy(k => k.Status == "candidate" ? 0 : 1)
@@ -295,12 +314,18 @@ public class AdminOverviewService(RbRulesDbContext db)
         }
 
         var query = db.Relations.AsNoTracking();
-        if (!string.IsNullOrWhiteSpace(status))
-            query = query.Where(r => r.Status == status);
+        query = string.IsNullOrWhiteSpace(status) switch
+        {
+            true => query.Where(r => r.Status == "unreviewed" && r.ArchivedAt == null),
+            false when status == "all" => query,
+            false when status == "archived" => query.Where(r => r.ArchivedAt != null),
+            _ => query.Where(r => r.Status == status && r.ArchivedAt == null),
+        };
 
         var total = await query.CountAsync();
         var rows = await query
-            .OrderByDescending(r => r.DetectedAt).ThenBy(r => r.Id)
+            .OrderBy(r => r.Status == "unreviewed" && r.ArchivedAt == null ? 0 : 1)
+            .ThenByDescending(r => r.DetectedAt).ThenBy(r => r.Id)
             .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
             .ToListAsync();
 
@@ -330,9 +355,10 @@ public class AdminOverviewService(RbRulesDbContext db)
 
         var items = rows.Select(r => new RelationOverviewItem(
                 r.Id, r.FromRef, NameFor(r.FromRef), r.ToRef, NameFor(r.ToRef),
-                r.Kind, r.Explanation, r.Provenance, r.Trust, r.Status, r.DetectedAt))
+                r.Kind, r.Explanation, r.Provenance, r.Trust, r.Status,
+                r.ReviewNote, r.ArchivedAt, r.DetectedAt))
             .ToList();
-        return new(total, page, PageSize, statusCounts, kinds, items);
+        return new(total, page, PageSize, statusCounts, archived, kinds, items);
     }
 
     /// <summary>Bronvoorstellen uit de scout (#63): status-chips + de
