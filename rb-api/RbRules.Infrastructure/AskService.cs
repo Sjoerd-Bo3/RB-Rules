@@ -30,10 +30,22 @@ public record AskClaim(
     int Corroboration, double TrustScore, string OfficialStatus,
     IReadOnlyList<AskClaimSource> Sources);
 
+public record AskMisconceptionSource(string SourceName, string Url, string? Quote);
+
+/// <summary>Gedocumenteerde misvatting in het antwoord (#125): het misvatting-
+/// blok naast de community-consensus toont beide bewijzen — het community-
+/// citaat (bron + quote) én de officiële weerlegging (met §-link waar de
+/// weerlegging een sectie noemt).</summary>
+public record AskMisconception(
+    string TopicType, string TopicRef, string Statement,
+    string Rebuttal, string? RebuttalSection,
+    IReadOnlyList<AskMisconceptionSource> Sources);
+
 public record AskResult(
     string Answer, IReadOnlyList<Citation> Citations,
     IReadOnlyList<AskCard> Cards, string QuestionType,
-    bool Ok = true, IReadOnlyList<AskClaim>? Claims = null);
+    bool Ok = true, IReadOnlyList<AskClaim>? Claims = null,
+    IReadOnlyList<AskMisconception>? Misconceptions = null);
 
 /// <summary>Vroege metadata voor het streamingpad (#31): vraagtype, citaties
 /// en community-claims staan al vast vóór de LLM-call — de UI kan daarmee de
@@ -417,6 +429,39 @@ public class AskService(
             }
         }
 
+        // 5c. Misvattingen-kanaal (#125): rejected/superseded claims mét
+        // weerlegging (StatusReason; de verwerp-notities van #124 komen hier
+        // later bij) zijn negatieve kennis — "zo zit het dus níet". Zelfde
+        // afstands-plafond als 5b, eigen cap en eigen label; de poort
+        // (ClaimRetrieval.SelectMisconceptions) is puur en getest, de query
+        // een virtual voorselectie (test-seam, zie MisconceptionCandidatesAsync).
+        var misconceptions = ClaimRetrieval.SelectMisconceptions(
+            await MisconceptionCandidatesAsync(qv, ct));
+        var misconceptionBlock = ClaimRetrieval.MisconceptionBlock(
+            [.. misconceptions.Select(m => new RetrievedMisconception(
+                m.TopicType, m.TopicRef, m.Statement, m.StatusReason!))]);
+        // Trace: zelfde kennislagen-veld als de claims, herkenbaar aan het
+        // "misvatting:"-prefix — bewust geen eigen kolom/migratie.
+        claimTraceRefs.AddRange(misconceptions.Select(m =>
+            $"misvatting:{m.TopicType}:{m.TopicRef}"));
+        var askMisconceptions = new List<AskMisconception>();
+        if (misconceptions.Count > 0)
+        {
+            // Beide bewijzen voor het misvatting-blok in de UI: het
+            // community-citaat (bron + quote) én de officiële weerlegging.
+            var misconceptionIds = misconceptions.Select(m => m.Id).ToList();
+            var misconceptionSources = await db.ClaimSources.AsNoTracking()
+                .Where(s => misconceptionIds.Contains(s.ClaimId))
+                .Join(db.Sources, cs => cs.SourceId, s => s.Id,
+                    (cs, s) => new { cs.ClaimId, s.Name, cs.Url, cs.QuoteExcerpt })
+                .ToListAsync(ct);
+            askMisconceptions.AddRange(misconceptions.Select(m => new AskMisconception(
+                m.TopicType, m.TopicRef, m.Statement, m.StatusReason!,
+                ClaimRetrieval.RebuttalSection(m.StatusReason!),
+                [.. misconceptionSources.Where(s => s.ClaimId == m.Id)
+                    .Select(s => new AskMisconceptionSource(s.Name, s.Url, s.QuoteExcerpt))])));
+        }
+
         // Doorvraag-gesprek (#41): eerdere rondes gecapt in de prompt.
         var historyBlock = turns.Count == 0
             ? ""
@@ -432,9 +477,10 @@ public class AskService(
 
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
         // Blok-volgorde = de kennispiramide van #51: officieel (fragmenten,
-        // rulings, kaartfeiten, banlijst) > primer > community-interpretatie.
+        // rulings, kaartfeiten, banlijst) > primer > community-interpretatie >
+        // misvattingen (#125, negatieve kennis — onderaan, kleurt nooit het oordeel).
         var prompt =
-            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{historyBlock}\n\n{questionLabel}: {question}";
+            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{misconceptionBlock}{historyBlock}\n\n{questionLabel}: {question}";
         var system = $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}";
         var task = images is { Count: > 0 } ? "hard" : "cheap";
 
@@ -632,7 +678,8 @@ public class AskService(
         }
 
         return new(answer, citations, cards, type.ToString(),
-            Ok: aiAnswer is not null, Claims: askClaims);
+            Ok: aiAnswer is not null, Claims: askClaims,
+            Misconceptions: askMisconceptions);
     }
 
     /// <summary>Consumeert de rb-ai-stream: deltas door naar de UI, het
@@ -698,6 +745,33 @@ public class AskService(
             .Select(c => new { c.Id, c.SourceId })
             .ToListAsync(ct);
         return [.. hits.Select(h => (h.Id, h.SourceId))];
+    }
+
+    /// <summary>Nearest-neighbour-voorselectie voor het misvattingen-kanaal
+    /// (#125): rejected/superseded claims mét weerlegging, op afstand van de
+    /// vraag. De echte poort (weerlegging-eis, afstands-cap, cap) is
+    /// ClaimRetrieval.SelectMisconceptions — puur en getest; die draait ook
+    /// over wat deze query aanlevert. Virtual als test-seam: CosineDistance
+    /// vertaalt alleen naar Postgres (zelfde reden als FullTextChunksAsync).
+    /// Zonder query-vector (embedding-uitval, #100) vervalt het kanaal.</summary>
+    protected virtual async Task<List<MisconceptionCandidate>> MisconceptionCandidatesAsync(
+        Vector? qv, CancellationToken ct)
+    {
+        if (qv is null) return [];
+        var rows = await db.Claims.AsNoTracking()
+            .Where(c => (c.Status == "rejected" || c.Status == "superseded")
+                && c.StatusReason != null && c.StatusReason != ""
+                && c.Embedding != null)
+            .OrderBy(c => c.Embedding!.CosineDistance(qv))
+            .Take(ClaimRetrieval.MisconceptionCap)
+            .Select(c => new
+            {
+                c.Id, c.TopicType, c.TopicRef, c.Statement, c.Status, c.StatusReason,
+                Distance = c.Embedding!.CosineDistance(qv),
+            })
+            .ToListAsync(ct);
+        return [.. rows.Select(r => new MisconceptionCandidate(
+            r.Id, r.TopicType, r.TopicRef, r.Statement, r.Status, r.StatusReason, r.Distance))];
     }
 
     /// <summary>Canonieke kaarten waarvan de naam letterlijk in de (lowercase)

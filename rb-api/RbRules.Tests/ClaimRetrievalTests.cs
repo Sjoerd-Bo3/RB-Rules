@@ -85,4 +85,115 @@ public class ClaimRetrievalTests
         // model nooit een eigen "Regelbasis"-blok laten bouwen.
         Assert.DoesNotContain("Regelbasis", ClaimRetrieval.PromptBlock([Claim()]));
     }
+
+    // ── Misvattingen-kanaal (#125) ─────────────────────────────────────
+
+    private static MisconceptionCandidate Candidate(
+        long id = 1, string status = "rejected",
+        string? reason = "§466.2 zegt dat Deflect alleen gekozen targets blokkeert.",
+        double distance = 0.2, string topicRef = "Deflect") =>
+        new(id, "mechanic", topicRef,
+            "Deflect blokkeert ook spells zonder targets.", status, reason, distance);
+
+    [Fact]
+    public void SelectMisconceptions_RejectedZonderWeerlegging_DoetNietMee()
+    {
+        // Randvoorwaarde uit #125: een kale rejected zonder reden is geen
+        // kennis — alleen misvattingen mét weerlegging doen mee.
+        var selected = ClaimRetrieval.SelectMisconceptions([
+            Candidate(1, reason: null),
+            Candidate(2, reason: ""),
+            Candidate(3, reason: "   "),
+            Candidate(4, reason: "§101 spreekt dit tegen."),
+        ]);
+
+        var only = Assert.Single(selected);
+        Assert.Equal(4, only.Id);
+    }
+
+    [Fact]
+    public void SelectMisconceptions_AlleenRejectedOfSuperseded()
+    {
+        // Accepted/unreviewed claims zijn géén misvattingen — ook niet als er
+        // toevallig een StatusReason staat.
+        var selected = ClaimRetrieval.SelectMisconceptions([
+            Candidate(1, status: "accepted"),
+            Candidate(2, status: "unreviewed"),
+            Candidate(3, status: "superseded"),
+        ]);
+
+        var only = Assert.Single(selected);
+        Assert.Equal(3, only.Id);
+    }
+
+    [Fact]
+    public void SelectMisconceptions_CaptOpTwee_DichtstbijEerst()
+    {
+        var selected = ClaimRetrieval.SelectMisconceptions([
+            Candidate(1, distance: 0.30),
+            Candidate(2, distance: 0.10),
+            Candidate(3, distance: 0.20),
+        ]);
+
+        Assert.Equal(2, selected.Count);
+        Assert.Equal(new[] { 2L, 3L }, selected.Select(c => c.Id));
+    }
+
+    [Fact]
+    public void SelectMisconceptions_RespecteertHetAfstandsPlafond()
+    {
+        // Zelfde plafond als het claims-kanaal (#51): liever géén misvatting
+        // dan een misvatting over een ander onderwerp.
+        var selected = ClaimRetrieval.SelectMisconceptions([
+            Candidate(1, distance: ClaimRetrieval.MaxDistance + 0.01),
+        ]);
+
+        Assert.Empty(selected);
+    }
+
+    [Fact]
+    public void MisconceptionPromptLabel_MetSectie_NoemtDeParagraaf()
+    {
+        var m = new RetrievedMisconception("mechanic", "Deflect",
+            "Deflect blokkeert alles.", "§466.2 zegt dat Deflect alleen gekozen targets blokkeert.");
+        Assert.Equal("[misvatting, weerlegd door §466.2]",
+            ClaimRetrieval.MisconceptionPromptLabel(m));
+    }
+
+    [Fact]
+    public void MisconceptionPromptLabel_ZonderSectie_BlijftOfficieelWeerlegd()
+    {
+        // De beheerders-afwijzing heeft geen §-verwijzing — het label blijft
+        // eerlijk generiek in plaats van een sectie te verzinnen.
+        var m = new RetrievedMisconception("mechanic", "Deflect",
+            "Deflect blokkeert alles.", "door de beheerder afgewezen");
+        Assert.Equal("[misvatting, officieel weerlegd]",
+            ClaimRetrieval.MisconceptionPromptLabel(m));
+    }
+
+    [Fact]
+    public void MisconceptionBlock_Empty_WhenNone() =>
+        Assert.Equal("", ClaimRetrieval.MisconceptionBlock([]));
+
+    [Fact]
+    public void MisconceptionBlock_DwingtDeWeerlegFramingAf()
+    {
+        // Regressietest in de stijl van StructureFor_NeverAsksForOwnRuleBasisSection
+        // (#69/#125): het misvattingen-blok moet om de weerleg-framing vragen —
+        // alleen benoemen bij echte gelijkenis, altijd in "Let op", nooit als
+        // waarheid — en mag nooit een eigen Regelbasis-sectie uitlokken.
+        var block = ClaimRetrieval.MisconceptionBlock([new RetrievedMisconception(
+            "mechanic", "Deflect", "Deflect blokkeert ook spells zonder targets.",
+            "§466.2 zegt dat Deflect alleen gekozen targets blokkeert.")]);
+
+        Assert.Contains("[misvatting, weerlegd door §466.2] Deflect:", block);
+        Assert.Contains("GEDOCUMENTEERDE MISVATTINGEN", block);
+        // De framing uit issue #125, letterlijk afgedwongen.
+        Assert.Contains("een veelgemaakte lezing is X, maar [n] zegt Y", block);
+        Assert.Contains("### Let op", block);
+        Assert.Contains("nooit als waarheid", block);
+        Assert.Contains("als de vraag er inhoudelijk echt op lijkt", block);
+        // #69-contract intact: geen eigen Regelbasis-sectie.
+        Assert.DoesNotContain("Regelbasis", block);
+    }
 }

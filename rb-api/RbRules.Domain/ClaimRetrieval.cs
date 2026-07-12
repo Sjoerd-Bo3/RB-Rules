@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace RbRules.Domain;
 
@@ -8,6 +9,22 @@ namespace RbRules.Domain;
 public record RetrievedClaim(
     string TopicType, string TopicRef, string Statement,
     int Corroboration, double TrustScore, string OfficialStatus);
+
+/// <summary>Een gedocumenteerde misvatting (#125): een verworpen of
+/// achterhaalde community-claim mét officiële weerlegging (StatusReason;
+/// zodra #124 landt komt daar de verwerp-notitie bij). Negatieve kennis —
+/// hoe het NIET zit, en waarom.</summary>
+public record RetrievedMisconception(
+    string TopicType, string TopicRef, string Statement, string Rebuttal);
+
+/// <summary>Kandidaat-rij voor het misvattingen-kanaal zoals de
+/// nearest-neighbour-query hem aanlevert — status, weerlegging en afstand
+/// nog ongefilterd; de poort is <see cref="ClaimRetrieval.SelectMisconceptions"/>.
+/// Id blijft erbij zodat de service de bronnen (citaat + URL) van de
+/// winnaars kan bijladen.</summary>
+public record MisconceptionCandidate(
+    long Id, string TopicType, string TopicRef, string Statement,
+    string Status, string? StatusReason, double Distance);
 
 /// <summary>Router-gewicht en prompt-opbouw voor het community-claimskanaal in
 /// /ask (#51). Puur en getest; de retrieval zelf (pgvector) leeft in
@@ -66,5 +83,72 @@ public static class ClaimRetrieval
             + "op community-interpretatie (geen dragende officiële § of geverifieerde ruling), "
             + "schrijf dan `Community-consensus (N bronnen)`; steunt het op officiële bronnen, "
             + "schrijf `Bevestigd (officieel)`.";
+    }
+
+    // ── Misvattingen-kanaal (#125): verworpen claims als negatieve kennis ──
+
+    /// <summary>Cap op het misvattingen-kanaal: maximaal twee per antwoord —
+    /// negatieve kennis is kanttekening, geen hoofdinhoud, en elke misvatting
+    /// kost promptruimte én aandacht in de "Let op"-sectie.</summary>
+    public const int MisconceptionCap = 2;
+
+    /// <summary>De poort van het misvattingen-kanaal, puur en getest: alleen
+    /// rejected/superseded claims mét weerlegging doen mee (een kale rejected
+    /// zonder reden is geen kennis), binnen hetzelfde afstands-plafond als het
+    /// claims-kanaal, gecapt op <see cref="MisconceptionCap"/>. De SQL-query in
+    /// AskService is een voorselectie; deze poort is de waarheid en draait ook
+    /// over wat de query aanlevert.</summary>
+    public static IReadOnlyList<MisconceptionCandidate> SelectMisconceptions(
+        IEnumerable<MisconceptionCandidate> candidates) =>
+        [.. candidates
+            .Where(c => c.Status is "rejected" or "superseded"
+                && !string.IsNullOrWhiteSpace(c.StatusReason)
+                && c.Distance <= MaxDistance)
+            .OrderBy(c => c.Distance)
+            .Take(MisconceptionCap)];
+
+    /// <summary>§-code in een weerleggingstekst ("… §466.2 zegt …") — de
+    /// OfficialCheck-reason is één NL-zin mét §-verwijzing; de beheerders-
+    /// afwijzing ("door de beheerder afgewezen") heeft er geen.</summary>
+    private static readonly Regex SectionInRebuttal = new(
+        @"§\s*(\d+(?:\.\d+)*(?:\.[a-z])?)", RegexOptions.Compiled);
+
+    /// <summary>De §-code uit de weerlegging, voor het promptlabel en de
+    /// sectie-link in de UI; null als de weerlegging geen § noemt.</summary>
+    public static string? RebuttalSection(string rebuttal)
+    {
+        var match = SectionInRebuttal.Match(rebuttal);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    /// <summary>Label per misvatting: "[misvatting, weerlegd door §466.2]" —
+    /// zonder §-code in de weerlegging het generieke "officieel weerlegd".</summary>
+    public static string MisconceptionPromptLabel(RetrievedMisconception m) =>
+        RebuttalSection(m.Rebuttal) is { } section
+            ? $"[misvatting, weerlegd door §{section}]"
+            : "[misvatting, officieel weerlegd]";
+
+    /// <summary>Contextblok voor de prompt (#125): gedocumenteerde misvattingen
+    /// als negatieve kennis, met omgangsregels die de framing afdwingen —
+    /// alleen benoemen als de vraag er echt op lijkt, altijd in de "Let op"-
+    /// sectie, nooit als waarheid. Het citatencontract van #69 blijft gelden:
+    /// geen eigen Regelbasis-sectie, verwijzen gaat met [n] in de tekst.</summary>
+    public static string MisconceptionBlock(IReadOnlyList<RetrievedMisconception> misconceptions)
+    {
+        if (misconceptions.Count == 0) return "";
+        var lines = string.Join("\n", misconceptions.Select(m =>
+            $"- {MisconceptionPromptLabel(m)} {m.TopicRef}: \"{m.Statement}\" — weerlegging: {m.Rebuttal}"));
+        return "\n\nGEDOCUMENTEERDE MISVATTINGEN (community-lezingen die officieel weerlegd zijn "
+            + "— dit is hoe het NIET zit):\n"
+            + lines
+            + "\nOmgang met misvattingen:\n"
+            + "- Benoem een misvatting uitsluitend als de vraag er inhoudelijk echt op lijkt; "
+            + "bij twijfel laat je hem volledig weg.\n"
+            + "- Benoem hem alléén in de sectie `### Let op`, met precies deze framing: "
+            + "\"een veelgemaakte lezing is X, maar [n] zegt Y\" — [n] is het context-fragment "
+            + "dat de weerlegging draagt; staat dat fragment er niet bij, noem dan de §-code "
+            + "uit de weerlegging in de lopende tekst.\n"
+            + "- Presenteer een misvatting nooit als waarheid, regel of oordeel: hij mag een "
+            + "antwoord nuanceren, nooit dragen.";
     }
 }
