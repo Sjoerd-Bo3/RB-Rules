@@ -46,10 +46,11 @@ public static class BrainEndpoints
                 : Results.Ok(node);
         });
 
-        // ── neighbors: Neo4j, edge-whitelist + richting ────────────────
+        // ── neighbors: Neo4j, edge-whitelist + kind-filter + richting ──
         brain.MapGet("/neighbors/{**refText}", async (
-            string refText, string? edges, string? richting, string? direction, int? take,
-            BrainGraphService graph, ILogger<BrainGraphService> logger, CancellationToken ct) =>
+            string refText, string? edges, string? kind, string? richting, string? direction,
+            int? take, BrainGraphService graph, ILogger<BrainGraphService> logger,
+            CancellationToken ct) =>
         {
             if (!BrainQuery.TryParseRouteRef(refText, out var nodeRef))
                 return InvalidRef(refText);
@@ -59,6 +60,11 @@ public static class BrainEndpoints
                     "(geverifieerde rulings leven alleen in Postgres — gebruik node/search)");
             if (!BrainQuery.TryParseEdges(edges, out var edgeFilter, out var fout))
                 return Problem(400, "ongeldige aanvraag", fout);
+            // Kind (#116) is een property-waarde uit het open vocabulaire —
+            // genormaliseerd en geparametriseerd, geen whitelist (die blijft
+            // voor het edge-TYPE).
+            if (!BrainQuery.TryParseKind(kind, out var kindFilter, out fout))
+                return Problem(400, "ongeldige aanvraag", fout);
             // NL "richting" is het contract (§2.3); "direction" is de alias.
             if (!BrainQuery.TryParseRichting(richting ?? direction, out var dir, out fout))
                 return Problem(400, "ongeldige aanvraag", fout);
@@ -66,7 +72,7 @@ public static class BrainEndpoints
             try
             {
                 var neighbors = await graph.NeighborsAsync(
-                    label, nodeRef.Format(), edgeFilter, dir,
+                    label, nodeRef.Format(), edgeFilter, kindFilter, dir,
                     Math.Clamp(take ?? 20, 1, 50), ct);
                 return neighbors is null
                     ? Problem(404, "niet gevonden",
@@ -82,13 +88,15 @@ public static class BrainEndpoints
 
         // ── path: kortste pad = de bewijsketen ─────────────────────────
         brain.MapGet("/path", async (
-            string? from, string? to, int? maxLen,
+            string? from, string? to, int? maxLen, string? kind,
             BrainGraphService graph, ILogger<BrainGraphService> logger, CancellationToken ct) =>
         {
             if (!BrainQuery.TryParseRouteRef(from, out var fromRef))
                 return InvalidRef(from ?? "(leeg)", "from");
             if (!BrainQuery.TryParseRouteRef(to, out var toRef))
                 return InvalidRef(to ?? "(leeg)", "to");
+            if (!BrainQuery.TryParseKind(kind, out var kindFilter, out var kindFout))
+                return Problem(400, "ongeldige aanvraag", kindFout);
             if (BrainQuery.GraphLabel(fromRef.Kind) is not { } fromLabel)
                 return Problem(400, "ongeldige aanvraag",
                     $"from-ref staat niet in de kennisgraaf: {fromRef.Format()}");
@@ -103,7 +111,7 @@ public static class BrainEndpoints
             {
                 var (outcome, chain) = await graph.PathAsync(
                     fromLabel, fromRef.Format(), toLabel, toRef.Format(),
-                    Math.Clamp(maxLen ?? 4, 1, 6), ct);
+                    Math.Clamp(maxLen ?? 4, 1, 6), kindFilter, ct);
                 return outcome switch
                 {
                     BrainGraphService.PathOutcome.FromMissing => Problem(404, "niet gevonden",
