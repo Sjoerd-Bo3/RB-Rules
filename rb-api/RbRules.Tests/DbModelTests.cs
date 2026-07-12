@@ -32,6 +32,9 @@ public class DbModelTests
     [InlineData(typeof(AppUser), "app_user")]
     [InlineData(typeof(UserSession), "user_session")]
     [InlineData(typeof(LoginToken), "login_token")]
+    // Passkeys (#109).
+    [InlineData(typeof(PasskeyCredential), "passkey_credential")]
+    [InlineData(typeof(PasskeyChallenge), "passkey_challenge")]
     public void TableNames_MatchPopSchema(Type entity, string expectedTable)
     {
         using var db = CreateContext();
@@ -76,6 +79,25 @@ public class DbModelTests
             .Where(s => s.TokenHash == "x" && s.ExpiresAt > since)
             .Select(s => s.User);
         Assert.Contains("JOIN", resolve.ToQueryString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Vertaalbaarheids-net voor de passkey-login (#109): de
+    /// credential-lookup vergelijkt op een bytea-kolom — bewezen vertaalbaar,
+    /// niet aannemen (conventie).</summary>
+    [Fact]
+    public void PasskeyCredentialLookup_TranslatesToSql()
+    {
+        using var db = CreateContext();
+        var rawId = new byte[] { 1, 2, 3 };
+
+        var byCredentialId = db.PasskeyCredentials
+            .Include(c => c.User)
+            .Where(c => c.CredentialId == rawId);
+        Assert.Contains("JOIN", byCredentialId.ToQueryString(), StringComparison.OrdinalIgnoreCase);
+
+        var challenge = db.PasskeyChallenges
+            .Where(c => c.TokenHash == "x");
+        Assert.NotEmpty(challenge.ToQueryString());
     }
 
     [Fact]

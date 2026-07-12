@@ -249,6 +249,52 @@ public class AppUser
     public int DailyPhotoQuota { get; set; } = 5;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastLoginAt { get; set; }
+    /// <summary>WebAuthn user handle (#109): willekeurige bytes die het account
+    /// richting authenticators identificeren — bewust niet het e-mailadres
+    /// (spec: geen PII in de handle) en stabiel per account, zodat meerdere
+    /// passkeys bij de authenticator als één account verschijnen. Null zolang
+    /// het account nog geen passkey-registratie heeft gedaan.</summary>
+    public byte[]? PasskeyHandle { get; set; }
+}
+
+/// <summary>Passkey-credential (WebAuthn, #109): de publieke sleutel waarmee
+/// een authenticator (Face ID, vingerafdruk, security key) zich bewijst.
+/// SignCount is de replay-teller (Passkeys.IsSignCountValid); Aaguid
+/// identificeert het authenticator-type. Meerdere per account is juist de
+/// bedoeling (telefoon + laptop).</summary>
+public class PasskeyCredential
+{
+    public long Id { get; set; }
+    public long UserId { get; set; }
+    public AppUser? User { get; set; }
+    public required byte[] CredentialId { get; set; }
+    public required byte[] PublicKey { get; set; }
+    /// <summary>WebAuthn-teller is een uint32; long omdat Postgres geen
+    /// unsigned kent. Cast naar uint richting fido2-net-lib.</summary>
+    public long SignCount { get; set; }
+    public Guid Aaguid { get; set; }
+    public required string Name { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? LastUsedAt { get; set; }
+}
+
+/// <summary>Lopende WebAuthn-ceremonie (#109): de server-side challenge, kort
+/// geldig en single-use — zelfde hygiëne als login_token (alleen de hash van
+/// het client-token in de database). OptionsJson bewaart de volledige opties
+/// omdat fido2-net-lib die nodig heeft om het antwoord te verifiëren.</summary>
+public class PasskeyChallenge
+{
+    public long Id { get; set; }
+    public required string TokenHash { get; set; }
+    /// <summary>Passkeys.RegisterKind of Passkeys.LoginKind.</summary>
+    public required string Kind { get; set; }
+    /// <summary>Registratie van een nieuw account: de gekozen identifier.</summary>
+    public string? Email { get; set; }
+    /// <summary>Registratie van een extra passkey bij een bestaand account.</summary>
+    public long? UserId { get; set; }
+    public required string OptionsJson { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; }
 }
 
 /// <summary>Ingelogde sessie (#42): rb-web bewaart het token in een httpOnly-

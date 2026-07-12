@@ -1,3 +1,5 @@
+using Fido2NetLib;
+
 namespace RbRules.Api;
 
 public record SourcePatch(
@@ -26,6 +28,17 @@ public record PushUnsubscribe(string Endpoint);
 public record AuthRequestDto(string? Email);
 
 public record AuthVerifyDto(string? Token);
+
+/// <summary>Passkey-registratie (#109): zonder sessie is Email de identifier
+/// voor een nieuw account; mét sessie komt de passkey bij het eigen account.</summary>
+public record PasskeyRegisterOptionsDto(string? Email);
+
+/// <summary>Verzilvering van een passkey-ceremonie (#109): het challenge-token
+/// uit de options-stap plus het (base64url-)antwoord van de authenticator —
+/// fido2-net-lib levert de JSON-vorm van Response.</summary>
+public record PasskeyRegisterVerifyDto(string? Token, AuthenticatorAttestationRawResponse? Response);
+
+public record PasskeyLoginVerifyDto(string? Token, AuthenticatorAssertionRawResponse? Response);
 
 /// <summary>Beheerder-bewerking van een account (#42): blokkeren en quota.</summary>
 public record UserPatch(bool? Blocked, int? DailyQuota, int? DailyPhotoQuota);

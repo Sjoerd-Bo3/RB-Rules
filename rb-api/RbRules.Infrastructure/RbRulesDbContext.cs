@@ -32,6 +32,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<LoginToken> LoginTokens => Set<LoginToken>();
+    public DbSet<PasskeyCredential> PasskeyCredentials => Set<PasskeyCredential>();
+    public DbSet<PasskeyChallenge> PasskeyChallenges => Set<PasskeyChallenge>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -229,6 +231,23 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.ToTable("login_token");
             e.HasIndex(x => x.TokenHash).IsUnique();
             e.HasIndex(x => x.Email);
+        });
+
+        // Passkeys (#109): credential-opslag + lopende WebAuthn-ceremonies.
+        b.Entity<PasskeyCredential>(e =>
+        {
+            e.ToTable("passkey_credential");
+            // De credential-id komt van de authenticator en is wereldwijd
+            // uniek; login zoekt hierop (bytea-vergelijking, zie DbModelTests).
+            e.HasIndex(x => x.CredentialId).IsUnique();
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<PasskeyChallenge>(e =>
+        {
+            e.ToTable("passkey_challenge");
+            e.HasIndex(x => x.TokenHash).IsUnique();
         });
     }
 }
