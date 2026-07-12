@@ -45,7 +45,8 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && req.url === "/ask") {
       // task="research" is de enige taak met web-toegang (WebSearch/WebFetch,
-      // opt-in per call — #64); zie ai.ts voor het bronnen-contract.
+      // opt-in per call — #64); task="agentic" (#106) krijgt alléén de interne
+      // brein-tools (MCP → rb-api, zie ai.ts/brain-tools.ts).
       const parsed = parseAskRequest(await readJson(req));
       if (!parsed.ok) return send(400, { error: parsed.error });
       const answer = await askClaude({ ...parsed.request, signal: abort.signal });

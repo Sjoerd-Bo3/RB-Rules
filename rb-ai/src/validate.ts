@@ -30,11 +30,14 @@ export function parseAskRequest(body: unknown): ParseResult {
   const system =
     typeof b.system === "string" && b.system.trim() ? b.system : undefined;
 
-  // Opt-in per taak (#64): web-toegang alléén bij expliciet task="research".
-  // Onbekende waarden vallen — net als voorheen — terug op "cheap", zodat
-  // een tikfout nooit stilzwijgend web-tools (kosten/latency) aanzet.
+  // Opt-in per taak: web-toegang alléén bij expliciet task="research" (#64);
+  // brein-tools alléén bij expliciet task="agentic" (#106). Onbekende waarden
+  // vallen — net als voorheen — terug op "cheap", zodat een tikfout nooit
+  // stilzwijgend tools (kosten/latency) aanzet.
   const task: Task =
-    b.task === "hard" || b.task === "research" ? b.task : "cheap";
+    b.task === "hard" || b.task === "research" || b.task === "agentic"
+      ? b.task
+      : "cheap";
 
   const rawImages = Array.isArray(b.images) ? b.images.slice(0, MAX_IMAGES) : [];
   const images: AskImage[] = [];

@@ -1,8 +1,20 @@
-import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
+import {
+  createSdkMcpServer,
+  query,
+  tool,
+  type Options,
+} from "@anthropic-ai/claude-agent-sdk";
+import {
+  BRAIN_SERVER_NAME,
+  BRAIN_TOOLS,
+  brainToolAllowlist,
+  compactJson,
+  createBrainSession,
+} from "./brain-tools.js";
 
 // Auth: CLAUDE_CODE_OAUTH_TOKEN (abonnement) of ANTHROPIC_API_KEY.
 // Laat ANTHROPIC_API_KEY leeg bij abonnementsgebruik — die wint stilletjes.
-export type Task = "cheap" | "hard" | "research";
+export type Task = "cheap" | "hard" | "research" | "agentic";
 
 export interface AskImage {
   mediaType: string; // image/jpeg | image/png | image/webp | image/gif
@@ -13,6 +25,7 @@ const MODEL: Record<Task, string> = {
   cheap: "claude-sonnet-4-6",
   hard: "claude-opus-4-8",
   research: "claude-sonnet-4-6", // web-werk is zoek+samenvat: Sonnet volstaat (kosten, #42)
+  agentic: "claude-sonnet-4-6", // brein-loop is 2–8 beurten: Sonnet houdt kosten/latency binnen budget (BRAIN.md §2.4)
 };
 
 // Websearch is opt-in per taak (#64): alléén "research" krijgt WebSearch/
@@ -44,6 +57,52 @@ const RESEARCH_CONTRACT = `Je hebt toegang tot WebSearch en WebFetch. Regels voo
 - Sluit je antwoord ALTIJD af met een sectie die begint met "Bronnen:" gevolgd door per regel één volledige URL (https://...) van een geraadpleegde pagina, waar mogelijk met publicatie- of raadpleegdatum erachter.
 - Vind je voor (een deel van) de vraag geen bruikbare bron, zeg dat dan expliciet in plaats van te gokken; de sectie "Bronnen:" blijft ook dan verplicht (eventueel met alleen de wel-geraadpleegde URL's).
 - Sommige sites weigeren datacenter-verkeer; meld het kort als een relevante pagina niet op te halen was.`;
+
+// Agentic (#106, docs/BRAIN.md §2.4): de agent redeneert zelf over het brein
+// via zes in-process MCP-tools die 1-op-1 op de brein-API mappen (§2.3,
+// brain-tools.ts; HTTP naar rb-api via RB_API_URL). Alléén die tools staan in
+// de allowlist — géén web, géén bash. Dubbele rem op kosten en latency:
+// maxTurns + harde timeout hier, en een tool-call-cap in de sessie zelf.
+const AGENTIC_MAX_TURNS = 8; // §2.4: "maxTurns ~8"
+const AGENTIC_TIMEOUT_MS = 120_000; // §2.4: harde grens 90–120s; zelfde AbortController-patroon als research
+const AGENTIC_MAX_TOOL_CALLS = 12; // §2.4: "cap ~12 calls"
+const AGENTIC_HTTP_TIMEOUT_MS = 10_000; // per brein-call: een hangende rb-api mag de harde timeout niet in z'n eentje opsouperen
+
+// Gedragscontract voor task="agentic". Net als RESEARCH_CONTRACT wordt dit
+// blok server-side ACHTER de system-prompt van de aanroeper geplakt, zodat de
+// voorrangregels van de kennispiramide (docs/KNOWLEDGE.md, BRAIN.md §2.4)
+// gelden ongeacht wat de aanroeper meestuurt.
+const AGENT_ADDENDUM = `Je hebt zes brein-tools (semantic_search, get_node, neighbors, path, evidence, contradictions) die de Riftbound-kennisbank bevragen. Regels:
+- De kennispiramide blijft gelden: officieel > geverifieerde rulings > primer > community > meta. Weeg elk toolresultaat op zijn laag- en trust-label; een community-claim wint nooit van een officiële regel of geverifieerde ruling.
+- Weerlegde of vervangen claims (via contradictions) zijn geen kennis — noem ze hooguit expliciet als weerlegd.
+- Een toolresultaat "brein niet beschikbaar" of "niet gevonden" is informatie, geen fout: redeneer verder met wat je al hebt en verzin nooit toolresultaten, refs of citaten.
+- Wees zuinig met tool-calls (er is een harde limiet): stop met zoeken zodra je genoeg weet en geef dan je eindantwoord in het gevraagde format, met §-verwijzingen waar je die gevonden hebt.`;
+
+/** In-process MCP-server met de zes brein-tools (§2.4, createSdkMcpServer).
+ * Per aanroep een verse sessie zodat de tool-call-cap per vraag telt. De
+ * tool-call-log op stdout maakt agent-stappen zichtbaar in de containerlog
+ * (verificatiepad #106; deelissue 4 maakt dit meetbaar via AskTrace).
+ * Exported zodat de MCP-laag ook zonder LLM-call te smoken/testen is. */
+export function createBrainMcpServer() {
+  const session = createBrainSession({
+    baseUrl: process.env.RB_API_URL,
+    timeoutMs: AGENTIC_HTTP_TIMEOUT_MS,
+    maxCalls: AGENTIC_MAX_TOOL_CALLS,
+  });
+  return createSdkMcpServer({
+    name: BRAIN_SERVER_NAME,
+    version: "1.0.0",
+    tools: BRAIN_TOOLS.map((t) =>
+      tool(t.name, t.description, t.schema, async (args) => {
+        const a = args as Record<string, unknown>;
+        console.log(`[agentic] ${t.name} ${compactJson(a).slice(0, 200)}`);
+        // session.run gooit nooit: fouten (rb-api plat, timeout, cap) komen
+        // als leesbaar toolresultaat terug — fouten zijn data (§2.3).
+        return { content: [{ type: "text" as const, text: await session.run(t.name, a) }] };
+      }),
+    ),
+  });
+}
 
 /** Streaming-input met content-blocks — nodig zodra er afbeeldingen meegaan. */
 async function* userMessage(prompt: string, images: AskImage[]) {
@@ -85,23 +144,32 @@ export async function askClaude(opts: {
 }): Promise<string> {
   const { prompt, system, task = "cheap", images = [], onDelta, signal } = opts;
   const research = task === "research";
+  const agentic = task === "agentic";
 
-  const systemPrompt = research
-    ? [system, RESEARCH_CONTRACT].filter(Boolean).join("\n\n")
+  // Server-side addendum per taak (nooit door de aanroeper te omzeilen):
+  // research krijgt het bronnen-contract, agentic de brein-voorrangregels.
+  const addendum = research ? RESEARCH_CONTRACT : agentic ? AGENT_ADDENDUM : undefined;
+  const systemPrompt = addendum
+    ? [system, addendum].filter(Boolean).join("\n\n")
     : system;
 
   // Eén AbortController voor álle taken (review #31): server.ts koppelt er
   // de client-verbinding aan (`signal`), zodat een weggelopen client de
   // Claude-call afbreekt in plaats van hem op abonnementskosten af te laten
-  // maken. De harde timeout blijft research-only: de andere taken zijn één
-  // beurt en kennen dat risico niet.
+  // maken. De harde timeout geldt alleen voor de multi-turn-taken (research,
+  // agentic): de andere taken zijn één beurt en kennen dat risico niet.
+  const timeoutMs = research
+    ? RESEARCH_TIMEOUT_MS
+    : agentic
+      ? AGENTIC_TIMEOUT_MS
+      : undefined;
   const controller = new AbortController();
   let timedOut = false;
-  const timer = research
+  const timer = timeoutMs
     ? setTimeout(() => {
         timedOut = true;
         controller.abort();
-      }, RESEARCH_TIMEOUT_MS)
+      }, timeoutMs)
     : undefined;
   const onAbort = () => controller.abort();
   if (signal?.aborted) controller.abort();
@@ -109,15 +177,25 @@ export async function askClaude(opts: {
 
   const options: Options = {
     model: MODEL[task],
-    maxTurns: research ? RESEARCH_MAX_TURNS : 1,
-    // Basis-toolset: leeg voor cheap/hard (puur prompt→tekst), alleen de
-    // web-tools voor research.
+    maxTurns: research ? RESEARCH_MAX_TURNS : agentic ? AGENTIC_MAX_TURNS : 1,
+    // Basis-toolset (built-ins): leeg voor cheap/hard/agentic (agentic krijgt
+    // zijn tools via de MCP-server hieronder), alleen de web-tools voor
+    // research.
     tools: research ? RESEARCH_TOOLS : [],
     ...(research
       ? {
           // Headless: web-tools vooraf goedkeuren; al het overige wordt
           // geweigerd in plaats van op een prompt te blijven hangen.
           allowedTools: RESEARCH_TOOLS,
+          permissionMode: "dontAsk" as const,
+        }
+      : {}),
+    ...(agentic
+      ? {
+          // In-process brein-tools (§2.4): alléén mcp__brain__* in de
+          // allowlist, headless — al het overige wordt geweigerd.
+          mcpServers: { [BRAIN_SERVER_NAME]: createBrainMcpServer() },
+          allowedTools: brainToolAllowlist(),
           permissionMode: "dontAsk" as const,
         }
       : {}),
@@ -173,9 +251,9 @@ export async function askClaude(opts: {
     // Timeout en client-abort herkenbaar maken voor de aanroeper (run_log);
     // overige fouten ongewijzigd doorgeven — server.ts vertaalt ze naar een
     // nette 500 of een error-frame.
-    if (timedOut) {
+    if (timedOut && timeoutMs) {
       throw new Error(
-        `research-call afgebroken na ${RESEARCH_TIMEOUT_MS / 1000}s (harde timeout)`,
+        `${task}-call afgebroken na ${timeoutMs / 1000}s (harde timeout)`,
       );
     }
     if (controller.signal.aborted) {

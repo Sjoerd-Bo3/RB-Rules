@@ -9,15 +9,18 @@ test("prompt is verplicht", () => {
   assert.equal(parseAskRequest("geen object").ok, false);
 });
 
-test("task valt terug op cheap; research alleen expliciet (web is opt-in, #64)", () => {
+test("task valt terug op cheap; research/agentic alleen expliciet (tools zijn opt-in, #64/#106)", () => {
   const cases: Array<[unknown, string]> = [
     [undefined, "cheap"],
     ["cheap", "cheap"],
     ["hard", "hard"],
     ["research", "research"],
-    // Nooit stilzwijgend web-toegang: onbekende/afwijkende waarden → cheap.
+    ["agentic", "agentic"],
+    // Nooit stilzwijgend tool-toegang: onbekende/afwijkende waarden → cheap.
     ["web", "cheap"],
     ["Research", "cheap"],
+    ["Agentic", "cheap"],
+    ["brain", "cheap"],
     [true, "cheap"],
   ];
   for (const [task, expected] of cases) {
