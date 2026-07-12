@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Pgvector;
 using Pgvector.EntityFrameworkCore;
 using RbRules.Domain;
@@ -45,9 +46,13 @@ public record AskStreamMeta(
 
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
-/// kaartfeiten + geverifieerde rulings + antwoord via rb-ai met [n]-citaten.</summary>
+/// kaartfeiten + geverifieerde rulings + antwoord via rb-ai met [n]-citaten.
+/// Embedding-uitval is een verwacht pad (#100): dan vervallen alleen de
+/// vector-kanalen en degradeert de vraag naar FTS + naam/mechaniek/lexicaal —
+/// nooit een kale 500.</summary>
 public class AskService(
-    RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai, RequestUserContext userContext)
+    RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai,
+    RequestUserContext userContext, ILogger<AskService> logger)
 {
     private const int TopK = 8;
 
@@ -159,12 +164,31 @@ public class AskService(
         // 1. Vector-kanaal: de genormaliseerde zoekzin plus de extra
         // zoekqueries uit de rewrite, in één Ollama-batch geëmbed. Elke query
         // is een eigen ranked list voor de RRF-fusie hieronder.
+        // Best-effort (#100): Ollama weg of model niet gepulld mag /ask nooit
+        // in een kale 500 laten eindigen — dan blijft qv null, vervallen álle
+        // vector-kanalen (regels, primer, rulings-matching, claims,
+        // semantische kaart-buren) en draait de vraag door op FTS +
+        // naam/mechaniek/lexicale kanalen (patroon RuleSearchService).
         string[] embedTexts = rewrite is null
             ? [retrievalText]
             : [searchText, .. rewrite.SearchQueries
                 .Where(q => !q.Equals(searchText, StringComparison.OrdinalIgnoreCase))];
-        var queryVectors = await embeddings.EmbedAsync(embedTexts, ct);
-        var qv = queryVectors[0];
+        Vector[] queryVectors = [];
+        try
+        {
+            queryVectors = await embeddings.EmbedAsync(embedTexts, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // de vrager zelf haakte af — niet maskeren
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Embedding voor /ask mislukt — vector-kanalen overgeslagen, " +
+                "degradatie naar FTS + lexicale kanalen");
+        }
+        var qv = queryVectors.Length > 0 ? queryVectors[0] : null;
         var vectorLists = new List<List<(long Id, string SourceId)>>();
         foreach (var vec in queryVectors)
         {
@@ -177,16 +201,8 @@ public class AskService(
             vectorLists.Add([.. hits.Select(h => (h.Id, h.SourceId))]);
         }
 
-        // 2. Full-text-kanaal (Engels — de bronnen zijn Engels; de rewrite
-        // levert een Engelse zoekzin, dus die matcht hier beter dan NL).
-        var textHits = await db.RuleChunks
-            .Where(c => EF.Functions.ToTsVector("english", c.Text)
-                .Matches(EF.Functions.PlainToTsQuery("english", searchText)))
-            .OrderByDescending(c => EF.Functions.ToTsVector("english", c.Text)
-                .Rank(EF.Functions.PlainToTsQuery("english", searchText)))
-            .Take(TopK * 2)
-            .Select(c => new { c.Id, c.SourceId })
-            .ToListAsync(ct);
+        // 2. Full-text-kanaal — eigen (virtual) methode, zie FullTextChunksAsync.
+        var textHits = await FullTextChunksAsync(searchText, ct);
 
         // 3. RRF-fusie (gedeelde Domain-helper, #44), met bron-bias per
         // vraagtype: toernooivragen tillen Tournament Rules-chunks op,
@@ -198,7 +214,7 @@ public class AskService(
             _ => null,
         };
         var topIds = RrfFusion.Fuse(
-            [.. vectorLists, textHits.Select(h => (h.Id, h.SourceId)).ToList()],
+            [.. vectorLists, textHits],
             hit => hit.Id,
             take: TopK,
             bonus: hit => sourceBias != null &&
@@ -207,7 +223,13 @@ public class AskService(
         {
             sw.Stop();
             await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false);
-            return new("Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.",
+            // Gedegradeerd (#100) én geen tekst-match: eerlijk melden wat er
+            // aan de hand is — niet doen alsof de index leeg is.
+            return new(qv is null
+                    ? "Het zoeken is tijdelijk beperkt (semantisch zoeken niet beschikbaar) " +
+                      "en de tekst-zoek vond niets voor deze vraag — formuleer de vraag " +
+                      "anders of probeer het later opnieuw."
+                    : "Er is nog geen geïndexeerde regeltekst — draai eerst de regel-index op /admin.",
                 [], [], type.ToString(), Ok: false);
         }
 
@@ -253,18 +275,25 @@ public class AskService(
 
         // 3b. Spelbegrip-primer (kennislaag 1, #49): goedgekeurde concept-docs
         // die semantisch bij de vraag passen — geeft het model de flow van het
-        // spel, niet alleen losse §'s.
-        var primerDocs = await db.KnowledgeDocs.AsNoTracking()
-            .Where(k => k.Kind == "primer" && k.Status == "approved" && k.Embedding != null)
-            .OrderBy(k => k.Embedding!.CosineDistance(qv))
-            .Take(3)
-            .Select(k => new { k.Title, k.Body })
-            .ToListAsync(ct);
-        var primerBlock = primerDocs.Count == 0
-            ? ""
-            : "\n\nSPELBEGRIP (achtergrond, gedistilleerd uit de officiële regels; " +
-              "de regels zelf blijven normatief):\n" +
-              string.Join("\n\n", primerDocs.Select(p => $"[{p.Title}]\n{p.Body}"));
+        // spel, niet alleen losse §'s. Puur vector-gedreven, dus zonder
+        // query-vector (embedding-uitval, #100) vervalt dit kanaal.
+        var primerTitles = new List<string>();
+        var primerBlock = "";
+        if (qv is not null)
+        {
+            var primerDocs = await db.KnowledgeDocs.AsNoTracking()
+                .Where(k => k.Kind == "primer" && k.Status == "approved" && k.Embedding != null)
+                .OrderBy(k => k.Embedding!.CosineDistance(qv))
+                .Take(3)
+                .Select(k => new { k.Title, k.Body })
+                .ToListAsync(ct);
+            primerTitles = [.. primerDocs.Select(p => p.Title)];
+            if (primerDocs.Count > 0)
+                primerBlock =
+                    "\n\nSPELBEGRIP (achtergrond, gedistilleerd uit de officiële regels; " +
+                    "de regels zelf blijven normatief):\n" +
+                    string.Join("\n\n", primerDocs.Select(p => $"[{p.Title}]\n{p.Body}"));
+        }
 
         // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
         // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
@@ -288,13 +317,16 @@ public class AskService(
         }
 
         // 5. Geverifieerde rulings (self-learning override-laag) — semantisch
-        // gematcht op de vraag; zonder embedding vallen we terug op recentste.
-        var rulings = await db.Corrections
-            .Where(c => c.Status == "verified" && c.Embedding != null)
-            .OrderBy(c => c.Embedding!.CosineDistance(qv))
-            .Take(3)
-            .Select(c => c.Text)
-            .ToListAsync(ct);
+        // gematcht op de vraag; zonder embedding (van de rulings óf van de
+        // vraag zelf, #100) vallen we terug op de recentste.
+        var rulings = new List<string>();
+        if (qv is not null)
+            rulings = await db.Corrections
+                .Where(c => c.Status == "verified" && c.Embedding != null)
+                .OrderBy(c => c.Embedding!.CosineDistance(qv))
+                .Take(3)
+                .Select(c => c.Text)
+                .ToListAsync(ct);
         if (rulings.Count == 0)
             rulings = await db.Corrections
                 .Where(c => c.Status == "verified")
@@ -312,41 +344,48 @@ public class AskService(
         // gelabeld kanaal, strikt gescheiden van de officiële lagen. Het
         // router-gewicht bepaalt hoeveel er meegaan (ruling: weinig;
         // lijst-/meta-vraag: meer). De afstand wordt bewust in-memory gecapt
-        // (bewezen vertaalbaar patroon, zie ClaimMiningService).
-        var claimHits = await db.Claims.AsNoTracking()
-            .Where(c => c.Status == "accepted" && c.Embedding != null)
-            .OrderBy(c => c.Embedding!.CosineDistance(qv))
-            .Take(ClaimRetrieval.TakeFor(type))
-            .Select(c => new
-            {
-                c.Id, c.TopicType, c.TopicRef, c.Statement,
-                c.Corroboration, c.TrustScore, c.OfficialStatus,
-                Distance = c.Embedding!.CosineDistance(qv),
-            })
-            .ToListAsync(ct);
-        var retrievedClaims = claimHits
-            .Where(c => c.Distance <= ClaimRetrieval.MaxDistance)
-            .ToList();
-        var claimsBlock = ClaimRetrieval.PromptBlock([.. retrievedClaims.Select(c =>
-            new RetrievedClaim(c.TopicType, c.TopicRef, c.Statement,
-                c.Corroboration, c.TrustScore, c.OfficialStatus))]);
-
-        // Bronnen per claim voor het uitklapbare "Community-consensus"-blok in
-        // het antwoord (#51) — registernaam erbij voor leesbaarheid.
+        // (bewezen vertaalbaar patroon, zie ClaimMiningService). Puur
+        // vector-gedreven, dus zonder query-vector (#100) vervalt dit kanaal.
+        var claimsBlock = "";
+        var claimTraceRefs = new List<string>();
         var askClaims = new List<AskClaim>();
-        if (retrievedClaims.Count > 0)
+        if (qv is not null)
         {
-            var claimIds = retrievedClaims.Select(c => c.Id).ToList();
-            var claimSources = await db.ClaimSources.AsNoTracking()
-                .Where(s => claimIds.Contains(s.ClaimId))
-                .Join(db.Sources, cs => cs.SourceId, s => s.Id,
-                    (cs, s) => new { cs.ClaimId, s.Name, cs.Url })
+            var claimHits = await db.Claims.AsNoTracking()
+                .Where(c => c.Status == "accepted" && c.Embedding != null)
+                .OrderBy(c => c.Embedding!.CosineDistance(qv))
+                .Take(ClaimRetrieval.TakeFor(type))
+                .Select(c => new
+                {
+                    c.Id, c.TopicType, c.TopicRef, c.Statement,
+                    c.Corroboration, c.TrustScore, c.OfficialStatus,
+                    Distance = c.Embedding!.CosineDistance(qv),
+                })
                 .ToListAsync(ct);
-            askClaims.AddRange(retrievedClaims.Select(c => new AskClaim(
-                c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
-                c.TrustScore, c.OfficialStatus,
-                [.. claimSources.Where(s => s.ClaimId == c.Id)
-                    .Select(s => new AskClaimSource(s.Name, s.Url))])));
+            var retrievedClaims = claimHits
+                .Where(c => c.Distance <= ClaimRetrieval.MaxDistance)
+                .ToList();
+            claimsBlock = ClaimRetrieval.PromptBlock([.. retrievedClaims.Select(c =>
+                new RetrievedClaim(c.TopicType, c.TopicRef, c.Statement,
+                    c.Corroboration, c.TrustScore, c.OfficialStatus))]);
+            claimTraceRefs = [.. retrievedClaims.Select(c => $"{c.TopicType}:{c.TopicRef}")];
+
+            // Bronnen per claim voor het uitklapbare "Community-consensus"-blok in
+            // het antwoord (#51) — registernaam erbij voor leesbaarheid.
+            if (retrievedClaims.Count > 0)
+            {
+                var claimIds = retrievedClaims.Select(c => c.Id).ToList();
+                var claimSources = await db.ClaimSources.AsNoTracking()
+                    .Where(s => claimIds.Contains(s.ClaimId))
+                    .Join(db.Sources, cs => cs.SourceId, s => s.Id,
+                        (cs, s) => new { cs.ClaimId, s.Name, cs.Url })
+                    .ToListAsync(ct);
+                askClaims.AddRange(retrievedClaims.Select(c => new AskClaim(
+                    c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
+                    c.TrustScore, c.OfficialStatus,
+                    [.. claimSources.Where(s => s.ClaimId == c.Id)
+                        .Select(s => new AskClaimSource(s.Name, s.Url))])));
+            }
         }
 
         // Doorvraag-gesprek (#41): eerdere rondes gecapt in de prompt.
@@ -404,12 +443,16 @@ public class AskService(
                 SourceBias = sourceBias,
                 MentionsCard = mentionsCard,
                 MechanicMatches = string.Join(", ", cardContext.Mechanics),
-                Sections = string.Join(", ", citations
-                    .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
+                // Degradatie-kanttekening (#100): de beheerder moet in de
+                // trace kunnen zien dat een antwoord zonder vector-kanalen
+                // tot stand kwam (bewust zonder migratie — geen eigen kolom).
+                Sections = (qv is null
+                        ? "[embedding-uitval: vector-kanalen overgeslagen] " : "")
+                    + string.Join(", ", citations
+                        .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
                 ContextCards = string.Join(", ", cardContext.CardNames),
-                PrimerDocs = string.Join(", ", primerDocs.Select(p => p.Title)),
-                CommunityClaims = string.Join(", ", retrievedClaims
-                    .Select(c => $"{c.TopicType}:{c.TopicRef}")),
+                PrimerDocs = string.Join(", ", primerTitles),
+                CommunityClaims = string.Join(", ", claimTraceRefs),
                 VerifiedRulings = rulings.Count,
                 Model = images is { Count: > 0 } ? "hard" : "cheap",
                 HadImage = images is { Count: > 0 },
@@ -470,6 +513,25 @@ public class AskService(
             // de vraag spoorloos te laten verdwijnen.
         }
         return answer;
+    }
+
+    /// <summary>Full-text-kanaal (Engels — de bronnen zijn Engels; de rewrite
+    /// levert een Engelse zoekzin, dus die matcht hier beter dan NL). Virtual
+    /// als test-seam (#100): de tsvector-functies vertalen alleen naar
+    /// Postgres, dus de degradatie-regressietest op EF InMemory vervangt dit
+    /// kanaal door een simpele tekst-match.</summary>
+    protected virtual async Task<List<(long Id, string SourceId)>> FullTextChunksAsync(
+        string searchText, CancellationToken ct)
+    {
+        var hits = await db.RuleChunks
+            .Where(c => EF.Functions.ToTsVector("english", c.Text)
+                .Matches(EF.Functions.PlainToTsQuery("english", searchText)))
+            .OrderByDescending(c => EF.Functions.ToTsVector("english", c.Text)
+                .Rank(EF.Functions.PlainToTsQuery("english", searchText)))
+            .Take(TopK * 2)
+            .Select(c => new { c.Id, c.SourceId })
+            .ToListAsync(ct);
+        return [.. hits.Select(h => (h.Id, h.SourceId))];
     }
 
     /// <summary>Canonieke kaarten waarvan de naam letterlijk in de (lowercase)
@@ -557,9 +619,11 @@ public class AskService(
     /// de regels-PDF een keyword niet expliciet definieert. Lijstvragen (#67)
     /// krijgen een vierde, lexicaal kanaal: ILIKE op kaarttekst per zoekterm
     /// uit de rewrite (#66), met ruimere limiet en een expliciete
-    /// afkap-melding richting de prompt ("eerste N van M").</summary>
+    /// afkap-melding richting de prompt ("eerste N van M"). Zonder
+    /// query-vector (embedding-uitval, #100) vervalt alleen het semantische
+    /// kanaal — naam, mechaniek en lexicaal blijven werken.</summary>
     private async Task<CardContextResult> CardContextAsync(
-        string question, string qLower, Vector qv, QuestionType type,
+        string question, string qLower, Vector? qv, QuestionType type,
         QueryRewrite? rewrite, CancellationToken ct)
     {
         var isList = type == QuestionType.Lijst;
@@ -629,14 +693,17 @@ public class AskService(
                 .Select(kv => kv.Key)];
         }
 
-        // 3. Semantische buren van de vraag (altijd, als vangnet; ruimer bij
+        // 3. Semantische buren van de vraag (als vangnet; ruimer bij
         // lijstvragen — zeker als de rewrite geen lexicale termen opleverde).
-        var semanticIds = await db.Cards
-            .Where(c => c.Embedding != null && c.VariantOf == null)
-            .OrderBy(c => c.Embedding!.CosineDistance(qv))
-            .Take(isList ? 12 : 4)
-            .Select(c => c.RiftboundId)
-            .ToListAsync(ct);
+        // Zonder query-vector (#100) vervalt dit kanaal.
+        var semanticIds = new List<string>();
+        if (qv is not null)
+            semanticIds = await db.Cards
+                .Where(c => c.Embedding != null && c.VariantOf == null)
+                .OrderBy(c => c.Embedding!.CosineDistance(qv))
+                .Take(isList ? 12 : 4)
+                .Select(c => c.RiftboundId)
+                .ToListAsync(ct);
 
         var cap = isList ? ListCardLimit : 8;
         var merged = nameHits.Concat(lexicalIds).Concat(mechanicCardIds)
