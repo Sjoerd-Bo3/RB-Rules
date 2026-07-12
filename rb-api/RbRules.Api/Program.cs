@@ -60,8 +60,9 @@ builder.Services.AddScoped<ClaimMiningService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();
-// Accounts + per-gebruiker-quota (#42).
+// Accounts + per-gebruiker-quota (#42); passkey-login (#109).
 builder.Services.AddScoped<UserAccountService>();
+builder.Services.AddScoped<PasskeyService>();
 builder.Services.AddScoped<RequestUserContext>();
 builder.Services.AddSingleton<MailService>();
 builder.Services.AddSingleton<JobRunner>();

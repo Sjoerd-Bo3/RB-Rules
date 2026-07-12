@@ -101,8 +101,17 @@ public class UserAccountService(RbRulesDbContext db, MailService mail, ILogger<U
             user = new AppUser { Email = loginToken.Email };
             db.Users.Add(user);
         }
-        user.LastLoginAt = now;
+        return await StartSessionAsync(user, ct);
+    }
 
+    /// <summary>Sessie-uitgifte, gedeeld door magic-link en passkeys (#109):
+    /// elke geslaagde login-ceremonie krijgt exact dezelfde sessie (token-hash
+    /// in de database, 90 dagen). SaveChanges hier rondt ook nog openstaande
+    /// wijzigingen van de aanroeper af (zelfde scoped DbContext).</summary>
+    public async Task<LoginVerifyResult> StartSessionAsync(AppUser user, CancellationToken ct = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        user.LastLoginAt = now;
         var sessionToken = Accounts.NewToken();
         db.UserSessions.Add(new UserSession
         {
