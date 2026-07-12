@@ -185,9 +185,15 @@ public class IngestSsrfGuardTests
             new HttpClient(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)))
             { BaseAddress = new Uri("http://rb-ai.test") },
             NullLogger<RbAiClient>.Instance);
+        var embeddings = new EmbeddingService(
+            new HttpClient(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)))
+            { BaseAddress = new Uri("http://ollama.test") });
         return new IngestService(
             db, new HttpClient(new StubHandler(respond)), ai,
-            new ChangeClassificationService(db, ai));
+            new ChangeClassificationService(db, ai),
+            // Kennis-hertoets (#119): zonder changes in het venster doet de
+            // scan-afronding niets — deze tests kijken alleen naar de guard.
+            new KnowledgeRecheckService(db, new ClaimMiningService(db, ai, embeddings)));
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
