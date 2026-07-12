@@ -175,6 +175,7 @@ public static class AdminEndpoints
                     OpenCorrections = await db.Corrections.CountAsync(c => c.Status == "unverified"),
                     Knowledge = await db.KnowledgeDocs.CountAsync(),
                     Claims = await db.Claims.CountAsync(),
+                    Relations = await db.Relations.CountAsync(),
                     MechanicCandidates = await db.MechanicKeywords.CountAsync(k => k.Status == "candidate"),
                     OpenProposals = await db.SourceProposals.CountAsync(p => p.Status == "proposed"),
                     Users = await db.Users.CountAsync(),
@@ -356,6 +357,11 @@ public static class AdminEndpoints
                 string? status, int? page, AdminOverviewService overview) =>
             Results.Ok(await overview.ProposalsAsync(status, page ?? 1)));
 
+        // Relatievoorstellen (#116): status-chips + kind-vocabulaire + queue.
+        admin.MapGet("/overview/relations", async (
+                string? status, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.RelationsAsync(status, page ?? 1)));
+
         // Gebruikers + kosteninzicht (#42): LLM-gebruik per account per
         // periode, met de cheap/hard-verdeling als kosten-indicatie.
         admin.MapGet("/overview/users", async (
@@ -408,6 +414,59 @@ public static class AdminEndpoints
             if (claim is null) return Results.NotFound();
             claim.Status = "rejected";
             claim.StatusReason = "door de beheerder afgewezen";
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Relatie-review (#116): accepteren maakt het voorstel definitief
+        // (blijft/komt in de graph bij de volgende graph-sync, mits het kind
+        // geaccepteerd is); verwerpen haalt hem uit de projectie én voorkomt
+        // dat de miner hetzelfde voorstel opnieuw opvoert.
+        admin.MapPost("/relations/{id:long}/accept", async (long id, RbRulesDbContext db) =>
+        {
+            var relation = await db.Relations.FindAsync(id);
+            if (relation is null) return Results.NotFound();
+            relation.Status = "accepted";
+            relation.ReviewedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/relations/{id:long}/reject", async (long id, RbRulesDbContext db) =>
+        {
+            var relation = await db.Relations.FindAsync(id);
+            if (relation is null) return Results.NotFound();
+            relation.Status = "rejected";
+            relation.ReviewedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Kind-vocabulaire-review (#116, patroon mechanics): accepteren laat
+        // relaties met dit kind meedoen in de graph-projectie (volgende
+        // graph-sync); verwerpen houdt het kind — en nieuwe voorstellen
+        // ermee — uit beeld.
+        admin.MapPost("/relationkinds/{id:long}/accept", async (long id, RbRulesDbContext db) =>
+        {
+            var kind = await db.RelationKinds.FindAsync(id);
+            if (kind is null) return Results.NotFound();
+            kind.Status = "accepted";
+            kind.ReviewedAt = DateTimeOffset.UtcNow;
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "relations", Ref = $"kind:{kind.Kind}", Status = "ok",
+                Detail = "kind geaccepteerd — relaties met dit kind gaan mee bij de volgende graph-sync",
+            });
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/relationkinds/{id:long}/reject", async (long id, RbRulesDbContext db) =>
+        {
+            var kind = await db.RelationKinds.FindAsync(id);
+            if (kind is null) return Results.NotFound();
+            kind.Status = "rejected"; // blijft bewaard: wordt niet opnieuw voorgesteld
+            kind.ReviewedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });

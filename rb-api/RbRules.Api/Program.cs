@@ -57,6 +57,7 @@ builder.Services.AddScoped<SimilarityExplainService>();
 builder.Services.AddScoped<RuleBrowserService>();
 builder.Services.AddScoped<GraphQueryService>();
 builder.Services.AddScoped<ClaimMiningService>();
+builder.Services.AddScoped<RelationMiningService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();
