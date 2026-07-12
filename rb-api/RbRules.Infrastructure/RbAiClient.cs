@@ -66,6 +66,44 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         }
     }
 
+    /// <summary>Antwoord van het agent-pad (#107): het antwoord plus de
+    /// brein-stappen (één regel per tool-call) die rb-ai bij task="agentic"
+    /// meestuurt — voedt AskTrace.BrainSteps in het beheer.</summary>
+    public record AgenticAnswer(string Answer, string? Steps);
+
+    /// <summary>Agentic ask (#107, docs/BRAIN.md §2.4): zelfde /ask-koppelvlak
+    /// als <see cref="AskAsync"/> maar met task="agentic" én de tool-call-log
+    /// uit de respons. Null bij uitval, timeout of leeg antwoord — de
+    /// aanroeper (AskService) draait dan het vangnet: de klassieke
+    /// single-pass. De harde rem zit in rb-ai zelf (maxTurns, tool-cap,
+    /// 120s-timeout); de 6-minuten-HttpClient-timeout volstaat hier ruim.</summary>
+    public async Task<AgenticAnswer?> AskAgenticAsync(
+        string prompt, string? system = null,
+        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var payload = new
+            {
+                prompt, system, task = "agentic",
+                images = images?.Select(i => new { mediaType = i.MediaType, data = i.Data }),
+            };
+            var res = await http.PostAsJsonAsync("/ask", payload, ct);
+            if (!res.IsSuccessStatusCode) return null;
+            var body = await res.Content.ReadFromJsonAsync<AskResponse>(ct);
+            if (string.IsNullOrWhiteSpace(body?.Answer)) return null;
+            var steps = body.Steps is { Length: > 0 }
+                ? string.Join("\n", body.Steps.Where(s => !string.IsNullOrWhiteSpace(s)))
+                : null;
+            return new AgenticAnswer(body.Answer, string.IsNullOrWhiteSpace(steps) ? null : steps);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "rb-ai-aanroep mislukt (task=agentic)");
+            return null;
+        }
+    }
+
     /// <summary>Streamende variant van <see cref="AskAsync"/> (#31): levert de
     /// NDJSON-frames van rb-ai's /ask/stream één voor één op. Uitval is —
     /// net als bij AskAsync — verwacht pad: de enumeratie eindigt dan met een
@@ -139,5 +177,8 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         }
     }
 
-    private record AskResponse(string? Answer);
+    /// <summary>Steps komt alleen mee bij task="agentic" (#107) en blijft bij
+    /// alle andere taken afwezig — de respons-vorm van cheap/hard/research is
+    /// onveranderd.</summary>
+    private record AskResponse(string? Answer, string[]? Steps = null);
 }

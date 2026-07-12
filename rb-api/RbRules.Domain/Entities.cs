@@ -181,6 +181,11 @@ public class AskMetric
     /// model ook, maar die tabel bewaart alleen de laatste 200 traces; hier
     /// blijft de verdeling over langere periodes optelbaar.</summary>
     public string? Model { get; set; }
+    /// <summary>Agentic ask (#107, docs/BRAIN.md §2.4): de gate escaleerde
+    /// deze vraag naar het agent-pad — zo toont de duurstatistiek beide paden
+    /// apart. Ook true als het vangnet daarna alsnog single-pass draaide
+    /// (juist die dubbele latency wil je meten).</summary>
+    public bool Agentic { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -229,6 +234,14 @@ public class AskTrace
     public string? Model { get; set; }                  // cheap|hard
     public bool HadImage { get; set; }
     public int DurationMs { get; set; }
+    /// <summary>Agentic ask (#107): de gate escaleerde deze vraag naar het
+    /// agent-pad (docs/BRAIN.md §2.4) — ook als het vangnet daarna alsnog de
+    /// klassieke single-pass draaide (dat staat dan in BrainSteps).</summary>
+    public bool Agentic { get; set; }
+    /// <summary>Brein-stappen van de agent (#107): één regel per tool-call
+    /// (toolnaam + argumenten), zoals rb-ai ze teruggeeft. Bij vangnet-inzet
+    /// een expliciete marker; null zolang de vraag niet escaleerde.</summary>
+    public string? BrainSteps { get; set; }
     public bool Ok { get; set; } = true;
     /// <summary>Ingelogde vrager (#42); null = anoniem.</summary>
     public long? UserId { get; set; }

@@ -145,9 +145,13 @@ public class AskService(
 
         // 0. Naam-match in SQL (review-fix #43: geen full-table naar de client)
         // + interne router: vraagtype stuurt structuur en bronnen-bias.
+        // De namen zelf (i.p.v. alleen een Any) omdat de agentic-gate (#107)
+        // op het áántal herkende kaartnamen beslist (interactievragen).
         var qLower = $"{string.Join("\n", turns.Select(t => t.Question))}\n{question}"
             .ToLowerInvariant();
-        var mentionsCard = await CardsNamedIn(qLower).AnyAsync(ct);
+        var mentionedCardNames = await CardsNamedIn(qLower)
+            .Select(c => c.Name).Distinct().ToListAsync(ct);
+        var mentionsCard = mentionedCardNames.Count > 0;
         var type = QuestionRouter.Classify(question, mentionsCard);
 
         // 0b. #66: query-herformulering via één goedkope LLM-call — typo's
@@ -408,7 +412,48 @@ public class AskService(
             $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{historyBlock}\n\n{questionLabel}: {question}";
         var system = $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}";
         var task = images is { Count: > 0 } ? "hard" : "cheap";
-        var aiAnswer = onDelta is null
+
+        // Agentic-gate (#107, docs/BRAIN.md §2.4): pas ná de retrieval
+        // beslissen of deze vraag mag door-redeneren over het brein. Het
+        // lege-retrieval-signaal spiegelt exact het gaps-rapport (#52): geen
+        // §-secties, geen kaartcontext, geen primer — de bank weet
+        // aantoonbaar niets. Flag default off: zonder env verandert er niets.
+        var emptyRetrieval = !citations.Any(c => c.Section != null)
+            && cardContext.CardNames.Count == 0
+            && primerTitles.Count == 0;
+        var agentic = AgenticGate.ShouldEscalate(
+            type, mentionedCardNames.Count, emptyRetrieval,
+            AgenticGate.ParseMode(Environment.GetEnvironmentVariable("ASK_AGENTIC")));
+
+        // Bij escalatie vervángt de agentic call de finale LLM-call, mét
+        // dezelfde contextblokken als startpunt (§2.4: de agent hoeft niet te
+        // her-ontdekken wat de retrieval al vond). Bewust niet-streamend, óók
+        // op de streamingroute: een multi-turn-agent streamt anders zijn
+        // tussenstappen als deltas de UI in, en bij vangnet-inzet zouden twee
+        // delta-stromen door elkaar lopen. Op succes gaat het antwoord als
+        // één delta naar de UI; het final-frame blijft identiek.
+        string? aiAnswer = null;
+        string? brainSteps = null;
+        if (agentic)
+        {
+            var agenticAnswer = await ai.AskAgenticAsync(prompt, system, images, ct);
+            if (agenticAnswer is not null)
+            {
+                aiAnswer = agenticAnswer.Answer;
+                brainSteps = agenticAnswer.Steps ?? "(agent deed geen tool-calls)";
+                if (onDelta is not null) await onDelta(aiAnswer);
+            }
+            else
+            {
+                // Vangnet (§2.4): agent faalt/timeout/leeg → de klassieke
+                // single-pass draait alsnog (hieronder). Geen dubbele kosten
+                // bij succes; de gebruiker merkt alleen extra wachttijd.
+                brainSteps = "[vangnet: agent gaf geen antwoord — klassieke single-pass gedraaid]";
+                logger.LogWarning(
+                    "agentic ask gaf geen antwoord — vangnet: klassieke single-pass");
+            }
+        }
+        aiAnswer ??= onDelta is null
             ? await ai.AskAsync(prompt, system, task, images, ct)
             : await StreamAnswerAsync(prompt, system, task, images, onDelta, ct);
         var answer = aiAnswer ?? RbAiClient.UnavailableAnswer;
@@ -427,7 +472,8 @@ public class AskService(
 
         // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
         // pagina (#59: uit het endpoint — de service meet hier toch al).
-        await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null);
+        await RecordMetricAsync(
+            sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null, agentic);
 
         // Denkstappen-trace voor het beheer (#40) — best-effort.
         try
@@ -457,6 +503,10 @@ public class AskService(
                 Model = images is { Count: > 0 } ? "hard" : "cheap",
                 HadImage = images is { Count: > 0 },
                 DurationMs = (int)sw.ElapsedMilliseconds,
+                // Agentic ask (#107): escalatie + brein-stappen zichtbaar in
+                // het beheer — dezelfde controleerbaarheid als de denkstappen.
+                Agentic = agentic,
+                BrainSteps = brainSteps,
                 Ok = aiAnswer is not null,
                 UserId = userContext.User?.Id,
             });
@@ -547,7 +597,8 @@ public class AskService(
     /// token: een afgebroken response mag een al gegeven antwoord niet uit de
     /// statistiek houden.</summary>
     private async Task RecordMetricAsync(
-        long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images, bool ok)
+        long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images,
+        bool ok, bool agentic = false)
     {
         try
         {
@@ -561,6 +612,8 @@ public class AskService(
                 // quota en het kosten-overzicht in het beheer.
                 UserId = userContext.User?.Id,
                 Model = images is { Count: > 0 } ? "hard" : "cheap",
+                // #107: duurstatistiek toont het agentic-pad apart.
+                Agentic = agentic,
             });
             await db.SaveChangesAsync();
         }
