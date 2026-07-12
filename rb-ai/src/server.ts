@@ -54,12 +54,21 @@ const server = createServer(async (req, res) => {
       // de respons van alle andere taken blijft byte-gelijk ({answer}).
       const agentic = parsed.request.task === "agentic";
       const steps: string[] = [];
-      const answer = await askClaude({
-        ...parsed.request,
-        signal: abort.signal,
-        ...(agentic ? { onBrainStep: (s: string) => steps.push(s) } : {}),
-      });
-      return send(200, agentic ? { answer, steps } : { answer });
+      try {
+        const answer = await askClaude({
+          ...parsed.request,
+          signal: abort.signal,
+          ...(agentic ? { onBrainStep: (s: string) => steps.push(s) } : {}),
+        });
+        return send(200, agentic ? { answer, steps } : { answer });
+      } catch (e) {
+        // Agentic faalt/timeout (#107): de tool-calls die vóór de uitval al
+        // gedaan waren gaan mee in de fout-body — juist de hangende run wil
+        // de beheerder in de trace kunnen inspecteren. Overige taken volgen
+        // het bestaande pad (outer catch → 500 {error}).
+        if (agentic) return send(500, { error: String(e), steps });
+        throw e;
+      }
     }
 
     if (req.method === "POST" && req.url === "/ask/stream") {
