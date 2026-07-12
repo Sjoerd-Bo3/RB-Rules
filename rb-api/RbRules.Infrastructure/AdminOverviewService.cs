@@ -69,10 +69,17 @@ public record ProposalOverview(
 public record UserOverviewItem(
     long Id, string Email, bool Blocked, int DailyQuota, int DailyPhotoQuota,
     DateTimeOffset CreatedAt, DateTimeOffset? LastLoginAt,
-    int Questions, int Photos, int Cheap, int Hard, int Failed, int AvgDurationMs);
+    int Questions, int Photos, int Cheap, int Hard, int Failed, int AvgDurationMs,
+    long InputTokens, long OutputTokens);
+/// <summary>Tokentotalen per antwoordpad in de gekozen periode (#121):
+/// cheap/hard/agentic, over álle vragen (dus ook anonieme). Metrics zonder
+/// usage (oude rb-ai) tellen als 0 tokens maar wel als vraag — de teller is
+/// een ondergrens, geen verzonnen getal.</summary>
+public record PathUsageItem(string Path, int Questions, long InputTokens, long OutputTokens);
 public record UserOverview(
     int Total, int Page, int PageSize, string Period,
-    int AnonQuestions, int AnonPhotos, IReadOnlyList<UserOverviewItem> Items);
+    int AnonQuestions, int AnonPhotos, IReadOnlyList<PathUsageItem> Paths,
+    IReadOnlyList<UserOverviewItem> Items);
 
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
@@ -359,10 +366,34 @@ public class AdminOverviewService(RbRulesDbContext db)
                 Hard = g.Count(m => m.Model == "hard" || (m.Model == null && m.HadImage)),
                 Failed = g.Count(m => !m.Ok),
                 AvgMs = (int)g.Average(m => m.DurationMs),
+                // Tokentotalen (#121): rijen zonder usage tellen als 0 —
+                // de som is een ondergrens, geen verzonnen getal.
+                InputTokens = g.Sum(m => m.InputTokens ?? 0),
+                OutputTokens = g.Sum(m => m.OutputTokens ?? 0),
             })
             .ToListAsync();
         var byUser = stats.Where(s => s.UserId != null).ToDictionary(s => s.UserId!.Value);
         var anon = stats.FirstOrDefault(s => s.UserId == null);
+
+        // Tokentotalen per antwoordpad (#121), over álle vragen in de periode
+        // (incl. anoniem). Zelfde model-afleiding als hierboven: oude rijen
+        // zonder model vallen op basis van HadImage onder cheap/hard.
+        var pathOrder = new[] { "cheap", "hard", "agentic" };
+        var paths = (await db.AskMetrics.AsNoTracking()
+                .Where(m => m.CreatedAt >= since)
+                .GroupBy(m => m.Model ?? (m.HadImage ? "hard" : "cheap"))
+                .Select(g => new
+                {
+                    Path = g.Key,
+                    Questions = g.Count(),
+                    InputTokens = g.Sum(m => m.InputTokens ?? 0),
+                    OutputTokens = g.Sum(m => m.OutputTokens ?? 0),
+                })
+                .ToListAsync())
+            .OrderBy(p => { var i = Array.IndexOf(pathOrder, p.Path); return i < 0 ? int.MaxValue : i; })
+            .ThenBy(p => p.Path)
+            .Select(p => new PathUsageItem(p.Path, p.Questions, p.InputTokens, p.OutputTokens))
+            .ToList();
 
         var total = await db.Users.CountAsync();
         var users = await db.Users.AsNoTracking()
@@ -378,10 +409,11 @@ public class AdminOverviewService(RbRulesDbContext db)
                 u.CreatedAt, u.LastLoginAt,
                 s?.Questions ?? 0, s?.Photos ?? 0,
                 (s?.Questions ?? 0) - (s?.Hard ?? 0), s?.Hard ?? 0,
-                s?.Failed ?? 0, s?.AvgMs ?? 0);
+                s?.Failed ?? 0, s?.AvgMs ?? 0,
+                s?.InputTokens ?? 0, s?.OutputTokens ?? 0);
         }).ToList();
         return new(total, page, PageSize, normalizedPeriod,
-            anon?.Questions ?? 0, anon?.Photos ?? 0, items);
+            anon?.Questions ?? 0, anon?.Photos ?? 0, paths, items);
     }
 
     public async Task<Paged<ChangeOverviewItem>> ChangesAsync(int page)
