@@ -187,6 +187,13 @@ public class AskMetric
     /// apart. Vangnet-inzet (agent faalde, single-pass antwoordde) telt als
     /// false en is herkenbaar aan de marker in AskTrace.BrainSteps.</summary>
     public bool Agentic { get; set; }
+    /// <summary>Echte token-tellingen per vraag (#121), opgeteld over álle
+    /// LLM-calls die de vraag kostte (rewrite + antwoord; bij agentic alle
+    /// beurten incl. tool-overhead — input telt rb-ai's cache-tokens mee).
+    /// Null = geen enkele call gaf usage terug (oude rb-ai of AI-uitval):
+    /// onbekend is niet hetzelfde als 0.</summary>
+    public long? InputTokens { get; set; }
+    public long? OutputTokens { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

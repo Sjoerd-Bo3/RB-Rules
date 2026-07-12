@@ -52,4 +52,29 @@ public class AiStreamFrameTests
         Assert.Equal("delta", frame!.Type);
         Assert.Null(frame.Text);
     }
+
+    [Fact]
+    public void Parse_DoneMetUsage_GeeftTokens()
+    {
+        // Slotframe met echte token-tellingen (#121).
+        var frame = AiStreamFrame.Parse(
+            """{"type":"done","answer":"**Oordeel:** Ja.","usage":{"inputTokens":48012,"outputTokens":890}}""");
+        Assert.Equal("done", frame!.Type);
+        Assert.Equal("**Oordeel:** Ja.", frame.Answer);
+        Assert.Equal(new AiUsage(48012, 890), frame.Usage);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"done","answer":"Ja."}""")]                                   // oude rb-ai zonder usage
+    [InlineData("""{"type":"done","answer":"Ja.","usage":null}""")]                      // expliciet null
+    [InlineData("""{"type":"done","answer":"Ja.","usage":{"inputTokens":"12","outputTokens":890}}""")] // verkeerd type
+    [InlineData("""{"type":"done","answer":"Ja.","usage":{"inputTokens":12}}""")]        // veld ontbreekt
+    public void Parse_KapotteOfOntbrekendeUsage_BlijftBruikbaarFrame(string line)
+    {
+        // Usage is best-effort (#121): het frame zelf mag er nooit op sneuvelen.
+        var frame = AiStreamFrame.Parse(line);
+        Assert.Equal("done", frame!.Type);
+        Assert.Equal("Ja.", frame.Answer);
+        Assert.Null(frame.Usage);
+    }
 }

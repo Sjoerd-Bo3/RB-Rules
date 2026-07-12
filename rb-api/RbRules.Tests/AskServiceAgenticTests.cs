@@ -68,6 +68,10 @@ public class AskServiceAgenticTests
         var metric = await db.AskMetrics.SingleAsync();
         Assert.True(metric.Agentic);
         Assert.Equal("agentic", metric.Model);
+        // #121: de agent-run droeg usage; de andere calls (rewrite) niet —
+        // het gemeten deel staat op de metric, onder het agentic-pad.
+        Assert.Equal(52_000, metric.InputTokens);
+        Assert.Equal(700, metric.OutputTokens);
     }
 
     // ── Foto-vragen escaleren nooit (review #107) ──────────────────────
@@ -114,6 +118,10 @@ public class AskServiceAgenticTests
         Assert.Contains("[vangnet:", trace.BrainSteps);
         var metric = await db.AskMetrics.SingleAsync();
         Assert.False(metric.Agentic);
+        // #121: de fout-body van rb-ai draagt geen usage en de vangnet-calls
+        // hier evenmin — dan blijft het totaal eerlijk "onbekend" (null).
+        Assert.Null(metric.InputTokens);
+        Assert.Null(metric.OutputTokens);
     }
 
     // ── Agentic-terugkoppeling (#120): ontdekte verbanden als voorstel ─
@@ -390,6 +398,9 @@ public class AskServiceAgenticTests
                             answer = AgentAnswer,
                             steps = new[] { "semantic_search {\"q\":\"Deflect showdown\"}" },
                             relations,
+                            // #121: de som over alle agent-beurten, zoals
+                            // rb-ai die uit het SDK-result rapporteert.
+                            usage = new { inputTokens = 52_000, outputTokens = 700 },
                         });
                 }
                 if (request.RequestUri!.AbsolutePath == "/ask/stream")

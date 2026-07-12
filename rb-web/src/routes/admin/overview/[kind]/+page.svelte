@@ -98,9 +98,14 @@
 		createdAt: string; lastLoginAt: string | null;
 		questions: number; photos: number; cheap: number; hard: number;
 		failed: number; avgDurationMs: number;
+		inputTokens: number; outputTokens: number;
 	}
+	// Tokentotalen per antwoordpad (#121): over álle vragen in de periode,
+	// dus ook anonieme. Vragen zonder gemeten usage tellen als 0 tokens —
+	// de som is een ondergrens.
+	interface PathUsage { path: string; questions: number; inputTokens: number; outputTokens: number; }
 	interface UserOverview extends Paged<UserItem> {
-		period: string; anonQuestions: number; anonPhotos: number;
+		period: string; anonQuestions: number; anonPhotos: number; paths: PathUsage[];
 	}
 
 	const TITLES: Record<string, { title: string; sub: string }> = {
@@ -118,7 +123,7 @@
 		relaties: { title: 'Relaties', sub: 'LLM-ontdekte relaties tussen de kennislagen — de graph-sync projecteert alleen geaccepteerde en ongereviewde voorstellen met een geaccepteerd kind, verworpen nooit' },
 		voorstellen: { title: 'Bronvoorstellen', sub: 'webvondsten van de scout — accepteren zet de bron uitgeschakeld in het register, aanzetten gaat daarna via de bronnen-tabel' },
 		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' },
-		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — de cheap/hard-verdeling is de kosten-indicatie; quota en blokkade zijn hier bij te stellen' }
+		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — tokentotalen per pad en per account zijn het kosteninzicht; quota en blokkade zijn hier bij te stellen' }
 	};
 	const meta = $derived(TITLES[data.kind]);
 
@@ -219,6 +224,12 @@
 
 	function fmtDate(iso: string | null): string {
 		return iso ? new Date(iso).toLocaleDateString('nl-NL') : '—';
+	}
+
+	// Tokentellingen (#121): NL-groepering (12.345) — grote getallen blijven
+	// zo scanbaar in de tabellen.
+	function fmtTokens(n: number): string {
+		return n.toLocaleString('nl-NL');
 	}
 </script>
 
@@ -792,12 +803,36 @@
 					? `, waarvan ${users.anonPhotos} met foto`
 					: ''} — anonieme bezoekers vallen onder de per-IP-limiet.
 			</p>
+
+			<!-- Tokentotalen per antwoordpad (#121): echte tellingen uit rb-ai,
+			     over álle vragen in de periode (incl. anoniem). Vragen zonder
+			     gemeten usage tellen als 0 tokens — de som is een ondergrens. -->
+			{#if users.paths.length}
+				<div class="table-wrap">
+					<table class="paths">
+						<thead><tr><th>Pad</th><th>Vragen</th><th>Tokens in</th><th>Tokens uit</th></tr></thead>
+						<tbody>
+							{#each users.paths as p (p.path)}
+								<tr>
+									<td><strong>{p.path}</strong></td>
+									<td class="meta">{p.questions}</td>
+									<td class="meta">{fmtTokens(p.inputTokens)}</td>
+									<td class="meta">{fmtTokens(p.outputTokens)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+				<p class="meta count">Tokens per pad over de gekozen periode, inclusief anonieme vragen; vragen van vóór de tokenmeting tellen als 0 tokens.</p>
+			{/if}
+
 			<div class="table-wrap">
 				<table>
 					<thead>
 						<tr>
 							<th>Gebruiker</th><th>Status</th><th>Vragen</th><th>Foto's</th>
 							<th>Cheap / hard</th><th>Mislukt</th><th>Gem. duur</th>
+							<th>Tokens in / uit</th>
 							<th>Quota per dag</th><th></th>
 						</tr>
 					</thead>
@@ -814,6 +849,7 @@
 								<td class="meta">{u.cheap} / {u.hard}</td>
 								<td class="meta">{u.failed}</td>
 								<td class="meta">{u.questions ? `${Math.round(u.avgDurationMs / 1000)}s` : '—'}</td>
+								<td class="meta nowrap">{u.questions ? `${fmtTokens(u.inputTokens)} / ${fmtTokens(u.outputTokens)}` : '—'}</td>
 								<td>
 									<form method="POST" action="?/saveUser" use:enhance class="quota-form">
 										<input type="hidden" name="id" value={u.id} />
@@ -875,6 +911,8 @@
 	.chip.active { border-color: var(--accent); color: var(--accent); }
 	.table-wrap { overflow-x: auto; }
 	table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+	/* Pad-totalen (#121): compacte samenvatting boven de accounttabel. */
+	table.paths { max-width: 480px; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
 	th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 	th { color: var(--muted); font-size: 0.82rem; font-weight: 600; }
 	td a { color: inherit; }

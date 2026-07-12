@@ -51,17 +51,19 @@ const server = createServer(async (req, res) => {
       const parsed = parseAskRequest(await readJson(req));
       if (!parsed.ok) return send(400, { error: parsed.error });
       // Brein-stappen (#107): alléén bij task="agentic" gaan de tool-calls
-      // als `steps` mee terug (rb-api legt ze vast in AskTrace.BrainSteps);
-      // de respons van alle andere taken blijft byte-gelijk ({answer}).
+      // als `steps` mee terug (rb-api legt ze vast in AskTrace.BrainSteps).
+      // Elke taak krijgt daarnaast `usage` (#121): de echte token-tellingen
+      // van de run (null als de SDK ze niet meegaf) — rb-api leest ze
+      // best-effort, dus een oudere aanroeper negeert het veld gewoon.
       const agentic = parsed.request.task === "agentic";
       const steps: string[] = [];
       try {
-        const answer = await askClaude({
+        const { answer, usage } = await askClaude({
           ...parsed.request,
           signal: abort.signal,
           ...(agentic ? { onBrainStep: (s: string) => steps.push(s) } : {}),
         });
-        if (!agentic) return send(200, { answer });
+        if (!agentic) return send(200, { answer, usage });
         // Relatievoorstellen (#120): het addendum laat de agent ontdekte
         // verbanden ná het antwoord melden; dat blok gaat als eigen veld
         // `relations` naast `steps` mee (rb-api parseert en valideert het,
@@ -71,6 +73,7 @@ const server = createServer(async (req, res) => {
         return send(200, {
           answer: split.answer,
           steps,
+          usage,
           ...(split.relations ? { relations: split.relations } : {}),
         });
       } catch (e) {
@@ -87,20 +90,22 @@ const server = createServer(async (req, res) => {
       // Streaming-variant (#31): NDJSON — één JSON-object per regel. Chunked
       // is het eenvoudigste dat node:http én de Agent SDK van nature doen;
       // geen SSE-framing nodig omdat de afnemer (rb-api) geen EventSource is.
-      // Frames: {type:"delta",text} … {type:"done",answer} | {type:"error",error}.
+      // Frames: {type:"delta",text} … {type:"done",answer,usage} | {type:"error",error}.
+      // Het slotframe draagt de token-usage van de run (#121, null bij
+      // ontbreken) — dezelfde best-effort-doorgifte als op /ask.
       const parsed = parseAskRequest(await readJson(req));
       if (!parsed.ok) return send(400, { error: parsed.error });
       res.writeHead(200, { "content-type": "application/x-ndjson" });
       const frame = (obj: unknown) => res.write(JSON.stringify(obj) + "\n");
       try {
-        const answer = await askClaude({
+        const { answer, usage } = await askClaude({
           ...parsed.request,
           signal: abort.signal,
           onDelta: (text) => {
             frame({ type: "delta", text });
           },
         });
-        frame({ type: "done", answer });
+        frame({ type: "done", answer, usage });
       } catch (e) {
         // Uitval mídden in de stream: de 200 is al weg, dus de fout gaat als
         // frame mee — de aanroeper (rb-api) degradeert daarop netjes. Is de
