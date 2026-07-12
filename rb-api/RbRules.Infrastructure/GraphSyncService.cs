@@ -296,8 +296,8 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         var affectsCard = new List<object>();
         foreach (var c in changes)
         {
-            var text = string.Join('\n', new[] { c.Summary, c.Meaning, c.Diff }
-                .Where(t => !string.IsNullOrWhiteSpace(t)));
+            // Gedeelde "betrokken"-definitie met de kennis-hertoets (#119).
+            var text = ChangeAffectsMapper.AffectsText(c.Summary, c.Meaning, c.Diff);
             foreach (var target in affectsMapper.Resolve(c.ChangeType, text))
             {
                 (target.Kind == BrainRefKind.Card ? affectsCard : affectsSection)

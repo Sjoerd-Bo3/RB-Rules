@@ -388,8 +388,11 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
 
     /// <summary>Toets één claim aan de dichtstbijzijnde officiële §'s. Geen
     /// regelindex of geen bruikbaar oordeel ⇒ "unchecked" (volgende run);
-    /// Degraded draagt in dat laatste geval de reden voor run_log.</summary>
-    private async Task<(string OfficialStatus, string? Reason, string? Degraded)> CheckOfficialAsync(
+    /// Degraded draagt in dat laatste geval de reden voor run_log.
+    /// Publiek sinds #119: de kennis-hertoets na een regelwijziging gebruikt
+    /// exact dezelfde official-check (geen tweede implementatie); virtual is
+    /// de test-seam (InMemory kan geen CosineDistance evalueren).</summary>
+    public virtual async Task<(string OfficialStatus, string? Reason, string? Degraded)> CheckOfficialAsync(
         string statement, Vector vec, IReadOnlyList<string> officialSourceIds,
         CancellationToken ct)
     {

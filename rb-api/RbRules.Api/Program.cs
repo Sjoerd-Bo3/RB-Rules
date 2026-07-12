@@ -71,6 +71,9 @@ builder.Services.AddScoped<KnowledgeGapsService>();
 // Run_log-grootboek voor periodieke jobs (#122): vensters voor de scheduler
 // en "laatste run per job" voor beheer.
 builder.Services.AddScoped<JobLedger>();
+// Kennis-levenscyclus (#119): regelwijzigingen hertoetsen betrokken
+// primer-docs en claims — lift mee in de scan-afronding van IngestService.
+builder.Services.AddScoped<KnowledgeRecheckService>();
 // Brein-API (#105): Postgres-kant (search/node/evidence/contradictions) en
 // Neo4j-kant (neighbors/path) gescheiden — degradatie per koppelvlak.
 builder.Services.AddScoped<BrainService>();

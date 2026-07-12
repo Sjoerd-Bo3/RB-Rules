@@ -88,8 +88,10 @@
 	}
 	interface GapDriftEntry { label: string; postgres: number; graph: number; delta: number; }
 	interface GapDrift { graphAvailable: boolean; detail: string | null; entries: GapDriftEntry[]; }
+	interface GapAgingSignal { kind: string; title: string; reason: string; at: string; }
 	interface GapsReport {
 		coverage: GapCoverage; questions: GapQuestion[]; sources: GapSource[]; drift: GapDrift;
+		aging: GapAgingSignal[];
 	}
 	interface UserItem {
 		id: number; email: string; blocked: boolean; dailyQuota: number; dailyPhotoQuota: number;
@@ -704,6 +706,25 @@
 				</div>
 			{/each}
 
+			<!-- Verouderingssignalen (#119): kennis die een verwerkte
+			     regelwijziging heeft teruggelegd voor review -->
+			<h2 class="gap-h">Verouderingssignalen <span class="meta">(kennis die een verwerkte regelwijziging hertoetste — primer-docs wachten in de <a class="meta-link" href="/admin">reviewqueue</a>, verouderde claims staan bij <a class="meta-link" href="/admin/overview/claims">community-claims</a>)</span></h2>
+			{#if !gaps.aging.length}
+				<p class="meta">Geen signalen — geen primer-docs of claims door een regelwijziging geraakt.</p>
+			{:else}
+				<div class="panel item">
+					<ul class="gap-list">
+						{#each gaps.aging as a, i (i)}
+							<li>
+								<span class="badge warn-b">{a.kind === 'primer' ? 'primer-draft' : 'claim verouderd'}</span>
+								<strong>{a.title}</strong>
+								<span class="meta">{a.reason} · {fmtDate(a.at)}</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+
 			<h2 class="gap-h">Bron-versheid <span class="meta">(wanneer leverde elke bron voor het laatst iets nieuws)</span></h2>
 			<div class="table-wrap">
 				<table>
@@ -902,6 +923,8 @@
 	.gap-stat a { color: var(--accent); text-decoration: none; }
 	.gap-list { margin: 4px 0 0; padding-left: 18px; }
 	.gap-list li { margin-bottom: 4px; line-height: 1.5; }
+	.meta-link { color: var(--accent); text-decoration: none; }
+	.meta-link:hover { text-decoration: underline; }
 	.pager { display: flex; align-items: center; gap: 14px; margin: 16px 0; }
 	.pager a { color: var(--accent); text-decoration: none; font-weight: 600; }
 	.meta { color: var(--muted); font-size: 0.85rem; }
