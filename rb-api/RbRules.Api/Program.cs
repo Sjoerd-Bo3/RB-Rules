@@ -31,7 +31,12 @@ builder.Services.AddHttpClient<RbAiClient>(c =>
     // de sidecar doorwerkt. Overige taken antwoorden of falen veel eerder.
     c.Timeout = TimeSpan.FromMinutes(6);
 });
-builder.Services.AddHttpClient<IngestService>(c => c.Timeout = TimeSpan.FromSeconds(60));
+// SSRF-guard (#45), fetch-laag: IngestService praat als enige client met
+// URL's van buiten (register/scout/hub) — DNS-check op elk verbindingsdoel
+// (ook redirect-hops) + redirect-limiet. De URL-regels zelf checkt
+// IngestService vóór de call (UrlGuard.Check).
+builder.Services.AddHttpClient<IngestService>(c => c.Timeout = TimeSpan.FromSeconds(60))
+    .ConfigurePrimaryHttpMessageHandler(SafeExternalHttp.CreateHandler);
 builder.Services.AddHttpClient<CardSyncService>(c => c.Timeout = TimeSpan.FromSeconds(120));
 builder.Services.AddHttpClient<EmbeddingService>(c =>
 {
@@ -145,7 +150,28 @@ if (!app.Environment.IsEnvironment("Testing"))
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<RbRulesDbContext>();
-    await db.Database.MigrateAsync();
+
+    // Migratie-retry (#45): na een VM-reboot start rb-api soms eerder dan
+    // Postgres klaar is (de compose-healthcheck gate dekt een verse `up`,
+    // niet elke reboot-race). Kort en begrensd — blijft het misgaan, dan
+    // faalt de start alsnog hard en vangt de deploy-healthcheck-verify het.
+    const int migrateAttempts = 5;
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            await db.Database.MigrateAsync();
+            break;
+        }
+        catch (Exception ex) when (attempt < migrateAttempts)
+        {
+            var delay = TimeSpan.FromSeconds(2 * attempt); // 2+4+6+8s ≪ start_period 90s
+            app.Logger.LogWarning(
+                ex, "Migratie-poging {Attempt}/{Max} mislukt (Postgres nog niet klaar?); opnieuw over {Delay}s",
+                attempt, migrateAttempts, delay.TotalSeconds);
+            await Task.Delay(delay);
+        }
+    }
 
     // Seed alleen ontbrekende bronnen — /admin blijft de bron van waarheid.
     var existing = await db.Sources.Select(s => s.Id).ToHashSetAsync();

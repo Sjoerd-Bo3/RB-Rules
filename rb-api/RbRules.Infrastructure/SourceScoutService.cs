@@ -97,6 +97,21 @@ public class SourceScoutService(RbRulesDbContext db, RbAiClient ai)
         var proposal = await db.SourceProposals.FindAsync([id], ct);
         if (proposal is null) return null;
 
+        // SSRF-guard (#45): een webvondst komt alleen door de guard heen het
+        // register (en dus de scan-loop) in. De fetch-rand valideert daarna
+        // nogmaals — dit is de vroege, duidelijke melding voor de beheerder.
+        if (UrlGuard.Check(proposal.Url) is { Allowed: false } g)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "scout", Ref = proposal.Url, Status = "error",
+                Detail = $"voorstel niet geaccepteerd — URL geweigerd (SSRF-guard): {g.Reason}",
+            });
+            await db.SaveChangesAsync(ct);
+            return new("refused", null,
+                $"URL geweigerd (SSRF-guard): {g.Reason} — het voorstel blijft staan; verwerp het om het uit de queue te halen");
+        }
+
         var registered = (await db.Sources.AsNoTracking()
                 .Select(s => new { s.Id, s.Url }).ToListAsync(ct))
             .FirstOrDefault(s => string.Equals(
