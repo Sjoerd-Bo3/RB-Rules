@@ -1,12 +1,16 @@
 using Microsoft.EntityFrameworkCore;
+using RbRules.Domain;
 using RbRules.Infrastructure;
 
 namespace RbRules.Api;
 
 /// <summary>In-app scheduler (audit-fix: geen handmatige crontab meer).
 /// Elk uur: scan bronnen die volgens hun cadence aan de beurt zijn.
-/// Elke week: kaart-sync (nieuwe sets/errata).</summary>
-public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanScheduler> logger)
+/// Elke week: kaart-sync (nieuwe sets/errata). Periodieke zelfverrijking
+/// (#122): relatie-mining nachtelijk en de bronnen-scout wekelijks, als
+/// gewone JobRunner-jobs op het run_log-grootboek.</summary>
+public class ScanScheduler(
+    IServiceScopeFactory scopeFactory, JobRunner jobs, ILogger<ScanScheduler> logger)
     : BackgroundService
 {
     private static readonly TimeSpan Tick = TimeSpan.FromHours(1);
@@ -17,6 +21,13 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
     // wekelijks gescand, dus één keer per dag minen is ruim voldoende — en
     // idempotent (al geminede documenten worden overgeslagen).
     private static readonly TimeSpan ClaimsMineInterval = TimeSpan.FromDays(1);
+    // Relatie-mining (#116/#122): zelfde nachtritme als de claims-harvest —
+    // eens per etmaal met de standaard-cap volstaat; de run is idempotent
+    // (markers + dedupe) en elke eenheid logt zelf naar run_log.
+    private static readonly TimeSpan RelationsMineInterval = TimeSpan.FromDays(1);
+    // Bronnenjacht (#63/#122): wekelijks — elke run kost een research-call
+    // van minuten, en het bronnenlandschap verandert niet sneller dan dat.
+    private static readonly TimeSpan ScoutInterval = TimeSpan.FromDays(7);
     private DateTimeOffset _lastCardSync = DateTimeOffset.MinValue;
     private DateTimeOffset _lastClaimsMine = DateTimeOffset.MinValue;
 
@@ -158,6 +169,17 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                 {
                     logger.LogWarning(ex, "Mining/graph-sync overgeslagen (rb-ai/Neo4j onbereikbaar?)");
                 }
+
+                // Periodieke zelfverrijking (#122): relatie-mining nachtelijk,
+                // de bronnen-scout wekelijks. Beide draaien als gewone
+                // JobRunner-job — dezelfde éénjob-gate als handmatige jobs
+                // (nooit twee tegelijk), dezelfde live-voortgang in beheer en
+                // dezelfde degradatiepaden in de services zelf. Het run_log-
+                // grootboek (kind "job", door JobRunner geschreven bij elke
+                // afronding) bepaalt het venster: een handmatige run gisteren
+                // of een container-herstart veroorzaakt geen dubbele run.
+                await TryStartPeriodicJobAsync(scope.ServiceProvider, "relations", RelationsMineInterval, ct);
+                await TryStartPeriodicJobAsync(scope.ServiceProvider, "scout", ScoutInterval, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -168,6 +190,39 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                 logger.LogError(ex, "Scheduler-tick faalde");
             }
             await Task.Delay(Tick, ct);
+        }
+    }
+
+    /// <summary>Start een catalogus-job zodra zijn venster verstreken is én
+    /// er geen andere job draait (JobRunner-gate). Een TryStart die false
+    /// geeft is geen fout: er draait al iets, en zolang de job niet gedraaid
+    /// heeft blijft het venster open — de volgende tick probeert opnieuw.</summary>
+    private async Task TryStartPeriodicJobAsync(
+        IServiceProvider sp, string name, TimeSpan window, CancellationToken ct)
+    {
+        try
+        {
+            var lastRun = await sp.GetRequiredService<JobLedger>().LastRunAsync(name, ct);
+            if (!Scheduling.IsWindowDue(window, lastRun, DateTimeOffset.UtcNow)) return;
+            if (JobCatalog.Find(name) is not { } job)
+            {
+                logger.LogError("Periodieke job '{Name}' bestaat niet in de JobCatalog", name);
+                return;
+            }
+            if (jobs.TryStart(name, job.Run))
+                logger.LogInformation(
+                    "Periodieke job '{Name}' gestart (vorige run: {LastRun})",
+                    name, lastRun?.ToString("u") ?? "nog nooit");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Grootboek even onleesbaar (db-hik): loggen en volgende tick
+            // opnieuw — de scheduler zelf mag hier nooit op stoppen.
+            logger.LogWarning(ex, "Periodieke job '{Name}' niet gestart", name);
         }
     }
 }

@@ -85,6 +85,41 @@ public class SchedulingTests
     [Fact]
     public void Weekly_DueAfterSevenDays() =>
         Assert.True(Scheduling.IsDue("weekly", Now.AddDays(-7), Now));
+
+    // ── Vensterlogica periodieke zelfverrijking (#122) ──────────────────
+    // De scheduler bepaalt op het run_log-grootboek of relatie-mining
+    // (nachtelijk) en de scout (wekelijks) aan de beurt zijn.
+
+    [Fact]
+    public void Window_EersteRunIsAltijdAanDeBeurt() =>
+        Assert.True(Scheduling.IsWindowDue(TimeSpan.FromDays(1), null, Now));
+
+    [Fact]
+    public void Window_NietAanDeBeurtBinnenHetVenster() =>
+        Assert.False(Scheduling.IsWindowDue(TimeSpan.FromDays(1), Now.AddHours(-12), Now));
+
+    [Fact]
+    public void Window_AanDeBeurtNaHetVenster() =>
+        Assert.True(Scheduling.IsWindowDue(TimeSpan.FromDays(1), Now.AddDays(-1), Now));
+
+    [Fact]
+    public void Window_MargeVoorkomtTickDrift()
+    {
+        // Een uurlijkse tick valt zelden exact op de venstergrens: 23u40m na
+        // de vorige run telt als 'aan de beurt' (marge 30m) — anders schuift
+        // elke nachtelijke run een tick verder op. Ruim daarbinnen niet.
+        Assert.True(Scheduling.IsWindowDue(
+            TimeSpan.FromDays(1), Now.AddHours(-23).AddMinutes(-40), Now));
+        Assert.False(Scheduling.IsWindowDue(TimeSpan.FromDays(1), Now.AddHours(-23), Now));
+    }
+
+    [Fact]
+    public void Window_WeekvensterVoorDeScout()
+    {
+        // De scout kost een research-call: binnen de week nooit opnieuw.
+        Assert.False(Scheduling.IsWindowDue(TimeSpan.FromDays(7), Now.AddDays(-6), Now));
+        Assert.True(Scheduling.IsWindowDue(TimeSpan.FromDays(7), Now.AddDays(-7), Now));
+    }
 }
 
 public class ClassifierTests
