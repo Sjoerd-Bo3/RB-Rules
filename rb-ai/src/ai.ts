@@ -12,6 +12,7 @@ import {
   createBrainSession,
 } from "./brain-tools.js";
 import { RELATIONS_MARKER } from "./relations.js";
+import { usageFromSdk, type AskUsage } from "./usage.js";
 
 // Auth: CLAUDE_CODE_OAUTH_TOKEN (abonnement) of ANTHROPIC_API_KEY.
 // Laat ANTHROPIC_API_KEY leeg bij abonnementsgebruik — die wint stilletjes.
@@ -133,6 +134,15 @@ async function* userMessage(prompt: string, images: AskImage[]) {
   };
 }
 
+/** Antwoord + echte token-usage van één askClaude-run (#121). `usage` komt
+ * uit het afsluitende result-bericht van de SDK (opgeteld over alle beurten,
+ * incl. tool-overhead bij research/agentic) en is null wanneer de SDK er
+ * geen meegaf — de aanroeper behandelt dat als "onbekend", nooit als 0. */
+export interface AskAnswer {
+  answer: string;
+  usage: AskUsage | null;
+}
+
 /** Stuur één prompt (optioneel met afbeeldingen) naar Claude.
  *
  * Met `onDelta` (#31, streaming) levert de Agent SDK naast de gewone
@@ -151,7 +161,7 @@ export async function askClaude(opts: {
    * terug zodat rb-api ze in AskTrace.BrainSteps kan vastleggen. */
   onBrainStep?: (step: string) => void;
   signal?: AbortSignal;
-}): Promise<string> {
+}): Promise<AskAnswer> {
   const { prompt, system, task = "cheap", images = [], onDelta, onBrainStep, signal } = opts;
   const research = task === "research";
   const agentic = task === "agentic";
@@ -226,12 +236,17 @@ export async function askClaude(opts: {
   // apart en geef het 'result' terug; val terug op assistant-tekst zonder result.
   let assistantText = "";
   let resultText = "";
+  // Echte token-tellingen (#121): het result-bericht (succes én
+  // error_max_turns e.d.) draagt de usage van de hele run — opgeteld over
+  // alle beurten, dus incl. agentic tool-overhead. Geen result = null.
+  let usage: AskUsage | null = null;
   try {
     for await (const message of query(arg as Parameters<typeof query>[0])) {
       const m = message as {
         type: string;
         text?: string;
         result?: string;
+        usage?: unknown;
         message?: { content?: Array<{ type: string; text?: string }> };
         event?: { type?: string; delta?: { type?: string; text?: string } };
       };
@@ -253,8 +268,9 @@ export async function askClaude(opts: {
         }
       } else if (m.type === "text" && m.text) {
         assistantText += m.text;
-      } else if (m.type === "result" && m.result) {
-        resultText += m.result;
+      } else if (m.type === "result") {
+        if (m.result) resultText += m.result;
+        usage = usageFromSdk(m.usage) ?? usage;
       }
     }
   } catch (e) {
@@ -274,5 +290,5 @@ export async function askClaude(opts: {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }
-  return (resultText || assistantText).trim();
+  return { answer: (resultText || assistantText).trim(), usage };
 }
