@@ -139,6 +139,31 @@ public static partial class RelationMiner
         return result;
     }
 
+    /// <summary>Kandidaat-refs (from/to) uit een voorstellenblok, vóór elke
+    /// validatie — #120: de agentic ask bood géén ref-lijst in de prompt aan,
+    /// dus de aanroeper toetst deze kandidaten eerst tegen het brein (bestaat
+    /// de knoop echt?) en geeft de geldige set daarna als offeredRefs aan
+    /// <see cref="ParseRelations"/> — dezelfde poort, andere bron van waarheid.
+    /// null = geen parseerbare JSON (zelfde betekenis als ParseRelations);
+    /// distinct en case-ongevoelig, in volgorde van eerste voorkomen.</summary>
+    public static IReadOnlyList<string>? CandidateRefs(string raw)
+    {
+        var items = LlmJson.ExtractItems(raw, "relations");
+        if (items is null) return null;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (var item in items)
+        {
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            foreach (var key in (string[])["from", "to"])
+            {
+                if (GetString(item, key) is { } r && seen.Add(r)) result.Add(r);
+            }
+        }
+        return result;
+    }
+
     /// <summary>Idempotentie-sleutel over runs heen: gericht (A counters B is
     /// niet B counters A), case-ongevoelig op de refs, kind al genormaliseerd.
     /// Eerder verworpen relaties blijven zo verworpen — zelfde voorstel komt

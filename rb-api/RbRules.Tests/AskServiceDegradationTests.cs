@@ -89,8 +89,10 @@ public class AskServiceDegradationTests
     /// en de degradatie (#100) gaat juist over de pipeline om dat kanaal heen.</summary>
     private sealed class TestableAskService(
         RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai)
-        : AskService(db, embeddings, ai, new RequestUserContext(),
-            NullLogger<AskService>.Instance)
+        : AskService(db, embeddings, ai,
+            new AgenticRelationService(db, new BrainService(
+                db, embeddings, new CardResolver(db), NullLogger<BrainService>.Instance)),
+            new RequestUserContext(), NullLogger<AskService>.Instance)
     {
         private readonly RbRulesDbContext _db = db;
 

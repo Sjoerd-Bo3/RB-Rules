@@ -52,6 +52,7 @@ public record AskStreamMeta(
 /// nooit een kale 500.</summary>
 public class AskService(
     RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai,
+    AgenticRelationService agenticRelations,
     RequestUserContext userContext, ILogger<AskService> logger)
 {
     private const int TopK = 8;
@@ -465,6 +466,7 @@ public class AskService(
         // één delta naar de UI; het final-frame blijft identiek.
         string? aiAnswer = null;
         string? brainSteps = null;
+        string? agenticProposals = null;
         var agentAnswered = false;
         var clientGone = false;
         if (agentic)
@@ -477,6 +479,10 @@ public class AskService(
                     aiAnswer = agentText;
                     agentAnswered = true;
                     brainSteps = agenticAnswer.Steps ?? "(agent deed geen tool-calls)";
+                    // #120: het relatievoorstellen-blok dat rb-ai van het
+                    // antwoord afsplitste; wordt in de afronding hieronder
+                    // gevalideerd en opgeslagen (na de metric, vóór de trace).
+                    agenticProposals = agenticAnswer.Relations;
                     if (onDelta is not null) await onDelta(agentText);
                 }
                 else
@@ -533,6 +539,28 @@ public class AskService(
         await RecordMetricAsync(
             sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null,
             agentic: agentAnswered, model: usedModel);
+
+        // Agentic-terugkoppeling (#120): door de agent ontdekte verbanden als
+        // relatievoorstel achterlaten — het brein verrijkt zichzelf al
+        // antwoordend. Best-effort én buiten de duurmeting: het antwoord is
+        // al af (en op de streamingroute al verstuurd); een haperende opslag
+        // mag het nooit alsnog blokkeren. De teller landt in BrainSteps zodat
+        // de vraag-trace toont wat de agent achterliet.
+        if (agentAnswered && agenticProposals is not null)
+        {
+            try
+            {
+                var harvest = await agenticRelations.StoreProposalsAsync(
+                    question, agenticProposals, finishCt);
+                brainSteps += "\n" + harvest.TraceLine;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "relatievoorstellen uit de agentic ask niet opgeslagen");
+                brainSteps += "\n[relatievoorstellen: opslaan mislukt — zie logs]";
+            }
+        }
 
         // Denkstappen-trace voor het beheer (#40) — best-effort.
         try
