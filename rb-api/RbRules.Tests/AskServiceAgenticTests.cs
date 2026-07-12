@@ -116,6 +116,137 @@ public class AskServiceAgenticTests
         Assert.False(metric.Agentic);
     }
 
+    // ── Agentic-terugkoppeling (#120): ontdekte verbanden als voorstel ─
+
+    /// <summary>Voorstellenblok zoals rb-ai het als `relations` meestuurt:
+    /// twee echte verbanden (waarvan één met een ref in de verkeerde case,
+    /// mechanic:deflect) plus één gehallucineerde ref die geweerd moet
+    /// worden.</summary>
+    private const string ProposalsBlock = """
+        {"relations": [
+          {"from": "card:test-viktor", "to": "card:test-yasuo", "kind": "counters", "explanation": "Viktor omzeilt Yasuo's Deflect met een niet-targeted effect."},
+          {"from": "mechanic:deflect", "to": "card:test-yasuo", "kind": "synergie met", "explanation": "Deflect beschermt Yasuo tijdens een showdown."},
+          {"from": "card:test-viktor", "to": "card:verzonnen-999", "kind": "counters", "explanation": "Deze ref bestaat niet in het brein."}
+        ]}
+        """;
+
+    [Fact]
+    public async Task Agentic_VoorstellenGevalideerdEnOpgeslagen_GehallucineerdeRefGeweerd()
+    {
+        using var db = NewDb();
+        await SeedAsync(db);
+        var ai = new AgenticAwareAi(relations: ProposalsBlock);
+        var svc = Svc(db, ai);
+
+        var result = await WithModeAsync("auto", () => svc.AskAsync(InteractionQuestion));
+
+        // Het antwoord zelf blijft schoon — het blok is metadata, geen tekst.
+        Assert.Equal(AgentAnswer, result.Answer);
+
+        var relations = await db.Relations.ToListAsync();
+        Assert.Equal(2, relations.Count);
+        Assert.All(relations, r =>
+        {
+            Assert.Equal("unreviewed", r.Status);
+            Assert.StartsWith("agentic-ask: When Viktor attacks", r.Provenance);
+            Assert.Equal(ClaimScoring.TierWeight(2), r.Trust);
+        });
+        Assert.Contains(relations, r =>
+            r.FromRef == "card:test-viktor" && r.ToRef == "card:test-yasuo" && r.Kind == "counters");
+        // Refs canonicaliseren op wat het brein kent: mechanic:deflect → mechanic:Deflect.
+        Assert.Contains(relations, r => r.FromRef == "mechanic:Deflect" && r.Kind == "synergie met");
+        // De verzonnen ref komt de database nooit in (hallucinatie-weer).
+        Assert.DoesNotContain(relations, r =>
+            r.FromRef.Contains("verzonnen") || r.ToRef.Contains("verzonnen"));
+
+        // Onbekend kind → kandidaat in de reviewqueue (#116-poort).
+        var kind = await db.RelationKinds.SingleAsync();
+        Assert.Equal("synergie met", kind.Kind);
+        Assert.Equal("candidate", kind.Status);
+
+        // Teller zichtbaar in de trace, naast de bestaande brein-stappen.
+        var trace = await db.AskTraces.SingleAsync();
+        Assert.True(trace.Agentic);
+        Assert.Contains("semantic_search", trace.BrainSteps);
+        Assert.Contains(
+            "[relatievoorstellen: 2 opgeslagen, 1 geweerd (onbekende ref), 0 al bekend, 1 nieuwe kind-kandidaten]",
+            trace.BrainSteps);
+
+        // Herleidbaar in run_log, in de bestaande relaties-pijplijn.
+        var log = await db.RunLogs.SingleAsync(l => l.Ref == "agentic-ask");
+        Assert.Equal("relations", log.Kind);
+        Assert.Equal("ok", log.Status);
+    }
+
+    [Fact]
+    public async Task Agentic_BekendVoorstelEnVerworpenKind_NietOpnieuwOpgevoerd()
+    {
+        using var db = NewDb();
+        await SeedAsync(db);
+        // Eerder verworpen voorstel én verworpen kind zijn definitief: het
+        // zelfde voorstel komt niet opnieuw de reviewqueue in (#116-poort).
+        db.Relations.Add(new Relation
+        {
+            FromRef = "card:test-viktor", ToRef = "card:test-yasuo", Kind = "counters",
+            Explanation = "eerder voorstel", Provenance = "concept:combat",
+            Trust = 0.6, Status = "rejected",
+        });
+        db.RelationKinds.Add(new RelationKind
+        {
+            Kind = "synergie met", Status = "rejected", Occurrences = 1,
+        });
+        await db.SaveChangesAsync();
+        var ai = new AgenticAwareAi(relations: ProposalsBlock);
+        var svc = Svc(db, ai);
+
+        await WithModeAsync("auto", () => svc.AskAsync(InteractionQuestion));
+
+        // Alleen de vooraf bestaande rij; beide voorstellen tellen als bekend.
+        Assert.Equal(1, await db.Relations.CountAsync());
+        Assert.Equal(1, (await db.RelationKinds.SingleAsync()).Occurrences);
+        var trace = await db.AskTraces.SingleAsync();
+        Assert.Contains(
+            "[relatievoorstellen: 0 opgeslagen, 1 geweerd (onbekende ref), 2 al bekend]",
+            trace.BrainSteps);
+    }
+
+    [Fact]
+    public async Task Agentic_ZonderVoorstellenBlok_GeenOogstEnGeenTraceregel()
+    {
+        using var db = NewDb();
+        await SeedAsync(db);
+        var ai = new AgenticAwareAi();
+        var svc = Svc(db, ai);
+
+        var result = await WithModeAsync("auto", () => svc.AskAsync(InteractionQuestion));
+
+        // Byte-gelijk aan het gedrag vóór #120: geen rijen, geen extra regel.
+        Assert.Equal(AgentAnswer, result.Answer);
+        Assert.Equal(0, await db.Relations.CountAsync());
+        var trace = await db.AskTraces.SingleAsync();
+        Assert.DoesNotContain("[relatievoorstellen", trace.BrainSteps);
+    }
+
+    [Fact]
+    public async Task Agentic_OnparseerbaarBlok_RunLogDiagnoseEnTracemelding()
+    {
+        using var db = NewDb();
+        await SeedAsync(db);
+        var ai = new AgenticAwareAi(relations: "dit is geen JSON");
+        var svc = Svc(db, ai);
+
+        var result = await WithModeAsync("auto", () => svc.AskAsync(InteractionQuestion));
+
+        // Het antwoord blijft staan (#93-discipline: diagnose, geen crash).
+        Assert.Equal(AgentAnswer, result.Answer);
+        Assert.Equal(0, await db.Relations.CountAsync());
+        var trace = await db.AskTraces.SingleAsync();
+        Assert.Contains("[relatievoorstellen: blok onparseerbaar", trace.BrainSteps);
+        var log = await db.RunLogs.SingleAsync(l => l.Ref == "agentic-ask");
+        Assert.Equal("error", log.Status);
+        Assert.Contains("dit is geen JSON", log.Detail);
+    }
+
     // ── Client-abort tijdens de agentic call: registratie landt tóch ───
     //    (review #107 — zelfde invariant als #110/StreamAnswerAsync)
 
@@ -194,8 +325,10 @@ public class AskServiceAgenticTests
     /// EF InMemory).</summary>
     private sealed class TestableAskService(
         RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai)
-        : AskService(db, embeddings, ai, new RequestUserContext(),
-            NullLogger<AskService>.Instance)
+        : AskService(db, embeddings, ai,
+            new AgenticRelationService(db, new BrainService(
+                db, embeddings, new CardResolver(db), NullLogger<BrainService>.Instance)),
+            new RequestUserContext(), NullLogger<AskService>.Instance)
     {
         private readonly RbRulesDbContext _db = db;
 
@@ -217,19 +350,23 @@ public class AskServiceAgenticTests
 
     /// <summary>Echte RbAiClient op een handler die de agentic-taak apart
     /// behandelt: telt de agentic-calls, kan hem laten slagen (antwoord +
-    /// steps), laten falen (500 mét de al gedane steps in de fout-body, zoals
-    /// rb-ai dat doet) of een eigen effect uitvoeren (bv. client-abort).
-    /// Alle andere /ask-calls (rewrite + single-pass) antwoorden gewoon.</summary>
-    private sealed class AgenticAwareAi(bool agenticFails = false, Action? onAgentic = null)
+    /// steps, optioneel met een relatievoorstellen-blok zoals rb-ai dat na
+    /// de marker-splitsing als `relations` meestuurt, #120), laten falen
+    /// (500 mét de al gedane steps in de fout-body, zoals rb-ai dat doet) of
+    /// een eigen effect uitvoeren (bv. client-abort). Alle andere /ask-calls
+    /// (rewrite + single-pass) antwoorden gewoon.</summary>
+    private sealed class AgenticAwareAi(
+        bool agenticFails = false, Action? onAgentic = null, string? relations = null)
     {
         public int AgenticCalls { get; private set; }
 
         public RbAiClient Client => new(
-            new HttpClient(new Handler(this, agenticFails, onAgentic))
+            new HttpClient(new Handler(this, agenticFails, onAgentic, relations))
             { BaseAddress = new Uri("http://rb-ai.test") },
             NullLogger<RbAiClient>.Instance);
 
-        private sealed class Handler(AgenticAwareAi owner, bool fails, Action? onAgentic)
+        private sealed class Handler(
+            AgenticAwareAi owner, bool fails, Action? onAgentic, string? relations)
             : HttpMessageHandler
         {
             protected override async Task<HttpResponseMessage> SendAsync(
@@ -252,6 +389,7 @@ public class AskServiceAgenticTests
                         {
                             answer = AgentAnswer,
                             steps = new[] { "semantic_search {\"q\":\"Deflect showdown\"}" },
+                            relations,
                         });
                 }
                 if (request.RequestUri!.AbsolutePath == "/ask/stream")
@@ -346,10 +484,12 @@ public class AskServiceAgenticTests
             ChunkIndex = 0, Page = 12,
             Text = "Deflect: a unit with Deflect cannot be chosen by opposing spells during a showdown.",
         });
-        // Twee canonieke kaarten voor de kaartnamen-trigger van de gate.
+        // Twee canonieke kaarten voor de kaartnamen-trigger van de gate;
+        // Yasuo draagt Deflect zodat mechanic:deflect als brein-knoop bestaat
+        // (ref-validatie + case-canonicalisatie in de #120-tests).
         db.Cards.AddRange(
             new Card { RiftboundId = "test-viktor", Name = "Viktor" },
-            new Card { RiftboundId = "test-yasuo", Name = "Yasuo" });
+            new Card { RiftboundId = "test-yasuo", Name = "Yasuo", Mechanics = ["Deflect"] });
         await db.SaveChangesAsync();
     }
 }

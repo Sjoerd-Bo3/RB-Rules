@@ -58,6 +58,8 @@ builder.Services.AddScoped<RuleBrowserService>();
 builder.Services.AddScoped<GraphQueryService>();
 builder.Services.AddScoped<ClaimMiningService>();
 builder.Services.AddScoped<RelationMiningService>();
+// Agentic-terugkoppeling (#120): voorstellen die de ask-agent achterlaat.
+builder.Services.AddScoped<AgenticRelationService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();

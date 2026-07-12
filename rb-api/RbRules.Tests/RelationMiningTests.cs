@@ -126,6 +126,38 @@ public class RelationMiningTests
         Assert.Equal(RelationMiner.MaxRelations, parsed!.Count);
     }
 
+    [Fact]
+    public void CandidateRefs_GeeftDistinctFromEnToRefs_OngeachtValidatie()
+    {
+        // #120: de agentic ask bood geen ref-lijst aan — de aanroeper haalt
+        // eerst de kandidaten op om ze tegen het brein te toetsen, ook de
+        // verzonnen refs (die moeten juist geteld en geweerd worden).
+        var raw = """
+            Voorstellen:
+            {"relations": [
+              {"from": "mechanic:Deflect", "to": "concept:combat", "kind": "verduidelijkt", "explanation": "x"},
+              {"from": "MECHANIC:deflect", "to": "card:verzonnen-999", "kind": "counters", "explanation": "x"},
+              "geen object — genegeerd"
+            ]}
+            """;
+
+        var refs = RelationMiner.CandidateRefs(raw);
+
+        // Distinct is case-ongevoelig (eerste spelling wint), volgorde van
+        // eerste voorkomen; ontbrekende/onzin-items vallen stil weg.
+        Assert.Equal(
+            ["mechanic:Deflect", "concept:combat", "card:verzonnen-999"],
+            refs);
+    }
+
+    [Fact]
+    public void CandidateRefs_OnbruikbareOutput_GeeftNull_EnLegeOogstIsGeldig()
+    {
+        // Zelfde betekenis als ParseRelations: null ⇒ run_log-diagnose.
+        Assert.Null(RelationMiner.CandidateRefs("Ik zie geen relaties, sorry!"));
+        Assert.Empty(RelationMiner.CandidateRefs("""{"relations": []}""")!);
+    }
+
     [Theory]
     [InlineData("Counters", "counters")]
     [InlineData("  wordt   beperkt door.", "wordt beperkt door")]

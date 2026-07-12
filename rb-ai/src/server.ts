@@ -3,6 +3,7 @@
 // heeft. Alleen bereikbaar binnen het compose-netwerk — nooit publiek exposen.
 import { createServer } from "node:http";
 import { askClaude } from "./ai.js";
+import { splitRelationProposals } from "./relations.js";
 import { parseAskRequest } from "./validate.js";
 
 const PORT = Number(process.env.PORT ?? 8090);
@@ -60,7 +61,18 @@ const server = createServer(async (req, res) => {
           signal: abort.signal,
           ...(agentic ? { onBrainStep: (s: string) => steps.push(s) } : {}),
         });
-        return send(200, agentic ? { answer, steps } : { answer });
+        if (!agentic) return send(200, { answer });
+        // Relatievoorstellen (#120): het addendum laat de agent ontdekte
+        // verbanden ná het antwoord melden; dat blok gaat als eigen veld
+        // `relations` naast `steps` mee (rb-api parseert en valideert het,
+        // gedeelde LlmJson) en verdwijnt uit het antwoord dat de gebruiker
+        // ziet. Zonder blok is de respons byte-gelijk aan voorheen.
+        const split = splitRelationProposals(answer);
+        return send(200, {
+          answer: split.answer,
+          steps,
+          ...(split.relations ? { relations: split.relations } : {}),
+        });
       } catch (e) {
         // Agentic faalt/timeout (#107): de tool-calls die vóór de uitval al
         // gedaan waren gaan mee in de fout-body — juist de hangende run wil

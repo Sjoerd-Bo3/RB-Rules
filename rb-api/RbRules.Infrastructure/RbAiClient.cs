@@ -71,8 +71,11 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
     /// meestuurt — voedt AskTrace.BrainSteps in het beheer. Answer is null
     /// wanneer de agent faalde maar er wél al tool-calls gedaan waren
     /// (rb-ai's fout-body draagt die steps): de aanroeper draait dan het
-    /// vangnet, maar de gedane stappen blijven controleerbaar.</summary>
-    public record AgenticAnswer(string? Answer, string? Steps);
+    /// vangnet, maar de gedane stappen blijven controleerbaar. Relations
+    /// (#120) is het rauwe relatievoorstellen-blok dat rb-ai van het antwoord
+    /// afsplitste; null als de agent niets achterliet — de aanroeper parseert
+    /// en valideert het (AgenticRelationService).</summary>
+    public record AgenticAnswer(string? Answer, string? Steps, string? Relations = null);
 
     /// <summary>Agentic ask (#107, docs/BRAIN.md §2.4): zelfde /ask-koppelvlak
     /// als <see cref="AskAsync"/> maar met task="agentic" én de tool-call-log
@@ -107,7 +110,8 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
             var body = await res.Content.ReadFromJsonAsync<AskResponse>(ct);
             if (string.IsNullOrWhiteSpace(body?.Answer))
                 return JoinSteps(body?.Steps) is { } steps ? new AgenticAnswer(null, steps) : null;
-            return new AgenticAnswer(body.Answer, JoinSteps(body.Steps));
+            return new AgenticAnswer(body.Answer, JoinSteps(body.Steps),
+                string.IsNullOrWhiteSpace(body.Relations) ? null : body.Relations);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -222,8 +226,8 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         }
     }
 
-    /// <summary>Steps komt alleen mee bij task="agentic" (#107) en blijft bij
-    /// alle andere taken afwezig — de respons-vorm van cheap/hard/research is
-    /// onveranderd.</summary>
-    private record AskResponse(string? Answer, string[]? Steps = null);
+    /// <summary>Steps (#107) en Relations (#120) komen alleen mee bij
+    /// task="agentic" en blijven bij alle andere taken afwezig — de
+    /// respons-vorm van cheap/hard/research is onveranderd.</summary>
+    private record AskResponse(string? Answer, string[]? Steps = null, string? Relations = null);
 }
