@@ -81,9 +81,11 @@ const AGENT_ADDENDUM = `Je hebt zes brein-tools (semantic_search, get_node, neig
 /** In-process MCP-server met de zes brein-tools (§2.4, createSdkMcpServer).
  * Per aanroep een verse sessie zodat de tool-call-cap per vraag telt. De
  * tool-call-log op stdout maakt agent-stappen zichtbaar in de containerlog
- * (verificatiepad #106; deelissue 4 maakt dit meetbaar via AskTrace).
+ * (verificatiepad #106); via `onStep` gaan dezelfde regels naar de aanroeper
+ * zodat /ask ze als `steps` kan teruggeven — deelissue 4 (#107) maakt ze zo
+ * meetbaar in AskTrace.BrainSteps.
  * Exported zodat de MCP-laag ook zonder LLM-call te smoken/testen is. */
-export function createBrainMcpServer() {
+export function createBrainMcpServer(onStep?: (step: string) => void) {
   const session = createBrainSession({
     baseUrl: process.env.RB_API_URL,
     timeoutMs: AGENTIC_HTTP_TIMEOUT_MS,
@@ -95,7 +97,9 @@ export function createBrainMcpServer() {
     tools: BRAIN_TOOLS.map((t) =>
       tool(t.name, t.description, t.schema, async (args) => {
         const a = args as Record<string, unknown>;
-        console.log(`[agentic] ${t.name} ${compactJson(a).slice(0, 200)}`);
+        const step = `${t.name} ${compactJson(a).slice(0, 200)}`;
+        console.log(`[agentic] ${step}`);
+        onStep?.(step);
         // session.run gooit nooit: fouten (rb-api plat, timeout, cap) komen
         // als leesbaar toolresultaat terug — fouten zijn data (§2.3).
         return { content: [{ type: "text" as const, text: await session.run(t.name, a) }] };
@@ -140,9 +144,13 @@ export async function askClaude(opts: {
   task?: Task;
   images?: AskImage[];
   onDelta?: (text: string) => void | Promise<void>;
+  /** #107: ontvangt per brein-tool-call één regel (toolnaam + argumenten);
+   * alleen relevant bij task="agentic" — server.ts geeft ze als `steps`
+   * terug zodat rb-api ze in AskTrace.BrainSteps kan vastleggen. */
+  onBrainStep?: (step: string) => void;
   signal?: AbortSignal;
 }): Promise<string> {
-  const { prompt, system, task = "cheap", images = [], onDelta, signal } = opts;
+  const { prompt, system, task = "cheap", images = [], onDelta, onBrainStep, signal } = opts;
   const research = task === "research";
   const agentic = task === "agentic";
 
@@ -194,7 +202,7 @@ export async function askClaude(opts: {
       ? {
           // In-process brein-tools (§2.4): alléén mcp__brain__* in de
           // allowlist, headless — al het overige wordt geweigerd.
-          mcpServers: { [BRAIN_SERVER_NAME]: createBrainMcpServer() },
+          mcpServers: { [BRAIN_SERVER_NAME]: createBrainMcpServer(onBrainStep) },
           allowedTools: brainToolAllowlist(),
           permissionMode: "dontAsk" as const,
         }
