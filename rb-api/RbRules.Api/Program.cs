@@ -147,7 +147,28 @@ if (!app.Environment.IsEnvironment("Testing"))
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<RbRulesDbContext>();
-    await db.Database.MigrateAsync();
+
+    // Migratie-retry (#45): na een VM-reboot start rb-api soms eerder dan
+    // Postgres klaar is (de compose-healthcheck gate dekt een verse `up`,
+    // niet elke reboot-race). Kort en begrensd — blijft het misgaan, dan
+    // faalt de start alsnog hard en vangt de deploy-healthcheck-verify het.
+    const int migrateAttempts = 5;
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            await db.Database.MigrateAsync();
+            break;
+        }
+        catch (Exception ex) when (attempt < migrateAttempts)
+        {
+            var delay = TimeSpan.FromSeconds(2 * attempt); // 2+4+6+8s ≪ start_period 90s
+            app.Logger.LogWarning(
+                ex, "Migratie-poging {Attempt}/{Max} mislukt (Postgres nog niet klaar?); opnieuw over {Delay}s",
+                attempt, migrateAttempts, delay.TotalSeconds);
+            await Task.Delay(delay);
+        }
+    }
 
     // Seed alleen ontbrekende bronnen — /admin blijft de bron van waarheid.
     var existing = await db.Sources.Select(s => s.Id).ToHashSetAsync();
