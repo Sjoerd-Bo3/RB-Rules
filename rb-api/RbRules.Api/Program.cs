@@ -78,6 +78,8 @@ builder.Services.AddScoped<KnowledgeRecheckService>();
 // Neo4j-kant (neighbors/path) gescheiden — degradatie per koppelvlak.
 builder.Services.AddScoped<BrainService>();
 builder.Services.AddScoped<BrainGraphService>();
+// Publieke rulings-databank (#127).
+builder.Services.AddScoped<RulingsService>();
 // Accounts + per-gebruiker-quota (#42); passkey-login (#109).
 builder.Services.AddScoped<UserAccountService>();
 builder.Services.AddScoped<PasskeyService>();
@@ -202,6 +204,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "rb-api" }
 
 app.MapCardEndpoints();
 app.MapRuleEndpoints();
+app.MapRulingsEndpoints();
 app.MapKnowledgeEndpoints();
 app.MapBrainEndpoints();
 app.MapAskEndpoints();

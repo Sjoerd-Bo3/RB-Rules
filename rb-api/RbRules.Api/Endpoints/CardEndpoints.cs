@@ -152,6 +152,13 @@ public static class CardEndpoints
             await details.RulesAsync(id) is { } links
                 ? Results.Ok(links)
                 : Results.NotFound());
+
+        // Kaart-dossier (#127): rulings, claims, brein-relaties en
+        // ban-historie — de databank-laag boven op de kaartfeiten.
+        app.MapGet("/api/cards/{id}/dossier", async (string id, CardDetailService details) =>
+            await details.DossierAsync(id) is { } dossier
+                ? Results.Ok(dossier)
+                : Results.NotFound());
     }
 
     /// <summary>Set-releasedatums één keer laden (handvol rijen) en per kaart

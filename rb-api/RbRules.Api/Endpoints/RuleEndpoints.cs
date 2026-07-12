@@ -28,5 +28,12 @@ public static class RuleEndpoints
             await rules.SectionAsync(code, source, ct) is { } section
                 ? Results.Ok(section)
                 : Results.NotFound());
+
+        // ── Sectie-dossier (#127): de levende geschiedenis van een § ───
+        app.MapGet("/api/rules/section/{code}/dossier", async (
+                string code, string? source, RuleBrowserService rules, CancellationToken ct) =>
+            await rules.DossierAsync(code, source, ct) is { } dossier
+                ? Results.Ok(dossier)
+                : Results.NotFound());
     }
 }

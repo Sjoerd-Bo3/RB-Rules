@@ -1,4 +1,3 @@
-using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Pgvector;
@@ -821,29 +820,11 @@ public class BrainService(
             ? $"officieel (trust {trustTier})"
             : $"community-bron (trust {trustTier})";
 
-    /// <summary>Trust-label voor claims: corroboratie + score, met de status
-    /// erbij zodra die afwijkt van accepted — de kennispiramide blijft in élk
-    /// koppelvlak expliciet (docs/BRAIN.md, leidend principe).</summary>
+    /// <summary>Trust-label voor claims — gedeelde Domain-logica (ClaimTrust)
+    /// sinds de rulings-databank (#127) hetzelfde label toont.</summary>
     private static string ClaimTrustLabel(
-        int corroboration, double trustScore, string status, string officialStatus)
-    {
-        var basis = $"community ({corroboration} " +
-            $"{(corroboration == 1 ? "bron" : "bronnen")}, " +
-            $"trust {trustScore.ToString("0.00", CultureInfo.InvariantCulture)}";
-        basis += officialStatus switch
-        {
-            "confirmed" => ", officieel bevestigd",
-            "contradicted" => ", officieel tegengesproken",
-            _ => "",
-        };
-        basis += status switch
-        {
-            "accepted" => "",
-            "unreviewed" => ", status=unreviewed — nog niet gereviewd",
-            _ => $", status={status} — weerlegd/vervangen, géén geldige kennis",
-        };
-        return basis + ")";
-    }
+        int corroboration, double trustScore, string status, string officialStatus) =>
+        ClaimTrust.Label(corroboration, trustScore, status, officialStatus);
 
     /// <summary>LIKE/ILIKE-metatekens onschadelijk maken (escape-teken is
     /// backslash, zie de ILike-aanroepen hierboven).</summary>

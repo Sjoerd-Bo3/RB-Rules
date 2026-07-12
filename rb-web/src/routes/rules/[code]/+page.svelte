@@ -72,6 +72,65 @@
 			<a href="/rules/{encodeURIComponent(s.next)}?source={s.sourceId}">§ {s.next} →</a>
 		{/if}
 	</div>
+
+	<!-- Sectie-dossier (#127): de levende geschiedenis van deze regel.
+	     Lege hoofdstukken worden verborgen. -->
+	{#if data.dossier.explains.length}
+		<section id="uitleg">
+			<h2>Uitleg in het spelbegrip</h2>
+			<ul class="plain">
+				{#each data.dossier.explains as e (e.topic)}
+					<li><a href="/primer#{encodeURIComponent(e.topic)}">{e.title}</a></li>
+				{/each}
+			</ul>
+			<p class="meta small">Primer-concepten die deze sectie uitleggen — gedistilleerd uit de officiële regels.</p>
+		</section>
+	{/if}
+
+	{#if data.dossier.cards.length}
+		<section id="kaarten">
+			<h2>Kaarten die op deze regel leunen</h2>
+			<div class="cards">
+				{#each data.dossier.cards as c (c.riftboundId)}
+					<a class="mini" href="/cards/{c.riftboundId}">
+						{#if c.imageUrl}<img src={c.imageUrl} alt={c.name} loading="lazy" />{/if}
+						<span class="mini-name">{c.name}</span>
+						{#if c.type}<span class="meta small">{c.type}</span>{/if}
+					</a>
+				{/each}
+			</div>
+			<p class="meta small">Semantisch gematcht op de sectietekst — kaarten waarvan de tekst het dichtst bij deze regel ligt.</p>
+		</section>
+	{/if}
+
+	{#if data.dossier.claims.length}
+		<section id="claims">
+			<h2>Community-inzichten over deze regel</h2>
+			{#each data.dossier.claims as cl (cl.id)}
+				<div class="box">
+					<p class="statement">{cl.statement}</p>
+					<p class="meta small">{cl.trustLabel}</p>
+				</div>
+			{/each}
+			<p class="meta small">Community-interpretatie — de officiële tekst hierboven gaat altijd voor.</p>
+		</section>
+	{/if}
+
+	{#if data.dossier.changes.length}
+		<section id="wijzigingen">
+			<h2>Wijzigingen die deze regel raakten</h2>
+			{#each data.dossier.changes as ch (ch.id)}
+				<div class="box change">
+					<p class="change-head">
+						<span class="badge sev-{ch.severity}">{ch.changeType}</span>
+						<time class="meta small" datetime={ch.detectedAt}>{new Date(ch.detectedAt).toLocaleDateString('nl-NL')}</time>
+					</p>
+					{#if ch.summary}<p class="statement">{ch.summary}</p>{/if}
+				</div>
+			{/each}
+			<p class="meta small">Uit de wijzigingen-feed, gekoppeld via de kennisgraaf — <a href="/">bekijk alle wijzigingen</a>.</p>
+		</section>
+	{/if}
 </main>
 
 <style>
@@ -103,4 +162,30 @@
 	.pager { display: flex; justify-content: space-between; margin-top: 18px; }
 	.pager a { color: #e7eefc; text-decoration: none; font-weight: 600; }
 	.pager a:hover { color: #d98a4e; }
+	/* Sectie-dossier (#127) — ontwerptokens, ankerdoelen vrij van de header. */
+	section[id] { scroll-margin-top: 70px; }
+	h2 { font-size: 1rem; color: var(--accent); margin: 22px 0 8px; }
+	.meta { color: var(--muted); }
+	.small { font-size: 0.8rem; }
+	.plain { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+	.plain a { color: var(--text); font-weight: 600; text-decoration: none; }
+	.plain a:hover { color: var(--accent); }
+	.cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+	.mini { display: flex; flex-direction: column; gap: 2px; font-size: 0.85rem; text-decoration: none; color: inherit; }
+	.mini img { width: 100%; border-radius: 10px; border: 1px solid var(--border); }
+	.mini:hover img { border-color: var(--accent); }
+	.mini-name { font-weight: 600; }
+	.box {
+		background: var(--surface); border: 1px solid var(--border);
+		border-radius: var(--radius); padding: 10px 14px; margin-bottom: 8px;
+	}
+	.statement { margin: 4px 0; overflow-wrap: anywhere; }
+	.change-head { display: flex; align-items: baseline; gap: 10px; margin: 0; flex-wrap: wrap; }
+	.badge {
+		font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+		border-radius: 999px; padding: 2px 9px; background: var(--accent-soft); color: var(--warn);
+	}
+	.badge.sev-high { background: var(--err-soft); color: var(--err); }
+	.badge.sev-low { background: var(--surface-deep); color: var(--muted); }
+	section .meta a { color: var(--muted); }
 </style>

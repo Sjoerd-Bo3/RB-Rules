@@ -9,6 +9,7 @@
 		{ href: '/', label: 'Wijzigingen' },
 		{ href: '/rules', label: 'Regels' },
 		{ href: '/primer', label: 'Spelbegrip' },
+		{ href: '/rulings', label: 'Rulings' },
 		{ href: '/ask', label: 'Vraag' },
 		{ href: '/cards', label: 'Kaarten' },
 		{ href: '/graph', label: 'Brein' },
