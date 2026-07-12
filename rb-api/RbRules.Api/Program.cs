@@ -61,6 +61,9 @@ builder.Services.AddScoped<RelationMiningService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();
+// Run_log-grootboek voor periodieke jobs (#122): vensters voor de scheduler
+// en "laatste run per job" voor beheer.
+builder.Services.AddScoped<JobLedger>();
 // Brein-API (#105): Postgres-kant (search/node/evidence/contradictions) en
 // Neo4j-kant (neighbors/path) gescheiden — degradatie per koppelvlak.
 builder.Services.AddScoped<BrainService>();

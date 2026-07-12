@@ -13,9 +13,13 @@
 		finishedAt: string | null; detail: string | null; progress: string | null;
 	}
 	interface Log { id: number; kind: string; ref: string | null; status: string; detail: string | null; createdAt: string; }
+	// Laatste afronding per job uit het run_log-grootboek (#122): overleeft
+	// een herstart en toont ook de automatische runs van de scheduler.
+	interface JobRun { name: string; status: string; at: string; }
 	interface Status {
 		running: Job | null;
 		lastJob: Job | null;
+		jobRuns?: JobRun[];
 		counts: Record<string, number>;
 		logs: Log[];
 	}
@@ -34,8 +38,8 @@
 		{ name: 'setrelease', label: 'Set-release-keten', hint: 'kaarten → mechanieken → embeddings → graph → primer-herziening; draait automatisch zodra de classifier een set-release herkent' },
 		{ name: 'classify', label: 'Classificaties aanvullen', hint: 'changes zonder samenvatting/duiding alsnog classificeren' },
 		{ name: 'claims', label: 'Claims minen', hint: 'community-claims destilleren uit registerbronnen (trust 3+), met corroboratie en toets tegen de officiële regels' },
-		{ name: 'relations', label: 'Relaties minen', hint: 'LLM ontdekt relaties tussen de kennislagen (concepten, mechanieken, secties, kaarten, claims); voorstellen en nieuwe kind-labels komen in de reviewqueue — nooit rechtstreeks de graph in' },
-		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten komen als voorstel in de reviewqueue, nooit automatisch in het register' }
+		{ name: 'relations', label: 'Relaties minen', hint: 'LLM ontdekt relaties tussen de kennislagen (concepten, mechanieken, secties, kaarten, claims); voorstellen en nieuwe kind-labels komen in de reviewqueue — nooit rechtstreeks de graph in; draait ook elke nacht automatisch' },
+		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten komen als voorstel in de reviewqueue, nooit automatisch in het register; draait ook wekelijks automatisch' }
 	];
 
 	interface Correction {
@@ -101,10 +105,20 @@
 	function fmtAgo(iso: string | null): string {
 		if (!iso) return '';
 		const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-		return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}u`;
+		// Dagen erbij (#122): een wekelijkse scout-run is anders '168u geleden'.
+		return s < 60 ? `${s}s`
+			: s < 3600 ? `${Math.round(s / 60)}m`
+			: s < 48 * 3600 ? `${Math.round(s / 3600)}u`
+			: `${Math.round(s / 86400)}d`;
 	}
 	function jobLabel(name: string): string {
 		return JOBS.find((j) => j.name === name)?.label ?? name;
+	}
+	// Laatste run per job (#122), handmatig én automatisch via de scheduler.
+	function lastRunLabel(name: string): string | null {
+		const r = live?.jobRuns?.find((x) => x.name === name);
+		if (!r) return null;
+		return `laatste run ${fmtAgo(r.at)} geleden${r.status === 'error' ? ' — mislukt' : ''}`;
 	}
 
 	// Elke tegel klikt door naar het onderliggende overzicht (#61).
@@ -207,6 +221,7 @@
 			<div class="job-info">
 				<strong>Alles bijwerken</strong>
 				<span class="hint">kaarten → scan → regels → bans → embeddings → mechanieken → graph → interacties; een haperende stap stopt de rest niet</span>
+				{#if lastRunLabel('all')}<span class="hint">{lastRunLabel('all')}</span>{/if}
 			</div>
 			<button disabled={running !== null}>
 				{running?.name === 'all' ? 'Bezig' : 'Start alles'}
@@ -219,6 +234,7 @@
 					<div class="job-info">
 						<strong>{j.label}</strong>
 						<span class="hint">{j.hint}</span>
+						{#if lastRunLabel(j.name)}<span class="hint">{lastRunLabel(j.name)}</span>{/if}
 					</div>
 					<button disabled={running !== null}>
 						{running?.name === j.name ? 'Bezig' : 'Start'}

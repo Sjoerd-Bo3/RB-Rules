@@ -154,13 +154,17 @@ public static class AdminEndpoints
                 : Results.Conflict(new { error = "er draait al een job — wacht tot die klaar is" });
         });
 
-        admin.MapGet("/status", async (JobRunner jobs, RbRulesDbContext db) =>
+        admin.MapGet("/status", async (JobRunner jobs, JobLedger ledger, RbRulesDbContext db) =>
         {
             var (running, last) = jobs.Snapshot();
             return Results.Ok(new
             {
                 Running = running,
                 LastJob = last,
+                // Laatste afronding per job uit het run_log-grootboek (#122):
+                // overleeft een herstart en toont ook de automatische runs
+                // van de scheduler (relaties nachtelijk, scout wekelijks).
+                JobRuns = await ledger.LastRunsAsync(),
                 Counts = new
                 {
                     Sources = await db.Sources.CountAsync(s => s.Enabled),
