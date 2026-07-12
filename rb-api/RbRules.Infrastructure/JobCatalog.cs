@@ -100,7 +100,7 @@ public static class JobCatalog
         await Step("graph", async () =>
         {
             var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
-            return $"{r.Cards} cards";
+            return $"{r.Cards} cards, {r.Sections} secties, {r.Claims} claims";
         });
         await Step("interacties", async () =>
         {
@@ -174,9 +174,11 @@ public static class JobCatalog
     private static async Task<string> GraphAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
-        report("canonieke kaarten, domeinen, tags en mechanieken naar Neo4j schrijven (variant-knopen worden opgeruimd)");
+        report("kaarten + facetten én de kennislagen (secties, concepten, claims, bronnen, errata, changes) naar Neo4j projecteren");
         var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
-        return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics";
+        return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics, "
+            + $"{r.Sections} secties, {r.Concepts} concepten, {r.Claims} claims, "
+            + $"{r.Sources} bronnen, {r.Errata} errata, {r.Changes} changes";
     }
 
     private static async Task<string> PrimerAsync(
