@@ -8,14 +8,15 @@ public record SetReleaseRunResult(int Triggers, string Detail);
 /// <summary>Evolutie-raamwerk (#52): set-release als event. De change-
 /// classifier herkent set-releases al; deze service laat dat event de
 /// volledige keten draaien: card-sync → nieuwe-mechanieken-detectie →
-/// (claims-harvest zodra #50 bestaat) → embeddings → graph-sync →
-/// primer-herziening. Elke stap is best-effort — een haperende externe
-/// dienst stopt de keten niet, en het resultaat per stap is zichtbaar in
-/// run_log (kind "setrelease").</summary>
+/// claims-harvest (#50, sinds #108 echt aangeroepen) → embeddings →
+/// graph-sync → primer-herziening. Elke stap is best-effort — een
+/// haperende externe dienst stopt de keten niet, en het resultaat per stap
+/// is zichtbaar in run_log (kind "setrelease").</summary>
 public class SetReleaseService(
     RbRulesDbContext db,
     CardSyncService cards,
     MechanicMiningService mining,
+    ClaimMiningService claims,
     CardEmbeddingPipeline embeddings,
     GraphSyncService graph,
     PrimerService primer)
@@ -82,10 +83,17 @@ public class SetReleaseService(
                 maxBatches: 60, p => progress?.Invoke($"2/6 · mechanieken — {p}"), ct);
             return $"{r.Mined} gemined, {r.NewCandidates} keyword-kandidaten, {r.Remaining} resterend";
         });
-        // Stap 3 uit het issue — gerichte claims-harvest op de nieuwe set —
-        // kan pas als de claims-pipeline (#50) bestaat; benoemd zodat de
-        // keten-uitvoer eerlijk laat zien wat er (nog) niet gebeurde.
-        results.Add("claims-harvest: overgeslagen — claims-pipeline (#50) bestaat nog niet");
+        await Step("claims-harvest", async () =>
+        {
+            // Stap 3 (#108): een verse set brengt een golf nieuwe community-
+            // inhoud mee. Gecapt op de standaard-cap van de nachtelijke job —
+            // wat de cap niet haalt pakt die job vanzelf op (documenten
+            // blijven ongemarkeerd, #92); rb-ai/Ollama-uitval degradeert al
+            // per stap binnen ClaimMiningService zelf.
+            var r = await claims.RunAsync(
+                progress: p => progress?.Invoke($"3/6 · claims — {p}"), ct: ct);
+            return r.Message;
+        });
         await Step("embeddings", async () =>
         {
             var r = await embeddings.RunAsync(
