@@ -48,9 +48,14 @@ public record RelationOverviewItem(
     long Id, string FromRef, string? FromName, string ToRef, string? ToName,
     string Kind, string Explanation, string Provenance, double Trust,
     string Status, DateTimeOffset DetectedAt);
+/// <summary>Bewijs bij een kandidaat-kind (#123): een voorbeeldvoorstel
+/// dat het kind draagt, zodat reviewen geen gokken is.</summary>
+public record RelationKindExample(
+    string FromRef, string? FromName, string ToRef, string? ToName);
 public record RelationKindOverviewItem(
     long Id, string Kind, string Status, int Occurrences,
-    DateTimeOffset FirstSeen, DateTimeOffset? ReviewedAt);
+    DateTimeOffset FirstSeen, DateTimeOffset? ReviewedAt,
+    IReadOnlyList<RelationKindExample> Examples);
 public record RelationStatusCount(string Status, int Count);
 public record RelationOverview(
     int Total, int Page, int PageSize,
@@ -260,13 +265,27 @@ public class AdminOverviewService(RbRulesDbContext db)
             .Select(s => new RelationStatusCount(s.Key, s.Count))
             .ToList();
 
-        var kinds = await db.RelationKinds.AsNoTracking()
+        var kindRows = await db.RelationKinds.AsNoTracking()
             .OrderBy(k => k.Status == "candidate" ? 0 : 1)
             .ThenByDescending(k => k.Occurrences)
             .ThenBy(k => k.Kind)
-            .Select(k => new RelationKindOverviewItem(
-                k.Id, k.Kind, k.Status, k.Occurrences, k.FirstSeen, k.ReviewedAt))
             .ToListAsync();
+
+        // Bewijs bij kandidaat-kinds (#123): tot 3 voorbeeldvoorstellen per
+        // kind. Eén kleine query per kandidaat — de open queue is klein en
+        // top-N-per-groep vertaalt niet in één LINQ-query.
+        var kindExamples = new Dictionary<string, List<(string FromRef, string ToRef)>>();
+        foreach (var kind in kindRows.Where(k => k.Status == "candidate").Select(k => k.Kind))
+        {
+            kindExamples[kind] = (await db.Relations.AsNoTracking()
+                    .Where(r => r.Kind == kind && r.Status != "rejected")
+                    .OrderByDescending(r => r.DetectedAt).ThenBy(r => r.Id)
+                    .Take(3)
+                    .Select(r => new { r.FromRef, r.ToRef })
+                    .ToListAsync())
+                .Select(r => (r.FromRef, r.ToRef))
+                .ToList();
+        }
 
         var query = db.Relations.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(status))
@@ -281,6 +300,7 @@ public class AdminOverviewService(RbRulesDbContext db)
         // Alleen card:-refs hebben een opzoekbare naam; de key is het id.
         var cardIds = rows
             .SelectMany(r => new[] { r.FromRef, r.ToRef })
+            .Concat(kindExamples.Values.SelectMany(e => e.SelectMany(x => new[] { x.FromRef, x.ToRef })))
             .Where(r => r.StartsWith("card:", StringComparison.Ordinal))
             .Select(r => r["card:".Length..])
             .Distinct()
@@ -293,6 +313,13 @@ public class AdminOverviewService(RbRulesDbContext db)
             brainRef.StartsWith("card:", StringComparison.Ordinal)
                 ? names.GetValueOrDefault(brainRef["card:".Length..])
                 : null;
+
+        var kinds = kindRows.Select(k => new RelationKindOverviewItem(
+                k.Id, k.Kind, k.Status, k.Occurrences, k.FirstSeen, k.ReviewedAt,
+                [.. kindExamples.GetValueOrDefault(k.Kind, [])
+                    .Select(e => new RelationKindExample(
+                        e.FromRef, NameFor(e.FromRef), e.ToRef, NameFor(e.ToRef)))]))
+            .ToList();
 
         var items = rows.Select(r => new RelationOverviewItem(
                 r.Id, r.FromRef, NameFor(r.FromRef), r.ToRef, NameFor(r.ToRef),
