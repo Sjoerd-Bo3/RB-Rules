@@ -63,6 +63,12 @@
 		firstSeen: string; reviewedAt: string | null;
 	}
 
+	// Bewijs bij een kandidaat (#123): kaart + snippet in drie delen zodat de
+	// term gemarkeerd kan worden zonder {@html}.
+	interface KeywordCard { id: string; name: string; before: string; match: string; after: string; }
+	interface KeywordCards { term: string; total: number; items: KeywordCard[]; }
+	interface KeywordEvidence { loading: boolean; error: string | null; data: KeywordCards | null; }
+
 	interface UpcomingSet {
 		setId: string; name: string; publishedOn: string; cardCount: number | null;
 	}
@@ -74,6 +80,26 @@
 	const mechanics = $derived((data.mechanics ?? []) as MechanicKeyword[]);
 	const mechanicCandidates = $derived(mechanics.filter((m) => m.status === 'candidate'));
 	const acceptedMechanics = $derived(mechanics.filter((m) => m.status === 'accepted'));
+
+	// Lazy bewijs per kandidaat (#123): pas fetchen bij de eerste uitklap —
+	// nooit alle kandidaten × kaarten vooraf laden. Na een fout kan dicht/open
+	// het opnieuw proberen.
+	let keywordCards = $state<Record<number, KeywordEvidence>>({});
+	async function loadKeywordCards(id: number) {
+		const cur = keywordCards[id];
+		if (cur?.loading || cur?.data) return;
+		keywordCards[id] = { loading: true, error: null, data: null };
+		try {
+			const r = await fetch(`/admin/mechanics/${id}/cards`);
+			if (!r.ok) throw new Error(`status ${r.status}`);
+			keywordCards[id] = { loading: false, error: null, data: await r.json() };
+		} catch {
+			keywordCards[id] = {
+				loading: false, data: null,
+				error: 'Kaarten laden mislukt — klap opnieuw uit om het nog eens te proberen'
+			};
+		}
+	}
 	const upcoming = $derived((data.upcoming ?? []) as UpcomingSet[]);
 
 	interface KnowledgeDoc {
@@ -273,11 +299,39 @@
 		<!-- Mechaniek-kandidaten (#52): het vocabulaire groeit met elke set -->
 		{#if mechanicCandidates.length}
 			<h2>Mechaniek-kandidaten <span class="meta">({mechanicCandidates.length} open — bracketed termen uit kaartteksten die nog niet in het vocabulaire staan)</span></h2>
+			<!-- Eén regel duiding bij de acties (#123): wat accepteren/verwerpen doet. -->
+			<p class="meta">Accepteren neemt de term op in het mining-vocabulaire en zet de betrokken kaarten opnieuw in de mine-wachtrij; verwerpen laat de term blijvend genegeerd.</p>
 			{#each mechanicCandidates as m (m.id)}
+				{@const evidence = keywordCards[m.id]}
 				<div class="correction panel">
 					<div class="correction-body">
 						<p class="t"><strong>{m.term}</strong> <span class="badge warn-b">kandidaat</span></p>
 						<p class="meta">komt voor op {m.occurrences} {m.occurrences === 1 ? 'kaart' : 'kaarten'} · gezien {new Date(m.firstSeen).toLocaleDateString('nl-NL')}</p>
+						<!-- Bewijs (#123): lazy uitklap met de kaarten die de term dragen. -->
+						<details class="evidence" ontoggle={(e) => { if (e.currentTarget.open) loadKeywordCards(m.id); }}>
+							<summary>Bekijk de {m.occurrences === 1 ? 'kaart' : 'kaarten'} met [{m.term}]</summary>
+							{#if evidence?.loading}
+								<p class="meta">Kaarten laden…</p>
+							{:else if evidence?.error}
+								<p class="warn">{evidence.error}</p>
+							{:else if evidence?.data}
+								{#if evidence.data.items.length === 0}
+									<p class="meta">Geen kaarten gevonden — mogelijk zijn de kaartteksten sinds de laatste mining-run gewijzigd.</p>
+								{:else}
+									<ul class="evidence-list">
+										{#each evidence.data.items as c (c.id)}
+											<li>
+												<a href="/cards/{c.id}">{c.name}</a>
+												<span class="snippet">{c.before}{#if c.match}<mark>{c.match}</mark>{/if}{c.after}</span>
+											</li>
+										{/each}
+									</ul>
+									{#if evidence.data.total > evidence.data.items.length}
+										<p class="meta">en {evidence.data.total - evidence.data.items.length} meer</p>
+									{/if}
+								{/if}
+							{/if}
+						</details>
 					</div>
 					<div class="correction-actions">
 						<form method="POST" action="?/acceptMechanic" use:enhance>
@@ -459,7 +513,22 @@
 		font-family: ui-monospace, monospace; font-size: 0.82rem;
 	}
 	.correction { display: flex; gap: 14px; padding: 12px 14px; margin-bottom: 8px; }
-	.correction-body { flex: 1; }
+	.correction-body { flex: 1; min-width: 0; /* snippets mogen de flex-rij op 390px niet oprekken */ }
+	/* Bewijs-uitklap bij kandidaten (#123). */
+	.evidence { margin-top: 6px; }
+	.evidence summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
+	.evidence-list { margin: 8px 0 0; padding-left: 18px; }
+	.evidence-list li { margin-bottom: 6px; line-height: 1.5; }
+	.evidence-list a { color: var(--accent); text-decoration: none; }
+	.evidence-list a:hover { text-decoration: underline; }
+	.evidence-list .snippet {
+		display: block; color: var(--muted); font-size: 0.85rem;
+		overflow-wrap: anywhere; /* lange kaartteksten, geen overflow op 390px */
+	}
+	.evidence-list mark {
+		background: var(--warn-soft); color: var(--warn);
+		border-radius: 4px; padding: 0 3px;
+	}
 	.correction .q { margin: 0 0 4px; color: var(--muted); font-size: 0.88rem; }
 	.correction .t { margin: 0 0 4px; }
 	.correction-actions { display: flex; flex-direction: column; gap: 6px; }

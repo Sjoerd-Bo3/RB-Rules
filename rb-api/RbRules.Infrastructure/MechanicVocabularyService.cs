@@ -9,6 +9,11 @@ public record MechanicKeywordItem(
 
 public record KeywordAcceptResult(string Term, int RequeuedCards);
 
+public record KeywordCardItem(
+    string Id, string Name, string Before, string Match, string After);
+public record KeywordCardsResult(
+    string Term, int Total, IReadOnlyList<KeywordCardItem> Items);
+
 /// <summary>Beheer van het groeiende mechaniek-vocabulaire (#52): kandidaten
 /// uit de miner accepteren of verwerpen. Accepteren maakt de term onderdeel
 /// van het mining-vocabulaire én zet de kaarten met dat keyword terug in de
@@ -54,6 +59,55 @@ public class MechanicVocabularyService(RbRulesDbContext db)
         await db.SaveChangesAsync(ct);
         return new(keyword.Term, requeued);
     }
+
+    /// <summary>Bewijs bij een keyword-kandidaat (#123): de canonieke kaarten
+    /// waarop de bracketed term voorkomt, met een snippet rond de term.
+    /// Zelfde bracketed vormen als AcceptAsync ("[Term]" of "[Term N]"), maar
+    /// case-insensitive (ILike) omdat de kandidaten-harvest ook
+    /// case-insensitive dedupliceert. Begrensd op <paramref name="limit"/>;
+    /// Total draagt de rest ("en N meer").</summary>
+    public async Task<KeywordCardsResult?> CardsForKeywordAsync(
+        long id, int limit = 20, CancellationToken ct = default)
+    {
+        var term = await db.MechanicKeywords.AsNoTracking()
+            .Where(k => k.Id == id)
+            .Select(k => k.Term)
+            .FirstOrDefaultAsync(ct);
+        if (term is null) return null;
+
+        var exact = "%[" + EscapeLike(term) + "]%";
+        var withParameter = "%[" + EscapeLike(term) + " %";
+        var query = db.Cards.AsNoTracking()
+            .Where(c => c.VariantOf == null && c.TextPlain != null &&
+                        (EF.Functions.ILike(c.TextPlain!, exact, "\\") ||
+                         EF.Functions.ILike(c.TextPlain!, withParameter, "\\")));
+
+        var total = await query.CountAsync(ct);
+        var rows = await query
+            .OrderBy(c => c.Name).ThenBy(c => c.RiftboundId)
+            .Take(limit)
+            .Select(c => new { c.RiftboundId, c.Name, c.TextPlain })
+            .ToListAsync(ct);
+
+        var items = rows.Select(r =>
+        {
+            // Het ILike-voorfilter is iets ruimer dan de miner-match (bv.
+            // "[Term up]"); zonder exacte voorkoming tonen we het tekstbegin
+            // zonder markering in plaats van de kaart te verzwijgen.
+            var s = MechanicMiner.SnippetFor(r.TextPlain, term)
+                ?? new KeywordSnippet("", "", Truncate(r.TextPlain!, 120));
+            return new KeywordCardItem(r.RiftboundId, r.Name, s.Before, s.Match, s.After);
+        }).ToList();
+        return new(term, total, items);
+    }
+
+    /// <summary>LIKE/ILIKE-metatekens onschadelijk maken (escape-teken is
+    /// backslash, zie de ILike-aanroepen hierboven).</summary>
+    private static string EscapeLike(string term) =>
+        term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "…";
 
     public async Task<bool> RejectAsync(long id, CancellationToken ct = default)
     {

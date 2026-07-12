@@ -55,9 +55,14 @@
 		kind: string; explanation: string; provenance: string; trust: number;
 		status: string; detectedAt: string;
 	}
+	interface RelationKindExample {
+		fromRef: string; fromName: string | null; toRef: string; toName: string | null;
+	}
 	interface RelationKindItem {
 		id: number; kind: string; status: string; occurrences: number;
 		firstSeen: string; reviewedAt: string | null;
+		// Bewijs bij kandidaat-kinds (#123): tot 3 voorbeeldvoorstellen.
+		examples: RelationKindExample[];
 	}
 	interface RelationOverview extends Paged<RelationItem> {
 		statusCounts: ClaimStatusCount[]; kinds: RelationKindItem[];
@@ -556,6 +561,14 @@
 								<span class="badge warn-b">kandidaat</span>
 								<span class="meta">{k.occurrences} {k.occurrences === 1 ? 'voorstel' : 'voorstellen'} · gezien {fmtDate(k.firstSeen)}</span>
 							</p>
+							<!-- Bewijs (#123): voorbeeldvoorstellen die dit kind dragen,
+							     klikbaar naar de brein-verkenner (patroon relatie-items). -->
+							{#each k.examples as ex, i (i)}
+								<p class="meta refs kind-example">
+									bijv. <a href={graphHref(ex.fromRef)} title="Verken deze knoop in de brein-verkenner">{ex.fromName ?? ex.fromRef}</a>
+									→ <a href={graphHref(ex.toRef)} title="Verken deze knoop in de brein-verkenner">{ex.toName ?? ex.toRef}</a>
+								</p>
+							{/each}
 						</div>
 						<div class="corr-actions">
 							<form method="POST" action="?/acceptRelationKind" use:enhance>
@@ -858,6 +871,9 @@
 	/* Lange bron-URL's mogen op 390px nooit horizontale overflow geven. */
 	.proposal-url { overflow-wrap: anywhere; }
 	.proposal-url a { color: var(--accent); }
+	/* Voorbeeldvoorstellen bij kandidaat-kinds (#123): lange refs breken. */
+	.kind-example { overflow-wrap: anywhere; }
+	.kind-example a { color: var(--accent); }
 	.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 	.actions { margin-top: 10px; }
 	.edit { display: flex; flex-direction: column; gap: 10px; }

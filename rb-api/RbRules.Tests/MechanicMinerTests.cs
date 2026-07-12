@@ -117,4 +117,60 @@ public class MechanicMinerTests
         Assert.Empty(MechanicMiner.ExtractKeywordCandidates(null, MechanicMiner.SeedVocabulary));
         Assert.Empty(MechanicMiner.ExtractKeywordCandidates("  ", MechanicMiner.SeedVocabulary));
     }
+
+    // ── Bewijs bij kandidaten (#123) ────────────────────────────────────
+
+    [Fact]
+    public void SnippetFor_SplitsAroundBracketedTerm()
+    {
+        var s = MechanicMiner.SnippetFor("Play a unit. [Ganking] (May move.)", "Ganking");
+        Assert.NotNull(s);
+        Assert.Equal("Play a unit. ", s.Before);
+        Assert.Equal("[Ganking]", s.Match);
+        Assert.Equal(" (May move.)", s.After);
+    }
+
+    [Fact]
+    public void SnippetFor_MatchesParameterizedForm_LikeTheMiner()
+    {
+        // "[Assault 2]" hoort bij kandidaat "Assault" (numerieke parameter
+        // gestript, zie ExtractKeywordCandidates) — de match toont de
+        // volledige bracketed vorm.
+        var s = MechanicMiner.SnippetFor("[Assault 2] Deal 4.", "Assault");
+        Assert.NotNull(s);
+        Assert.Equal("[Assault 2]", s.Match);
+        Assert.Equal("", s.Before);
+    }
+
+    [Fact]
+    public void SnippetFor_IsCaseInsensitive_LikeCandidateDedupe()
+    {
+        var s = MechanicMiner.SnippetFor("[Quick-Draw] shoot first.", "quick-draw");
+        Assert.NotNull(s);
+        Assert.Equal("[Quick-Draw]", s.Match);
+    }
+
+    [Fact]
+    public void SnippetFor_TruncatesLongContextWithEllipsis()
+    {
+        var text = new string('a', 100) + " [Level 6] " + new string('b', 100);
+        var s = MechanicMiner.SnippetFor(text, "Level", context: 20);
+        Assert.NotNull(s);
+        Assert.StartsWith("…", s.Before);
+        Assert.EndsWith("…", s.After);
+        // "…" + 20 tekens context; de match zelf blijft volledig.
+        Assert.Equal(21, s.Before.Length);
+        Assert.Equal(21, s.After.Length);
+        Assert.Equal("[Level 6]", s.Match);
+    }
+
+    [Fact]
+    public void SnippetFor_NullWhenTermAbsentOrNotBracketed()
+    {
+        // "Leveling" mag geen match voor "Level" zijn, en een kale (niet-
+        // bracketed) voorkoming telt niet — de miner kijkt alleen naar [..].
+        Assert.Null(MechanicMiner.SnippetFor("[Leveling] and Level up.", "Level"));
+        Assert.Null(MechanicMiner.SnippetFor(null, "Level"));
+        Assert.Null(MechanicMiner.SnippetFor("[Level 6]", "  "));
+    }
 }

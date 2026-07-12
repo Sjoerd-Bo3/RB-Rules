@@ -498,6 +498,12 @@ public static class AdminEndpoints
         admin.MapPost("/mechanics/{id:long}/reject", async (
                 long id, MechanicVocabularyService vocab) =>
             await vocab.RejectAsync(id) ? Results.Ok(new { ok = true }) : Results.NotFound());
+        // Bewijs bij een kandidaat (#123): welke kaarten dragen de term, met
+        // snippet — lazy opgevraagd bij het uitklappen in de admin.
+        admin.MapGet("/mechanics/{id:long}/cards", async (
+                long id, MechanicVocabularyService vocab, CancellationToken ct) =>
+            await vocab.CardsForKeywordAsync(id, ct: ct) is { } cards
+                ? Results.Ok(cards) : Results.NotFound());
 
         // Denkstappen-traces van de vraag-pipeline (#40).
         admin.MapGet("/asktraces", async (RbRulesDbContext db) =>

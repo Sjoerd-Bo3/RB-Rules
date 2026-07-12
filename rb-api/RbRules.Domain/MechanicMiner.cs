@@ -6,6 +6,10 @@ namespace RbRules.Domain;
 
 public record MinedCard(string Id, string[] Mechanics, string[] Triggers, string[] Effects);
 
+/// <summary>Tekstfragment rond een keyword-voorkoming (#123); Match is de
+/// volledige bracketed vorm ("[Assault 2]") zodat de UI die kan markeren.</summary>
+public record KeywordSnippet(string Before, string Match, string After);
+
 /// <summary>Prompt + parser voor LLM-mining van kaartmechanieken (F3).
 /// De LLM-call zelf loopt via rb-ai; dit deel is puur en getest.
 /// Het vocabulaire = seed + door de beheerder geaccepteerde keywords (#52);
@@ -117,6 +121,29 @@ public static partial class MechanicMiner
             if (known.Add(term)) found.Add(term); // dedupe + vocab-filter ineen
         }
         return found;
+    }
+
+    /// <summary>Kort tekstfragment rond de eerste bracketed voorkoming van een
+    /// keyword (#123): zelfde herkenning als ExtractKeywordCandidates — de
+    /// numerieke parameter hoort bij de match ("[Assault 2]" is bewijs voor
+    /// term "Assault") en de vergelijking is case-insensitive, net als de
+    /// dedupe in de kandidaten-harvest. Drie delen (voor/match/na) zodat de
+    /// UI de term kan markeren zonder {@html}.</summary>
+    public static KeywordSnippet? SnippetFor(string? textPlain, string term, int context = 60)
+    {
+        if (string.IsNullOrWhiteSpace(textPlain) || string.IsNullOrWhiteSpace(term)) return null;
+        foreach (Match m in BracketedTerm().Matches(textPlain))
+        {
+            var inner = NumericParameter().Replace(m.Groups[1].Value.Trim(), "");
+            if (!inner.Equals(term.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+            var start = Math.Max(0, m.Index - context);
+            var end = Math.Min(textPlain.Length, m.Index + m.Length + context);
+            return new(
+                (start > 0 ? "…" : "") + textPlain[start..m.Index],
+                m.Value,
+                textPlain[(m.Index + m.Length)..end] + (end < textPlain.Length ? "…" : ""));
+        }
+        return null;
     }
 
     [GeneratedRegex(@"\[([^\[\]]+)\]")]
