@@ -13,7 +13,7 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    [Migration("20260712183708_ReviewNotitiesEnArchief")]
+    [Migration("20260712192724_ReviewNotitiesEnArchief")]
     partial class ReviewNotitiesEnArchief
     {
         /// <inheritdoc />
@@ -100,6 +100,10 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("had_image");
 
+                    b.Property<long?>("InputTokens")
+                        .HasColumnType("bigint")
+                        .HasColumnName("input_tokens");
+
                     b.Property<string>("Model")
                         .HasColumnType("text")
                         .HasColumnName("model");
@@ -107,6 +111,10 @@ namespace RbRules.Infrastructure.Migrations
                     b.Property<bool>("Ok")
                         .HasColumnType("boolean")
                         .HasColumnName("ok");
+
+                    b.Property<long?>("OutputTokens")
+                        .HasColumnType("bigint")
+                        .HasColumnName("output_tokens");
 
                     b.Property<string>("QuestionType")
                         .HasColumnType("text")
