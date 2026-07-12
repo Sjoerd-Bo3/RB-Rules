@@ -33,6 +33,23 @@ public class BrainGraphService(IDriver driver)
     private const string NameCoalesce =
         "coalesce(m.name, m.title, m.code, m.cardName, m.statement, m.label, m.changeType, toString(m.id))";
 
+    /// <summary>Knopen per label, voor de drift-meting in het
+    /// kennis-gaten-rapport (#108, docs/BRAIN.md §4). Eén query over de hele
+    /// graph — de aantallen zijn klein (§2.2). Neo4j-uitval bubbelt als
+    /// exception naar de aanroeper, die er "graph niet beschikbaar" van
+    /// maakt (zelfde afspraak als neighbors/path).</summary>
+    public async Task<IReadOnlyDictionary<string, int>> CountsByLabelAsync(
+        CancellationToken ct = default)
+    {
+        await using var session = driver.AsyncSession();
+        var cursor = await session.RunAsync(
+            "MATCH (n) UNWIND labels(n) AS label RETURN label, count(*) AS count");
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var record in await cursor.ToListAsync(ct))
+            counts[record["label"].As<string>()] = record["count"].As<int>();
+        return counts;
+    }
+
     /// <summary>Buren van één knoop, optioneel gefilterd op edge-types
     /// (whitelist, al gevalideerd) en richting. Null = knoop niet in de graph
     /// (404 bij het endpoint — de graph-job is dan mogelijk nog niet gedraaid).</summary>

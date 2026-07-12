@@ -11,7 +11,7 @@
 		{ href: '/primer', label: 'Spelbegrip' },
 		{ href: '/ask', label: 'Vraag' },
 		{ href: '/cards', label: 'Kaarten' },
-		{ href: '/graph', label: 'Graph' },
+		{ href: '/graph', label: 'Brein' },
 		{ href: '/account', label: 'Account' },
 		{ href: '/admin', label: 'Beheer' }
 	];
