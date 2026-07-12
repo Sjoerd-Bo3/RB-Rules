@@ -13,7 +13,7 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    [Migration("20260712121727_DynamicRelations")]
+    [Migration("20260712125515_DynamicRelations")]
     partial class DynamicRelations
     {
         /// <inheritdoc />
@@ -84,6 +84,10 @@ namespace RbRules.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
+                    b.Property<bool>("Agentic")
+                        .HasColumnType("boolean")
+                        .HasColumnName("agentic");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -132,6 +136,14 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnName("id");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<bool>("Agentic")
+                        .HasColumnType("boolean")
+                        .HasColumnName("agentic");
+
+                    b.Property<string>("BrainSteps")
+                        .HasColumnType("text")
+                        .HasColumnName("brain_steps");
 
                     b.Property<string>("CommunityClaims")
                         .HasColumnType("text")
