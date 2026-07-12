@@ -16,19 +16,28 @@ public record GapSourceStatus(
     string Id, string Name, short TrustTier, int Documents, int Chunks,
     DateTimeOffset? LastChecked, DateTimeOffset? LastChangeAt);
 
+/// <summary>Drift Postgres ↔ Neo4j (#108): per knooptype de verwachte
+/// telling (Postgres, sync-predicaten) naast de werkelijke graph-telling.
+/// Niet beschikbaar (Neo4j plat) is een geldige meting: GraphAvailable=false
+/// met de reden in Detail — de rest van het rapport blijft gewoon staan.</summary>
+public record GapDrift(
+    bool GraphAvailable, string? Detail, IReadOnlyList<GraphDriftEntry> Entries);
+
 public record KnowledgeGapsReport(
     GapCoverage Coverage,
     IReadOnlyList<GapQuestion> Questions,
-    IReadOnlyList<GapSourceStatus> Sources);
+    IReadOnlyList<GapSourceStatus> Sources,
+    GapDrift Drift);
 
 /// <summary>Kennis-gaten-rapport (#52): meet waar de kennisbank dun is in
-/// plaats van te raden. Drie invalshoeken: dekking (kaarten zonder
+/// plaats van te raden. Vier invalshoeken: dekking (kaarten zonder
 /// embedding/mechanics, secties zonder embedding, ontbrekende primer-
 /// concepten), vraag-signalen (lege retrieval, AI-uitval, negatieve
-/// feedback uit de ask-traces en correcties) en bron-versheid (bronnen die
-/// al lang niets nieuws leverden). Alleen reads — het rapport wordt bij
-/// elke aanvraag vers berekend, er is niets om te verversen of cachen.</summary>
-public class KnowledgeGapsService(RbRulesDbContext db)
+/// feedback uit de ask-traces en correcties), bron-versheid (bronnen die
+/// al lang niets nieuws leverden) en graph-drift (#108: loopt de
+/// Neo4j-projectie achter op Postgres). Alleen reads — het rapport wordt
+/// bij elke aanvraag vers berekend, er is niets om te verversen of cachen.</summary>
+public class KnowledgeGapsService(RbRulesDbContext db, BrainGraphService graph)
 {
     /// <summary>Hoeveel recente traces meewegen in de vraag-signalen.</summary>
     private const int TraceWindow = 200;
@@ -123,6 +132,62 @@ public class KnowledgeGapsService(RbRulesDbContext db)
                 PrimerTopics.All.Count, topicsMissing, primerDrafts,
                 openCandidates, traces.Count),
             questions,
-            sources);
+            sources,
+            await BuildDriftAsync(ct));
+    }
+
+    /// <summary>Graph-drift (#108, docs/BRAIN.md §4): telt per knooptype wat
+    /// Postgres nú zou projecteren (exact de predicaten van GraphSyncService)
+    /// en zet dat naast de werkelijke Neo4j-tellingen. Best-effort: zonder
+    /// Neo4j geen drift-cijfers maar wél een rapport — de fout is de data.</summary>
+    private async Task<GapDrift> BuildDriftAsync(CancellationToken ct)
+    {
+        IReadOnlyDictionary<string, int> graphCounts;
+        try
+        {
+            graphCounts = await graph.CountsByLabelAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new(false, ex.Message, []);
+        }
+
+        var canonical = db.Cards.AsNoTracking().Where(c => c.VariantOf == null);
+
+        // Facetten (Domain/Tag/Mechanic) zijn array-kolommen: distinct over
+        // de elementen kan niet in één vertaalbare LINQ-query — bewust
+        // gematerialiseerd (drie smalle kolommen over honderden kaarten),
+        // met exacte (ordinal) vergelijking zoals Neo4j's MERGE op name.
+        var facets = await canonical
+            .Select(c => new { c.SetId, c.Domains, c.Tags, c.Mechanics })
+            .ToListAsync(ct);
+
+        var postgres = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["Card"] = facets.Count,
+            ["Set"] = facets.Where(f => f.SetId != null).Select(f => f.SetId!).Distinct().Count(),
+            ["Domain"] = facets.SelectMany(f => f.Domains).Distinct().Count(),
+            ["Tag"] = facets.SelectMany(f => f.Tags).Distinct().Count(),
+            ["Mechanic"] = facets.SelectMany(f => f.Mechanics ?? []).Distinct().Count(),
+            // Sectie-knopen vouwen chunks samen tot één per (bron, §-code).
+            ["RuleSection"] = await db.RuleChunks.AsNoTracking()
+                .Where(r => r.SectionCode != null && r.SectionCode != "")
+                .Select(r => new { r.SourceId, r.SectionCode })
+                .Distinct()
+                .CountAsync(ct),
+            ["Concept"] = await db.KnowledgeDocs.AsNoTracking()
+                .Where(k => k.Kind == "primer")
+                .Select(k => k.Topic)
+                .Distinct()
+                .CountAsync(ct),
+            // Scope-keuze uit de sync: alleen accepted/unreviewed claims.
+            ["Claim"] = await db.Claims.CountAsync(
+                c => c.Status == "accepted" || c.Status == "unreviewed", ct),
+            ["Source"] = await db.Sources.CountAsync(ct),
+            ["Erratum"] = await db.Errata.CountAsync(ct),
+            ["Change"] = await db.Changes.CountAsync(ct),
+        };
+
+        return new(true, null, GraphDrift.Compare(postgres, graphCounts));
     }
 }

@@ -69,8 +69,10 @@
 		id: string; name: string; trustTier: number; documents: number; chunks: number;
 		lastChecked: string | null; lastChangeAt: string | null;
 	}
+	interface GapDriftEntry { label: string; postgres: number; graph: number; delta: number; }
+	interface GapDrift { graphAvailable: boolean; detail: string | null; entries: GapDriftEntry[]; }
 	interface GapsReport {
-		coverage: GapCoverage; questions: GapQuestion[]; sources: GapSource[];
+		coverage: GapCoverage; questions: GapQuestion[]; sources: GapSource[]; drift: GapDrift;
 	}
 	interface UserItem {
 		id: number; email: string; blocked: boolean; dailyQuota: number; dailyPhotoQuota: number;
@@ -623,6 +625,35 @@
 					</tbody>
 				</table>
 			</div>
+
+			<!-- Graph-drift (#108, docs/BRAIN.md §4): loopt de Neo4j-projectie
+			     achter op Postgres? Gemeten per knooptype, niet geraden. -->
+			<h2 class="gap-h">Graph-drift <span class="meta">(aantallen per knooptype — Postgres is de bron, Neo4j de projectie; negatieve delta = achterlopende graph, de graph-job haalt hem bij)</span></h2>
+			{#if !gaps.drift.graphAvailable}
+				<p class="panel item warn">graph niet beschikbaar{gaps.drift.detail ? ` — ${gaps.drift.detail}` : ''} · drift is nu niet te meten; de rest van dit rapport werkt gewoon</p>
+			{:else}
+				<div class="table-wrap">
+					<table>
+						<thead><tr><th>Knooptype</th><th>Postgres</th><th>Neo4j</th><th>Drift</th></tr></thead>
+						<tbody>
+							{#each gaps.drift.entries as e (e.label)}
+								<tr>
+									<td><strong>{e.label}</strong></td>
+									<td class="meta">{e.postgres}</td>
+									<td class="meta">{e.graph}</td>
+									<td>
+										{#if e.delta === 0}
+											<span class="badge ok-b">in sync</span>
+										{:else}
+											<span class="badge warn-b">{e.delta > 0 ? `+${e.delta}` : e.delta}</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
 		{/if}
 
 		<!-- Gebruikers + kosteninzicht (#42): gebruik per account in de gekozen
