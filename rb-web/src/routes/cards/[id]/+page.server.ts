@@ -63,6 +63,45 @@ interface CardRules {
 	relevantRules: { section: string; snippet: string; sourceName: string; url: string }[];
 }
 
+// Kaart-dossier (#127): rulings, claims, brein-relaties en ban-historie.
+export interface CardDossier {
+	rulings: {
+		id: number;
+		question: string | null;
+		text: string;
+		provenance: string | null;
+		date: string;
+		sections: { sourceId: string; code: string }[];
+	}[];
+	claims: {
+		id: number;
+		statement: string;
+		corroboration: number;
+		trustScore: number;
+		officialStatus: string;
+		trustLabel: string;
+		sources: { name: string; url: string | null; quote: string | null; trustTier: number }[];
+	}[];
+	relations: {
+		otherRef: string;
+		otherName: string | null;
+		kind: string;
+		explanation: string;
+		status: string;
+		trust: number;
+		richting: string;
+	}[];
+	banHistory: {
+		kind: string;
+		format: string;
+		effectiveFrom: string | null;
+		sourceUrl: string;
+		detectedAt: string;
+	}[];
+}
+
+const EMPTY_DOSSIER: CardDossier = { rulings: [], claims: [], relations: [], banHistory: [] };
+
 export const load: PageServerLoad = async ({ params }) => {
 	let card: CardDetail;
 	try {
@@ -93,5 +132,13 @@ export const load: PageServerLoad = async ({ params }) => {
 	} catch {
 		// regels-index nog niet gedraaid — sectie gewoon verbergen
 	}
-	return { card, similar, interactions, rules };
+
+	// Kaart-dossier (#127) — best-effort: lege hoofdstukken worden verborgen.
+	let dossier: CardDossier = EMPTY_DOSSIER;
+	try {
+		dossier = await api<CardDossier>(`/api/cards/${encodeURIComponent(params.id)}/dossier`);
+	} catch {
+		// dossier niet beschikbaar — de kaartfeiten blijven gewoon werken
+	}
+	return { card, similar, interactions, rules, dossier };
 };

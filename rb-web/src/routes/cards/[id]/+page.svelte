@@ -174,6 +174,79 @@
 		</section>
 	{/if}
 
+	{#if data.dossier.rulings.length}
+		<section id="rulings">
+			<h2>Rulings over deze kaart <a class="graph-link" href="/rulings?q={encodeURIComponent(c.name)}">Alle rulings →</a></h2>
+			{#each data.dossier.rulings as r (r.id)}
+				<div class="rulebox">
+					<span class="badge verified">Geverifieerd</span>
+					{#if r.question}<p class="q">{r.question}</p>{/if}
+					<p><RbText text={r.text} /></p>
+					{#if r.sections.length}
+						<p class="secrefs">
+							{#each r.sections as s (s.sourceId + s.code)}
+								<a class="badge rule" href="/rules/{encodeURIComponent(s.code)}?source={encodeURIComponent(s.sourceId)}">§ {s.code}</a>
+							{/each}
+						</p>
+					{/if}
+					<p class="meta">
+						{new Date(r.date).toLocaleDateString('nl-NL')}
+						{#if r.provenance}· bron: {r.provenance}{/if}
+					</p>
+				</div>
+			{/each}
+		</section>
+	{/if}
+
+	{#if data.dossier.claims.length}
+		<section id="claims">
+			<h2>Community-inzichten <span class="meta">(geaccepteerd, met trust)</span></h2>
+			{#each data.dossier.claims as cl (cl.id)}
+				<div class="rulebox">
+					<p><RbText text={cl.statement} /></p>
+					<p class="meta trust">{cl.trustLabel}</p>
+					{#each cl.sources as src (src.name + (src.url ?? ''))}
+						<p class="meta small source">
+							{#if src.quote}“{src.quote}” — {/if}
+							{#if src.url}<a href={src.url} target="_blank" rel="noopener">{src.name}</a>{:else}{src.name}{/if}
+						</p>
+					{/each}
+				</div>
+			{/each}
+			<p class="meta small">Community-interpretatie — de officiële regels en geverifieerde rulings gaan altijd voor.</p>
+		</section>
+	{/if}
+
+	{#if data.dossier.relations.length}
+		<section id="relaties">
+			<h2>Relaties in het brein <a class="graph-link" href="/graph?ref={encodeURIComponent(`card:${c.variantOf ?? c.riftboundId}`)}">Verken in het brein →</a></h2>
+			{#each data.dossier.relations as rel (rel.otherRef + rel.kind)}
+				<div class="interaction">
+					<a href="/graph?ref={encodeURIComponent(rel.otherRef)}"><strong>{rel.otherName ?? rel.otherRef}</strong></a>
+					<span class="chip relkind">{rel.richting === 'in' ? `is doelwit van "${rel.kind}"` : rel.kind}</span>
+					{#if rel.status !== 'accepted'}<span class="chip unreviewed">nog niet gereviewd</span>{/if}
+					<p class="meta"><RbText text={rel.explanation} /></p>
+				</div>
+			{/each}
+		</section>
+	{/if}
+
+	{#if data.dossier.banHistory.length}
+		<section id="ban-historie">
+			<h2>Ban-historie</h2>
+			{#each data.dossier.banHistory as b (b.sourceUrl + b.detectedAt)}
+				<div class="rulebox ban-box">
+					<span class="badge banned-badge">Ban · {b.format}</span>
+					<p class="meta">
+						{#if b.effectiveFrom}Van kracht sinds {new Date(b.effectiveFrom).toLocaleDateString('nl-NL')} · {/if}
+						waargenomen {new Date(b.detectedAt).toLocaleDateString('nl-NL')}
+						· <a href={b.sourceUrl} target="_blank" rel="noopener">officiële bron</a>
+					</p>
+				</div>
+			{/each}
+		</section>
+	{/if}
+
 	{#if data.similar.length}
 		<section>
 			<h2>Vergelijkbare kaarten <a class="graph-link" href="/graph?card={c.riftboundId}">Bekijk in graph →</a></h2>
@@ -279,4 +352,15 @@
 	.badge.rule { background: var(--ok-soft); color: var(--ok); }
 	.small { font-size: 0.78rem; }
 	.meta a { color: var(--muted); }
+	/* Dossier (#127): ankerdoelen niet onder de sticky header laten schuiven. */
+	section[id] { scroll-margin-top: 70px; }
+	.badge.verified { background: var(--ok-soft); color: var(--ok); }
+	.badge.banned-badge { background: var(--err-soft); color: var(--err); }
+	.rulebox.ban-box { border-color: var(--err); }
+	.rulebox .q { font-weight: 600; margin: 8px 0 2px; overflow-wrap: anywhere; }
+	.rulebox .trust { font-size: 0.78rem; }
+	.rulebox .source { border-left: 2px solid var(--border); padding-left: 8px; overflow-wrap: anywhere; }
+	.secrefs { margin: 6px 0 2px; display: flex; gap: 6px; flex-wrap: wrap; }
+	.chip.relkind { color: var(--warn); }
+	.chip.unreviewed { color: var(--muted); font-size: 0.72rem; }
 </style>
