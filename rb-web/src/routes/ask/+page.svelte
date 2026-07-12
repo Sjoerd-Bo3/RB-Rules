@@ -215,7 +215,12 @@
 		live = null;
 		retryPending = null;
 		announce = '';
-		let sawFrame = false;
+		// Expliciet error-frame van rb-api (fout ná de 200) — apart van een
+		// verbindingsbreuk, zodat de catch een echte fout als fout toont en
+		// alleen een breuk de retry-knop geeft (#103/#107). Of er "al iets"
+		// binnenkwam meet de afhandeling niet meer op frames (het meta-frame
+		// komt vóór de lange agentic-wachtfase, #107) maar op antwoordtekst.
+		let serverError: string | null = null;
 		try {
 			const images = photo
 				? // mediaType uit het bestand zelf: downscale() kan het originele
@@ -297,7 +302,6 @@
 					} catch {
 						continue; // half frame door een weggevallen verbinding
 					}
-					sawFrame = true;
 					if (frame.type === 'meta' && live) {
 						// Citaties zijn vóór het antwoord al bekend: daarmee kunnen
 						// [[rule:…]]-widgets tijdens het streamen al renderen.
@@ -311,7 +315,8 @@
 					} else if (frame.type === 'final') {
 						finalData = frame.result ?? null;
 					} else if (frame.type === 'error') {
-						throw new Error(String(frame.error ?? 'stream-fout'));
+						serverError = String(frame.error ?? 'stream-fout');
+						throw new Error(serverError);
 					}
 				}
 			}
@@ -337,10 +342,13 @@
 					live = null;
 					announce = 'Antwoord compleet.';
 				}
-			} else if (!sawFrame) {
-				// Response gestart maar gebroken vóór het eerste frame: rb-api kan
-				// al aan de LLM-call begonnen zijn — expliciete knop, geen stille
-				// dubbele kosten (review-fix).
+			} else if (!live?.answer) {
+				// Gebroken vóór de eerste antwoordtekst: rb-api kan al aan de
+				// LLM-call begonnen zijn — expliciete knop, geen stille dubbele
+				// kosten (review-fix). Niet op sawFrame toetsen: het meta-frame
+				// komt vóór het antwoord al binnen, en bij agentic (#107) zit
+				// daar een lange stille wachtfase achter — een breuk dáár hoort
+				// dezelfde herkansing te krijgen als een breuk vóór elk frame.
 				live = null;
 				retryPending = { fd: formData, clearQuestion };
 				announce = 'Antwoord mislukt.';
@@ -351,14 +359,12 @@
 				announce = 'Antwoord onderbroken.';
 			}
 		} catch (e) {
-			if (sawFrame && live?.answer) {
+			if (live?.answer) {
 				liveError = 'De verbinding viel weg — dit antwoord is mogelijk onvolledig.';
 				announce = 'Antwoord onderbroken.';
-			} else if (!sawFrame) {
-				live = null;
-				retryPending = { fd: formData, clearQuestion };
-				announce = 'Antwoord mislukt.';
-			} else {
+			} else if (serverError) {
+				// Expliciete fout van rb-api (error-frame): eerlijk als fout
+				// tonen — dit is geen verbindingskwestie die een retry oplost.
 				live = null;
 				await applyAction({
 					type: 'failure',
@@ -369,6 +375,12 @@
 						history: turns
 					}
 				});
+			} else {
+				// Verbindingsbreuk zonder antwoordtekst — ook mét al gezien
+				// meta-frame (agentic-wachtfase, #107): expliciete herkansing.
+				live = null;
+				retryPending = { fd: formData, clearQuestion };
+				announce = 'Antwoord mislukt.';
 			}
 		} finally {
 			busy = false;
