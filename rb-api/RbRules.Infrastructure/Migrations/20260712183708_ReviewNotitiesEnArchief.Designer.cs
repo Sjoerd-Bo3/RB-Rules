@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260712183708_ReviewNotitiesEnArchief")]
+    partial class ReviewNotitiesEnArchief
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -97,10 +100,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("had_image");
 
-                    b.Property<long?>("InputTokens")
-                        .HasColumnType("bigint")
-                        .HasColumnName("input_tokens");
-
                     b.Property<string>("Model")
                         .HasColumnType("text")
                         .HasColumnName("model");
@@ -108,10 +107,6 @@ namespace RbRules.Infrastructure.Migrations
                     b.Property<bool>("Ok")
                         .HasColumnType("boolean")
                         .HasColumnName("ok");
-
-                    b.Property<long?>("OutputTokens")
-                        .HasColumnType("bigint")
-                        .HasColumnName("output_tokens");
 
                     b.Property<string>("QuestionType")
                         .HasColumnType("text")

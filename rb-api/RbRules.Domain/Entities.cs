@@ -402,6 +402,14 @@ public class Claim
     public string? StatusReason { get; set; }
     /// <summary>Toets tegen officiële §'s: unchecked|confirmed|contradicted|unclear.</summary>
     public string OfficialStatus { get; set; } = "unchecked";
+    /// <summary>Beheerder-notitie bij het reviewen (#124, "zo zit het wél") —
+    /// blijft bij het item staan en is via de promotie-actie door te zetten
+    /// als geverifieerde ruling (Correction), zodat de kennis antwoorden stuurt.</summary>
+    public string? ReviewNote { get; set; }
+    /// <summary>Archief (#124): gearchiveerd = uit de default-reviewweergave,
+    /// terugvindbaar via de archief-chip. Puur beheer-zicht — een accepted
+    /// claim blijft gewoon meedoen in /ask, gearchiveerd of niet.</summary>
+    public DateTimeOffset? ArchivedAt { get; set; }
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
     public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
@@ -495,6 +503,13 @@ public class Relation
     /// kennispiramide blijft leidend, ook op relaties.</summary>
     public double Trust { get; set; }
     public string Status { get; set; } = "unreviewed";  // unreviewed|accepted|rejected
+    /// <summary>Beheerder-notitie bij het reviewen (#124) — zichtbaar bij het
+    /// item (verwerp-reden) en promoveerbaar tot geverifieerde ruling.</summary>
+    public string? ReviewNote { get; set; }
+    /// <summary>Archief (#124): uit de default-reviewweergave, terugvindbaar
+    /// via de archief-chip. Puur beheer-zicht — de graph-projectie kijkt
+    /// alleen naar Status, niet naar het archief.</summary>
+    public DateTimeOffset? ArchivedAt { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ReviewedAt { get; set; }
 }
