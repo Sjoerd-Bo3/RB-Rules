@@ -20,6 +20,8 @@ public class BrainRefTests
         Assert.Equal("domain:Fury", BrainRef.Domain("Fury").Format());
         Assert.Equal("tag:Yordle", BrainRef.Tag("Yordle").Format());
         Assert.Equal("ruling:9", BrainRef.Ruling(9).Format());
+        // #124: relatie als onderwerp van een beheerder-ruling.
+        Assert.Equal("relation:12", BrainRef.Relation(12).Format());
     }
 
     [Theory]
@@ -27,6 +29,7 @@ public class BrainRefTests
     [InlineData("section:core-rules-pdf/101.2.d", BrainRefKind.Section, "core-rules-pdf/101.2.d")]
     [InlineData("mechanic:Chosen Champion", BrainRefKind.Mechanic, "Chosen Champion")]
     [InlineData("claim:17", BrainRefKind.Claim, "17")]
+    [InlineData("relation:12", BrainRefKind.Relation, "12")]
     [InlineData("  ruling:9  ", BrainRefKind.Ruling, "9")] // randwitruimte om de hele ref is vergeeflijk
     public void TryParse_ValidRefs_RoundTrip(string text, BrainRefKind kind, string key)
     {

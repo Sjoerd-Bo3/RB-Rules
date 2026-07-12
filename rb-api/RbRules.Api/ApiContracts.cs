@@ -42,3 +42,7 @@ public record PasskeyLoginVerifyDto(string? Token, AuthenticatorAssertionRawResp
 
 /// <summary>Beheerder-bewerking van een account (#42): blokkeren en quota.</summary>
 public record UserPatch(bool? Blocked, int? DailyQuota, int? DailyPhotoQuota);
+
+/// <summary>Review-beslissing op een claim/relatie (#124): optionele
+/// beheerder-notitie bij bevestigen, verwerpen of notitie-promotie.</summary>
+public record ReviewDecision(string? Note);

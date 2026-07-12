@@ -17,6 +17,10 @@ public enum BrainRefKind
     Domain,
     Tag,
     Ruling,
+    /// <summary>Dynamische relatie (#116-entiteit) als onderwerp van een
+    /// beheerder-ruling (#124). Bewust géén graph-knoop (relaties zijn edges);
+    /// GraphLabel geeft er dan ook null voor terug.</summary>
+    Relation,
 }
 
 /// <summary>Eén canonieke, tekstuele referentie voor alles wat het brein kent
@@ -43,6 +47,7 @@ public readonly record struct BrainRef(BrainRefKind Kind, string Key)
     public static BrainRef Domain(string name) => new(BrainRefKind.Domain, name);
     public static BrainRef Tag(string name) => new(BrainRefKind.Tag, name);
     public static BrainRef Ruling(long correctionId) => new(BrainRefKind.Ruling, correctionId.ToString());
+    public static BrainRef Relation(long id) => new(BrainRefKind.Relation, id.ToString());
 
     public string Format() => $"{Prefix(Kind)}:{Key}";
 
@@ -82,6 +87,7 @@ public readonly record struct BrainRef(BrainRefKind Kind, string Key)
         BrainRefKind.Domain => "domain",
         BrainRefKind.Tag => "tag",
         BrainRefKind.Ruling => "ruling",
+        BrainRefKind.Relation => "relation",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "onbekende BrainRefKind"),
     };
 
@@ -99,6 +105,7 @@ public readonly record struct BrainRef(BrainRefKind Kind, string Key)
         "domain" => BrainRefKind.Domain,
         "tag" => BrainRefKind.Tag,
         "ruling" => BrainRefKind.Ruling,
+        "relation" => BrainRefKind.Relation,
         _ => null,
     };
 }

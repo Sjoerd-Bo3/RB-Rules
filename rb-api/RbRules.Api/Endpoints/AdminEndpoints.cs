@@ -419,49 +419,143 @@ public static class AdminEndpoints
 
         // Claims-review (#50): accepteren maakt een claim retrieval-baar
         // (het /ask-kanaal zelf is #51); verwerpen houdt hem uit beeld.
-        admin.MapPost("/claims/{id:long}/accept", async (long id, RbRulesDbContext db) =>
+        // Beide nemen optioneel een beheerder-notitie mee (#124); bij
+        // verwerpen is die notitie meteen de zichtbare reden bij het item.
+        admin.MapPost("/claims/{id:long}/accept", async (
+            long id, ReviewDecision? body, RbRulesDbContext db) =>
         {
             var claim = await db.Claims.FindAsync(id);
             if (claim is null) return Results.NotFound();
             claim.Status = "accepted";
             claim.StatusReason = null;
+            if (!string.IsNullOrWhiteSpace(body?.Note)) claim.ReviewNote = body.Note.Trim();
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
 
-        admin.MapPost("/claims/{id:long}/reject", async (long id, RbRulesDbContext db) =>
+        admin.MapPost("/claims/{id:long}/reject", async (
+            long id, ReviewDecision? body, RbRulesDbContext db) =>
         {
             var claim = await db.Claims.FindAsync(id);
             if (claim is null) return Results.NotFound();
             claim.Status = "rejected";
-            claim.StatusReason = "door de beheerder afgewezen";
+            if (!string.IsNullOrWhiteSpace(body?.Note)) claim.ReviewNote = body.Note.Trim();
+            // Verwerpen was zwijgend (#124): met notitie is de reden de notitie.
+            claim.StatusReason = claim.ReviewNote ?? "door de beheerder afgewezen";
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
+
+        // Archief (#124): gearchiveerd = uit de default-reviewweergave — puur
+        // beheer-zicht; status (en dus /ask-deelname en graph-projectie)
+        // verandert niet. Herstel kan altijd via de archief-chip.
+        admin.MapPost("/claims/{id:long}/archive", async (long id, RbRulesDbContext db) =>
+        {
+            var claim = await db.Claims.FindAsync(id);
+            if (claim is null) return Results.NotFound();
+            claim.ArchivedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/claims/{id:long}/unarchive", async (long id, RbRulesDbContext db) =>
+        {
+            var claim = await db.Claims.FindAsync(id);
+            if (claim is null) return Results.NotFound();
+            claim.ArchivedAt = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // "Archiveer alle afgehandelde" (#124): alles waar de beheerder al
+        // over besliste (of wat de pipeline zelf afwees) in één keer het
+        // archief in; te-reviewen items blijven staan.
+        admin.MapPost("/claims/archive-handled", async (RbRulesDbContext db) =>
+        {
+            var archived = await db.Claims
+                .Where(c => c.ArchivedAt == null && c.Status != "unreviewed")
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.ArchivedAt, DateTimeOffset.UtcNow));
+            return Results.Ok(new { archived });
+        });
+
+        // Notitie → geverifieerde ruling (#124): de beheerder-notitie wordt
+        // een Correction (scope claim, ref = BrainRef) via het verify-pad,
+        // zodat de uitleg voortaan antwoorden stuurt.
+        admin.MapPost("/claims/{id:long}/promote-note", async (
+                long id, ReviewDecision? body, ReviewNoteService notes) =>
+            await notes.PromoteClaimNoteAsync(id, body?.Note) switch
+            {
+                { Status: PromoteNoteStatus.NotFound } => Results.NotFound(),
+                { Status: PromoteNoteStatus.NoNote } => Results.BadRequest(
+                    new { error = "geen notitie om door te zetten — schrijf er eerst één" }),
+                var r => Results.Ok(new { ok = true, r.CorrectionId, r.Embedded, r.Updated }),
+            });
 
         // Relatie-review (#116): accepteren maakt het voorstel definitief
         // (blijft/komt in de graph bij de volgende graph-sync, mits het kind
         // geaccepteerd is); verwerpen haalt hem uit de projectie én voorkomt
         // dat de miner hetzelfde voorstel opnieuw opvoert.
-        admin.MapPost("/relations/{id:long}/accept", async (long id, RbRulesDbContext db) =>
+        admin.MapPost("/relations/{id:long}/accept", async (
+            long id, ReviewDecision? body, RbRulesDbContext db) =>
         {
             var relation = await db.Relations.FindAsync(id);
             if (relation is null) return Results.NotFound();
             relation.Status = "accepted";
             relation.ReviewedAt = DateTimeOffset.UtcNow;
+            if (!string.IsNullOrWhiteSpace(body?.Note)) relation.ReviewNote = body.Note.Trim();
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
 
-        admin.MapPost("/relations/{id:long}/reject", async (long id, RbRulesDbContext db) =>
+        admin.MapPost("/relations/{id:long}/reject", async (
+            long id, ReviewDecision? body, RbRulesDbContext db) =>
         {
             var relation = await db.Relations.FindAsync(id);
             if (relation is null) return Results.NotFound();
             relation.Status = "rejected";
             relation.ReviewedAt = DateTimeOffset.UtcNow;
+            // Verwerp-reden (#124) — zichtbaar bij het item in de queue.
+            if (!string.IsNullOrWhiteSpace(body?.Note)) relation.ReviewNote = body.Note.Trim();
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
+
+        // Archief + notitie-promotie voor relaties (#124, claims-patroon).
+        admin.MapPost("/relations/{id:long}/archive", async (long id, RbRulesDbContext db) =>
+        {
+            var relation = await db.Relations.FindAsync(id);
+            if (relation is null) return Results.NotFound();
+            relation.ArchivedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/relations/{id:long}/unarchive", async (long id, RbRulesDbContext db) =>
+        {
+            var relation = await db.Relations.FindAsync(id);
+            if (relation is null) return Results.NotFound();
+            relation.ArchivedAt = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/relations/archive-handled", async (RbRulesDbContext db) =>
+        {
+            var archived = await db.Relations
+                .Where(r => r.ArchivedAt == null && r.Status != "unreviewed")
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.ArchivedAt, DateTimeOffset.UtcNow));
+            return Results.Ok(new { archived });
+        });
+
+        admin.MapPost("/relations/{id:long}/promote-note", async (
+                long id, ReviewDecision? body, ReviewNoteService notes) =>
+            await notes.PromoteRelationNoteAsync(id, body?.Note) switch
+            {
+                { Status: PromoteNoteStatus.NotFound } => Results.NotFound(),
+                { Status: PromoteNoteStatus.NoNote } => Results.BadRequest(
+                    new { error = "geen notitie om door te zetten — schrijf er eerst één" }),
+                var r => Results.Ok(new { ok = true, r.CorrectionId, r.Embedded, r.Updated }),
+            });
 
         // Kind-vocabulaire-review (#116, patroon mechanics): accepteren laat
         // relaties met dit kind meedoen in de graph-projectie (volgende

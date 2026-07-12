@@ -100,6 +100,35 @@ public class DbModelTests
         Assert.NotEmpty(challenge.ToQueryString());
     }
 
+    /// <summary>Vertaalbaarheids-net voor de reviewqueue-weergaven van #124
+    /// (conventie: LINQ dat naar SQL moet, is bewezen vertaalbaar): de
+    /// default-filter (te reviewen + niet gearchiveerd) en de
+    /// unreviewed-bovenaan-sortering met conditional (CASE WHEN).</summary>
+    [Fact]
+    public void ReviewQueueFilters_TranslateToSql()
+    {
+        using var db = CreateContext();
+
+        var claimsDefault = db.Claims.AsNoTracking()
+            .Where(c => c.Status == "unreviewed" && c.ArchivedAt == null)
+            .OrderBy(c => c.Status == "unreviewed" && c.ArchivedAt == null ? 0 : 1)
+            .ThenByDescending(c => c.LastSeen);
+        Assert.Contains("CASE", claimsDefault.ToQueryString(), StringComparison.OrdinalIgnoreCase);
+
+        var relationsArchived = db.Relations.AsNoTracking()
+            .Where(r => r.ArchivedAt != null)
+            .OrderBy(r => r.Status == "unreviewed" && r.ArchivedAt == null ? 0 : 1)
+            .ThenByDescending(r => r.DetectedAt);
+        Assert.NotEmpty(relationsArchived.ToQueryString());
+
+        // Chip-tellingen over het niet-gearchiveerde deel.
+        var counts = db.Claims.AsNoTracking()
+            .Where(c => c.ArchivedAt == null)
+            .GroupBy(c => c.Status)
+            .Select(g => new { g.Key, Count = g.Count() });
+        Assert.Contains("GROUP BY", counts.ToQueryString(), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void VectorColumns_AreTypedWithFixedDimension()
     {

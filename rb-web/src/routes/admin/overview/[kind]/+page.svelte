@@ -46,14 +46,17 @@
 		id: number; topicType: string; topicRef: string; statement: string;
 		corroboration: number; trustScore: number; status: string;
 		statusReason: string | null; officialStatus: string;
+		reviewNote: string | null; archivedAt: string | null;
 		firstSeen: string; lastSeen: string; sources: ClaimSourceItem[];
 	}
 	interface ClaimStatusCount { status: string; count: number; }
-	interface ClaimOverview extends Paged<ClaimItem> { statusCounts: ClaimStatusCount[]; }
+	interface ClaimOverview extends Paged<ClaimItem> {
+		statusCounts: ClaimStatusCount[]; archived: number;
+	}
 	interface RelationItem {
 		id: number; fromRef: string; fromName: string | null; toRef: string; toName: string | null;
 		kind: string; explanation: string; provenance: string; trust: number;
-		status: string; detectedAt: string;
+		status: string; reviewNote: string | null; archivedAt: string | null; detectedAt: string;
 	}
 	interface RelationKindExample {
 		fromRef: string; fromName: string | null; toRef: string; toName: string | null;
@@ -65,7 +68,7 @@
 		examples: RelationKindExample[];
 	}
 	interface RelationOverview extends Paged<RelationItem> {
-		statusCounts: ClaimStatusCount[]; kinds: RelationKindItem[];
+		statusCounts: ClaimStatusCount[]; archived: number; kinds: RelationKindItem[];
 	}
 	interface ProposalItem {
 		id: number; url: string; name: string; type: string; motivation: string;
@@ -119,9 +122,9 @@
 		wijzigingen: { title: 'Wijzigingen', sub: 'de wijzigingshistorie die de feed voedt' },
 		correcties: { title: 'Correcties', sub: 'feedback op antwoorden en geverifieerde rulings' },
 		primer: { title: 'Spelbegrip-primer', sub: 'alle spelbegrip-docs, bewerkbaar — goedgekeurde docs voeden elke ruling' },
-		claims: { title: 'Community-claims', sub: 'beweringen uit community-bronnen met corroboratie en bron-trust — geaccepteerde claims worden het community-kanaal (#51)' },
-		relaties: { title: 'Relaties', sub: 'LLM-ontdekte relaties tussen de kennislagen — de graph-sync projecteert alleen geaccepteerde en ongereviewde voorstellen met een geaccepteerd kind, verworpen nooit' },
-		voorstellen: { title: 'Bronvoorstellen', sub: 'webvondsten van de scout — accepteren zet de bron uitgeschakeld in het register, aanzetten gaat daarna via de bronnen-tabel' },
+		claims: { title: 'Community-claims', sub: 'beweringen uit community-bronnen met corroboratie en bron-trust — geaccepteerde claims worden het community-kanaal (#51); standaard staat hier alleen wat aandacht vraagt, de rest zit achter de chips' },
+		relaties: { title: 'Relaties', sub: 'LLM-ontdekte relaties tussen de kennislagen — de graph-sync projecteert alleen geaccepteerde en ongereviewde voorstellen met een geaccepteerd kind, verworpen nooit; standaard staat hier alleen wat aandacht vraagt' },
+		voorstellen: { title: 'Bronvoorstellen', sub: 'webvondsten van de scout — accepteren zet de bron uitgeschakeld in het register, aanzetten gaat daarna via de bronnen-tabel; standaard staan hier alleen de nog te beoordelen vondsten' },
 		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' },
 		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — tokentotalen per pad en per account zijn het kosteninzicht; quota en blokkade zijn hier bij te stellen' }
 	};
@@ -162,6 +165,20 @@
 	function proposalStatus(status: string): { label: string; badge: string } {
 		return PROPOSAL_STATUS[status] ?? { label: status, badge: 'warn-b' };
 	}
+
+	// Chip-tellingen (#124): statussen tellen over het niet-gearchiveerde deel;
+	// de default-chip is de te-reviewen-telling.
+	function statusCount(counts: ClaimStatusCount[], status: string): number {
+		return counts.find((s) => s.status === status)?.count ?? 0;
+	}
+	// "Archiveer alle afgehandelde": alles waarover al besloten is (of wat de
+	// pipeline zelf afwees) — te-reviewen items blijven staan.
+	const claimsHandled = $derived(
+		(claims?.statusCounts ?? []).filter((s) => s.status !== 'unreviewed').reduce((a, s) => a + s.count, 0)
+	);
+	const relationsHandled = $derived(
+		(relations?.statusCounts ?? []).filter((s) => s.status !== 'unreviewed').reduce((a, s) => a + s.count, 0)
+	);
 
 	const gaps = $derived(data.kind === 'gaten' ? (data.data as GapsReport | null) : null);
 	const users = $derived(data.kind === 'gebruikers' ? (data.data as UserOverview | null) : null);
@@ -263,29 +280,48 @@
 				<a class="chip" class:active={data.filter === 'unmined'} aria-current={data.filter === 'unmined' ? 'page' : undefined} href={href({ filter: 'unmined', page: 1 })}>Nog niet geanalyseerd</a>
 			</div>
 		{:else if data.kind === 'claims' && claims}
+			<!-- Default-weergave (#124): alleen wat aandacht vraagt; afgehandeld,
+			     archief en alles achter de chips. -->
 			<div class="chips">
-				<!-- Som over de statussen: claims.total is het gefilterde totaal. -->
-				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({claims.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
-				{#each claims.statusCounts as s (s.status)}
+				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Te reviewen ({statusCount(claims.statusCounts, 'unreviewed')})</a>
+				{#each claims.statusCounts.filter((s) => s.status !== 'unreviewed') as s (s.status)}
 					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{claimStatus(s.status).label} ({s.count})</a>
 				{/each}
+				<a class="chip" class:active={data.filter === 'archived'} aria-current={data.filter === 'archived' ? 'page' : undefined} href={href({ filter: 'archived', page: 1 })}>Gearchiveerd ({claims.archived})</a>
+				<a class="chip" class:active={data.filter === 'all'} aria-current={data.filter === 'all' ? 'page' : undefined} href={href({ filter: 'all', page: 1 })}>Alles ({claims.statusCounts.reduce((a, s) => a + s.count, 0) + claims.archived})</a>
 			</div>
+			{#if claimsHandled}
+				<form method="POST" action="?/archiveHandledClaims" use:enhance class="archive-all">
+					<button class="ghost small" title="Geaccepteerd, verworpen en verouderd het archief in — te reviewen blijft staan; status en /ask-deelname veranderen niet">Archiveer alle afgehandelde ({claimsHandled})</button>
+					{#if form && 'archived' in form && form.archived !== undefined}<span class="meta">{form.archived} {form.archived === 1 ? 'item' : 'items'} gearchiveerd.</span>{/if}
+				</form>
+			{/if}
 		{:else if data.kind === 'relaties' && relations}
+			<!-- Zelfde default-weergave als claims (#124); het statusvocabulaire
+			     deelt de claims-labels (#116). -->
 			<div class="chips">
-				<!-- Som over de statussen: relations.total is het gefilterde totaal;
-				     het statusvocabulaire deelt de claims-labels (#116). -->
-				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({relations.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
-				{#each relations.statusCounts as s (s.status)}
+				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Te reviewen ({statusCount(relations.statusCounts, 'unreviewed')})</a>
+				{#each relations.statusCounts.filter((s) => s.status !== 'unreviewed') as s (s.status)}
 					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{claimStatus(s.status).label} ({s.count})</a>
 				{/each}
+				<a class="chip" class:active={data.filter === 'archived'} aria-current={data.filter === 'archived' ? 'page' : undefined} href={href({ filter: 'archived', page: 1 })}>Gearchiveerd ({relations.archived})</a>
+				<a class="chip" class:active={data.filter === 'all'} aria-current={data.filter === 'all' ? 'page' : undefined} href={href({ filter: 'all', page: 1 })}>Alles ({relations.statusCounts.reduce((a, s) => a + s.count, 0) + relations.archived})</a>
 			</div>
+			{#if relationsHandled}
+				<form method="POST" action="?/archiveHandledRelations" use:enhance class="archive-all">
+					<button class="ghost small" title="Geaccepteerd en verworpen het archief in — te reviewen blijft staan; de graph-projectie kijkt alleen naar de status">Archiveer alle afgehandelde ({relationsHandled})</button>
+					{#if form && 'archived' in form && form.archived !== undefined}<span class="meta">{form.archived} {form.archived === 1 ? 'item' : 'items'} gearchiveerd.</span>{/if}
+				</form>
+			{/if}
 		{:else if data.kind === 'voorstellen' && proposals}
+			<!-- Default (#124): alleen te beoordelen — de bestaande statussen
+			     zíjn hier het archief (KISS, geen schema-wijziging). -->
 			<div class="chips">
-				<!-- Som over de statussen: proposals.total is het gefilterde totaal. -->
-				<a class="chip" class:active={!data.filter} aria-current={!data.filter ? 'page' : undefined} href={href({ filter: '', page: 1 })}>Alle ({proposals.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
-				{#each proposals.statusCounts as s (s.status)}
+				<a class="chip" class:active={data.filter === 'proposed'} aria-current={data.filter === 'proposed' ? 'page' : undefined} href={href({ filter: 'proposed', page: 1 })}>Te beoordelen ({statusCount(proposals.statusCounts, 'proposed')})</a>
+				{#each proposals.statusCounts.filter((s) => s.status !== 'proposed') as s (s.status)}
 					<a class="chip" class:active={data.filter === s.status} aria-current={data.filter === s.status ? 'page' : undefined} href={href({ filter: s.status, page: 1 })}>{proposalStatus(s.status).label} ({s.count})</a>
 				{/each}
+				<a class="chip" class:active={data.filter === 'all'} aria-current={data.filter === 'all' ? 'page' : undefined} href={href({ filter: 'all', page: 1 })}>Alles ({proposals.statusCounts.reduce((a, s) => a + s.count, 0)})</a>
 			</div>
 		{:else if data.kind === 'gebruikers'}
 			<div class="chips">
@@ -522,19 +558,24 @@
 			{#if !knowledge.length}<p class="meta">Nog geen spelbegrip-docs — draai "Primer genereren" in het beheer.</p>{/if}
 		{/if}
 
-		<!-- Community-claims (#50): bewering + bewijsvoering + review-acties -->
+		<!-- Community-claims (#50/#124): bewering + bewijsvoering + review-acties
+		     met beheerder-notitie, archief en notitie→ruling-promotie -->
 		{#if claims}
 			{#each claims.items as c (c.id)}
 				<div class="panel item corr">
 					<div class="corr-body">
 						<p class="item-head">
 							<span class="badge {claimStatus(c.status).badge}">{claimStatus(c.status).label}</span>
+							{#if c.archivedAt}<span class="badge mute">gearchiveerd</span>{/if}
 							{#if c.officialStatus === 'confirmed'}<span class="badge ok-b">officieel bevestigd</span>
 							{:else if c.officialStatus === 'contradicted'}<span class="badge err">officieel tegengesproken</span>{/if}
 							<span class="meta">{c.topicType} · {c.topicRef} · {c.corroboration} {c.corroboration === 1 ? 'bron' : 'bronnen'} · trust {c.trustScore.toFixed(2)} · {fmtDate(c.lastSeen)}</span>
 						</p>
 						<p class="pre">{c.statement}</p>
 						{#if c.statusReason}<p class="meta refs">{c.statusReason}</p>{/if}
+						<!-- Reden/notitie zichtbaar bij het item (#124); bij verwerpen-met-
+						     reden is de statusReason de notitie — dan niet dubbel tonen. -->
+						{#if c.reviewNote && c.reviewNote !== c.statusReason}<p class="meta refs">Notitie beheerder: {c.reviewNote}</p>{/if}
 						{#each c.sources as s (s.sourceId)}
 							<p class="meta refs">
 								<a href={s.url}>{s.sourceName}</a>
@@ -542,23 +583,41 @@
 							</p>
 						{/each}
 					</div>
-					<div class="corr-actions">
-						{#if c.status !== 'accepted'}
-							<form method="POST" action="?/acceptClaim" use:enhance>
-								<input type="hidden" name="id" value={c.id} />
-								<button class="small" title="Geaccepteerde claims worden het community-kanaal in de vraagbaak (#51)">Bevestig</button>
-							</form>
-						{/if}
-						{#if c.status !== 'rejected'}
-							<form method="POST" action="?/rejectClaim" use:enhance>
-								<input type="hidden" name="id" value={c.id} />
-								<button class="ghost small">Verwerp</button>
-							</form>
-						{/if}
+					<div class="corr-actions review">
+						<!-- Eén formulier per item: de notitie gaat mee met de knop die
+						     hem indient (formaction). Fouten landen bij dit item. -->
+						<form method="POST" action="?/acceptClaim" use:enhance class="review-form">
+							<input type="hidden" name="id" value={c.id} />
+							<textarea name="note" rows="2" placeholder="Notitie — zo zit het wél (optioneel)" aria-label="Beheerder-notitie" value={c.reviewNote ?? ''}></textarea>
+							<div class="row">
+								{#if c.status !== 'accepted'}
+									<button class="small" formaction="?/acceptClaim" title="Geaccepteerde claims worden het community-kanaal in de vraagbaak (#51); de notitie wordt bewaard">Bevestig</button>
+								{/if}
+								{#if c.status !== 'rejected'}
+									<button class="ghost small" formaction="?/rejectClaim" title="Met notitie is de reden zichtbaar bij het item">Verwerp</button>
+								{/if}
+								<button class="ghost small" formaction="?/promoteClaimNote" title="Zet de notitie door als geverifieerde ruling — die stuurt voortaan de antwoorden">Notitie → ruling</button>
+								{#if c.archivedAt}
+									<button class="ghost small" formaction="?/unarchiveClaim" title="Terug in de gewone weergaven">Terug uit archief</button>
+								{:else}
+									<button class="ghost small" formaction="?/archiveClaim" title="Uit de default-weergave; terugvindbaar via de archief-chip">Archiveer</button>
+								{/if}
+							</div>
+							{#if form?.error && formDocId === c.id}<p class="warn">{form.error}</p>{/if}
+							{#if form && 'promoted' in form && form.promoted && formDocId === c.id}
+								<p class="meta">Notitie doorgezet als geverifieerde ruling{form.embedded ? '' : ' — embedding volgt bij opnieuw doorzetten (Ollama niet bereikbaar)'}.</p>
+							{/if}
+						</form>
 					</div>
 				</div>
 			{/each}
-			{#if !claims.items.length}<p class="meta">Geen claims{data.filter ? ' met deze status' : ' — draai "Claims minen" in het beheer'}.</p>{/if}
+			{#if !claims.items.length}
+				<p class="meta">
+					{#if data.filter}Geen claims in deze weergave.
+					{:else if claims.statusCounts.length === 0 && claims.archived === 0}Geen claims — draai "Claims minen" in het beheer.
+					{:else}Niets te reviewen — afgehandelde en gearchiveerde claims zitten achter de chips.{/if}
+				</p>
+			{/if}
 		{/if}
 
 		<!-- Relaties (#116): kandidaat-kinds eerst (vocabulaire-poort), dan de
@@ -605,31 +664,51 @@
 					<div class="corr-body">
 						<p class="item-head">
 							<span class="badge {claimStatus(r.status).badge}">{claimStatus(r.status).label}</span>
+							{#if r.archivedAt}<span class="badge mute">gearchiveerd</span>{/if}
 							<span class="badge ok-b">{r.kind}</span>
 							<a href={graphHref(r.fromRef)} title="Verken deze knoop in de brein-verkenner"><strong>{r.fromName ?? r.fromRef}</strong></a>
 							<span class="meta">→</span>
 							<a href={graphHref(r.toRef)} title="Verken deze knoop in de brein-verkenner"><strong>{r.toName ?? r.toRef}</strong></a>
 						</p>
 						<p class="pre">{r.explanation}</p>
+						<!-- Reden/notitie zichtbaar bij het item (#124): verwerpen is niet
+						     langer zwijgend. -->
+						{#if r.reviewNote}<p class="meta refs">Notitie beheerder: {r.reviewNote}</p>{/if}
 						<p class="meta refs">bron: {r.provenance} · trust {r.trust.toFixed(2)} · {fmtDate(r.detectedAt)}{r.fromName ? ` · ${r.fromRef}` : ''}{r.toName ? ` → ${r.toRef}` : ''}</p>
 					</div>
-					<div class="corr-actions">
-						{#if r.status !== 'accepted'}
-							<form method="POST" action="?/acceptRelation" use:enhance>
-								<input type="hidden" name="id" value={r.id} />
-								<button class="small" title="Mee in de graph bij de volgende sync (mits het kind geaccepteerd is)">Bevestig</button>
-							</form>
-						{/if}
-						{#if r.status !== 'rejected'}
-							<form method="POST" action="?/rejectRelation" use:enhance>
-								<input type="hidden" name="id" value={r.id} />
-								<button class="ghost small" title="Uit de projectie; wordt niet opnieuw voorgesteld">Verwerp</button>
-							</form>
-						{/if}
+					<div class="corr-actions review">
+						<form method="POST" action="?/acceptRelation" use:enhance class="review-form">
+							<input type="hidden" name="id" value={r.id} />
+							<textarea name="note" rows="2" placeholder="Notitie — zo zit het wél (optioneel)" aria-label="Beheerder-notitie" value={r.reviewNote ?? ''}></textarea>
+							<div class="row">
+								{#if r.status !== 'accepted'}
+									<button class="small" formaction="?/acceptRelation" title="Mee in de graph bij de volgende sync (mits het kind geaccepteerd is); de notitie wordt bewaard">Bevestig</button>
+								{/if}
+								{#if r.status !== 'rejected'}
+									<button class="ghost small" formaction="?/rejectRelation" title="Uit de projectie; wordt niet opnieuw voorgesteld — met notitie is de reden zichtbaar bij het item">Verwerp</button>
+								{/if}
+								<button class="ghost small" formaction="?/promoteRelationNote" title="Zet de notitie door als geverifieerde ruling — die stuurt voortaan de antwoorden">Notitie → ruling</button>
+								{#if r.archivedAt}
+									<button class="ghost small" formaction="?/unarchiveRelation" title="Terug in de gewone weergaven">Terug uit archief</button>
+								{:else}
+									<button class="ghost small" formaction="?/archiveRelation" title="Uit de default-weergave; terugvindbaar via de archief-chip">Archiveer</button>
+								{/if}
+							</div>
+							{#if form?.error && formDocId === r.id}<p class="warn">{form.error}</p>{/if}
+							{#if form && 'promoted' in form && form.promoted && formDocId === r.id}
+								<p class="meta">Notitie doorgezet als geverifieerde ruling{form.embedded ? '' : ' — embedding volgt bij opnieuw doorzetten (Ollama niet bereikbaar)'}.</p>
+							{/if}
+						</form>
 					</div>
 				</div>
 			{/each}
-			{#if !relations.items.length}<p class="meta">Geen relatievoorstellen{data.filter ? ' met deze status' : ' — draai "Relaties minen" in het beheer'}.</p>{/if}
+			{#if !relations.items.length}
+				<p class="meta">
+					{#if data.filter}Geen relatievoorstellen in deze weergave.
+					{:else if relations.statusCounts.length === 0 && relations.archived === 0}Geen relatievoorstellen — draai "Relaties minen" in het beheer.
+					{:else}Niets te reviewen — afgehandelde en gearchiveerde voorstellen zitten achter de chips.{/if}
+				</p>
+			{/if}
 		{/if}
 
 		<!-- Bronvoorstellen (#63): url + type-inschatting + motivatie + reviewacties -->
@@ -663,7 +742,12 @@
 					{/if}
 				</div>
 			{/each}
-			{#if !proposals.items.length}<p class="meta">Geen voorstellen{data.filter ? ' met deze status' : ' — draai "Bronnen zoeken (web)" in het beheer'}.</p>{/if}
+			{#if !proposals.items.length}
+				<p class="meta">
+					{#if proposals.statusCounts.length === 0}Geen voorstellen — draai "Bronnen zoeken (web)" in het beheer.
+					{:else}Geen voorstellen in deze weergave — de rest zit achter de chips.{/if}
+				</p>
+			{/if}
 		{/if}
 
 		<!-- Kennis-gaten-rapport (#52) -->
@@ -923,9 +1007,26 @@
 	.item-head { margin: 0 0 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 	.item-head a { color: inherit; }
 	.pre { margin: 0; white-space: pre-wrap; line-height: 1.55; }
-	.corr { display: flex; gap: 14px; }
-	.corr-body { flex: 1; }
+	/* flex-wrap: op 390px zakt de actiekolom (met notitieveld, #124) onder de
+	   tekst — nooit horizontale overflow. */
+	.corr { display: flex; gap: 14px; flex-wrap: wrap; }
+	.corr-body { flex: 1 1 320px; min-width: 0; }
 	.corr-actions { display: flex; flex-direction: column; gap: 6px; }
+	/* Review-formulier per item (#124): notitie + beslisknoppen. De breedte
+	   stuurt de actie-kólom (rij-context); het formulier zelf groeit met de
+	   inhoud — geen flex-basis in de kolomrichting (dat werd hoogte). */
+	.corr-actions.review { flex: 1 1 240px; max-width: 340px; }
+	.review-form { display: flex; flex-direction: column; gap: 6px; }
+	.review-form textarea {
+		width: 100%; box-sizing: border-box; background: var(--surface-deep); color: var(--text);
+		border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+		font-size: 16px; /* iOS zoomt in op form-controls kleiner dan 16px */
+		font-family: inherit; line-height: 1.45;
+	}
+	.review-form .warn, .review-form .meta { margin: 0; }
+	/* Neutrale badge (archief): geen oordeel, alleen zicht-status. */
+	.badge.mute { background: var(--surface-deep); color: var(--muted); border: 1px solid var(--border); }
+	.archive-all { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 14px; }
 	.refs { margin: 6px 0 0; }
 	/* Lange bron-URL's mogen op 390px nooit horizontale overflow geven. */
 	.proposal-url { overflow-wrap: anywhere; }
