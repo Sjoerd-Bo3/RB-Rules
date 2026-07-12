@@ -256,6 +256,10 @@ public static class AdminEndpoints
             var doc = await db.KnowledgeDocs.FindAsync(id);
             if (doc is null) return Results.NotFound();
             doc.Status = "approved";
+            // #119: de hertoets-kanttekening leeft alleen zolang het doc op
+            // review wacht — goedkeuren betekent "opnieuw gecontroleerd", dus
+            // de reden gaat weg en de tekst is weer exact die van de embedding.
+            doc.Body = KnowledgeRecheck.StripMarkers(doc.Body);
             doc.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
@@ -283,7 +287,12 @@ public static class AdminEndpoints
             var doc = await db.KnowledgeDocs.FindAsync(id);
             if (doc is null) return Results.NotFound();
             var title = patch.Title?.Trim();
-            var body = patch.Body?.Trim();
+            // #119: hertoets-kanttekeningen zijn beheer-metadata, geen
+            // doc-tekst — bewerken verwijdert ze (de beheerder hééft de reden
+            // dan gezien), zodat een nieuwe embedding nooit een kanttekening
+            // bevat.
+            var body = patch.Body is null
+                ? null : KnowledgeRecheck.StripMarkers(patch.Body).Trim();
             if (string.IsNullOrEmpty(title) && string.IsNullOrEmpty(body))
                 return Results.BadRequest(new { error = "titel of tekst is verplicht" });
 

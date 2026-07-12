@@ -8,9 +8,12 @@ public record IngestResult(string SourceId, string Status, string? Detail = null
 /// <summary>Scan-pipeline (port van de PoP-runner, met audit-fixes):
 /// fetch → boilerplate-strip → hash → diff → AI-classify → store + log.
 /// Sluit af met een naclassificatie-ronde voor changes die eerder zonder
-/// samenvatting zijn opgeslagen (#58).</summary>
+/// samenvatting zijn opgeslagen (#58) en de kennis-hertoets (#119): een
+/// verwerkte regelwijziging legt de kennis die erop leunt terug voor
+/// review in plaats van die stil te laten verouderen.</summary>
 public class IngestService(
-    RbRulesDbContext db, HttpClient http, RbAiClient ai, ChangeClassificationService classifier)
+    RbRulesDbContext db, HttpClient http, RbAiClient ai,
+    ChangeClassificationService classifier, KnowledgeRecheckService recheck)
 {
     /// <summary>Retry-venster voor naclassificatie: oud genoeg om een paar
     /// dagen rb-ai-uitval te overbruggen, jong genoeg om de scan goedkoop te
@@ -70,6 +73,41 @@ public class IngestService(
             db.RunLogs.Add(new RunLog
             {
                 Kind = "classify", Ref = "scan-retry", Status = "error", Detail = ex.Message,
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
+        // Kennis-hertoets (#119): verwerkte regelwijzigingen hertoetsen de
+        // kennis die erop leunt — primer-docs op geraakte secties terug naar
+        // draft (met reden), betrokken accepted claims door de official-check.
+        // Bewust alleen changes van vóór deze run (before: now): de her-index
+        // van de scheduler moet de nieuwe regelversie eerst in rule_chunk
+        // zetten, anders toetst de official-check tegen de oude tekst; een
+        // change van deze scan komt bij de volgende afronding vanzelf aan de
+        // beurt. Best-effort met een eigen run_log-grootboek (#58-patroon):
+        // uitval hier raakt de scan-resultaten niet.
+        try
+        {
+            var r = await recheck.RunAsync(
+                since: now - KnowledgeRecheckService.RecheckWindow, before: now,
+                progress: p => progress?.Invoke($"kennis-hertoets — {p}"), ct: ct);
+            if (r.Changes > 0)
+            {
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = KnowledgeRecheckService.LedgerKind, Ref = "scan-afronding",
+                    Status = r.Deferred > 0 ? "info" : "ok",
+                    Detail = r.Message,
+                });
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = KnowledgeRecheckService.LedgerKind, Ref = "scan-afronding",
+                Status = "error", Detail = ex.Message,
             });
             await db.SaveChangesAsync(ct);
         }
