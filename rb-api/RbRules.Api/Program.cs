@@ -31,7 +31,12 @@ builder.Services.AddHttpClient<RbAiClient>(c =>
     // de sidecar doorwerkt. Overige taken antwoorden of falen veel eerder.
     c.Timeout = TimeSpan.FromMinutes(6);
 });
-builder.Services.AddHttpClient<IngestService>(c => c.Timeout = TimeSpan.FromSeconds(60));
+// SSRF-guard (#45), fetch-laag: IngestService praat als enige client met
+// URL's van buiten (register/scout/hub) — DNS-check op elk verbindingsdoel
+// (ook redirect-hops) + redirect-limiet. De URL-regels zelf checkt
+// IngestService vóór de call (UrlGuard.Check).
+builder.Services.AddHttpClient<IngestService>(c => c.Timeout = TimeSpan.FromSeconds(60))
+    .ConfigurePrimaryHttpMessageHandler(SafeExternalHttp.CreateHandler);
 builder.Services.AddHttpClient<CardSyncService>(c => c.Timeout = TimeSpan.FromSeconds(120));
 builder.Services.AddHttpClient<EmbeddingService>(c =>
 {

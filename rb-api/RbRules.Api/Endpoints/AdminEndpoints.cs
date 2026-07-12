@@ -388,9 +388,17 @@ public static class AdminEndpoints
         // Bronvoorstellen-review (#63): accepteren zet de bron uitgeschakeld
         // in het register (veilige defaults — de beheerder zet hem daarna
         // bewust aan); verwerpen houdt de URL uit volgende scout-runs.
+        // Een door de SSRF-guard geweigerde URL (#45) geeft een 422 met
+        // { error } — de vorm die de adminApi-helper in rb-web als
+        // foutmelding aan de beheerder toont.
         admin.MapPost("/proposals/{id:long}/accept", async (
                 long id, SourceScoutService scout) =>
-            await scout.AcceptAsync(id) is { } r ? Results.Ok(r) : Results.NotFound());
+            await scout.AcceptAsync(id) switch
+            {
+                null => Results.NotFound(),
+                { Status: "refused" } r => Results.UnprocessableEntity(new { error = r.Message }),
+                var r => Results.Ok(r),
+            });
 
         admin.MapPost("/proposals/{id:long}/reject", async (
                 long id, SourceScoutService scout) =>

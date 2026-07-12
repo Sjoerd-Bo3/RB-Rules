@@ -81,6 +81,13 @@ public class IngestService(
     {
         try
         {
+            // SSRF-guard (#45): register-URL's zijn beheerder-invoer en (via
+            // scout/hub-ontdekking) deels webvondsten — valideer vóór elke
+            // fetch. De fetch-laag (SafeExternalHttp) checkt daarnaast de
+            // geresolvede IP's, ook van redirect-doelen.
+            if (UrlGuard.Check(src.Url) is { Allowed: false } g)
+                return new(src.Id, "error", $"URL geweigerd (SSRF-guard): {g.Reason}");
+
             using var req = new HttpRequestMessage(HttpMethod.Get, src.Url);
             req.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
             using var res = await http.SendAsync(req, ct);
@@ -123,6 +130,11 @@ public class IngestService(
                     var pdfUrl = PdfDiscovery.FindPdfUrl(hubHtml, keyword, new Uri(src.Url));
                     if (pdfUrl is null)
                         return new(src.Id, "error", $"geen '{keyword}'-PDF-link gevonden op {src.Url}");
+
+                    // SSRF-guard (#45): de PDF-link komt uit opgehaalde HTML
+                    // en is dus per definitie externe invoer.
+                    if (UrlGuard.Check(pdfUrl) is { Allowed: false } pg)
+                        return new(src.Id, "error", $"PDF-URL geweigerd (SSRF-guard): {pg.Reason} ({pdfUrl})");
 
                     using var pdfReq = new HttpRequestMessage(HttpMethod.Get, pdfUrl);
                     pdfReq.Headers.TryAddWithoutValidation("User-Agent", BrowserUserAgent);
