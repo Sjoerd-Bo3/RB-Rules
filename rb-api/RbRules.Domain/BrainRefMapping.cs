@@ -178,6 +178,14 @@ public sealed partial class ChangeAffectsMapper
         return new ChangeAffectsMapper(cardNames, cardIdByName, sectionByCode);
     }
 
+    /// <summary>De "betrokken"-tekst van een change: samenvatting, duiding en
+    /// diff samen. Eén definitie, gedeeld door de AFFECTS-projectie (#104) en
+    /// de kennis-hertoets (#119) — zodat "betrokken" op beide plekken nooit
+    /// uiteenloopt.</summary>
+    public static string AffectsText(string? summary, string? meaning, string? diff) =>
+        string.Join('\n', new[] { summary, meaning, diff }
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+
     public IReadOnlyList<BrainRef> Resolve(string? changeType, string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return [];
