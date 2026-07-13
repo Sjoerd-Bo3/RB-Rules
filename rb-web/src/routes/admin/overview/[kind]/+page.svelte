@@ -96,6 +96,13 @@
 		coverage: GapCoverage; questions: GapQuestion[]; sources: GapSource[]; drift: GapDrift;
 		aging: GapAgingSignal[];
 	}
+	// Piltover Archive-decks (#15): attributie per deck via sourceUrl;
+	// unknownCards = kaartregels zonder koppeling aan onze kaarten.
+	interface DeckItem {
+		id: number; paId: string; name: string | null; domains: string[];
+		cards: number; unknownCards: number; views: number; likes: number;
+		sourceUrl: string; paUpdatedAt: string | null; fetchedAt: string;
+	}
 	interface UserItem {
 		id: number; email: string; blocked: boolean; dailyQuota: number; dailyPhotoQuota: number;
 		createdAt: string; lastLoginAt: string | null;
@@ -126,6 +133,7 @@
 		relaties: { title: 'Relaties', sub: 'LLM-ontdekte relaties tussen de kennislagen — de graph-sync projecteert alleen geaccepteerde en ongereviewde voorstellen met een geaccepteerd kind, verworpen nooit; standaard staat hier alleen wat aandacht vraagt' },
 		voorstellen: { title: 'Bronvoorstellen', sub: 'webvondsten van de scout — accepteren zet de bron uitgeschakeld in het register, aanzetten gaat daarna via de bronnen-tabel; standaard staan hier alleen de nog te beoordelen vondsten' },
 		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' },
+		decks: { title: 'Decks', sub: 'community-decks van Piltover Archive, met bronvermelding en deep-link terug — wij bouwen bewust geen eigen deckbuilder (#15)' },
 		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — tokentotalen per pad en per account zijn het kosteninzicht; quota en blokkade zijn hier bij te stellen' }
 	};
 	const meta = $derived(TITLES[data.kind]);
@@ -181,6 +189,7 @@
 	);
 
 	const gaps = $derived(data.kind === 'gaten' ? (data.data as GapsReport | null) : null);
+	const decks = $derived(data.kind === 'decks' ? (data.data as Paged<DeckItem> | null) : null);
 	const users = $derived(data.kind === 'gebruikers' ? (data.data as UserOverview | null) : null);
 
 	// Meetperiode voor het gebruikers-overzicht (#42): chip-label per waarde.
@@ -220,7 +229,7 @@
 		editing = null;
 	});
 
-	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims ?? relations ?? proposals ?? users);
+	const paged = $derived(cards ?? chunks ?? interactions ?? changes ?? claims ?? relations ?? proposals ?? decks ?? users);
 
 	/** Deeplink naar de brein-verkenner: elke ref is daar klikbaar te verkennen. */
 	function graphHref(ref: string): string {
@@ -747,6 +756,45 @@
 					{#if proposals.statusCounts.length === 0}Geen voorstellen — draai "Bronnen zoeken (web)" in het beheer.
 					{:else}Geen voorstellen in deze weergave — de rest zit achter de chips.{/if}
 				</p>
+			{/if}
+		{/if}
+
+		<!-- Piltover Archive-decks (#15): wij spiegelen hun publieke
+		     deck-pagina's — attributie prominent, elk deck deep-linkt terug. -->
+		{#if decks}
+			<p class="meta">
+				Bron: <a href="https://piltoverarchive.com">Piltover Archive</a> — elk
+				deck linkt terug naar zijn eigen pagina; "onbekend" telt kaartregels
+				die (nog) niet aan onze kaarten koppelen.
+			</p>
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>Deck</th><th>Domeinen</th><th>Kaarten</th><th>Views</th>
+							<th>Likes</th><th>Bron</th><th>Opgehaald</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each decks.items as d (d.id)}
+							<tr>
+								<td>
+									<strong>{d.name ?? '(naamloos)'}</strong>
+									<br /><span class="meta">{d.paId}</span>
+								</td>
+								<td class="meta">{d.domains.join(', ') || '—'}</td>
+								<td class="meta">{d.cards}{d.unknownCards ? ` (${d.unknownCards} onbekend)` : ''}</td>
+								<td class="meta">{d.views}</td>
+								<td class="meta">{d.likes}</td>
+								<td class="meta nowrap"><a href={d.sourceUrl}>Piltover Archive</a></td>
+								<td class="meta">{fmtDate(d.fetchedAt)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			{#if !decks.items.length}
+				<p class="meta">Nog geen decks — start "Decks binnenhalen" in het beheer.</p>
 			{/if}
 		{/if}
 

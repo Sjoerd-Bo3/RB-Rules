@@ -29,6 +29,8 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	// archief (#124, KISS) — default alleen te beoordelen, "all" toont alles.
 	voorstellen: { allowed: ['proposed', 'accepted', 'rejected', 'all'], fallback: 'proposed' },
 	gaten: null,
+	// Piltover Archive-decks (#15): attributie + deep-link per deck.
+	decks: null,
 	// Gebruikers + kosteninzicht (#42): de chips kiezen de meetperiode.
 	gebruikers: { allowed: ['vandaag', '7d', '30d'], fallback: '7d' }
 };
@@ -95,6 +97,8 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 			case 'gaten':
 				// Kennis-gaten-rapport (#52): vers berekend bij elke aanvraag.
 				return { ...base, data: await adminApi<unknown>('/api/admin/overview/gaps') };
+			case 'decks':
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/decks?page=${page}`) };
 			case 'gebruikers': {
 				const qs = new URLSearchParams({ page: String(page), period: filter });
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/users?${qs}`) };
