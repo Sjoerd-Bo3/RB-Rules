@@ -251,9 +251,28 @@ public static partial class PiltoverDeckPage
         return [.. result];
     }
 
+    /// <summary>PA-userdata kan JSON-legale maar Postgres-onwettige tekens
+    /// bevatten: een NUL-byte in een text-kolom geeft een DbUpdateException
+    /// en zou zonder wasstraat élke run deterministisch op hetzelfde deck
+    /// laten stranden (review-fix #15). NUL verdwijnt; overige control chars
+    /// worden een spatie zodat een naam met een verdwaalde \n leesbaar blijft.</summary>
+    public static string? CleanText(string? s)
+    {
+        if (string.IsNullOrEmpty(s) || !s.Any(char.IsControl)) return s;
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s)
+        {
+            if (c == '\0') continue;
+            sb.Append(char.IsControl(c) ? ' ' : c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Alle string-reads lopen door <see cref="CleanText"/> — één
+    /// funnel, dus ook kaartnamen, variantnummers en domeinen zijn schoon.</summary>
     private static string? Str(JsonElement obj, string property) =>
         obj.TryGetProperty(property, out var p) && p.ValueKind == JsonValueKind.String
-            ? p.GetString()
+            ? CleanText(p.GetString())
             : null;
 
     private static int? Int(JsonElement obj, string property) =>

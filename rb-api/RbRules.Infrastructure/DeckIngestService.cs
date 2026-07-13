@@ -4,7 +4,7 @@ using RbRules.Domain;
 namespace RbRules.Infrastructure;
 
 public record DeckIngestResult(
-    int Shards, int InSitemap, int Fetched, int Saved, int Failed,
+    int Shards, int FailedShards, int InSitemap, int Fetched, int Saved, int Failed,
     int UnknownCards, bool CapHit, string Message);
 
 /// <summary>Deck-ingest van Piltover Archive (#15, Piltover-first): sitemap
@@ -49,6 +49,7 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
             return await FailRunAsync("sitemap-index bevat geen shards (formaat gewijzigd?)", ct);
 
         var entries = new Dictionary<string, DeckSitemapEntry>();
+        var failedShards = 0;
         for (var i = 0; i < shardUrls.Count; i++)
         {
             progress?.Invoke($"sitemap-shard {i + 1}/{shardUrls.Count} ophalen ({entries.Count} decks gevonden)");
@@ -56,12 +57,17 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
             if (shard is null)
             {
                 // Eén kapotte shard kost alleen zijn eigen decks — die komen
-                // bij de volgende run vanzelf weer langs.
+                // bij de volgende run vanzelf weer langs. Direct persisteren
+                // (review-fix #15): zonder eigen SaveChanges verdween deze
+                // regel spoorloos wanneer de queue daarna leeg bleek
+                // (steady-state ná de backfill — precies dán valt hij op).
+                failedShards++;
                 db.RunLogs.Add(new RunLog
                 {
                     Kind = LedgerKind, Ref = shardUrls[i], Status = "error",
                     Detail = $"sitemap-shard niet opgehaald: {shardError}",
                 });
+                await db.SaveChangesAsync(ct);
                 continue;
             }
             foreach (var entry in PiltoverSitemap.DeckEntries(shard))
@@ -134,20 +140,46 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
                 continue;
             }
 
-            var unknown = await SaveDeckAsync(parsed, url, linker, ct);
-            unknownCards += unknown;
-            saved++;
+            try
+            {
+                var unknown = await SaveDeckAsync(parsed, url, linker, ct);
+                unknownCards += unknown;
+                saved++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Ook het opslaan zelf is per deck gecontaineerd (review-fix
+                // #15): een DbUpdateException (bv. door Postgres geweigerde
+                // userdata) zou anders de hele run aborteren én — omdat het
+                // grootboek-"ok" mee terugrolt — elke volgende run
+                // deterministisch op ditzelfde deck laten stranden.
+                failed++;
+                // De vergiftigde entiteiten (Added/Modified/Deleted uit het
+                // upsert-pad) mogen niet in de gedeelde context blijven
+                // hangen, anders faalt elke volgende SaveChanges mee
+                // (RecordMetric-patroon uit AskService, hier volledig omdat
+                // het update-pad ook Modified/Deleted rijen draagt).
+                db.ChangeTracker.Clear();
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = LedgerKind, Ref = $"deck:{uuid}", Status = "error",
+                    Detail = $"opslaan mislukt: {ex.Message}",
+                });
+                await db.SaveChangesAsync(ct);
+            }
         }
 
         var message =
-            $"{shardUrls.Count} shards, {entries.Count} decks in de sitemap; "
+            $"{shardUrls.Count} shards"
+            + (failedShards > 0 ? $" ({failedShards} mislukt)" : "")
+            + $", {entries.Count} decks in de sitemap; "
             + $"{saved} opgeslagen, {failed} mislukt"
-            + (failed > 0 ? " (details in run_log)" : "")
+            + (failed > 0 || failedShards > 0 ? " (details in run_log)" : "")
             + $", {unknownCards} onbekende kaartverwijzingen"
             + (capHit
                 ? $" — cap van {maxPages} pagina's bereikt, de volgende run gaat verder ({due.Count - queue.Count} resterend)"
                 : "");
-        return new(shardUrls.Count, entries.Count, queue.Count, saved, failed,
+        return new(shardUrls.Count, failedShards, entries.Count, queue.Count, saved, failed,
             unknownCards, capHit, message);
     }
 
@@ -238,6 +270,6 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
             Kind = LedgerKind, Ref = "sitemap", Status = "error", Detail = reason,
         });
         await db.SaveChangesAsync(ct);
-        return new(0, 0, 0, 0, 1, 0, false, reason);
+        return new(0, 0, 0, 0, 0, 1, 0, false, reason);
     }
 }

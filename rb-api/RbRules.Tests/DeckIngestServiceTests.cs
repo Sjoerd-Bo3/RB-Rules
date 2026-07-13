@@ -157,6 +157,71 @@ public class DeckIngestServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_OpslagFout_IsData_EnWedgetDeRunNiet()
+    {
+        // Review-fix #15: een door Postgres geweigerde deck-rij (bv. een
+        // NUL-byte die toch door de wasstraat glipt) mag nooit de run
+        // aborteren -- dan rolt het grootboek-"ok" mee terug en strandt elke
+        // volgende run deterministisch op hetzelfde deck (permanente wedge:
+        // alles na het gif-deck wordt nooit meer geingest). InMemory
+        // accepteert alles, dus de weigering zelf is gestubd.
+        using var db = new PoisonedSaveDbContext(
+            new DbContextOptionsBuilder<RbRulesDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString())
+                .Options,
+            FixtureUuid);
+        var (svc, _) = Service(db, ShardMet(
+            (FixtureUuid, "2026-07-13T13:53:29.172Z"),
+            (TweedeUuid, "2026-07-01T00:00:00.000Z")));
+
+        var r = await svc.RunAsync();
+
+        // Het gif-deck faalt, maar de run gaat door en het tweede deck landt.
+        Assert.Equal(1, r.Failed);
+        Assert.Equal(1, r.Saved);
+        Assert.Equal(TweedeUuid, (await db.Decks.SingleAsync()).PaId);
+        // De fout is herleidbaar en bewaard: de ChangeTracker is geschoond
+        // (anders faalt deze SaveChanges mee op de vergiftigde entiteiten).
+        var fout = await db.RunLogs.SingleAsync(
+            l => l.Kind == "deckingest" && l.Status == "error");
+        Assert.Equal($"deck:{FixtureUuid}", fout.Ref);
+        Assert.Contains("opslaan mislukt", fout.Detail);
+
+        // Geen "ok" zonder opslag: de volgende run probeert het gif-deck
+        // opnieuw -- en strandt opnieuw netjes, zonder de rest te raken.
+        var again = await svc.RunAsync();
+        Assert.Equal(1, again.Failed);
+        Assert.Equal(0, again.Saved);
+    }
+
+    [Fact]
+    public async Task RunAsync_ShardFout_TeltMee_EnBlijftBewaard()
+    {
+        // Review-fix #15: de shard-fout kreeg geen eigen SaveChanges -- met
+        // een lege queue (steady-state na de backfill: precies dan valt een
+        // shard weg) werd de context ge-disposed en verdween de fout
+        // spoorloos, terwijl het bericht "0 mislukt" meldde.
+        using var db = NewDb();
+        var handler = new RoutingHandler();
+        handler.Routes[$"{Base}/sitemap.xml"] = () => Ok(
+            $"<sitemapindex><sitemap><loc>{Base}/sitemap/0</loc></sitemap></sitemapindex>");
+        handler.Routes[$"{Base}/sitemap/0"] =
+            () => new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        var svc = new DeckIngestService(db, new HttpClient(handler)) { Throttle = TimeSpan.Zero };
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.FailedShards);
+        Assert.Equal(0, r.Saved);
+        Assert.Contains("(1 mislukt)", r.Message);
+        var fout = await db.RunLogs.SingleAsync(
+            l => l.Kind == "deckingest" && l.Status == "error");
+        Assert.Equal($"{Base}/sitemap/0", fout.Ref);
+        Assert.Contains("sitemap-shard niet opgehaald", fout.Detail);
+        Assert.Contains("HTTP 500", fout.Detail);
+    }
+
+    [Fact]
     public async Task RunAsync_SitemapWeg_IsEenNetteFout()
     {
         using var db = NewDb();
@@ -231,7 +296,7 @@ public class DeckIngestServiceTests
 
     /// <summary>InMemory kent het pgvector-type niet: sla vectors op in hun
     /// tekstvorm (alleen opslag — vector-queries blijven buiten deze tests).</summary>
-    private sealed class InMemoryDbContext(DbContextOptions<RbRulesDbContext> options)
+    private class InMemoryDbContext(DbContextOptions<RbRulesDbContext> options)
         : RbRulesDbContext(options)
     {
         protected override void OnModelCreating(ModelBuilder b)
@@ -245,6 +310,25 @@ public class DeckIngestServiceTests
                             new Microsoft.EntityFrameworkCore.Storage.ValueConversion
                                 .ValueConverter<Pgvector.Vector, string>(
                                 v => v.ToString(), s => new Pgvector.Vector(s)));
+        }
+    }
+
+    /// <summary>Simuleert Postgres die een deck-rij weigert (bv. een NUL-byte
+    /// in een text-kolom) -- InMemory accepteert alles, dus de weigering wordt
+    /// gestubd; wat hier getest wordt is de per-deck containment.</summary>
+    private sealed class PoisonedSaveDbContext(
+        DbContextOptions<RbRulesDbContext> options, string poisonedPaId)
+        : InMemoryDbContext(options)
+    {
+        public override Task<int> SaveChangesAsync(
+            bool acceptAllChangesOnSuccess, CancellationToken ct = default)
+        {
+            if (ChangeTracker.Entries<Deck>().Any(e =>
+                    e.Entity.PaId == poisonedPaId
+                    && e.State is EntityState.Added or EntityState.Modified))
+                throw new DbUpdateException(
+                    "gesimuleerde Postgres-weigering (NUL-byte in text-kolom)");
+            return base.SaveChangesAsync(acceptAllChangesOnSuccess, ct);
         }
     }
 

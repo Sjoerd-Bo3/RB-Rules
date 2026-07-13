@@ -128,6 +128,36 @@ public class PiltoverDeckPageTests
     }
 
     [Fact]
+    public void Parse_NulBytesInUserdata_WordenGesaneerd()
+    {
+        // Review-fix #15: een NUL-byte is legaal in JSON maar Postgres
+        // weigert hem in text-kolommen — zonder wasstraat zou élke run
+        // deterministisch op zo'n deck stranden. In de flight-chunk staat de
+        // NUL dubbel-ge-escaped (\\u0000: een laag JS-string, een laag JSON);
+        // pas JsonDocument maakt er een echte NUL van en Str/CleanText wast
+        // hem eruit. Andere control chars worden een spatie (leesbaar).
+        var html =
+            """<script>self.__next_f.push([1,"{\"deck\":{\"id\":\"11111111-2222-3333-4444-555555555555\",\"name\":\"Gif\\u0000deck\",\"maindeck\":[{\"quantity\":1,\"card\":{\"name\":\"Kaart\\u0000naam\",\"cardVariants\":[{\"id\":\"v1\",\"variantNumber\":\"OGN\\u0000-001\"}]}}]}}"])</script>""";
+        var deck = PiltoverDeckPage.Parse(html);
+
+        Assert.NotNull(deck);
+        Assert.Equal("Gifdeck", deck.Name);
+        var entry = Assert.Single(deck.Cards);
+        Assert.Equal("Kaartnaam", entry.CardName);
+        Assert.Equal("OGN-001", entry.VariantNumber);
+    }
+
+    [Fact]
+    public void CleanText_NulWeg_AndereControlCharsEenSpatie()
+    {
+        Assert.Equal("ab", PiltoverDeckPage.CleanText("a\0b"));
+        Assert.Equal("a b", PiltoverDeckPage.CleanText("a\nb"));
+        Assert.Equal("schoon", PiltoverDeckPage.CleanText("schoon"));
+        Assert.Null(PiltoverDeckPage.CleanText(null));
+        Assert.Equal("", PiltoverDeckPage.CleanText(""));
+    }
+
+    [Fact]
     public void Unescape_UnicodeEnStuurtekens()
     {
         // PA-namen bevatten unicode-escapes (【】 e.d.) en \n in beschrijvingen.
