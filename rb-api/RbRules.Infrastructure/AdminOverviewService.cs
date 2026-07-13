@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RbRules.Domain;
 
@@ -87,6 +88,22 @@ public record UserOverview(
     int Total, int Page, int PageSize, string Period,
     int AnonQuestions, int AnonPhotos, IReadOnlyList<PathUsageItem> Paths,
     IReadOnlyList<UserOverviewItem> Items);
+
+/// <summary>Vraag-trace in de beheerlijst (#40): alle route-metadata, maar
+/// bewust zonder het antwoord en de gespreks-historie — die komen per trace
+/// via het detail (#143), zodat de lijst-payload slank blijft.</summary>
+public record AskTraceListItem(
+    long Id, string Question, string? QuestionType, string? RewrittenQuery,
+    string? SourceBias, bool MentionsCard, string? MechanicMatches,
+    string? Sections, string? ContextCards, string? PrimerDocs,
+    string? CommunityClaims, int VerifiedRulings, string? Model, bool HadImage,
+    int DurationMs, bool Agentic, string? BrainSteps, bool Ok,
+    DateTimeOffset CreatedAt);
+public record AskTraceTurn(string Question, string Answer);
+/// <summary>Trace-detail (#143): het definitieve antwoord en de eerdere
+/// beurten van het gesprek — de metadata zit al in de lijst.</summary>
+public record AskTraceDetail(
+    long Id, string? Answer, IReadOnlyList<AskTraceTurn> History);
 
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
@@ -481,5 +498,50 @@ public class AdminOverviewService(RbRulesDbContext db)
                 c.Summary, c.Meaning, c.DetectedAt))
             .ToListAsync();
         return new(total, page, PageSize, items);
+    }
+
+    /// <summary>Vraag-traces (#40): de route-metadata van de laatste vragen.
+    /// Bewust zónder antwoord en gespreks-historie — die kunnen groot zijn en
+    /// komen per trace via <see cref="AskTraceAsync"/> (#143).</summary>
+    public async Task<IReadOnlyList<AskTraceListItem>> AskTracesAsync() =>
+        await db.AskTraces.AsNoTracking()
+            .OrderByDescending(t => t.CreatedAt)
+            .Take(30)
+            .Select(t => new AskTraceListItem(
+                t.Id, t.Question, t.QuestionType, t.RewrittenQuery, t.SourceBias,
+                t.MentionsCard, t.MechanicMatches, t.Sections, t.ContextCards,
+                t.PrimerDocs, t.CommunityClaims, t.VerifiedRulings, t.Model,
+                t.HadImage, t.DurationMs, t.Agentic, t.BrainSteps, t.Ok,
+                t.CreatedAt))
+            .ToListAsync();
+
+    /// <summary>Het gesprek achter één trace (#143): het definitieve antwoord
+    /// plus de eerdere beurten — de metadata zit al in de lijst.</summary>
+    public async Task<AskTraceDetail?> AskTraceAsync(long id)
+    {
+        var t = await db.AskTraces.AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(x => new { x.Id, x.Answer, x.History })
+            .SingleOrDefaultAsync();
+        return t is null ? null : new(t.Id, t.Answer, ParseHistory(t.History));
+    }
+
+    private static readonly JsonSerializerOptions HistoryJson =
+        new(JsonSerializerDefaults.Web);
+
+    /// <summary>Het history-snapshot terug naar beurten; een onparseerbare
+    /// rij (hoort niet voor te komen) degradeert naar een leeg gesprek —
+    /// het antwoord zelf blijft dan gewoon zichtbaar.</summary>
+    private static IReadOnlyList<AskTraceTurn> ParseHistory(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<AskTraceTurn>>(json, HistoryJson) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 }
