@@ -7,7 +7,8 @@ namespace RbRules.Infrastructure;
 
 public record CardSyncResult(
     int Sets, int Cards, string Source,
-    int MergedDuplicates = 0, int NormalizedIds = 0, int NormalizedNames = 0)
+    int MergedDuplicates = 0, int NormalizedIds = 0, int NormalizedNames = 0,
+    int SupplementCards = 0, string? SupplementSource = null)
 {
     /// <summary>Reparatie-naslag voor run_log/job-detail (#144); leeg als er
     /// niets te repareren viel.</summary>
@@ -16,14 +17,26 @@ public record CardSyncResult(
             ? ""
             : $", reparatie: {MergedDuplicates} dubbelen samengevoegd, " +
               $"{NormalizedIds} id-vormen en {NormalizedNames} namen genormaliseerd";
+
+    /// <summary>Compact bronlabel voor run_log-ref en logregels:
+    /// "riot" of "riot+riftcodex".</summary>
+    public string SourceLabel =>
+        SupplementSource is null ? Source : $"{Source}+{SupplementSource}";
+
+    /// <summary>Telling per bron voor job-detail/run_log (#150):
+    /// "1083 kaarten via riot + 141 aanvullend via riftcodex".</summary>
+    public string CardsSummary => SupplementSource is null
+        ? $"{Cards} kaarten via {Source}"
+        : $"{Cards} kaarten via {Source} + {SupplementCards} aanvullend via {SupplementSource}";
 }
 
 public record CardRepairResult(int MergedDuplicates, int NormalizedIds, int NormalizedNames);
 
-/// <summary>Kaart-sync: Riftcodex API → officiële Riot-gallery-fallback (die
-/// datacenter-IP's niet blokkeert). Idempotente upsert; nieuwe sets komen
-/// automatisch mee. Riftcodex-bronvormen (ster-id's, streepjes-namen) worden
-/// bij binnenkomst genormaliseerd naar de Riot-vorm (#144), en een vaste
+/// <summary>Kaart-sync: de officiële Riot-gallery is leidend (onvoorwaardelijke
+/// upsert), de riftcodex-API vult daarna alleen aan — extra kaarten (JDG-promo's)
+/// en set-metadata die de gallery niet levert (#150). Idempotente upsert; nieuwe
+/// sets komen automatisch mee. Riftcodex-bronvormen (ster-id's, streepjes-namen)
+/// worden bij binnenkomst genormaliseerd naar de Riot-vorm (#144), en een vaste
 /// reparatiestap voegt eerder ontstane dubbelen samen.</summary>
 public class CardSyncService(RbRulesDbContext db, HttpClient http)
 {
@@ -35,8 +48,12 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
     {
         // Opruimen: set-facetten die eerdere versies per abuis als kaart
         // importeerden (id zonder '-', bijv. 'VEN'/'OGN'). String-overload:
-        // Npgsql vertaalt Contains(char) niet naar SQL.
-        await db.Cards.Where(c => !c.RiftboundId.Contains("-")).ExecuteDeleteAsync(ct);
+        // Npgsql vertaalt Contains(char) niet naar SQL. Tracked delete i.p.v.
+        // ExecuteDelete: dit matcht vrijwel nooit rijen, en zo draait de hele
+        // sync ook onder de InMemory-testprovider (#150-servicetests).
+        db.Cards.RemoveRange(await db.Cards
+            .Where(c => !c.RiftboundId.Contains("-")).ToListAsync(ct));
+        await db.SaveChangesAsync(ct);
 
         // Reparatie vóór de upsert (#144): de bronwissel van 2026-07-12 liet
         // ster-id's en streepjes-namen achter; de genormaliseerde adapter
@@ -45,23 +62,13 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         var repair = await RepairSourceFormsAsync(ct);
 
         var mode = Environment.GetEnvironmentVariable("CARD_SOURCE") ?? "auto";
-        CardSyncResult result;
-        if (mode == "riot")
+        var result = mode switch
         {
-            result = await SyncFromRiotAsync(progress, ct);
-        }
-        else
-        {
-            try
-            {
-                result = await SyncFromRiftcodexAsync(progress, ct);
-            }
-            catch when (mode != "riftcodex")
-            {
-                progress?.Invoke("Riftcodex niet bereikbaar — overschakelen naar officiële Riot-gallery");
-                result = await SyncFromRiotAsync(progress, ct);
-            }
-        }
+            // Expliciete overrides: precies één bron, uitval = jobfout.
+            "riot" => await SyncFromRiotAsync(progress, ct),
+            "riftcodex" => await SyncFromRiftcodexAsync(progress, ct),
+            _ => await SyncAutoAsync(progress, ct),
+        };
 
         progress?.Invoke("varianten groeperen (alt-art/promo/herdruk)");
         await RegroupVariantsAsync(ct);
@@ -71,6 +78,46 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
             NormalizedIds = repair.NormalizedIds,
             NormalizedNames = repair.NormalizedNames,
         };
+    }
+
+    /// <summary>Auto-modus (#150): de officiële Riot-gallery eerst — namen en
+    /// kaartvelden zijn leidend (kennislagen: officieel > community) — en
+    /// riftcodex daarna alléén als aanvulling. Riot-uitval ⇒ riftcodex alleen;
+    /// riftcodex-uitval ná een geslaagde Riot-run is data (run_log-info),
+    /// geen jobfout — het Riot-resultaat staat dan al.</summary>
+    private async Task<CardSyncResult> SyncAutoAsync(
+        Action<string>? progress, CancellationToken ct)
+    {
+        CardSyncResult riot;
+        try
+        {
+            riot = await SyncFromRiotAsync(progress, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            progress?.Invoke("Riot-gallery niet bereikbaar — overschakelen naar Riftcodex");
+            return await SyncFromRiftcodexAsync(progress, ct);
+        }
+
+        // De Riot-pass heeft zijn wijzigingen al gesaved; de aanvul-pass laadt
+        // de kaartenset vers en heeft dus het actuele naambewijs (verse
+        // komma-namen) voor de normalisatie van nieuwe riftcodex-kaarten.
+        try
+        {
+            var extra = await SyncFromRiftcodexAsync(progress, ct, supplementOnly: true);
+            return riot with { SupplementCards = extra.Cards, SupplementSource = extra.Source };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            progress?.Invoke("Riftcodex niet bereikbaar — Riot-resultaat staat, aanvulling overgeslagen");
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "cards", Ref = "riftcodex-aanvulling", Status = "info",
+                Detail = $"aanvulling overgeslagen na geslaagde Riot-sync: {ex.Message}",
+            });
+            await db.SaveChangesAsync(ct);
+            return riot;
+        }
     }
 
     /// <summary>Eenmalige reparatie van de riftcodex-bronwissel (#144), als
@@ -287,10 +334,18 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
     private async Task<Dictionary<string, Card>> LoadExistingAsync(CancellationToken ct) =>
         await db.Cards.ToDictionaryAsync(c => c.RiftboundId, ct);
 
+    /// <summary>Volledige riftcodex-sync, of — met <paramref name="supplementOnly"/>
+    /// (#150) — alleen de aanvulling op de leidende Riot-pass: kaarten die al
+    /// bestaan blijven volledig onaangeraakt (geen veld-overschrijving, geen
+    /// embedding-churn), nieuwe kaarten (JDG-promo's) en set-metadata (échte
+    /// setnamen/releasedatums, die de Riot-gallery niet levert) komen erbij.
+    /// Cards in het resultaat telt dan alleen de aangevulde kaarten.</summary>
     private async Task<CardSyncResult> SyncFromRiftcodexAsync(
-        Action<string>? progress, CancellationToken ct)
+        Action<string>? progress, CancellationToken ct, bool supplementOnly = false)
     {
-        progress?.Invoke("setlijst ophalen bij Riftcodex");
+        progress?.Invoke(supplementOnly
+            ? "aanvulling ophalen bij Riftcodex (extra kaarten en set-metadata)"
+            : "setlijst ophalen bij Riftcodex");
         var existing = await LoadExistingAsync(ct);
         // Bewijs voor naamnormalisatie (#144): welke komma-basisnamen kennen
         // we al — alleen dán mag "Naam - Epithet" de komma-vorm worden.
@@ -313,7 +368,8 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         {
             for (var page = 1; page <= 200; page++)
             {
-                progress?.Invoke($"set {setId}: pagina {page} ophalen ({total} kaarten verwerkt)");
+                progress?.Invoke($"set {setId}: pagina {page} ophalen " +
+                    $"({total} kaarten {(supplementOnly ? "aangevuld" : "verwerkt")})");
                 var node = await GetJsonAsync(
                     $"{RiftcodexBase}/cards?set_id={Uri.EscapeDataString(setId)}&page={page}&size=100", ct);
                 var items = AsList(node);
@@ -321,19 +377,20 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
                 foreach (var c in items.OfType<JsonObject>())
                 {
                     var card = RiftcodexCardMapper.MapCard(c, setId);
-                    if (card is not null)
-                    {
-                        // Een bestaande naam wint altijd (ook échte Riot-
-                        // streepjesnamen zoals de OGS-starters — anders
-                        // flip-flopt de naam per bronwissel); riftcodex vult
-                        // alleen gaten, zo mogelijk genormaliseerd. Dash-
-                        // artefacten herstelt RepairSourceFormsAsync.
-                        card.Name = RiftcodexCardMapper.ResolveName(
-                            existing.TryGetValue(card.RiftboundId, out var have) ? have.Name : null,
-                            card.Name, knownCommaNames);
-                        await UpsertCardAsync(card, existing, ct);
-                        total++;
-                    }
+                    if (card is null) continue;
+                    // Aanvullend (#150): een kaart die de leidende Riot-pass
+                    // al kent blijft volledig onaangeraakt.
+                    if (supplementOnly && existing.ContainsKey(card.RiftboundId)) continue;
+                    // Een bestaande naam wint altijd (ook échte Riot-
+                    // streepjesnamen zoals de OGS-starters — anders
+                    // flip-flopt de naam per bronwissel); riftcodex vult
+                    // alleen gaten, zo mogelijk genormaliseerd. Dash-
+                    // artefacten herstelt RepairSourceFormsAsync.
+                    card.Name = RiftcodexCardMapper.ResolveName(
+                        existing.TryGetValue(card.RiftboundId, out var have) ? have.Name : null,
+                        card.Name, knownCommaNames);
+                    await UpsertCardAsync(card, existing, ct);
+                    total++;
                 }
                 if (items.Count < 100) break;
             }
@@ -377,6 +434,8 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
             known[card.RiftboundId] = card;
             return;
         }
+        var nameChanged = existing.Name != card.Name;
+        var textChanged = existing.TextPlain != card.TextPlain;
         existing.Name = card.Name;
         existing.Type = card.Type;
         existing.Supertype = card.Supertype;
@@ -388,13 +447,19 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         existing.SetId = card.SetId;
         existing.SetLabel = card.SetLabel;
         existing.CollectorNumber = card.CollectorNumber;
-        // Tekstwijziging (errata!) invalideert de embedding → de embed-pijplijn
-        // pakt de kaart automatisch opnieuw op. Gecachete gelijkenis-uitleg
-        // over deze kaart is dan ook achterhaald.
-        if (existing.TextPlain != card.TextPlain)
+        // Naam- óf tekstwijziging invalideert de embedding — beide zitten in
+        // de embeddingtekst (CardText.Compose); zo pakt de embed-pijplijn een
+        // door Riot herstelde naam ("Darius - Trifarian" → "Darius, Trifarian",
+        // #150) automatisch op. Alleen bij échte wijziging — geen churn.
+        if (nameChanged || textChanged)
         {
             existing.Embedding = null;
             existing.EmbeddingModel = null;
+        }
+        // Tekstwijziging (errata!) maakt ook de gecachete gelijkenis-uitleg
+        // over deze kaart achterhaald.
+        if (textChanged)
+        {
             await db.SimilarityExplanations
                 .Where(e => e.CardAId == card.RiftboundId || e.CardBId == card.RiftboundId)
                 .ExecuteDeleteAsync(ct);

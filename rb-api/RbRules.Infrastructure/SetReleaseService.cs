@@ -74,7 +74,7 @@ public class SetReleaseService(
         await Step("kaarten", async () =>
         {
             var r = await cards.SyncAsync(p => progress?.Invoke($"1/6 · kaarten — {p}"), ct);
-            return $"{r.Cards} kaarten via {r.Source}{r.RepairSummary}";
+            return $"{r.CardsSummary}{r.RepairSummary}";
         });
         await Step("mechanieken", async () =>
         {

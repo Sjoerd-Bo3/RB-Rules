@@ -116,8 +116,8 @@ public class ScanScheduler(
                     var cards = scope.ServiceProvider.GetRequiredService<CardSyncService>();
                     var r = await cards.SyncAsync(ct: ct);
                     _lastCardSync = DateTimeOffset.UtcNow;
-                    logger.LogInformation("Kaart-sync: {Sets} sets, {Cards} kaarten via {Source}",
-                        r.Sets, r.Cards, r.Source);
+                    logger.LogInformation("Kaart-sync: {Sets} sets, {Summary}",
+                        r.Sets, r.CardsSummary);
                 }
 
                 // Embed kaarten die het nodig hebben (nieuw/tekst gewijzigd).
