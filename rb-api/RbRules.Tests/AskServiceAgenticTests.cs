@@ -64,6 +64,8 @@ public class AskServiceAgenticTests
         var trace = await db.AskTraces.SingleAsync();
         Assert.True(trace.Agentic);
         Assert.Equal("agentic", trace.Model);
+        // #143: ook het agentic pad boekt het definitieve antwoord in de trace.
+        Assert.Equal(AgentAnswer, trace.Answer);
         Assert.Contains("semantic_search", trace.BrainSteps);
         var metric = await db.AskMetrics.SingleAsync();
         Assert.True(metric.Agentic);
@@ -289,6 +291,8 @@ public class AskServiceAgenticTests
         var trace = await db.AskTraces.SingleAsync();
         Assert.False(trace.Agentic);
         Assert.False(trace.Ok);
+        // #143: ook bij een abort draagt de trace het (eerlijke) antwoord.
+        Assert.Equal(RbAiClient.UnavailableAnswer, trace.Answer);
         Assert.Contains("[client afgehaakt", trace.BrainSteps);
         var metric = await db.AskMetrics.SingleAsync();
         Assert.False(metric.Ok);

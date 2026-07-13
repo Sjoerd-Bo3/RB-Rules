@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -659,6 +660,13 @@ public class AskService(
                 // denkstappen.
                 Agentic = agentAnswered,
                 BrainSteps = brainSteps,
+                // Het volledige gesprek (#143): het definitieve antwoord —
+                // op de streamingroute is dat het slotframe uit
+                // StreamAnswerAsync (of UnavailableAnswer bij uitval, Ok=false)
+                // — plus de gecapte doorvraag-beurten (#41) zoals ze als
+                // GESPREK-blok in de prompt meegingen.
+                Answer = answer,
+                History = SerializeHistory(turns),
                 Ok = aiAnswer is not null,
                 UserId = userContext.User?.Id,
             });
@@ -720,6 +728,17 @@ public class AskService(
         }
         return answer;
     }
+
+    /// <summary>Camel-case zoals de rest van de API-payloads — de beheer-UI
+    /// leest de beurten rechtstreeks terug (#143).</summary>
+    private static readonly JsonSerializerOptions HistoryJson =
+        new(JsonSerializerDefaults.Web);
+
+    /// <summary>Gesprek-snapshot voor de trace (#143): dezelfde gecapte
+    /// beurten die als doorvraag-context meegingen (#41), als JSON
+    /// `[{question, answer}]`; null bij een eerste vraag.</summary>
+    private static string? SerializeHistory(IReadOnlyList<AskTurn> turns) =>
+        turns.Count == 0 ? null : JsonSerializer.Serialize(turns, HistoryJson);
 
     /// <summary>Token-optelling per vraag (#121): null betekent "onbekend" en
     /// mag een wél gemeten deel niet wegdrukken — null + x = x; pas als álle
