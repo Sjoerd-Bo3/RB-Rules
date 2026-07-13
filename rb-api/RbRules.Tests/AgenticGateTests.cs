@@ -127,4 +127,149 @@ public class AgenticGateTests
     public void CountDistinctMentions_MengselTeltAlleenLangsteNamen() =>
         Assert.Equal(2, AgenticGate.CountDistinctMentions(
             ["Viktor", "Jinx", "Jinx, Loose Cannon"]));
+
+    // ── ParseApproach (#153): default auto, tikfouten vallen op auto ───
+
+    [Theory]
+    [InlineData(null, AskApproach.Auto)]
+    [InlineData("", AskApproach.Auto)]
+    [InlineData("auto", AskApproach.Auto)]
+    [InlineData("fast", AskApproach.Fast)]
+    [InlineData("thorough", AskApproach.Thorough)]
+    [InlineData("THOROUGH", AskApproach.Thorough)] // hoofdletterongevoelig
+    [InlineData(" Fast ", AskApproach.Fast)]       // en whitespace-tolerant
+    [InlineData("grondig", AskApproach.Auto)]      // onbekend → nooit stil forceren
+    [InlineData("agentic", AskApproach.Auto)]
+    public void ParseApproach_ValtAltijdVeiligTerugOpAuto(string? value, AskApproach expected) =>
+        Assert.Equal(expected, AgenticGate.ParseApproach(value));
+
+    // ── Decide (#153) — Fast: nooit escaleren, wie er ook wint ─────────
+
+    [Theory] // ook onder force en met beide auto-triggers actief
+    [InlineData(AgenticMode.Off)]
+    [InlineData(AgenticMode.Auto)]
+    [InlineData(AgenticMode.Force)]
+    public void Decide_Fast_EscaleertNooit(AgenticMode mode)
+    {
+        var d = AgenticGate.Decide(
+            AskApproach.Fast, mode, QuestionType.Ruling, cardMentions: 3,
+            emptyRetrieval: true, hasImage: false, quotaAvailable: true);
+        Assert.False(d.Escalate);
+        Assert.Equal(AskDecider.User, d.DecidedBy);
+        Assert.Null(d.FallbackReason);
+        Assert.Equal("fast", AgenticGate.EffectiveApproach(d, AskApproach.Fast));
+    }
+
+    // ── Decide — Thorough gehonoreerd: flag aan, geen foto, quota over ─
+
+    [Theory]
+    [InlineData(AgenticMode.Auto)]
+    [InlineData(AgenticMode.Force)]
+    public void Decide_ThoroughMetQuota_EscaleertAlsGebruiker(AgenticMode mode)
+    {
+        // Bewust een vraag die de auto-gate NIET zou escaleren: de gebruiker
+        // dwingt hem af.
+        var d = AgenticGate.Decide(
+            AskApproach.Thorough, mode, QuestionType.Definitie, cardMentions: 0,
+            emptyRetrieval: false, hasImage: false, quotaAvailable: true);
+        Assert.True(d.Escalate);
+        Assert.Equal(AskDecider.User, d.DecidedBy);
+        Assert.Null(d.FallbackReason);
+        Assert.Equal("thorough", AgenticGate.EffectiveApproach(d, AskApproach.Thorough));
+    }
+
+    // ── Decide — Thorough onder flag off: Grondig bestaat niet ─────────
+
+    [Fact]
+    public void Decide_ThoroughOnderFlagOff_ValtTerugMetRedenDisabled()
+    {
+        var d = AgenticGate.Decide(
+            AskApproach.Thorough, AgenticMode.Off, QuestionType.Ruling, cardMentions: 3,
+            emptyRetrieval: true, hasImage: false, quotaAvailable: true);
+        Assert.False(d.Escalate);
+        Assert.Equal(AskDecider.Gate, d.DecidedBy);
+        Assert.Equal(AgenticGate.ReasonDisabled, d.FallbackReason);
+        Assert.Equal("auto", AgenticGate.EffectiveApproach(d, AskApproach.Thorough));
+    }
+
+    // ── Decide — Thorough met foto: het vision-pad wint (gate-regel) ───
+
+    [Theory]
+    [InlineData(AgenticMode.Auto)]
+    [InlineData(AgenticMode.Force)]
+    public void Decide_ThoroughMetFoto_BlijftOpHetVisionpad(AgenticMode mode)
+    {
+        var d = AgenticGate.Decide(
+            AskApproach.Thorough, mode, QuestionType.Ruling, cardMentions: 2,
+            emptyRetrieval: true, hasImage: true, quotaAvailable: true);
+        Assert.False(d.Escalate);
+        Assert.Equal(AskDecider.Gate, d.DecidedBy);
+        Assert.Equal(AgenticGate.ReasonPhoto, d.FallbackReason);
+        Assert.Equal("auto", AgenticGate.EffectiveApproach(d, AskApproach.Thorough));
+    }
+
+    // ── Decide — Thorough zonder quota: terugvallen op Auto mét reden ──
+
+    [Fact]
+    public void Decide_ThoroughZonderQuota_ValtTerugOpAutoZonderEscalatie()
+    {
+        var d = AgenticGate.Decide(
+            AskApproach.Thorough, AgenticMode.Auto, QuestionType.Definitie, cardMentions: 0,
+            emptyRetrieval: false, hasImage: false, quotaAvailable: false);
+        Assert.False(d.Escalate);
+        Assert.Equal(AskDecider.QuotaFallback, d.DecidedBy);
+        Assert.Equal(AgenticGate.ReasonQuota, d.FallbackReason);
+        Assert.Equal("auto", AgenticGate.EffectiveApproach(d, AskApproach.Thorough));
+    }
+
+    [Fact]
+    public void Decide_ThoroughZonderQuota_MaarAutoTriggerVuurt_EscaleertAlsGate()
+    {
+        // De gate zou deze interactievraag zélf escaleren: dat blijft een
+        // gate-escalatie (telt niet tegen het gebruikersquotum), maar de
+        // niet-gehonoreerde keuze blijft als reden zichtbaar voor de UI.
+        var d = AgenticGate.Decide(
+            AskApproach.Thorough, AgenticMode.Auto, QuestionType.Ruling, cardMentions: 2,
+            emptyRetrieval: false, hasImage: false, quotaAvailable: false);
+        Assert.True(d.Escalate);
+        Assert.Equal(AskDecider.Gate, d.DecidedBy);
+        Assert.Equal(AgenticGate.ReasonQuota, d.FallbackReason);
+        Assert.Equal("auto", AgenticGate.EffectiveApproach(d, AskApproach.Thorough));
+    }
+
+    // ── Decide — terugval-volgorde: flag boven foto boven quota ────────
+
+    [Fact]
+    public void Decide_TerugvalRedenen_FlagWintVanFotoWintVanQuota()
+    {
+        var flagOff = AgenticGate.Decide(
+            AskApproach.Thorough, AgenticMode.Off, QuestionType.Ruling, 0,
+            emptyRetrieval: false, hasImage: true, quotaAvailable: false);
+        Assert.Equal(AgenticGate.ReasonDisabled, flagOff.FallbackReason);
+
+        var foto = AgenticGate.Decide(
+            AskApproach.Thorough, AgenticMode.Auto, QuestionType.Ruling, 0,
+            emptyRetrieval: false, hasImage: true, quotaAvailable: false);
+        Assert.Equal(AgenticGate.ReasonPhoto, foto.FallbackReason);
+    }
+
+    // ── Decide — Auto: exact het bestaande gate-gedrag, besluit = gate ─
+
+    [Theory]
+    [InlineData(AgenticMode.Off, QuestionType.Ruling, 3, true, false)]
+    [InlineData(AgenticMode.Auto, QuestionType.Ruling, 2, false, true)]  // trigger (a)
+    [InlineData(AgenticMode.Auto, QuestionType.Definitie, 0, true, true)] // trigger (b)
+    [InlineData(AgenticMode.Auto, QuestionType.Ruling, 1, false, false)]
+    [InlineData(AgenticMode.Force, QuestionType.Definitie, 0, false, true)]
+    public void Decide_Auto_VolgtShouldEscalate(
+        AgenticMode mode, QuestionType type, int mentions, bool emptyRetrieval, bool expected)
+    {
+        var d = AgenticGate.Decide(
+            AskApproach.Auto, mode, type, mentions, emptyRetrieval,
+            hasImage: false, quotaAvailable: true);
+        Assert.Equal(expected, d.Escalate);
+        Assert.Equal(AskDecider.Gate, d.DecidedBy);
+        Assert.Null(d.FallbackReason);
+        Assert.Equal("auto", AgenticGate.EffectiveApproach(d, AskApproach.Auto));
+    }
 }
