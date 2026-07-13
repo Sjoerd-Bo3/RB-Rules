@@ -248,7 +248,13 @@ apart in §6.
   `/api/admin/mechanics/{id}/accept|reject`,
   `/api/admin/proposals/{id}/accept|reject`.
 - **Vraag-traces** — per vraag welke kennislagen en brein-stappen meededen
-  (#40). *Endpoint* `/api/admin/asktraces`.
+  (#40), en sinds #143 het volledige gesprek: het definitieve antwoord (ook
+  het streaming-slotframe; bij AI-uitval de eerlijke uitvalmelding) en een
+  snapshot van de doorvraag-beurten (#41). De uitklap toont het als
+  chatweergave — eerdere beurten, de vraag, de brein-stappen op hun plek en
+  het antwoord gerenderd zoals op `/ask` — naast de bestaande metadata.
+  *Endpoints* `/api/admin/asktraces` (slanke lijst, zonder antwoord/gesprek),
+  `/api/admin/asktraces/{id}` (het gesprek, lazy bij het uitklappen).
 - **Token-metering & kostenoverzicht** — echte input/output-tokens per vraag
   (rb-ai geeft usage door, geboekt op `ask_metric`), getotaliseerd per pad
   (cheap/hard/agentic) en per account in het kostenoverzicht (#121).
@@ -373,7 +379,9 @@ openstaande PR.
   antwoorden, negatieve feedback en lege-retrieval-vragen — meet waar de bank
   aantoonbaar tekortschiet in plaats van te raden.
 - **Vraag-traces** (#40): per vraag welke kennislagen en brein-stappen meededen
-  — controleerbaarheid als kwaliteitsmaat.
+  — controleerbaarheid als kwaliteitsmaat; sinds #143 mét het definitieve
+  antwoord en de gespreksgeschiedenis, zodat route én uitkomst samen te
+  beoordelen zijn.
 
 **Zinnige volgende metrieken**
 - **Dekking**: aandeel `/ask`-antwoorden met een "Zeker/Redelijk zeker"-label

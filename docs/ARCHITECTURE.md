@@ -216,7 +216,9 @@ Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
 contradictions), `/api/ask` + `/api/ask/stream`, `/api/auth/*` (magic-link +
 passkeys), `/api/changes|sources|bans|sets/upcoming`, `/api/push/*`,
-`/api/admin/*`.
+`/api/admin/*` (o.a. vraag-traces: `/asktraces` als slanke lijst,
+`/asktraces/{id}` met het volledige gesprek — antwoord + eerdere beurten,
+#143).
 
 ### rb-ai — belangrijkste modules
 
