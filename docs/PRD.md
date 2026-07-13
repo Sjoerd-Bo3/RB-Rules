@@ -368,11 +368,12 @@ openstaande PR.
 **Decks (Piltover-first)**
 - **#15** *(herscoped 2026-07-13; spoor 2 — deck-model + PA-ingest — in-flight
   op deze branch)* Géén eigen deckbuilder: we spiegelen Piltover Archive met
-  attributie en deep-links terug. Sporen: (1) deck-codes (C#-port van
-  RiftboundDeckCodes, Apache 2.0), (2) deck-model + robots-compliant ingest
-  via de PA-sitemap, (3) meta-laag & UI (deck-browser, legaliteitscheck,
-  "populair in N% van recente decks", archetype-signalen als
-  kennispiramide-laag 3). Onderzoek in `docs/ENGINE.md` §5.
+  attributie en deep-links terug. Sporen: (1) deck-codes — gemerged (PR
+  #146: C#-port van RiftboundDeckCodes, Apache 2.0, Domain-laag; UI volgt in
+  spoor 3), (2) deck-model + robots-compliant ingest via de PA-sitemap, (3)
+  meta-laag & UI (deck-browser, legaliteitscheck, "populair in N% van recente
+  decks", archetype-signalen als kennispiramide-laag 3). Onderzoek in
+  `docs/ENGINE.md` §5.
 
 ---
 
