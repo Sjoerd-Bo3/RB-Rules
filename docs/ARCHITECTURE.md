@@ -93,6 +93,7 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
 | **playriftbound.com / Rules Hub** | Officiële regel-PDF's, patch notes, errata (laag 0) | `IngestService` via `SafeExternalHttp`; bronnen in `SourceSeed.cs` |
 | **Riot-kaartgallery** | Kaartenbron (JSON, set-facetten, token-kaarten) | `CardSyncService` |
 | **Community-bronnen** | riftbound.gg, fanfinity, UVS Games-PDF, mobalytics (laag 1-3) | `SourceSeed.cs`, `ClaimMiningService`, `BanErrataSyncService` |
+| **Piltover Archive** | Community-decks (#15, fundament meta-laag 3) | `DeckIngestService` via `SafeExternalHttp`; **alleen** de sitemap en publieke `/decks/view/{uuid}`-pagina's — hun `/api/` is robots-disallowed en wordt nooit aangeraakt; attributie + deep-link per deck |
 | **Claude Agent SDK** | LLM-uitvoering op abonnement | `rb-ai` (sidecar), intern koppelvlak `/ask` |
 | **Ollama (bge-m3)** | Lokale embeddings | `EmbeddingService` (compose-intern) |
 | **Web-push / SMTP** | Meldingen (VAPID) en magic-link-login | `PushService`, `MailService` |
@@ -109,6 +110,11 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
   (`docs/KNOWLEDGE.md`).
 - De Rules Hub wisselt per request de volgorde van artikellinks; flip-flop-
   suppressie zit in `IngestService` (hash-historie + lege-diff-guard).
+- Piltover Archive geeft **403 zonder browser-User-Agent**; de deck-data zit
+  als Next.js/RSC-flight in `self.__next_f.push`-chunks (`PiltoverDeckPage`).
+  Netiquette is een harde afspraak: ~1,5 s throttle, cap per run met
+  hervatting via het run_log-grootboek, her-fetch alleen bij een nieuwere
+  sitemap-lastmod — de ~10k-backfill loopt bewust over meerdere runs.
 
 ### Contextdiagram
 
@@ -123,6 +129,7 @@ flowchart LR
     end
     riot["playriftbound.com / Rules Hub / Riot-gallery"]
     community["Community-bronnen"]
+    pa["Piltover Archive (publieke deck-pagina's)"]
     claude["Claude Agent SDK (abonnement)"]
     notify["Web-push / SMTP"]
 
@@ -133,6 +140,7 @@ flowchart LR
     ai --> claude
     api -->|scan / kaart-sync| riot
     api -->|harvest / bans| community
+    api -->|deck-ingest| pa
     api --> notify
 ```
 
@@ -192,7 +200,8 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   (identiteitsconventie), `QuestionRouter`, `QueryRewriter`, `RrfFusion`,
   `RuleSectionParser`, `SetLegality`, `VariantGrouping`, `ClaimMining`,
   `RelationMining`, `AgenticGate`, `SourceSeed`, `RiotCardMapper`,
-  `HubDiscovery`, `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
+  `HubDiscovery`, `PiltoverDeckPage`/`PiltoverSitemap`/`DeckCardLinker`
+  (#15), `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
   datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `RuleChunkPipeline`, `CardSyncService`,
@@ -200,7 +209,8 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`
   (Neo4j), `BrainService`, `MechanicMiningService`, `ClaimMiningService`,
   `RelationMiningService`, `InteractionService`, `PrimerService`,
-  `SetReleaseService`, `KnowledgeGapsService`, `JobLedger`, `PushService`,
+  `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
+  Piltover Archive-ingest), `KnowledgeGapsService`, `JobLedger`, `PushService`,
   `MailService`, `UserAccountService`, `PasskeyService`, en de migraties in
   `Migrations/`.
 - **`RbRules.Api`** — compositie: `Program.cs` doet alleen DI-registratie,

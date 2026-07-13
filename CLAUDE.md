@@ -93,6 +93,10 @@ met quota en rate-limiting.
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`
   is gezet voor foto-upload.
 - iOS zoomt op form-controls < 16px (app.css-fix aanwezig).
+- Piltover Archive (deck-ingest #15): alléén de sitemap en publieke
+  `/decks/view/{uuid}`-pagina's — hun `/api/` is robots-disallowed en blijft
+  onaangeraakt. Browser-UA verplicht (403 zonder); deck-data zit als
+  RSC-flight in `self.__next_f.push`-chunks (parser: `PiltoverDeckPage`).
 
 ## Waar het werk staat
 - Roadmap: **docs/PRD.md §6** (uit de open issues, in-flight PR's

@@ -37,6 +37,10 @@ builder.Services.AddHttpClient<RbAiClient>(c =>
 // IngestService vóór de call (UrlGuard.Check).
 builder.Services.AddHttpClient<IngestService>(c => c.Timeout = TimeSpan.FromSeconds(60))
     .ConfigurePrimaryHttpMessageHandler(SafeExternalHttp.CreateHandler);
+// Deck-ingest (#15): praat alleen met piltoverarchive.com (sitemap + publieke
+// deck-pagina's, nooit hun /api/) — zelfde SSRF-gehardde fetch-laag.
+builder.Services.AddHttpClient<DeckIngestService>(c => c.Timeout = TimeSpan.FromSeconds(60))
+    .ConfigurePrimaryHttpMessageHandler(SafeExternalHttp.CreateHandler);
 builder.Services.AddHttpClient<CardSyncService>(c => c.Timeout = TimeSpan.FromSeconds(120));
 builder.Services.AddHttpClient<EmbeddingService>(c =>
 {

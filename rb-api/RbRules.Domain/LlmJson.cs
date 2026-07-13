@@ -22,8 +22,10 @@ public static class LlmJson
 
     /// <summary>Het gebalanceerde blok dat op <paramref name="start"/> opent,
     /// met JSON-strings (incl. escapes) overgeslagen; null als het blok niet
-    /// sluit of met het verkeerde haakje sluit.</summary>
-    private static string? BalancedBlock(string raw, int start)
+    /// sluit of met het verkeerde haakje sluit. Publiek sinds #15: de
+    /// Piltover-deckparser (<see cref="PiltoverDeckPage"/>) pakt er het
+    /// deck-object mee uit een RSC-blob — één balanced-scanner, geen kopie.</summary>
+    public static string? BalancedBlock(string raw, int start)
     {
         var close = raw[start] == '{' ? '}' : ']';
         var depth = 0;

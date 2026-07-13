@@ -233,9 +233,18 @@ apart in §6.
 
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
   (scan, cards, embed, mine, rules, bans, graph, primer, interactions, scout,
-  classify, claims, relations, setrelease) draaien via `JobRunner` met
+  classify, claims, relations, setrelease, decks) draaien via `JobRunner` met
   live-voortgang en run_log. *Route* `/admin` · *endpoints* `/api/admin/jobs/{name}`,
   `/api/admin/status`, `/api/admin/logs`.
+- **Deck-ingest (Piltover Archive)** — job "decks" haalt publieke
+  community-decks binnen via de PA-sitemap (#15, Piltover-first: géén eigen
+  deckbuilder). Robots-compliant (alleen `/sitemap*` en `/decks/view/{uuid}`;
+  hun `/api/` blijft onaangeraakt), throttled (~1,5 s) en gecapt per run met
+  hervatting via het run_log-grootboek; her-fetch alleen bij een nieuwere
+  sitemap-lastmod. Kaartregels koppelen via de variantgroepering aan onze
+  canonieke kaarten (onbekend = zichtbaar signaal); elk deck draagt zijn
+  bron-URL als attributie met deep-link terug. *Route*
+  `/admin/overview/decks` · *endpoint* `/api/admin/overview/decks`.
 - **Aanklikbare status-tegels** — elke teller opent een overzichtspagina.
   *Route* `/admin/overview/[kind]` · *endpoints* `/api/admin/overview/{cards,
   rulechunks, bans, errata, interactions, changes, claims, proposals, relations,
@@ -356,10 +365,14 @@ openstaande PR.
 - **#55** Autonome-werkdag-draaiboek en **#60** actuele handoff — proces-issues
   die de stand en volgorde bijhouden (geen productfeature).
 
-**Backlog (bewust gedeprioriteerd)**
-- **#15** Decks: model, deck-code-import, ingest (Piltover Archive, melee.gg) en
-  analyse (legaliteit/curve, hand-simulator, synergie/archetype, meta-explorer).
-  Fundament voor de meta-/tactieklaag (piramide-laag 3). Onderzoek in
+**Decks (Piltover-first)**
+- **#15** *(herscoped 2026-07-13; spoor 2 — deck-model + PA-ingest — in-flight
+  op deze branch)* Géén eigen deckbuilder: we spiegelen Piltover Archive met
+  attributie en deep-links terug. Sporen: (1) deck-codes — gemerged (PR
+  #146: C#-port van RiftboundDeckCodes, Apache 2.0, Domain-laag; UI volgt in
+  spoor 3), (2) deck-model + robots-compliant ingest via de PA-sitemap, (3)
+  meta-laag & UI (deck-browser, legaliteitscheck, "populair in N% van recente
+  decks", archetype-signalen als kennispiramide-laag 3). Onderzoek in
   `docs/ENGINE.md` §5.
 
 ---
@@ -397,10 +410,12 @@ openstaande PR.
 
 ## 8. Expliciet buiten scope
 
-- **Deckbuilder / deck-analyse** — bewust geparkeerd in de backlog (#15,
-  gedeprioriteerd); pas oppakken wanneer de kaart- en kennisbasis staat.
+- **Een eigen deckbuilder/deck-editor** — blijft expliciet buiten scope, ook
+  na de herscoping van #15 (Piltover-first): we gebruiken het werk van
+  Piltover Archive, met prominente attributie en deep-links terug; decks
+  bouwen of bewerken doe je dáár, niet hier.
 - **Meta-/tactieklaag** (archetypes, staples, combo-frequentie) — piramide-laag
-  3; hangt aan #15 en komt daarna.
+  3; hangt aan #15 (fase 3) en komt daarna.
 - **Accounts breder dan de passkeys-/e-mailbasis** — uitgebreid
   gebruikersbeheer, rollen, social login e.d. zijn geen doel; huidige accounts
   dienen quota/kosteninzicht, niet een sociaal platform.

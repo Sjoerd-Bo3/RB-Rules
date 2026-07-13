@@ -183,6 +183,7 @@ public static class AdminEndpoints
                     MechanicCandidates = await db.MechanicKeywords.CountAsync(k => k.Status == "candidate"),
                     OpenProposals = await db.SourceProposals.CountAsync(p => p.Status == "proposed"),
                     Users = await db.Users.CountAsync(),
+                    Decks = await db.Decks.CountAsync(),
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
             });
@@ -374,6 +375,11 @@ public static class AdminEndpoints
         admin.MapGet("/overview/relations", async (
                 string? status, int? page, AdminOverviewService overview) =>
             Results.Ok(await overview.RelationsAsync(status, page ?? 1)));
+
+        // Piltover Archive-decks (#15): attributie + deep-link per deck.
+        admin.MapGet("/overview/decks", async (
+                int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.DecksAsync(page ?? 1)));
 
         // Gebruikers + kosteninzicht (#42): LLM-gebruik per account per
         // periode, met de cheap/hard-verdeling als kosten-indicatie.

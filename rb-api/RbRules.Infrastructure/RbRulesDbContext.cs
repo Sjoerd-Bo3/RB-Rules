@@ -31,6 +31,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<Relation> Relations => Set<Relation>();
     public DbSet<RelationKind> RelationKinds => Set<RelationKind>();
     public DbSet<SourceProposal> SourceProposals => Set<SourceProposal>();
+    public DbSet<Deck> Decks => Set<Deck>();
+    public DbSet<DeckCard> DeckCards => Set<DeckCard>();
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<LoginToken> LoginTokens => Set<LoginToken>();
@@ -217,6 +219,25 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.ToTable("relation_kind");
             e.HasIndex(x => x.Kind).IsUnique();
             e.HasIndex(x => x.Status);
+        });
+
+        // Piltover Archive-decks (#15): PaId is de idempotentie-sleutel van
+        // de ingest; kaartregels verdwijnen met hun deck (cascade).
+        b.Entity<Deck>(e =>
+        {
+            e.ToTable("deck");
+            e.HasIndex(x => x.PaId).IsUnique();
+        });
+
+        b.Entity<DeckCard>(e =>
+        {
+            e.ToTable("deck_card");
+            e.HasOne(x => x.Deck).WithMany().HasForeignKey(x => x.DeckId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.DeckId);
+            // Meta-vragen straks ("populair in N% van recente decks", #15
+            // fase 2) zoeken op kaart.
+            e.HasIndex(x => x.CanonicalRiftboundId);
         });
 
         b.Entity<SourceProposal>(e =>
