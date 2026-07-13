@@ -91,7 +91,7 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
 | Extern systeem | Rol | Koppelvlak |
 |---|---|---|
 | **playriftbound.com / Rules Hub** | Officiële regel-PDF's, patch notes, errata (laag 0) | `IngestService` via `SafeExternalHttp`; bronnen in `SourceSeed.cs` |
-| **Riot-kaartgallery** | Kaartenbron (JSON, set-facetten, token-kaarten) | `CardSyncService` |
+| **Riot-kaartgallery** | Leidende kaartenbron (JSON, set-facetten, token-kaarten); de riftcodex-API vult daarna alleen aan — extra kaarten en set-metadata, bestaande kaarten blijven onaangeraakt (#150) | `CardSyncService` |
 | **Community-bronnen** | riftbound.gg, fanfinity, UVS Games-PDF, mobalytics (laag 1-3) | `SourceSeed.cs`, `ClaimMiningService`, `BanErrataSyncService` |
 | **Piltover Archive** | Community-decks (#15, fundament meta-laag 3) | `DeckIngestService` via `SafeExternalHttp`; **alleen** de sitemap en publieke `/decks/view/{uuid}`-pagina's — hun `/api/` is robots-disallowed en wordt nooit aangeraakt; attributie + deep-link per deck |
 | **Claude Agent SDK** | LLM-uitvoering op abonnement | `rb-ai` (sidecar), intern koppelvlak `/ask` |
@@ -104,10 +104,12 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
 - Riot's domein is **playriftbound.com**; PDF-links zijn opake Sanity-CDN-
   hashes, dus matchen gebeurt op ankertekst ("Core Rules")
   (`docs/CONVENTIONS.md`, `HubDiscovery`, `PdfDiscovery`).
-- Riftcodex/Mobalytics/community-sites blokkeren datacenter-IP's (Cloudflare);
-  de Riot-gallery is de betrouwbare kaartenbron vanaf de VM. Een lege of
-  gedeeltelijke community-oogst is een verwacht resultaat, geen bug
-  (`docs/KNOWLEDGE.md`).
+- Riftcodex-site/Mobalytics/community-sites blokkeren datacenter-IP's
+  (Cloudflare); de riftcodex-API werkt wél vanaf de VM, maar is sinds #150
+  uitdrukkelijk aanvullend — de Riot-gallery is de leidende kaartenbron
+  (riftcodex-eerst conserveerde eerder naamschade). Een lege of gedeeltelijke
+  community-oogst is een verwacht resultaat, geen bug (`docs/KNOWLEDGE.md`);
+  riftcodex-uitval in auto-modus is een run_log-info, geen jobfout.
 - De Rules Hub wisselt per request de volgorde van artikellinks; flip-flop-
   suppressie zit in `IngestService` (hash-historie + lege-diff-guard).
 - Piltover Archive geeft **403 zonder browser-User-Agent**; de deck-data zit

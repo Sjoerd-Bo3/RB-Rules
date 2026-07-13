@@ -23,8 +23,8 @@ public static class AdminEndpoints
                 var r = await cards.SyncAsync();
                 db.RunLogs.Add(new RunLog
                 {
-                    Kind = "cards", Ref = r.Source, Status = "ok",
-                    Detail = $"{r.Sets} sets, {r.Cards} kaarten",
+                    Kind = "cards", Ref = r.SourceLabel, Status = "ok",
+                    Detail = $"{r.Sets} sets, {r.CardsSummary}",
                 });
                 await db.SaveChangesAsync();
                 return Results.Ok(r);

@@ -162,6 +162,11 @@ apart in §6.
 - **Variantgroepering op basisnaam** — "Naam (Alternate Art)" telt als dezelfde
   kaart; de naamloze printing is canoniek, ook toekomstvast bij herdrukken
   (canonical-flip). Alleen canonieke printings gaan de graph in.
+- **Bronvolgorde kaart-sync** — de officiële Riot-gallery is leidend
+  (onvoorwaardelijke upsert, ook voor namen en kaartvelden) en riftcodex
+  vult daarna alleen aan — extra kaarten (JDG-promo's) en set-metadata,
+  bestaande kaarten blijven onaangeraakt; `CARD_SOURCE=riot|riftcodex`
+  blijven expliciete overrides en het job-detail telt per bron (#150).
 - **Bronvorm-normalisatie (riftcodex)** — de kaart-sync normaliseert
   riftcodex-vormen bij binnenkomst naar de Riot-gallery-vorm: ster-id's
   ("sfd-239\*-221" → "sfd-239-star-221") en streepjes-namen ("Soraka -
@@ -216,8 +221,9 @@ apart in §6.
   (keyword-kandidaten → reviewqueue → re-mine) en een kennis-gaten-rapport dat
   meet waar de bank aantoonbaar niets weet.
 - **Kennis-levenscyclus** — regelwijzigingen (change high/medium) hertoetsen de
-  betrokken primer-docs en claims automatisch; embeddings en uitleg-cache
-  invalideren al bij tekstwijziging.
+  betrokken primer-docs en claims automatisch; kaart-embeddings invalideren
+  bij naam- of tekstwijziging (beide zitten in de embeddingtekst, #150), de
+  uitleg-cache bij tekstwijziging.
 - **Brein-API** — zes koppelvlakken over de unified vector+graph-representatie,
   met per resultaat een laag- en trust-label; compose-intern (browser komt er
   via rb-web-proxy's). *Endpoints* `/api/brain/search`, `/api/brain/node/{ref}`,

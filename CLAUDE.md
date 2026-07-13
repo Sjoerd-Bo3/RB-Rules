@@ -86,8 +86,10 @@ met quota en rate-limiting.
 - Riot's domein is **playriftbound.com**; PDF-links zijn opake Sanity-CDN-
   hashes — matchen op ankertekst ("Core Rules"). Gallery-JSON bevat
   set-facetten en token-kaarten met lege type-lijst (regressietests bestaan).
-- Riftcodex/Mobalytics blokkeren datacenter-IP's (Cloudflare) — Riot-gallery
-  is de betrouwbare kaartenbron vanaf de VM.
+- Kaart-sync: Riot-gallery is de **leidende** bron; de riftcodex-API (werkt
+  wél vanaf de VM) vult alleen aan en raakt bestaande kaarten niet aan —
+  riftcodex-eerst conserveerde naamschade (#150). Riftcodex-site/Mobalytics
+  blokkeren datacenter-IP's (Cloudflare).
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`

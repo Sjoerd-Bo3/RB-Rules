@@ -75,7 +75,7 @@ public static class JobCatalog
         {
             var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(
                 p => report($"1/8 · kaarten — {p}"), ct);
-            return $"{r.Cards} kaarten via {r.Source}{r.RepairSummary}";
+            return $"{r.CardsSummary}{r.RepairSummary}";
         });
         await Step("bronnen scannen", async () =>
         {
@@ -143,7 +143,7 @@ public static class JobCatalog
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(report, ct);
-        return $"{r.Sets} sets, {r.Cards} kaarten via {r.Source}{r.RepairSummary}";
+        return $"{r.Sets} sets, {r.CardsSummary}{r.RepairSummary}";
     }
 
     private static async Task<string> EmbedAsync(
