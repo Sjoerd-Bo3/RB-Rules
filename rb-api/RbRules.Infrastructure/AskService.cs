@@ -164,8 +164,20 @@ public class AskService(
             ? question
             : string.Join("\n", turns.Select(t => t.Question).Append(question));
 
-        // 0. Naam-match in SQL (review-fix #43: geen full-table naar de client)
-        // + interne router: vraagtype stuurt structuur en bronnen-bias.
+        // 0. Rewrite-overlap (#152): de query-rewrite (#66, één goedkope
+        // LLM-call — typo's corrigeren, NL→EN speltermen, zoekqueries en
+        // lexicale termen; bij doorvragen #41 gaat de historie mee) is de
+        // traagste voorbereidingsstap. Die start daarom METEEN, samen met het
+        // embedden van de ruwe retrievaltekst; alles wat niet van de rewrite
+        // afhangt (naam-match, FTS op de ruwe tekst, banlijst) draait terwijl
+        // de rewrite loopt. Uitval of onzin-output van de rewrite = verwacht
+        // pad: rewrite blijft null en we zoeken met de rauwe vraag(+historie),
+        // het gedrag van vóór #66.
+        var rewriteTask = RunRewriteAsync(retrievalText, ct);
+        var rawEmbedTask = EmbedRawAsync(retrievalText, ct);
+
+        // 0b. Naam-match in SQL (review-fix #43: geen full-table naar de
+        // client) + interne router: vraagtype stuurt structuur en bronnen-bias.
         var qLower = $"{string.Join("\n", turns.Select(t => t.Question))}\n{question}"
             .ToLowerInvariant();
         var mentionsCard = await CardsNamedIn(qLower).AnyAsync(ct);
@@ -184,55 +196,102 @@ public class AskService(
                 await CardsNamedIn(question.ToLowerInvariant())
                     .Select(c => c.Name).Distinct().ToListAsync(ct));
 
+        // 0c. Full-text op de rúwe tekst, alvast tijdens de rewrite. De
+        // afweging (#152): FTS zocht sinds #66 op de genormaliseerde Engelse
+        // zoekzin — de bronnen zijn Engels, dus die matcht wezenlijk beter
+        // dan een Nederlandse ruwe vraag. Daarom hieronder: levert de rewrite
+        // een ándere zoektekst op, dan draait de FTS opnieuw op die tekst en
+        // telt alléén die lijst mee in de RRF-fusie — de resultaten blijven
+        // zo byte-voor-byte gelijk aan vóór de overlap. De vroege ruwe run is
+        // alleen "verspild" als de rewrite iets wezenlijks veranderde, en
+        // kostte dan tóch geen wandkloktijd (hij liep onder de rewrite).
+        var rawTextHits = await FullTextChunksAsync(retrievalText, ct);
+
+        // 0d. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend
+        // blok — rewrite-onafhankelijk, dus ook alvast tijdens de rewrite.
+        var banBlock = "";
+        if (type == QuestionType.Legaliteit)
+        {
+            var bans = await db.BanEntries
+                .OrderBy(b => b.Name)
+                .Take(40)
+                .Select(b => $"- {b.Name} ({b.Kind})")
+                .ToListAsync(ct);
+            banBlock = bans.Count == 0
+                ? "\n\nBANLIJST (gezaghebbend): momenteel leeg — er zijn geen bans bekend."
+                : "\n\nBANLIJST (gezaghebbend, actueel):\n" + string.Join("\n", bans);
+        }
+
         // Token-teller per vraag (#121): opgeteld over álle rb-ai-calls die
         // deze vraag kost (rewrite + antwoord; bij agentic de hele run).
         // Blijft null zolang geen enkele call usage teruggaf (oude rb-ai,
         // AI-uitval) — de metric boekt dan "onbekend", niet 0.
         AiUsage? usage = null;
 
-        // 0b. #66: query-herformulering via één goedkope LLM-call — typo's
-        // corrigeren, NL→EN speltermen, zoekqueries en lexicale termen. Bij
-        // doorvragen (#41) gaat de gespreks-historie mee als context.
-        // Uitval of onzin-output = verwacht pad: rewrite blijft null en we
-        // zoeken met de rauwe vraag(+historie), het gedrag van vóór #66.
-        QueryRewrite? rewrite = null;
-        var rewriteSw = System.Diagnostics.Stopwatch.StartNew();
-        var rewriteRes = await ai.AskWithUsageAsync(
-            QueryRewriter.BuildPrompt(retrievalText), QueryRewriter.SystemPrompt, ct: ct);
-        rewriteMs = rewriteSw.ElapsedMilliseconds;
-        usage = AddUsage(usage, rewriteRes?.Usage);
-        if (rewriteRes is not null) rewrite = QueryRewriter.Parse(rewriteRes.Answer);
+        var rewriteOutcome = await rewriteTask;
+        rewriteMs = rewriteOutcome.Ms;
+        usage = AddUsage(usage, rewriteOutcome.Usage);
+        var rewrite = rewriteOutcome.Rewrite;
         var searchText = rewrite?.NormalizedQuestion ?? retrievalText;
 
         // 1. Vector-kanaal: de genormaliseerde zoekzin plus de extra
-        // zoekqueries uit de rewrite, in één Ollama-batch geëmbed. Elke query
-        // is een eigen ranked list voor de RRF-fusie hieronder.
+        // zoekqueries uit de rewrite; elke query is een eigen ranked list
+        // voor de RRF-fusie hieronder. De ruwe-vraag-embedding die onder de
+        // rewrite al gemaakt is wordt hergebruikt zodra de zoekzin letterlijk
+        // de ruwe tekst is (altijd bij rewrite-uitval); alleen wat nog
+        // ontbreekt gaat in een tweede Ollama-batch — de embedded teksten en
+        // hun volgorde blijven exact die van vóór de overlap.
         // Best-effort (#100): Ollama weg of model niet gepulld mag /ask nooit
         // in een kale 500 laten eindigen — dan blijft qv null, vervallen álle
         // vector-kanalen (regels, primer, rulings-matching, claims,
         // semantische kaart-buren) en draait de vraag door op FTS +
         // naam/mechaniek/lexicale kanalen (patroon RuleSearchService).
-        string[] embedTexts = rewrite is null
-            ? [retrievalText]
-            : [searchText, .. rewrite.SearchQueries
-                .Where(q => !q.Equals(searchText, StringComparison.OrdinalIgnoreCase))];
+        var rawEmbed = await rawEmbedTask;
+        embedMs = rawEmbed.Ms;
         Vector[] queryVectors = [];
-        var embedSw = System.Diagnostics.Stopwatch.StartNew();
-        try
+        if (rewrite is null)
         {
-            queryVectors = await embeddings.EmbedAsync(embedTexts, ct);
+            queryVectors = rawEmbed.Vec is null ? [] : [rawEmbed.Vec];
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        else
         {
-            throw; // de vrager zelf haakte af — niet maskeren
+            // Ordinal: alleen bij een letterlijk identieke zoekzin is de
+            // vroege embedding gegarandeerd dezelfde als wat de oude
+            // één-batch zou maken.
+            var reuseRaw = rawEmbed.Vec is not null && searchText == retrievalText;
+            var extraTexts = new List<string>();
+            if (!reuseRaw) extraTexts.Add(searchText);
+            extraTexts.AddRange(rewrite.SearchQueries
+                .Where(q => !q.Equals(searchText, StringComparison.OrdinalIgnoreCase)));
+            if (extraTexts.Count == 0)
+            {
+                queryVectors = reuseRaw ? [rawEmbed.Vec!] : [];
+            }
+            else
+            {
+                var extraSw = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    var extra = await embeddings.EmbedAsync([.. extraTexts], ct);
+                    queryVectors = reuseRaw ? [rawEmbed.Vec!, .. extra] : extra;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw; // de vrager zelf haakte af — niet maskeren
+                }
+                catch (Exception ex)
+                {
+                    // Alles-of-niets, precies zoals de oude één-batch: een
+                    // half embedde queryset zou een ándere RRF-mix geven dan
+                    // vóór de overlap ooit kon bestaan.
+                    queryVectors = [];
+                    logger.LogWarning(ex,
+                        "Embedding voor /ask mislukt — vector-kanalen overgeslagen, " +
+                        "degradatie naar FTS + lexicale kanalen");
+                }
+                embedMs += extraSw.ElapsedMilliseconds;
+            }
         }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex,
-                "Embedding voor /ask mislukt — vector-kanalen overgeslagen, " +
-                "degradatie naar FTS + lexicale kanalen");
-        }
-        embedMs = embedSw.ElapsedMilliseconds;
         var qv = queryVectors.Length > 0 ? queryVectors[0] : null;
         var vectorLists = new List<List<(long Id, string SourceId)>>();
         foreach (var vec in queryVectors)
@@ -247,7 +306,11 @@ public class AskService(
         }
 
         // 2. Full-text-kanaal — eigen (virtual) methode, zie FullTextChunksAsync.
-        var textHits = await FullTextChunksAsync(searchText, ct);
+        // Gaf de rewrite een wezenlijk andere zoektekst, dan hier de her-run
+        // (zie de afweging bij 0c); anders telt de vroege ruwe run.
+        var textHits = searchText == retrievalText
+            ? rawTextHits
+            : await FullTextChunksAsync(searchText, ct);
 
         // 3. RRF-fusie (gedeelde Domain-helper, #44), met bron-bias per
         // vraagtype: toernooivragen tillen Tournament Rules-chunks op,
@@ -355,19 +418,8 @@ public class AskService(
         var cardContext = await CardContextAsync(question, qLower, qv, type, rewrite, ct);
         var cardBlock = cardContext.Block;
 
-        // 4b. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend blok.
-        var banBlock = "";
-        if (type == QuestionType.Legaliteit)
-        {
-            var bans = await db.BanEntries
-                .OrderBy(b => b.Name)
-                .Take(40)
-                .Select(b => $"- {b.Name} ({b.Kind})")
-                .ToListAsync(ct);
-            banBlock = bans.Count == 0
-                ? "\n\nBANLIJST (gezaghebbend): momenteel leeg — er zijn geen bans bekend."
-                : "\n\nBANLIJST (gezaghebbend, actueel):\n" + string.Join("\n", bans);
-        }
+        // 4b. De banlijst voor legaliteitsvragen is al opgehaald (0d, tijdens
+        // de rewrite); het blok schuift hier ongewijzigd de prompt-volgorde in.
 
         // 5. Geverifieerde rulings (self-learning override-laag) — semantisch
         // gematcht op de vraag; zonder embedding (van de rulings óf van de
@@ -769,6 +821,45 @@ public class AskService(
     private static AiUsage? AddUsage(AiUsage? a, AiUsage? b) =>
         a is null ? b : b is null ? a
             : new AiUsage(a.InputTokens + b.InputTokens, a.OutputTokens + b.OutputTokens);
+
+    /// <summary>De query-rewrite-call (#66) als taak, zodat hij kan overlappen
+    /// met de rewrite-onafhankelijke kanalen (#152). Uitval of onzin-output is
+    /// het bestaande degradatiepad: Rewrite null, zoeken met de rauwe tekst.
+    /// Ms is de wandkloktijd van de call zelf (fase-meting).</summary>
+    private async Task<(QueryRewrite? Rewrite, AiUsage? Usage, long Ms)> RunRewriteAsync(
+        string retrievalText, CancellationToken ct)
+    {
+        var rewriteSw = System.Diagnostics.Stopwatch.StartNew();
+        var res = await ai.AskWithUsageAsync(
+            QueryRewriter.BuildPrompt(retrievalText), QueryRewriter.SystemPrompt, ct: ct);
+        var rewrite = res is null ? null : QueryRewriter.Parse(res.Answer);
+        return (rewrite, res?.Usage, rewriteSw.ElapsedMilliseconds);
+    }
+
+    /// <summary>Embedding van de ruwe retrievaltekst, gestart naast de rewrite
+    /// (#152). Best-effort (#100): uitval levert null — exact het bestaande
+    /// vector-degradatiepad; echte client-annulering bubbelt wél door.</summary>
+    private async Task<(Vector? Vec, long Ms)> EmbedRawAsync(
+        string retrievalText, CancellationToken ct)
+    {
+        var rawSw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var vecs = await embeddings.EmbedAsync([retrievalText], ct);
+            return (vecs.Length > 0 ? vecs[0] : null, rawSw.ElapsedMilliseconds);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // de vrager zelf haakte af — niet maskeren
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Embedding voor /ask mislukt — vector-kanalen overgeslagen, " +
+                "degradatie naar FTS + lexicale kanalen");
+            return (null, rawSw.ElapsedMilliseconds);
+        }
+    }
 
     /// <summary>Full-text-kanaal (Engels — de bronnen zijn Engels; de rewrite
     /// levert een Engelse zoekzin, dus die matcht hier beter dan NL). Virtual
