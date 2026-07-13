@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260713185633_PiltoverDecks")]
+    partial class PiltoverDecks
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -146,10 +149,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("agentic");
 
-                    b.Property<string>("Answer")
-                        .HasColumnType("text")
-                        .HasColumnName("answer");
-
                     b.Property<string>("BrainSteps")
                         .HasColumnType("text")
                         .HasColumnName("brain_steps");
@@ -173,10 +172,6 @@ namespace RbRules.Infrastructure.Migrations
                     b.Property<bool>("HadImage")
                         .HasColumnType("boolean")
                         .HasColumnName("had_image");
-
-                    b.Property<string>("History")
-                        .HasColumnType("text")
-                        .HasColumnName("history");
 
                     b.Property<string>("MechanicMatches")
                         .HasColumnType("text")

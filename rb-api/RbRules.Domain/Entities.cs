@@ -522,6 +522,47 @@ public class Relation
     public DateTimeOffset? ReviewedAt { get; set; }
 }
 
+/// <summary>Community-deck van Piltover Archive (#15, Piltover-first): wij
+/// bouwen geen eigen deckbuilder maar spiegelen hun publieke deck-pagina's,
+/// met prominente attributie (SourceUrl deep-linkt terug). Fundament voor de
+/// meta-laag (kennispiramide-laag 3).</summary>
+public class Deck
+{
+    public long Id { get; set; }
+    /// <summary>PA-deck-uuid (uit /decks/view/{uuid}) — de identiteit voor
+    /// idempotente her-runs; uniek geïndexeerd.</summary>
+    public required string PaId { get; set; }
+    public string? Name { get; set; }
+    /// <summary>Attributie: de publieke PA-pagina waar dit deck vandaan komt.</summary>
+    public required string SourceUrl { get; set; }
+    /// <summary>Deck-domeinen (via de legend) — string[] net als card.domains,
+    /// zodat facet-queries over kaarten en decks uniform blijven (geen csv).</summary>
+    public string[] Domains { get; set; } = [];
+    public DateTimeOffset? PaCreatedAt { get; set; }
+    /// <summary>PA's updatedAt — samen met de sitemap-lastmod de basis om
+    /// alleen echt gewijzigde decks opnieuw op te halen.</summary>
+    public DateTimeOffset? PaUpdatedAt { get; set; }
+    public int Views { get; set; }
+    public int Likes { get; set; }
+    public DateTimeOffset FetchedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Kaartregel binnen een PA-deck. CardCode is het PA-variantnummer
+/// ("OGN-126a"); CanonicalRiftboundId is onze canonieke kaart via de
+/// variantgroepering (DeckCardLinker), null zolang wij de kaart niet kennen
+/// (onbekend is data, geen crash — de ingest telt ze per run).</summary>
+public class DeckCard
+{
+    public long Id { get; set; }
+    public long DeckId { get; set; }
+    public Deck? Deck { get; set; }
+    /// <summary>legend|champions|battlefields|runes|maindeck|sideboard|bench.</summary>
+    public required string Section { get; set; }
+    public required string CardCode { get; set; }
+    public string? CanonicalRiftboundId { get; set; }
+    public int Quantity { get; set; }
+}
+
 /// <summary>Kandidaat-vocabulaire voor relatie-kinds (#116, patroon
 /// MechanicKeyword uit #52): de LLM mag nieuwe kinds voorstellen; onbekende
 /// kinds landen hier als kandidaat. Pas geaccepteerde kinds (plus de
