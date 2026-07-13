@@ -23,8 +23,9 @@ public static partial class PiltoverSitemap
     [GeneratedRegex(@"<lastmod>\s*([^<\s]+)\s*</lastmod>", RegexOptions.IgnoreCase)]
     private static partial Regex LastMod();
 
-    /// <summary>Shard-URL's uit de sitemap-index, alleen van de eigen host —
-    /// een externe URL in de index mag ons nooit ergens anders laten fetchen.</summary>
+    /// <summary>Shard-URL's uit de sitemap-index, alleen van de eigen host én
+    /// onder /sitemap — de index is pagina-inhoud en mag ons nooit ergens
+    /// anders laten fetchen (robots-afspraak: /api/ blijft onaangeraakt).</summary>
     public static IReadOnlyList<string> ShardUrls(string xml, string host = "piltoverarchive.com")
     {
         var shards = new List<string>();
@@ -33,7 +34,9 @@ public static partial class PiltoverSitemap
             var url = m.Groups[1].Value;
             if (Uri.TryCreate(url, UriKind.Absolute, out var uri)
                 && uri.Scheme == Uri.UriSchemeHttps
-                && string.Equals(uri.Host, host, StringComparison.OrdinalIgnoreCase))
+                && string.Equals(uri.Host, host, StringComparison.OrdinalIgnoreCase)
+                && (uri.AbsolutePath == "/sitemap.xml"
+                    || uri.AbsolutePath.StartsWith("/sitemap/", StringComparison.Ordinal)))
                 shards.Add(url);
         }
         return shards;

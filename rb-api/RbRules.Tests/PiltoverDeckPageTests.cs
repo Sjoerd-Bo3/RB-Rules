@@ -158,8 +158,10 @@ public class PiltoverDeckPageTests
 public class PiltoverSitemapTests
 {
     [Fact]
-    public void ShardUrls_AlleenEigenHost()
+    public void ShardUrls_AlleenEigenHost_EnAlleenSitemapPaden()
     {
+        // De index is pagina-inhoud: een vreemde host of een pad buiten
+        // /sitemap (zoals hun robots-disallowed /api/) mag er nooit doorheen.
         var xml =
             """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -167,6 +169,7 @@ public class PiltoverSitemapTests
               <sitemap><loc>https://piltoverarchive.com/sitemap/0</loc></sitemap>
               <sitemap><loc>https://piltoverarchive.com/sitemap/1</loc></sitemap>
               <sitemap><loc>https://kwaadaardig.example/sitemap/0</loc></sitemap>
+              <sitemap><loc>https://piltoverarchive.com/api/decks</loc></sitemap>
             </sitemapindex>
             """;
         Assert.Equal(
