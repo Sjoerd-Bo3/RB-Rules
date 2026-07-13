@@ -162,6 +162,15 @@ apart in §6.
 - **Variantgroepering op basisnaam** — "Naam (Alternate Art)" telt als dezelfde
   kaart; de naamloze printing is canoniek, ook toekomstvast bij herdrukken
   (canonical-flip). Alleen canonieke printings gaan de graph in.
+- **Bronvorm-normalisatie (riftcodex)** — de kaart-sync normaliseert
+  riftcodex-vormen bij binnenkomst naar de Riot-gallery-vorm: ster-id's
+  ("sfd-239\*-221" → "sfd-239-star-221") en streepjes-namen ("Soraka -
+  Wanderer" → "Soraka, Wanderer" — alleen waar de komma-basisnaam al als
+  kaart bekend is; bij conflict op dezelfde printing wint de bestaande
+  Riot-naam). Een idempotente reparatiestap in de sync voegt eerder
+  ontstane dubbelen samen op (set, collector-nummer, variant-suffix) en
+  hangt alle verwijzingen (bans, errata, interacties, rulings, relaties,
+  claims, variant-verwijzingen) mee om; run_log meldt hoeveel (#144).
 - **Kaarttekst-icoontokens** — tokens als `:rb_energy_1:` renderen als échte
   iconen (`$lib/rbtokens.ts`), veilig ge-escaped vóór injectie.
 

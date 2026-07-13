@@ -1,0 +1,432 @@
+{
+ "items": [
+  {
+   "id": "69bc5bdbd308c64675ca884b",
+   "name": "Ahri - Inquisitive (Signature)",
+   "riftbound_id": "sfd-227*-221",
+   "tcgplayer_id": "664913",
+   "collector_number": 227,
+   "attributes": {
+    "energy": 3,
+    "might": 3,
+    "power": 1
+   },
+   "classification": {
+    "type": "Unit",
+    "supertype": "Champion",
+    "rarity": "Showcase",
+    "domain": [
+     "Mind"
+    ]
+   },
+   "text": {
+    "rich": "<p>When I attack or defend, give an enemy unit here -2 :rb_might: this turn, to a minimum of 1 :rb_might:.</p>",
+    "plain": "When I attack or defend, give an enemy unit here -2 :rb_might: this turn, to a minimum of 1 :rb_might:.",
+    "flavour": "Just remember...to follow the fox."
+   },
+   "set": {
+    "set_id": "SFD",
+    "label": "Spiritforged"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/608f786c30a7e80db87d3c2d45bc0c26b0840c5e-744x1039.png?accountingTag=RB",
+    "artist": "Shawn Tan",
+    "accessibility_text": "Riftbound Unit: Ahri, Inquisitive. When I attack or defend, give an enemy unit here -2 [S] this turn, to a minimum of 1 [S]."
+   },
+   "tags": [
+    "Ahri"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Ahri Inquisitive Signature",
+    "updated_on": "2026-07-10T22:44:45.121378+00:00",
+    "alternate_art": false,
+    "overnumbered": false,
+    "signature": true
+   },
+   "new": false
+  },
+  {
+   "id": "69bc5bdbd308c64675ca8844",
+   "name": "Irelia - Fervent (Alternate Art)",
+   "riftbound_id": "sfd-057a-221",
+   "tcgplayer_id": "664886",
+   "collector_number": 57,
+   "attributes": {
+    "energy": 5,
+    "might": 4,
+    "power": null
+   },
+   "classification": {
+    "type": "Unit",
+    "supertype": "Champion",
+    "rarity": "Showcase",
+    "domain": [
+     "Calm"
+    ]
+   },
+   "text": {
+    "rich": "<p>[Deflect] (Opponents must pay :rb_rune_rainbow: to choose me with a spell or ability.)<br />When you choose or ready me, give me +1 :rb_might: this turn.</p>",
+    "plain": "[Deflect] (Opponents must pay :rb_rune_rainbow: to choose me with a spell or ability.)When you choose or ready me, give me +1 :rb_might: this turn.",
+    "flavour": "Do we want to be safe, or free? The choice is ours."
+   },
+   "set": {
+    "set_id": "SFD",
+    "label": "Spiritforged"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/cef4f73541e0623b4024b483d141d0396f1dddcb-744x1039.png?accountingTag=RB",
+    "artist": "League Splash Team",
+    "accessibility_text": "Riftbound Unit: Irelia, Fervent. [Deflect] (Opponents must pay [A] to choose me with a spell or ability.)\nWhen you choose or ready me, give me +1 [S] this turn."
+   },
+   "tags": [
+    "Irelia",
+    "Ionia"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Irelia Fervent Alternate Art",
+    "updated_on": "2026-07-10T22:44:44.722873+00:00",
+    "alternate_art": true,
+    "overnumbered": false,
+    "signature": false
+   },
+   "new": false
+  },
+  {
+   "id": "69bc5bdbd308c64675ca8843",
+   "name": "Irelia - Fervent",
+   "riftbound_id": "sfd-057-221",
+   "tcgplayer_id": "664885",
+   "collector_number": 57,
+   "attributes": {
+    "energy": 5,
+    "might": 4,
+    "power": null
+   },
+   "classification": {
+    "type": "Unit",
+    "supertype": "Champion",
+    "rarity": "Epic",
+    "domain": [
+     "Calm"
+    ]
+   },
+   "text": {
+    "rich": "<p>[Deflect] (Opponents must pay :rb_rune_rainbow: to choose me with a spell or ability.)<br />When you choose or ready me, give me +1 :rb_might: this turn.</p>",
+    "plain": "[Deflect] (Opponents must pay :rb_rune_rainbow: to choose me with a spell or ability.)When you choose or ready me, give me +1 :rb_might: this turn.",
+    "flavour": "Do we want to be safe, or free? The choice is ours."
+   },
+   "set": {
+    "set_id": "SFD",
+    "label": "Spiritforged"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/fe05fa55781f8036f8bfc9c10bba94326a0c8cc9-744x1039.png?accountingTag=RB",
+    "artist": "Six More Vodka",
+    "accessibility_text": "Riftbound Unit: Irelia, Fervent. [Deflect] (Opponents must pay [A] to choose me with a spell or ability.)\nWhen you choose or ready me, give me +1 [S] this turn."
+   },
+   "tags": [
+    "Irelia",
+    "Ionia"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Irelia Fervent",
+    "updated_on": "2026-07-10T22:44:44.665581+00:00",
+    "alternate_art": false,
+    "overnumbered": false,
+    "signature": false
+   },
+   "new": false
+  },
+  {
+   "id": "69bc5bdbd308c64675ca8841",
+   "name": "Renata Glasc - Chem-Baroness (Overnumbered)",
+   "riftbound_id": "sfd-249-221",
+   "tcgplayer_id": "664883",
+   "collector_number": 249,
+   "attributes": {
+    "energy": null,
+    "might": null,
+    "power": null
+   },
+   "classification": {
+    "type": "Legend",
+    "supertype": null,
+    "rarity": "Showcase",
+    "domain": [
+     "Mind",
+     "Order"
+    ]
+   },
+   "text": {
+    "rich": "<p>When you or an ally hold, you may exhaust me to play a Gold gear token exhausted.<br />While your score is within 3 points of the Victory Score, your Gold [ADD] an additional :rb_energy_1:.</p>",
+    "plain": "When you or an ally hold, you may exhaust me to play a Gold gear token exhausted.While your score is within 3 points of the Victory Score, your Gold [ADD] an additional :rb_energy_1:.",
+    "flavour": null
+   },
+   "set": {
+    "set_id": "SFD",
+    "label": "Spiritforged"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5df25d5a1351d0a97e103ef8e155991297b86ca9-744x1039.png?accountingTag=RB",
+    "artist": "Envar Studio",
+    "accessibility_text": "Riftbound Legend: Chem-Baroness. When you or an ally hold, you may exhaust me to play a Gold gear token exhausted.\nWhile your score is within 3 points of the Victory Score, your Gold [ADD] an additional [1]."
+   },
+   "tags": [
+    "Renata Glasc"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Renata Glasc Chem Baroness Overnumbered",
+    "updated_on": "2026-07-10T22:44:44.554319+00:00",
+    "alternate_art": false,
+    "overnumbered": true,
+    "signature": false
+   },
+   "new": false
+  },
+  {
+   "id": "69bc5be1d308c64675ca88b2",
+   "name": "Yone - Blademaster (Signature)",
+   "riftbound_id": "sfd-233*-221",
+   "tcgplayer_id": "666469",
+   "collector_number": 233,
+   "attributes": {
+    "energy": 5,
+    "might": 5,
+    "power": 1
+   },
+   "classification": {
+    "type": "Unit",
+    "supertype": "Champion",
+    "rarity": "Showcase",
+    "domain": [
+     "Body"
+    ]
+   },
+   "text": {
+    "rich": "<p>[Weaponmaster] (When you play me, you may [Equip] one of your Equipment to me for :rb_rune_rainbow: less, even if it's already attached.)<br />When I conquer an open battlefield, deal damage equal to my Might to an enemy unit in a base.</p>",
+    "plain": "[Weaponmaster] (When you play me, you may [Equip] one of your Equipment to me for :rb_rune_rainbow: less, even if it's already attached.)When I conquer an open battlefield, deal damage equal to my Might to an enemy unit in a base.",
+    "flavour": null
+   },
+   "set": {
+    "set_id": "SFD",
+    "label": "Spiritforged"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/8b190a0e419af24797408f0df4c17b48e8d86e5f-744x1039.png?accountingTag=RB",
+    "artist": "Anson Tan",
+    "accessibility_text": "Riftbound Unit: Yone, Blademaster. [Weaponmaster] (When you play me, you may [Equip] one of your Equipment to me for [A] less, even if it's already attached.)\nWhen I conquer an open battlefield, deal damage equal to my Might to an enemy unit in a base."
+   },
+   "tags": [
+    "Yone",
+    "Ionia",
+    "Demon"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Yone Blademaster Signature",
+    "updated_on": "2026-07-10T22:44:50.799759+00:00",
+    "alternate_art": false,
+    "overnumbered": false,
+    "signature": true
+   },
+   "new": false
+  },
+  {
+   "id": "69bc5be1d308c64675ca88b1",
+   "name": "Yone - Blademaster (Overnumbered)",
+   "riftbound_id": "sfd-233-221",
+   "tcgplayer_id": "666468",
+   "collector_number": 233,
+   "attributes": {
+    "energy": 5,
+    "might": 5,
+    "power": 1
+   },
+   "classification": {
+    "type": "Unit",
+    "supertype": "Champion",
+    "rarity": "Showcase",
+    "domain": [
+     "Body"
+    ]
+   },
+   "text": {
+    "rich": "<p>[Weaponmaster] (When you play me, you may [Equip] one of your Equipment to me for :rb_rune_rainbow: less, even if it's already attached.)<br />When I conquer an open battlefield, deal damage equal to my Might to an enemy unit in a base.</p>",
+    "plain": "[Weaponmaster] (When you play me, you may [Equip] one of your Equipment to me for :rb_rune_rainbow: less, even if it's already attached.)When I conquer an open battlefield, deal damage equal to my Might to an enemy unit in a base.",
+    "flavour": null
+   },
+   "set": {
+    "set_id": "SFD",
+    "label": "Spiritforged"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/0bb6fd6e7d1e6fefeeccc82059bdae2eaa000730-744x1039.png?accountingTag=RB",
+    "artist": "Anson Tan",
+    "accessibility_text": "Riftbound Unit: Yone, Blademaster. [Weaponmaster] (When you play me, you may [Equip] one of your Equipment to me for [A] less, even if it's already attached.)\nWhen I conquer an open battlefield, deal damage equal to my Might to an enemy unit in a base."
+   },
+   "tags": [
+    "Yone",
+    "Ionia",
+    "Demon"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Yone Blademaster Overnumbered",
+    "updated_on": "2026-07-10T22:44:50.747633+00:00",
+    "alternate_art": false,
+    "overnumbered": true,
+    "signature": false
+   },
+   "new": false
+  },
+  {
+   "id": "69bc5bf3d308c64675ca8a1d",
+   "name": "Annie - Stubborn",
+   "riftbound_id": "opp-010-024",
+   "tcgplayer_id": "680416",
+   "collector_number": 10,
+   "attributes": {
+    "energy": 4,
+    "might": 3,
+    "power": 1
+   },
+   "classification": {
+    "type": "Unit",
+    "supertype": "Champion",
+    "rarity": "Promo",
+    "domain": [
+     "Chaos"
+    ]
+   },
+   "text": {
+    "rich": "<p>When you play me, return a spell from your trash to your hand.</p>",
+    "plain": "When you play me, return a spell from your trash to your hand.",
+    "flavour": "I want a turn!"
+   },
+   "set": {
+    "set_id": "OPP",
+    "label": "Riftbound Organized Play Promotional Cards"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/44eb968cf0c54e75970588b69eef5c5f5ccc9b24-744x1039.png?accountingTag=RB",
+    "artist": "League Splash Team",
+    "accessibility_text": "Riftbound Unit: Annie, Stubborn. When you play me, return a spell from your trash to your hand."
+   },
+   "tags": [
+    "Annie",
+    "Noxus"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Annie Stubborn",
+    "updated_on": "2026-07-10T22:45:21.128676+00:00",
+    "alternate_art": false,
+    "overnumbered": false,
+    "signature": false
+   },
+   "new": false
+  },
+  {
+   "id": "69bc5bf4d308c64675ca8a21",
+   "name": "Lux - Crownguard",
+   "riftbound_id": "opp-014-024",
+   "tcgplayer_id": "680439",
+   "collector_number": 14,
+   "attributes": {
+    "energy": 4,
+    "might": 2,
+    "power": null
+   },
+   "classification": {
+    "type": "Unit",
+    "supertype": "Champion",
+    "rarity": "Promo",
+    "domain": [
+     "Order"
+    ]
+   },
+   "text": {
+    "rich": "<p>:rb_exhaust:: [Reaction] — [Add] :rb_energy_2:. Use only to play spells. (Abilities that add resources can't be reacted to.)</p>",
+    "plain": ":rb_exhaust:: [Reaction] — [Add] :rb_energy_2:. Use only to play spells. (Abilities that add resources can't be reacted to.)",
+    "flavour": "I've been hiding my light long enough."
+   },
+   "set": {
+    "set_id": "OPP",
+    "label": "Riftbound Organized Play Promotional Cards"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/17d0793ad495727e67bb1c94ae0e11cd4705870f-744x1039.png?accountingTag=RB",
+    "artist": "Envar Studio",
+    "accessibility_text": "Riftbound Unit: Lux, Crownguard. [T]: [Reaction] — [Add] [2]. Use only to play spells. (Abilities that add resources can't be reacted to.)"
+   },
+   "tags": [
+    "Lux",
+    "Demacia"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Lux Crownguard",
+    "updated_on": "2026-07-10T22:45:21.334361+00:00",
+    "alternate_art": false,
+    "overnumbered": false,
+    "signature": false
+   },
+   "new": false
+  },
+  {
+   "id": "69bc5bf0d308c64675ca89e4",
+   "name": "Pakaa Cub",
+   "riftbound_id": "opp-135-298",
+   "tcgplayer_id": "662913",
+   "collector_number": 135,
+   "attributes": {
+    "energy": 3,
+    "might": 3,
+    "power": null
+   },
+   "classification": {
+    "type": "Unit",
+    "supertype": null,
+    "rarity": "Promo",
+    "domain": [
+     "Body"
+    ]
+   },
+   "text": {
+    "rich": "<p>[Hidden] (Hide now for :rb_rune_rainbow: to react with later for :rb_energy_0:.)</p>",
+    "plain": "[Hidden] (Hide now for :rb_rune_rainbow: to react with later for :rb_energy_0:.)",
+    "flavour": "Oh it's so cute!\" -Common last words"
+   },
+   "set": {
+    "set_id": "OPP",
+    "label": "Riftbound Organized Play Promotional Cards"
+   },
+   "media": {
+    "image_url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/156a66d7d44165367cc5a470fb35c86f337f9429-744x1039.png?accountingTag=RB",
+    "artist": "Bubble Cat Studio",
+    "accessibility_text": "Riftbound Unit: Pakaa Cub. [Hidden] (Hide now for [A] to react with later for [0].)"
+   },
+   "tags": [
+    "Cat",
+    "Ixtal"
+   ],
+   "orientation": "portrait",
+   "metadata": {
+    "clean_name": "Pakaa Cub",
+    "updated_on": "2026-07-10T22:45:18.029861+00:00",
+    "alternate_art": false,
+    "overnumbered": false,
+    "signature": false
+   },
+   "new": false
+  }
+ ],
+ "total": 9,
+ "page": 1,
+ "size": 100,
+ "pages": 1
+}
