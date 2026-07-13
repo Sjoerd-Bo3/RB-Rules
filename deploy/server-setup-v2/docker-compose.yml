@@ -52,6 +52,9 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://riftbound-v2.bo3.dev}
+      # Agentic ask (#107): off/auto/force. Default auto sinds 2026-07-13
+      # (keuze Sjoerd); via .env terug te zetten zonder repo-wijziging.
+      ASK_AGENTIC: ${ASK_AGENTIC:-auto}
     depends_on:
       postgres:
         condition: service_healthy
