@@ -198,7 +198,9 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
 
 - **`RbRules.Domain`** — pure, unit-testbare logica zonder I/O: `BrainRef`
   (identiteitsconventie), `QuestionRouter`, `QueryRewriter`, `RrfFusion`,
-  `RuleSectionParser`, `SetLegality`, `VariantGrouping`, `ClaimMining`,
+  `RuleSectionParser`, `SetLegality`, `VariantGrouping`, `RiftboundIds`
+  (id-parse/normalisatie, #144), `RiftcodexCardMapper` (bronvorm-adapter,
+  #144), `SetCoverage` (dekking per set, #145), `ClaimMining`,
   `RelationMining`, `AgenticGate`, `SourceSeed`, `RiotCardMapper`,
   `HubDiscovery`, `PiltoverDeckPage`/`PiltoverSitemap`/`DeckCardLinker`
   (#15), `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
@@ -255,7 +257,7 @@ Navigatie in `+layout.svelte`.
 Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 `RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `markdown.ts` +
 `rbtokens.ts` (sanitize + icoon-injectie vóór `{@html}`), `answerFormat.ts`,
-`passkeys.ts`, `quota.ts`. Ontwerptokens in `app.css` (`var(--accent)` etc.).
+`passkeys.ts`, `quota.ts`, `ranges.ts` (compacte reeksweergave, #145). Ontwerptokens in `app.css` (`var(--accent)` etc.).
 
 ### Datastores
 

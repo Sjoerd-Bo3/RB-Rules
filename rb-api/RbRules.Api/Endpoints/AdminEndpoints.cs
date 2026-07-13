@@ -387,6 +387,12 @@ public static class AdminEndpoints
                 string? period, int? page, AdminOverviewService overview) =>
             Results.Ok(await overview.UsersAsync(period, page ?? 1)));
 
+        // Set-dekking (#145): per set de aanwezige én exact ontbrekende
+        // basisnummers, afgeleid uit de riftbound-id's zelf ("ogn-074-298" =
+        // 74 van 298). Vers berekend bij elke aanvraag.
+        admin.MapGet("/overview/setcoverage", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.SetCoverageAsync()));
+
         // Accountbeheer (#42): blokkeren en quota bijstellen.
         admin.MapPatch("/users/{id:long}", async (long id, UserPatch patch, RbRulesDbContext db) =>
         {

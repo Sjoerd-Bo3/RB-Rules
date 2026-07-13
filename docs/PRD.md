@@ -162,6 +162,15 @@ apart in §6.
 - **Variantgroepering op basisnaam** — "Naam (Alternate Art)" telt als dezelfde
   kaart; de naamloze printing is canoniek, ook toekomstvast bij herdrukken
   (canonical-flip). Alleen canonieke printings gaan de graph in.
+- **Bronvorm-normalisatie (riftcodex)** — de kaart-sync normaliseert
+  riftcodex-vormen bij binnenkomst naar de Riot-gallery-vorm: ster-id's
+  ("sfd-239\*-221" → "sfd-239-star-221") en streepjes-namen ("Soraka -
+  Wanderer" → "Soraka, Wanderer" — alleen waar de komma-basisnaam al als
+  kaart bekend is; bij conflict op dezelfde printing wint de bestaande
+  Riot-naam). Een idempotente reparatiestap in de sync voegt eerder
+  ontstane dubbelen samen op (set, collector-nummer, variant-suffix) en
+  hangt alle verwijzingen (bans, errata, interacties, rulings, relaties,
+  claims, variant-verwijzingen) mee om; run_log meldt hoeveel (#144).
 - **Kaarttekst-icoontokens** — tokens als `:rb_energy_1:` renderen als échte
   iconen (`$lib/rbtokens.ts`), veilig ge-escaped vóór injectie.
 
@@ -248,7 +257,15 @@ apart in §6.
 - **Aanklikbare status-tegels** — elke teller opent een overzichtspagina.
   *Route* `/admin/overview/[kind]` · *endpoints* `/api/admin/overview/{cards,
   rulechunks, bans, errata, interactions, changes, claims, proposals, relations,
-  users, gaps}`.
+  users, gaps, setcoverage}`.
+- **Set-dekking** — tegel + overzichtspagina: per set het basistotaal,
+  aanwezige én exact ontbrekende kaartnummers (compacte reeksweergave,
+  bv. "12, 45–47, 203"), dekking %, variantentelling, afwijkende
+  bron-totalen en laatste sync — allemaal afgeleid uit de riftbound-id's
+  zelf ("ogn-074-298" = nr. 74 van 298). Onvolledige sets verschijnen
+  bovendien als signaalregel in het kennis-gaten-rapport ("set X mist N
+  nummers", met doorklik). *Route* `/admin/overview/setdekking` ·
+  *endpoint* `/api/admin/overview/setcoverage` (#145).
 - **Reviewqueues** — claims, relaties (+ kandidaat-kinds), mechaniek-kandidaten
   en bronvoorstellen accepteren/verwerpen, mét het bewijs per keuze (#123).
   *Endpoints* o.a. `/api/admin/claims/{id}/accept|reject`,
@@ -395,6 +412,10 @@ openstaande PR.
   — controleerbaarheid als kwaliteitsmaat; sinds #143 mét het definitieve
   antwoord en de gespreksgeschiedenis, zodat route én uitkomst samen te
   beoordelen zijn.
+- **Set-dekking** (`/api/admin/overview/setcoverage`, #145): per set het
+  aandeel aanwezige basisnummers en de exacte ontbrekende nummers — meet of
+  de kaartenbank compleet is in plaats van het aan te nemen; onvolledige
+  sets zijn een signaal in het kennis-gaten-rapport.
 
 **Zinnige volgende metrieken**
 - **Dekking**: aandeel `/ask`-antwoorden met een "Zeker/Redelijk zeker"-label

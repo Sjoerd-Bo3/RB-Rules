@@ -267,6 +267,11 @@
 					<span class="num">→</span>
 					<span class="lbl">Kennis-gaten</span>
 				</a>
+				<!-- Rapport (#145): per set aanwezige en ontbrekende nummers. -->
+				<a class="tile panel" href="/admin/overview/setdekking">
+					<span class="num">→</span>
+					<span class="lbl">Set-dekking</span>
+				</a>
 			</div>
 		{/if}
 

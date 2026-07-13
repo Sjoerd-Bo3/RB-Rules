@@ -110,6 +110,16 @@ public record AskTraceTurn(string Question, string Answer);
 public record AskTraceDetail(
     long Id, string? Answer, IReadOnlyList<AskTraceTurn> History);
 
+/// <summary>Set-dekking per set (#145): dekking uit de id's (SetCoverage) +
+/// setmetadata uit card_set. MissingNumbers is de exacte lijst — de UI maakt
+/// er een compacte reeksweergave van.</summary>
+public record SetCoverageOverviewItem(
+    string SetId, string Name, DateOnly? PublishedOn, DateTimeOffset? SyncedAt,
+    int? BaseTotal, int Present, IReadOnlyList<int> MissingNumbers, int Variants,
+    IReadOnlyList<SetTotalDeviation> TotalDeviations);
+public record SetCoverageOverview(
+    int Sets, int Incomplete, IReadOnlyList<SetCoverageOverviewItem> Items);
+
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
 /// server-side gepagineerd waar lijsten groot zijn.</summary>
@@ -583,5 +593,31 @@ public class AdminOverviewService(RbRulesDbContext db)
         {
             return [];
         }
+    }
+
+    /// <summary>Set-dekking (#145): per set welke basisnummers we hebben en
+    /// wélke ontbreken — exact afgeleid uit de riftbound-id's zelf (pure
+    /// aggregatie in SetCoverage). Setnaam/releasedatum/laatste sync komen
+    /// uit card_set; sets die alleen als id-prefix bestaan (Riot-fallback
+    /// zonder setregistratie) vallen terug op de set-code.</summary>
+    public async Task<SetCoverageOverview> SetCoverageAsync()
+    {
+        var ids = await db.Cards.AsNoTracking()
+            .Select(c => c.RiftboundId)
+            .ToListAsync();
+        var sets = await db.CardSets.AsNoTracking()
+            .ToDictionaryAsync(s => s.SetId);
+
+        var items = SetCoverage.Aggregate(ids)
+            .Select(r =>
+            {
+                var set = sets.GetValueOrDefault(r.SetId);
+                return new SetCoverageOverviewItem(
+                    r.SetId, set?.Name ?? r.SetId, set?.PublishedOn, set?.SyncedAt,
+                    r.BaseTotal, r.Present, r.MissingNumbers, r.Variants,
+                    r.TotalDeviations);
+            })
+            .ToList();
+        return new(items.Count, items.Count(i => i.MissingNumbers.Count > 0), items);
     }
 }

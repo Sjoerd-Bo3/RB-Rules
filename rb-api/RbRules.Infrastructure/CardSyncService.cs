@@ -5,11 +5,26 @@ using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
 
-public record CardSyncResult(int Sets, int Cards, string Source);
+public record CardSyncResult(
+    int Sets, int Cards, string Source,
+    int MergedDuplicates = 0, int NormalizedIds = 0, int NormalizedNames = 0)
+{
+    /// <summary>Reparatie-naslag voor run_log/job-detail (#144); leeg als er
+    /// niets te repareren viel.</summary>
+    public string RepairSummary =>
+        MergedDuplicates + NormalizedIds + NormalizedNames == 0
+            ? ""
+            : $", reparatie: {MergedDuplicates} dubbelen samengevoegd, " +
+              $"{NormalizedIds} id-vormen en {NormalizedNames} namen genormaliseerd";
+}
+
+public record CardRepairResult(int MergedDuplicates, int NormalizedIds, int NormalizedNames);
 
 /// <summary>Kaart-sync: Riftcodex API → officiële Riot-gallery-fallback (die
 /// datacenter-IP's niet blokkeert). Idempotente upsert; nieuwe sets komen
-/// automatisch mee.</summary>
+/// automatisch mee. Riftcodex-bronvormen (ster-id's, streepjes-namen) worden
+/// bij binnenkomst genormaliseerd naar de Riot-vorm (#144), en een vaste
+/// reparatiestap voegt eerder ontstane dubbelen samen.</summary>
 public class CardSyncService(RbRulesDbContext db, HttpClient http)
 {
     private const string RiftcodexBase = "https://api.riftcodex.com";
@@ -22,6 +37,12 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         // importeerden (id zonder '-', bijv. 'VEN'/'OGN'). String-overload:
         // Npgsql vertaalt Contains(char) niet naar SQL.
         await db.Cards.Where(c => !c.RiftboundId.Contains("-")).ExecuteDeleteAsync(ct);
+
+        // Reparatie vóór de upsert (#144): de bronwissel van 2026-07-12 liet
+        // ster-id's en streepjes-namen achter; de genormaliseerde adapter
+        // hieronder zou die anders als "nieuwe" kaarten dubbel aanleggen.
+        progress?.Invoke("bronvormen repareren (riftcodex-dubbelen, #144)");
+        var repair = await RepairSourceFormsAsync(ct);
 
         var mode = Environment.GetEnvironmentVariable("CARD_SOURCE") ?? "auto";
         CardSyncResult result;
@@ -44,8 +65,199 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
 
         progress?.Invoke("varianten groeperen (alt-art/promo/herdruk)");
         await RegroupVariantsAsync(ct);
-        return result;
+        return result with
+        {
+            MergedDuplicates = repair.MergedDuplicates,
+            NormalizedIds = repair.NormalizedIds,
+            NormalizedNames = repair.NormalizedNames,
+        };
     }
+
+    /// <summary>Eenmalige reparatie van de riftcodex-bronwissel (#144), als
+    /// idempotente vaste stap in de sync (tweede run = 0 wijzigingen — géén
+    /// aparte datamigratie). Drie sporen, in één transactie:
+    /// 1. dubbelen op (set, collector-nummer, variant-suffix) — dat is id-
+    ///    gelijkheid na ster-normalisatie — samenvoegen; de rij met de
+    ///    canonieke vorm wint en alle verwijzingen hangen mee om;
+    /// 2. ster-id's zonder canonieke tegenhanger hernoemen, zodat de
+    ///    genormaliseerde adapter ze blijft vinden;
+    /// 3. streepjes-namen met bewijs terugzetten naar de komma-vorm.
+    /// Neo4j hangt niet mee om: de graph-sync verwijdert verdwenen kaart-
+    /// knopen zelf ("NOT c.id IN $ids" + DETACH DELETE) en draait in de
+    /// setrelease-keten en "Alles bijwerken" ná de kaartenstap.</summary>
+    public async Task<CardRepairResult> RepairSourceFormsAsync(CancellationToken ct = default)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var cards = await db.Cards.ToListAsync(ct);
+        var byId = cards.ToDictionary(c => c.RiftboundId);
+        var refs = new CardReferences(
+            await db.CardInteractions.ToListAsync(ct),
+            await db.SimilarityExplanations.ToListAsync(ct),
+            await db.BanEntries.Where(b => b.CardRiftboundId != null).ToListAsync(ct),
+            await db.Errata.Where(e => e.CardRiftboundId != null).ToListAsync(ct),
+            await db.Corrections.Where(c => c.Scope == "card").ToListAsync(ct),
+            await db.Relations
+                .Where(r => r.FromRef.StartsWith("card:") || r.ToRef.StartsWith("card:"))
+                .ToListAsync(ct));
+
+        var cardClaims = await db.Claims.Where(c => c.TopicType == "card").ToListAsync(ct);
+        int merged = 0, normalizedIds = 0;
+        foreach (var card in cards.Where(c => RiftboundIds.Normalize(c.RiftboundId) != c.RiftboundId))
+        {
+            var canonicalId = RiftboundIds.Normalize(card.RiftboundId);
+            if (byId.TryGetValue(canonicalId, out var winner))
+            {
+                merged++; // dubbel: de rij met de canonieke vorm wint
+                // Claims verwijzen kaarten op naam — met de rij verdwijnt ook
+                // de riftcodex-naam; hang ze om naar de winnende naam.
+                foreach (var claim in cardClaims.Where(cl => cl.TopicRef == card.Name))
+                    claim.TopicRef = winner.Name;
+            }
+            else
+            {
+                // Alleen de riftcodex-vorm bestaat: id-vorm normaliseren.
+                // RiftboundId is de sleutel — dus kopie erbij, oude rij weg.
+                var moved = CopyWithId(card, canonicalId);
+                db.Cards.Add(moved);
+                byId[canonicalId] = moved;
+                normalizedIds++;
+            }
+            RepointReferences(card.RiftboundId, canonicalId, byId.Values, refs);
+            db.Cards.Remove(card);
+            byId.Remove(card.RiftboundId);
+        }
+
+        // Naamreparatie: streepjes-namen waarvoor de komma-basisnaam al als
+        // kaart bekend is (aantoonbaar dezelfde kaart). Zonder bewijs blijft
+        // de naam staan — de eerstvolgende Riot-sync is dan de waarheid.
+        var known = RiftcodexCardMapper.CommaBaseNames(byId.Values.Select(c => c.Name));
+        var normalizedNames = 0;
+        foreach (var card in byId.Values.Where(c => RiftcodexCardMapper.HasDashName(c.Name)))
+        {
+            var commaName = RiftcodexCardMapper.NormalizeName(card.Name, known);
+            if (commaName == card.Name) continue;
+            // Claims verwijzen kaarten op naam (TopicRef) — mee omhangen.
+            foreach (var claim in cardClaims.Where(cl => cl.TopicRef == card.Name))
+                claim.TopicRef = commaName;
+            card.Name = commaName;
+            // De naam zit in de embeddingtekst (CardText.Compose):
+            // leegmaken zodat de embed-pijplijn de kaart opnieuw oppakt.
+            card.Embedding = null;
+            card.EmbeddingModel = null;
+            normalizedNames++;
+        }
+
+        if (merged + normalizedIds + normalizedNames > 0)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "cards", Ref = "bronvorm-reparatie", Status = "ok",
+                Detail = $"{merged} dubbelen samengevoegd, {normalizedIds} id-vormen " +
+                         $"en {normalizedNames} namen genormaliseerd (#144)",
+            });
+        }
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return new(merged, normalizedIds, normalizedNames);
+    }
+
+    /// <summary>Alle tabellen die op riftbound_id (of kaartnaam) verwijzen —
+    /// één keer geladen, zodat de reparatie zonder query-per-rij omhangt.</summary>
+    private sealed record CardReferences(
+        List<CardInteraction> Interactions,
+        List<SimilarityExplanation> Explanations,
+        List<BanEntry> Bans,
+        List<Erratum> Errata,
+        List<Correction> Corrections,
+        List<Relation> Relations)
+    {
+        public HashSet<(string, string)> InteractionPairs { get; } =
+            [.. Interactions.Select(i => (i.CardAId, i.CardBId))];
+        public HashSet<(string, string)> ExplanationPairs { get; } =
+            [.. Explanations.Select(e => (e.CardAId, e.CardBId))];
+        public HashSet<(string, string, string)> RelationKeys { get; } =
+            [.. Relations.Select(r => (r.FromRef, r.ToRef, r.Kind))];
+    }
+
+    private void RepointReferences(
+        string oldId, string newId, IEnumerable<Card> cards, CardReferences refs)
+    {
+        foreach (var c in cards.Where(c => c.VariantOf == oldId))
+            c.VariantOf = c.RiftboundId == newId ? null : newId;
+
+        foreach (var b in refs.Bans.Where(b => b.CardRiftboundId == oldId))
+            b.CardRiftboundId = newId;
+        foreach (var e in refs.Errata.Where(e => e.CardRiftboundId == oldId))
+            e.CardRiftboundId = newId;
+        foreach (var c in refs.Corrections.Where(c => c.Ref == oldId))
+            c.Ref = newId;
+
+        // Interactie- en uitlegparen zijn geordend en uniek: her-punten kan
+        // botsen met een bestaand paar of tot een zelf-paar leiden — dan
+        // vervalt de rij (het canonieke paar bestaat al of is betekenisloos).
+        foreach (var i in refs.Interactions
+                     .Where(i => i.CardAId == oldId || i.CardBId == oldId).ToList())
+        {
+            refs.InteractionPairs.Remove((i.CardAId, i.CardBId));
+            var pair = CardText.OrderedPair(
+                i.CardAId == oldId ? newId : i.CardAId,
+                i.CardBId == oldId ? newId : i.CardBId);
+            if (pair.A == pair.B || !refs.InteractionPairs.Add(pair))
+            {
+                db.CardInteractions.Remove(i);
+                refs.Interactions.Remove(i);
+                continue;
+            }
+            (i.CardAId, i.CardBId) = pair;
+        }
+        foreach (var e in refs.Explanations
+                     .Where(e => e.CardAId == oldId || e.CardBId == oldId).ToList())
+        {
+            refs.ExplanationPairs.Remove((e.CardAId, e.CardBId));
+            var pair = CardText.OrderedPair(
+                e.CardAId == oldId ? newId : e.CardAId,
+                e.CardBId == oldId ? newId : e.CardBId);
+            if (pair.A == pair.B || !refs.ExplanationPairs.Add(pair))
+            {
+                db.SimilarityExplanations.Remove(e);
+                refs.Explanations.Remove(e);
+                continue;
+            }
+            (e.CardAId, e.CardBId) = pair;
+        }
+
+        // Dynamische relaties dragen kaarten als BrainRef ("card:<id>");
+        // (FromRef, ToRef, Kind) is uniek — botsing = rij vervalt.
+        var oldRef = BrainRef.Card(oldId).Format();
+        var newRef = BrainRef.Card(newId).Format();
+        foreach (var r in refs.Relations
+                     .Where(r => r.FromRef == oldRef || r.ToRef == oldRef).ToList())
+        {
+            refs.RelationKeys.Remove((r.FromRef, r.ToRef, r.Kind));
+            var from = r.FromRef == oldRef ? newRef : r.FromRef;
+            var to = r.ToRef == oldRef ? newRef : r.ToRef;
+            if (from == to || !refs.RelationKeys.Add((from, to, r.Kind)))
+            {
+                db.Relations.Remove(r);
+                refs.Relations.Remove(r);
+                continue;
+            }
+            (r.FromRef, r.ToRef) = (from, to);
+        }
+    }
+
+    private static Card CopyWithId(Card c, string newId) => new()
+    {
+        RiftboundId = newId,
+        Name = c.Name, Type = c.Type, Supertype = c.Supertype, Rarity = c.Rarity,
+        Domains = c.Domains, Energy = c.Energy, Might = c.Might, Power = c.Power,
+        SetId = c.SetId, SetLabel = c.SetLabel, CollectorNumber = c.CollectorNumber,
+        TextPlain = c.TextPlain, ImageUrl = c.ImageUrl, Tags = c.Tags,
+        Mechanics = c.Mechanics, Triggers = c.Triggers, Effects = c.Effects,
+        Embedding = c.Embedding, EmbeddingModel = c.EmbeddingModel,
+        VariantOf = c.VariantOf, UpdatedAt = c.UpdatedAt,
+    };
 
     /// <summary>Groepeert printings van dezelfde kaart: één canonieke kaart,
     /// de rest (alt-art/showcase/promo/herdruk) verwijst ernaar via VariantOf.
@@ -80,6 +292,10 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
     {
         progress?.Invoke("setlijst ophalen bij Riftcodex");
         var existing = await LoadExistingAsync(ct);
+        // Bewijs voor naamnormalisatie (#144): welke komma-basisnamen kennen
+        // we al — alleen dán mag "Naam - Epithet" de komma-vorm worden.
+        var knownCommaNames = RiftcodexCardMapper.CommaBaseNames(
+            existing.Values.Select(c => c.Name));
         var setsNode = await GetJsonAsync($"{RiftcodexBase}/sets?page=1&size=100", ct);
         var sets = AsList(setsNode);
         var setIds = new List<string>();
@@ -104,9 +320,17 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
                 if (items.Count == 0) break;
                 foreach (var c in items.OfType<JsonObject>())
                 {
-                    var card = MapRiftcodexCard(c, setId);
+                    var card = RiftcodexCardMapper.MapCard(c, setId);
                     if (card is not null)
                     {
+                        // Een bestaande naam wint altijd (ook échte Riot-
+                        // streepjesnamen zoals de OGS-starters — anders
+                        // flip-flopt de naam per bronwissel); riftcodex vult
+                        // alleen gaten, zo mogelijk genormaliseerd. Dash-
+                        // artefacten herstelt RepairSourceFormsAsync.
+                        card.Name = RiftcodexCardMapper.ResolveName(
+                            existing.TryGetValue(card.RiftboundId, out var have) ? have.Name : null,
+                            card.Name, knownCommaNames);
                         await UpsertCardAsync(card, existing, ct);
                         total++;
                     }
@@ -142,34 +366,6 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         foreach (var sid in setIds) await UpsertSetAsync(sid, sid, null, null, ct);
         await db.SaveChangesAsync(ct);
         return new(setIds.Count, cards.Count, "riot");
-    }
-
-    private static Card? MapRiftcodexCard(JsonObject c, string fallbackSetId)
-    {
-        var rid = c["riftbound_id"]?.GetValue<string>() ?? c["id"]?.GetValue<string>();
-        if (rid is null) return null;
-        return new Card
-        {
-            RiftboundId = rid,
-            Name = c["name"]?.GetValue<string>() ?? rid,
-            Type = c["classification"]?["type"]?.GetValue<string>(),
-            Supertype = c["classification"]?["supertype"]?.GetValue<string>(),
-            Rarity = c["classification"]?["rarity"]?.GetValue<string>(),
-            Domains = c["classification"]?["domain"] is JsonArray d
-                ? [.. d.Select(x => x?.GetValue<string>()).OfType<string>()]
-                : [],
-            Energy = c["attributes"]?["energy"]?.GetValue<int?>(),
-            Might = c["attributes"]?["might"]?.GetValue<int?>(),
-            Power = c["attributes"]?["power"]?.GetValue<int?>(),
-            SetId = (c["set"]?["set_id"]?.GetValue<string>() ?? fallbackSetId).ToUpperInvariant(),
-            SetLabel = c["set"]?["label"]?.GetValue<string>(),
-            CollectorNumber = c["collector_number"]?.GetValue<int?>(),
-            TextPlain = c["text"]?["plain"]?.GetValue<string>(),
-            ImageUrl = c["media"]?["image_url"]?.GetValue<string>(),
-            Tags = c["tags"] is JsonArray t
-                ? [.. t.Select(x => x?.GetValue<string>()).OfType<string>()]
-                : [],
-        };
     }
 
     private async Task UpsertCardAsync(

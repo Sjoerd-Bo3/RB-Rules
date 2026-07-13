@@ -31,6 +31,8 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	gaten: null,
 	// Piltover Archive-decks (#15): attributie + deep-link per deck.
 	decks: null,
+	// Set-dekking (#145): per set aanwezige/ontbrekende basisnummers.
+	setdekking: null,
 	// Gebruikers + kosteninzicht (#42): de chips kiezen de meetperiode.
 	gebruikers: { allowed: ['vandaag', '7d', '30d'], fallback: '7d' }
 };
@@ -99,6 +101,9 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 				return { ...base, data: await adminApi<unknown>('/api/admin/overview/gaps') };
 			case 'decks':
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/decks?page=${page}`) };
+			case 'setdekking':
+				// Set-dekking (#145): exact uit de riftbound-id's afgeleid.
+				return { ...base, data: await adminApi<unknown>('/api/admin/overview/setcoverage') };
 			case 'gebruikers': {
 				const qs = new URLSearchParams({ page: String(page), period: filter });
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/users?${qs}`) };
