@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import AnswerView from '$lib/AnswerView.svelte';
 
 	let { data, form } = $props();
 
@@ -58,6 +59,12 @@
 		ok: boolean; createdAt: string;
 	}
 
+	// Het volledige gesprek achter een trace (#143): de lijst is slank,
+	// antwoord + eerdere beurten komen lazy uit het detail-endpoint.
+	interface AskTraceTurn { question: string; answer: string }
+	interface AskTraceDetail { id: number; answer: string | null; history: AskTraceTurn[] }
+	interface TraceDetailState { loading: boolean; error: string | null; data: AskTraceDetail | null }
+
 	interface MechanicKeyword {
 		id: number; term: string; status: string; occurrences: number;
 		firstSeen: string; reviewedAt: string | null;
@@ -101,6 +108,26 @@
 		}
 	}
 	const upcoming = $derived((data.upcoming ?? []) as UpcomingSet[]);
+
+	// Lazy gesprek per trace (#143): pas fetchen bij de eerste uitklap —
+	// zelfde patroon als het keyword-bewijs hierboven; na een fout kan
+	// dicht/open het opnieuw proberen.
+	let traceDetails = $state<Record<number, TraceDetailState>>({});
+	async function loadTraceDetail(id: number) {
+		const cur = traceDetails[id];
+		if (cur?.loading || cur?.data) return;
+		traceDetails[id] = { loading: true, error: null, data: null };
+		try {
+			const r = await fetch(`/admin/asktraces/${id}`);
+			if (!r.ok) throw new Error(`status ${r.status}`);
+			traceDetails[id] = { loading: false, error: null, data: await r.json() };
+		} catch {
+			traceDetails[id] = {
+				loading: false, data: null,
+				error: 'Gesprek laden mislukt — klap opnieuw uit om het nog eens te proberen'
+			};
+		}
+	}
 
 	interface KnowledgeDoc {
 		id: number; kind: string; topic: string; title: string; body: string;
@@ -401,17 +428,63 @@
 			{/each}
 		{/if}
 
-		<!-- Vraag-traces (#40): denkstappen van de ask-pipeline -->
+		<!-- Vraag-traces (#40): denkstappen van de ask-pipeline; uitklappen
+		     laadt het volledige gesprek (#143) lazy uit het detail-endpoint -->
 		{#if askTraces.length}
-			<h2>Vraag-traces <span class="meta">(laatste {askTraces.length} — de route die elke vraag door de pipeline nam)</span></h2>
+			<h2>Vraag-traces <span class="meta">(laatste {askTraces.length} — de route die elke vraag door de pipeline nam, met het volledige gesprek)</span></h2>
 			{#each askTraces as t (t.id)}
-				<details class="trace panel">
+				{@const detail = traceDetails[t.id]}
+				<details class="trace panel" ontoggle={(e) => { if (e.currentTarget.open) loadTraceDetail(t.id); }}>
 					<summary>
 						<span class="badge {t.ok ? 'ok-b' : 'err'}">{t.questionType ?? '?'}</span>
 						{#if t.agentic}<span class="badge warn-b">agentic</span>{/if}
 						<span class="trace-q">{t.question}</span>
 						<span class="meta">{(t.durationMs / 1000).toFixed(1)}s{t.hadImage ? ' · foto' : ''} · {new Date(t.createdAt).toLocaleTimeString('nl-NL')}</span>
 					</summary>
+					<!-- Chatweergave (#143): eerdere beurten → vraag → brein-
+					     stappen op hun plek in de flow → definitieve antwoord,
+					     gerenderd zoals /ask hem toont (AnswerView saneert). -->
+					<div class="chat">
+						{#if detail?.loading}
+							<p class="meta">Gesprek laden…</p>
+						{:else if detail?.error}
+							<p class="warn">{detail.error}</p>
+						{/if}
+						{#if detail?.data}
+							{#each detail.data.history as turn, i (i)}
+								<div class="chat-q">
+									<span class="chat-label">Eerdere vraag</span>
+									<p class="chat-question">{turn.question}</p>
+								</div>
+								<div class="chat-a">
+									<span class="chat-label">Eerder antwoord</span>
+									<AnswerView answer={turn.answer} />
+								</div>
+							{/each}
+						{/if}
+						<div class="chat-q">
+							<span class="chat-label">Vraag</span>
+							<p class="chat-question">{t.question}</p>
+						</div>
+						<!-- Agentic ask (#107): de brein-stappen van de agent —
+						     tussen vraag en antwoord, waar ze in de flow zaten -->
+						{#if t.agentic}
+							<div class="chat-a">
+								<span class="chat-label">Brein-stappen</span>
+								<p class="brain-steps">{t.brainSteps || '—'}</p>
+							</div>
+						{/if}
+						{#if detail?.data}
+							<div class="chat-a">
+								<span class="chat-label">Antwoord</span>
+								{#if detail.data.answer}
+									<AnswerView answer={detail.data.answer} />
+								{:else}
+									<p class="meta">Voor deze trace is geen antwoord opgeslagen — hij is van vóór het gesprek-in-de-trace.</p>
+								{/if}
+							</div>
+						{/if}
+					</div>
 					<dl>
 						<dt>Router</dt>
 						<dd>type {t.questionType} · bron-bias {t.sourceBias ?? 'geen'} · kaartnaam herkend: {t.mentionsCard ? 'ja' : 'nee'}{t.mechanicMatches ? ` · mechanieken: ${t.mechanicMatches}` : ''}</dd>
@@ -422,12 +495,6 @@
 						<!-- Kennislagen (#51): welke lagen deden mee in de prompt -->
 						<dt>Kennislagen</dt>
 						<dd>primer: {t.primerDocs || '—'} · community: {t.communityClaims || '—'}</dd>
-						<!-- Agentic ask (#107): de brein-stappen van de agent — dezelfde
-						     controleerbaarheid als de denkstappen hierboven -->
-						{#if t.agentic}
-							<dt>Brein-stappen</dt>
-							<dd class="brain-steps">{t.brainSteps || '—'}</dd>
-						{/if}
 						<dt>Overig</dt>
 						<dd>{t.verifiedRulings} geverifieerde rulings · model {t.model} · {t.ok ? 'geslaagd' : 'AI niet beschikbaar'}</dd>
 					</dl>
@@ -503,6 +570,22 @@
 	.trace { padding: 10px 14px; margin-bottom: 6px; }
 	.trace summary { cursor: pointer; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 	.trace-q { flex: 1; min-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	/* Chatweergave in de trace-uitklap (#143): vraag als eigen blok, het
+	   antwoord met een gesprekslijn ervoor; alles mag breken op 390px. */
+	.chat { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 4px; }
+	.chat-label {
+		display: block; color: var(--muted); font-size: 0.75rem;
+		text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;
+	}
+	.chat-q {
+		background: var(--surface-deep); border: 1px solid var(--border);
+		border-radius: 10px; padding: 10px 14px;
+	}
+	.chat-question { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+	.chat-a {
+		border-left: 2px solid var(--border); padding-left: 12px;
+		min-width: 0; overflow-wrap: anywhere;
+	}
 	.trace dl { margin: 10px 0 2px; }
 	.trace dt { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 8px; }
 	.trace dd { margin: 2px 0 0; font-size: 0.9rem; }
