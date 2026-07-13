@@ -66,6 +66,11 @@ public record RelationOverview(
     IReadOnlyList<RelationKindOverviewItem> Kinds,
     IReadOnlyList<RelationOverviewItem> Items);
 
+public record DeckOverviewItem(
+    long Id, string PaId, string? Name, string[] Domains, int Cards, int UnknownCards,
+    int Views, int Likes, string SourceUrl, DateTimeOffset? PaUpdatedAt,
+    DateTimeOffset FetchedAt);
+
 public record ProposalOverviewItem(
     long Id, string Url, string Name, string Type, string Motivation,
     string Status, DateTimeOffset FoundAt, DateTimeOffset? ReviewedAt);
@@ -376,6 +381,41 @@ public class AdminOverviewService(RbRulesDbContext db)
                 r.ReviewNote, r.ArchivedAt, r.DetectedAt))
             .ToList();
         return new(total, page, PageSize, statusCounts, archived, kinds, items);
+    }
+
+    /// <summary>Piltover Archive-decks (#15): recentst op PA bijgewerkt eerst,
+    /// met kaartaantallen per deck in een tweede stap (Interactions-patroon —
+    /// geen join over alle deck_card-rijen). UnknownCards telt regels zonder
+    /// kaartkoppeling: het beheersignaal dat de gallery achterloopt op PA.</summary>
+    public async Task<Paged<DeckOverviewItem>> DecksAsync(int page)
+    {
+        page = ClampPage(page);
+        var total = await db.Decks.CountAsync();
+        var rows = await db.Decks.AsNoTracking()
+            .OrderByDescending(d => d.PaUpdatedAt ?? d.FetchedAt).ThenBy(d => d.Id)
+            .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
+            .ToListAsync();
+
+        var ids = rows.Select(d => d.Id).ToList();
+        var counts = (await db.DeckCards.AsNoTracking()
+                .Where(c => ids.Contains(c.DeckId))
+                .GroupBy(c => c.DeckId)
+                .Select(g => new
+                {
+                    g.Key,
+                    Cards = g.Sum(c => c.Quantity),
+                    Unknown = g.Count(c => c.CanonicalRiftboundId == null),
+                })
+                .ToListAsync())
+            .ToDictionary(c => c.Key);
+
+        var items = rows.Select(d => new DeckOverviewItem(
+                d.Id, d.PaId, d.Name, d.Domains,
+                counts.TryGetValue(d.Id, out var c) ? c.Cards : 0,
+                counts.TryGetValue(d.Id, out var u) ? u.Unknown : 0,
+                d.Views, d.Likes, d.SourceUrl, d.PaUpdatedAt, d.FetchedAt))
+            .ToList();
+        return new(total, page, PageSize, items);
     }
 
     /// <summary>Bronvoorstellen uit de scout (#63): status-chips + de

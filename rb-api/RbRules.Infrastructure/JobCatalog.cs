@@ -53,6 +53,11 @@ public static class JobCatalog
             // Evolutie-raamwerk (#52): de volledige set-release-keten
             // (sync -> nieuwe mechanieken -> embeddings -> graph -> primer).
             new("setrelease", SetReleaseAsync),
+            // Piltover Archive-decks (#15): publieke deck-pagina's via de
+            // sitemap, throttled en gecapt per run — bewust géén stap in de
+            // "alles"-keten (een backfill-run duurt met de netiquette-throttle
+            // tot ~10 minuten en heeft geen volgorde-afhankelijkheid).
+            new("decks", DecksAsync),
         }.ToDictionary(j => j.Name);
 
     private static async Task<string> RunAllAsync(
@@ -236,4 +241,12 @@ public static class JobCatalog
     private static Task<string> SetReleaseAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct) =>
         sp.GetRequiredService<SetReleaseService>().RunChainAsync(report, ct);
+
+    private static async Task<string> DecksAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<DeckIngestService>()
+            .RunAsync(progress: report, ct: ct);
+        return r.Message;
+    }
 }
