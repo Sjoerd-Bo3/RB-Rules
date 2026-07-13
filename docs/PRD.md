@@ -257,7 +257,15 @@ apart in §6.
 - **Aanklikbare status-tegels** — elke teller opent een overzichtspagina.
   *Route* `/admin/overview/[kind]` · *endpoints* `/api/admin/overview/{cards,
   rulechunks, bans, errata, interactions, changes, claims, proposals, relations,
-  users, gaps}`.
+  users, gaps, setcoverage}`.
+- **Set-dekking** — tegel + overzichtspagina: per set het basistotaal,
+  aanwezige én exact ontbrekende kaartnummers (compacte reeksweergave,
+  bv. "12, 45–47, 203"), dekking %, variantentelling, afwijkende
+  bron-totalen en laatste sync — allemaal afgeleid uit de riftbound-id's
+  zelf ("ogn-074-298" = nr. 74 van 298). Onvolledige sets verschijnen
+  bovendien als signaalregel in het kennis-gaten-rapport ("set X mist N
+  nummers", met doorklik). *Route* `/admin/overview/setdekking` ·
+  *endpoint* `/api/admin/overview/setcoverage` (#145).
 - **Reviewqueues** — claims, relaties (+ kandidaat-kinds), mechaniek-kandidaten
   en bronvoorstellen accepteren/verwerpen, mét het bewijs per keuze (#123).
   *Endpoints* o.a. `/api/admin/claims/{id}/accept|reject`,
@@ -404,6 +412,10 @@ openstaande PR.
   — controleerbaarheid als kwaliteitsmaat; sinds #143 mét het definitieve
   antwoord en de gespreksgeschiedenis, zodat route én uitkomst samen te
   beoordelen zijn.
+- **Set-dekking** (`/api/admin/overview/setcoverage`, #145): per set het
+  aandeel aanwezige basisnummers en de exacte ontbrekende nummers — meet of
+  de kaartenbank compleet is in plaats van het aan te nemen; onvolledige
+  sets zijn een signaal in het kennis-gaten-rapport.
 
 **Zinnige volgende metrieken**
 - **Dekking**: aandeel `/ask`-antwoorden met een "Zeker/Redelijk zeker"-label

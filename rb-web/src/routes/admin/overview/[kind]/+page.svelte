@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { compactRanges } from '$lib/ranges';
 
 	let { data, form } = $props();
 
@@ -76,6 +77,15 @@
 	}
 	interface ProposalStatusCount { status: string; count: number; }
 	interface ProposalOverview extends Paged<ProposalItem> { statusCounts: ProposalStatusCount[]; }
+	// Set-dekking (#145): exact uit de riftbound-id's afgeleid; missingNumbers
+	// is de exacte lijst, de weergave vouwt hem compact (compactRanges).
+	interface SetTotalDeviation { total: number; count: number; }
+	interface SetCoverageItem {
+		setId: string; name: string; publishedOn: string | null; syncedAt: string | null;
+		baseTotal: number | null; present: number; missingNumbers: number[];
+		variants: number; totalDeviations: SetTotalDeviation[];
+	}
+	interface SetCoverageOverview { sets: number; incomplete: number; items: SetCoverageItem[]; }
 	interface GapCoverage {
 		cards: number; cardsWithoutEmbedding: number; cardsWithoutMechanics: number;
 		ruleChunks: number; ruleChunksWithoutEmbedding: number;
@@ -92,9 +102,10 @@
 	interface GapDriftEntry { label: string; postgres: number; graph: number; delta: number; }
 	interface GapDrift { graphAvailable: boolean; detail: string | null; entries: GapDriftEntry[]; }
 	interface GapAgingSignal { kind: string; title: string; reason: string; at: string; }
+	interface GapSetCoverageSignal { setId: string; name: string; missing: number; baseTotal: number; }
 	interface GapsReport {
 		coverage: GapCoverage; questions: GapQuestion[]; sources: GapSource[]; drift: GapDrift;
-		aging: GapAgingSignal[];
+		aging: GapAgingSignal[]; setCoverage: GapSetCoverageSignal[];
 	}
 	// Piltover Archive-decks (#15): attributie per deck via sourceUrl;
 	// unknownCards = kaartregels zonder koppeling aan onze kaarten.
@@ -134,6 +145,7 @@
 		voorstellen: { title: 'Bronvoorstellen', sub: 'webvondsten van de scout — accepteren zet de bron uitgeschakeld in het register, aanzetten gaat daarna via de bronnen-tabel; standaard staan hier alleen de nog te beoordelen vondsten' },
 		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' },
 		decks: { title: 'Decks', sub: 'community-decks van Piltover Archive, met bronvermelding en deep-link terug — wij bouwen bewust geen eigen deckbuilder (#15)' },
+		setdekking: { title: 'Set-dekking', sub: 'per set welke kaartnummers we hebben en wélke exact ontbreken — afgeleid uit de riftbound-id\'s zelf ("ogn-074-298" = nr. 74 van 298)' },
 		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — tokentotalen per pad en per account zijn het kosteninzicht; quota en blokkade zijn hier bij te stellen' }
 	};
 	const meta = $derived(TITLES[data.kind]);
@@ -190,6 +202,7 @@
 
 	const gaps = $derived(data.kind === 'gaten' ? (data.data as GapsReport | null) : null);
 	const decks = $derived(data.kind === 'decks' ? (data.data as Paged<DeckItem> | null) : null);
+	const coverage = $derived(data.kind === 'setdekking' ? (data.data as SetCoverageOverview | null) : null);
 	const users = $derived(data.kind === 'gebruikers' ? (data.data as UserOverview | null) : null);
 
 	// Meetperiode voor het gebruikers-overzicht (#42): chip-label per waarde.
@@ -798,6 +811,55 @@
 			{/if}
 		{/if}
 
+		<!-- Set-dekking (#145): status = kleur + tekst; de ontbrekende nummers
+		     compact als reeksen ("12, 45–47, 203"), de API levert de exacte lijst. -->
+		{#if coverage}
+			<p class="meta count">{coverage.sets} sets · {coverage.incomplete === 0 ? 'alles compleet' : `${coverage.incomplete} onvolledig`}</p>
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>Set</th><th>Status</th><th>Basistotaal</th><th>Aanwezig</th>
+							<th>Dekking</th><th>Ontbrekende nummers</th><th>Varianten</th><th>Laatste sync</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each coverage.items as s (s.setId)}
+							<tr>
+								<td>
+									<strong>{s.name}</strong><br />
+									<span class="meta">{s.setId}{s.publishedOn ? ` · release ${fmtDate(s.publishedOn)}` : ''}</span>
+								</td>
+								<td>
+									{#if s.baseTotal === null}
+										<span class="badge mute">geen basistotaal</span>
+									{:else if s.missingNumbers.length === 0}
+										<span class="badge ok-b">compleet</span>
+									{:else}
+										<span class="badge warn-b">{s.missingNumbers.length} {s.missingNumbers.length === 1 ? 'nummer ontbreekt' : 'nummers ontbreken'}</span>
+									{/if}
+								</td>
+								<td class="meta">{s.baseTotal ?? '—'}</td>
+								<td class="meta">{s.present}</td>
+								<td class="meta">{s.baseTotal ? `${Math.round((s.present / s.baseTotal) * 100)}%` : '—'}</td>
+								<td class="missing">
+									<span class="meta">{s.missingNumbers.length ? compactRanges(s.missingNumbers) : '—'}</span>
+									{#if s.totalDeviations.length}
+										<br /><span class="meta">afwijkend totaal in bron: {s.totalDeviations.map((d) => `${d.total} (${d.count} ${d.count === 1 ? 'kaart' : 'kaarten'})`).join(', ')}</span>
+									{/if}
+								</td>
+								<td class="meta">{s.variants}</td>
+								<td class="meta">{fmtDate(s.syncedAt)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			{#if !coverage.items.length}
+				<p class="meta">Nog geen kaarten in de database — draai eerst de kaarten-sync in het beheer.</p>
+			{/if}
+		{/if}
+
 		<!-- Kennis-gaten-rapport (#52) -->
 		{#if gaps}
 			<h2 class="gap-h">Dekking</h2>
@@ -862,6 +924,26 @@
 								<span class="badge warn-b">{a.kind === 'primer' ? 'primer-draft' : 'claim verouderd'}</span>
 								<strong>{a.title}</strong>
 								<span class="meta">{a.reason} · {fmtDate(a.at)}</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+
+			<!-- Set-dekking als signaal (#145, zelfde stijl als #119): één regel
+			     per onvolledige set; de exacte nummers staan op het overzicht. -->
+			<h2 class="gap-h">Set-dekking <span class="meta">(basisnummers per set uit de riftbound-id's — de exacte ontbrekende nummers staan op <a class="meta-link" href="/admin/overview/setdekking">het set-dekking-overzicht</a>)</span></h2>
+			{#if !gaps.setCoverage.length}
+				<p class="meta">Geen signalen — elke set met een basistotaal is compleet.</p>
+			{:else}
+				<div class="panel item">
+					<ul class="gap-list">
+						{#each gaps.setCoverage as s (s.setId)}
+							<li>
+								<span class="badge warn-b">onvolledig</span>
+								<strong>{s.name}</strong>
+								<span class="meta">set {s.setId} mist {s.missing} van {s.baseTotal} nummers</span>
+								<a class="meta-link" href="/admin/overview/setdekking">bekijk</a>
 							</li>
 						{/each}
 					</ul>
@@ -1051,6 +1133,9 @@
 	.nowrap { white-space: nowrap; }
 	.snippet { max-width: 560px; }
 	.mech { max-width: 260px; }
+	/* Ontbrekende-nummers-cel (#145): compacte reeksen mogen wrappen — de
+	   tabel scrolt in .table-wrap, de cel zelf blijft leesbaar begrensd. */
+	.missing { max-width: 420px; min-width: 200px; overflow-wrap: anywhere; }
 	.item { padding: 12px 14px; margin-bottom: 8px; }
 	.item-head { margin: 0 0 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 	.item-head a { color: inherit; }

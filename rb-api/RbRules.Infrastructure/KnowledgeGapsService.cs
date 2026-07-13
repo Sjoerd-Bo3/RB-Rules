@@ -28,12 +28,17 @@ public record GapDrift(
 /// (kind "primer") of een claim die verouderd raakte (kind "claim").</summary>
 public record GapAgingSignal(string Kind, string Title, string Reason, DateTimeOffset At);
 
+/// <summary>Dekkingssignaal (#145): één regel per onvolledige set — "set X
+/// mist N nummers" — met doorklik naar het set-dekking-overzicht.</summary>
+public record GapSetCoverageSignal(string SetId, string Name, int Missing, int BaseTotal);
+
 public record KnowledgeGapsReport(
     GapCoverage Coverage,
     IReadOnlyList<GapQuestion> Questions,
     IReadOnlyList<GapSourceStatus> Sources,
     GapDrift Drift,
-    IReadOnlyList<GapAgingSignal> Aging);
+    IReadOnlyList<GapAgingSignal> Aging,
+    IReadOnlyList<GapSetCoverageSignal> SetCoverage);
 
 /// <summary>Kennis-gaten-rapport (#52): meet waar de kennisbank dun is in
 /// plaats van te raden. Vier invalshoeken: dekking (kaarten zonder
@@ -140,7 +145,27 @@ public class KnowledgeGapsService(RbRulesDbContext db, BrainGraphService graph)
             questions,
             sources,
             await BuildDriftAsync(ct),
-            await BuildAgingAsync(ct));
+            await BuildAgingAsync(ct),
+            await BuildSetCoverageAsync(ct));
+    }
+
+    /// <summary>Set-dekking als gaten-signaal (#145): één regel per
+    /// onvolledige set. De volledige uitsplitsing (welke nummers precies)
+    /// staat op het set-dekking-overzicht; hier alleen het signaal —
+    /// zelfde stijl als de verouderingssignalen (#119).</summary>
+    private async Task<IReadOnlyList<GapSetCoverageSignal>> BuildSetCoverageAsync(
+        CancellationToken ct)
+    {
+        var ids = await db.Cards.AsNoTracking()
+            .Select(c => c.RiftboundId)
+            .ToListAsync(ct);
+        var names = await db.CardSets.AsNoTracking()
+            .ToDictionaryAsync(s => s.SetId, s => s.Name, ct);
+        return [.. Domain.SetCoverage.Aggregate(ids)
+            .Where(r => r.MissingNumbers.Count > 0 && r.BaseTotal is not null)
+            .Select(r => new GapSetCoverageSignal(
+                r.SetId, names.GetValueOrDefault(r.SetId, r.SetId),
+                r.MissingNumbers.Count, r.BaseTotal!.Value))];
     }
 
     /// <summary>Verouderingssignalen (#119): wat heeft een verwerkte
