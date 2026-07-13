@@ -608,12 +608,15 @@ public static class AdminEndpoints
             await vocab.CardsForKeywordAsync(id, ct: ct) is { } cards
                 ? Results.Ok(cards) : Results.NotFound());
 
-        // Denkstappen-traces van de vraag-pipeline (#40).
-        admin.MapGet("/asktraces", async (RbRulesDbContext db) =>
-            await db.AskTraces.AsNoTracking()
-                .OrderByDescending(t => t.CreatedAt)
-                .Take(30)
-                .ToListAsync());
+        // Denkstappen-traces van de vraag-pipeline (#40). De lijst is slank;
+        // het volledige gesprek (antwoord + eerdere beurten, #143) komt per
+        // trace uit het detail — lazy bij het uitklappen in het beheer.
+        admin.MapGet("/asktraces", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.AskTracesAsync()));
+        admin.MapGet("/asktraces/{id:long}", async (
+                long id, AdminOverviewService overview) =>
+            await overview.AskTraceAsync(id) is { } t
+                ? Results.Ok(t) : Results.NotFound());
 
         // Projectie zonder Embedding — 1024 floats per rij horen niet in JSON.
         admin.MapGet("/corrections", async (RbRulesDbContext db) =>

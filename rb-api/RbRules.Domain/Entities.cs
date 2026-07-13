@@ -255,6 +255,14 @@ public class AskTrace
     /// de vóór de uitval al gedane stappen plus een expliciete marker; null
     /// zolang de vraag niet escaleerde.</summary>
     public string? BrainSteps { get; set; }
+    /// <summary>Het volledige gesprek in de trace (#143): de definitieve
+    /// antwoordtekst zoals de vrager hem kreeg — op het streamingpad het
+    /// slotframe, bij AI-uitval de eerlijke UnavailableAnswer (Ok=false).</summary>
+    public string? Answer { get; set; }
+    /// <summary>JSON-snapshot van de eerdere beurten `[{question, answer}]`
+    /// (#143) — exact de gecapte doorvraag-context die als GESPREK-blok in de
+    /// prompt meeging (#41); null bij een eerste vraag.</summary>
+    public string? History { get; set; }
     public bool Ok { get; set; } = true;
     /// <summary>Ingelogde vrager (#42); null = anoniem.</summary>
     public long? UserId { get; set; }
