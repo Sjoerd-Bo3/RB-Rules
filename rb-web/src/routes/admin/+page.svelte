@@ -56,8 +56,22 @@
 		contextCards: string | null; primerDocs: string | null;
 		communityClaims: string | null; verifiedRulings: number;
 		model: string | null; hadImage: boolean; durationMs: number;
+		phaseTimings: string | null;
 		agentic: boolean; brainSteps: string | null;
 		ok: boolean; createdAt: string;
+	}
+
+	// Fase-timings (#152): compacte JSON van de trace naar één leesbare regel;
+	// kapotte of ontbrekende JSON degradeert naar een streepje.
+	function phaseLine(json: string | null): string {
+		if (!json) return '—';
+		try {
+			const p = JSON.parse(json);
+			const s = (ms: unknown) => `${((typeof ms === 'number' ? ms : 0) / 1000).toFixed(1)}s`;
+			return `rewrite ${s(p.rewriteMs)} · embed ${s(p.embedMs)} · retrieval ${s(p.retrievalMs)} · AI ${s(p.aiMs)} (fasen overlappen)`;
+		} catch {
+			return '—';
+		}
 	}
 
 	// Het volledige gesprek achter een trace (#143): de lijst is slank,
@@ -503,6 +517,9 @@
 						<!-- Kennislagen (#51): welke lagen deden mee in de prompt -->
 						<dt>Kennislagen</dt>
 						<dd>primer: {t.primerDocs || '—'} · community: {t.communityClaims || '—'}</dd>
+						<!-- Fase-timings (#152): waar zat de tijd van deze vraag -->
+						<dt>Fasen</dt>
+						<dd>{phaseLine(t.phaseTimings)}</dd>
 						<dt>Overig</dt>
 						<dd>{t.verifiedRulings} geverifieerde rulings · model {t.model} · {t.ok ? 'geslaagd' : 'AI niet beschikbaar'}</dd>
 					</dl>

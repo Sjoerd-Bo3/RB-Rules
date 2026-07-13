@@ -263,6 +263,11 @@ public class AskTrace
     /// (#143) — exact de gecapte doorvraag-context die als GESPREK-blok in de
     /// prompt meeging (#41); null bij een eerste vraag.</summary>
     public string? History { get; set; }
+    /// <summary>Per-fase-wandkloktijden als compacte JSON (#152, vorm:
+    /// <see cref="AskPhases"/>) — rewrite/embed/retrieval/AI naast de totale
+    /// DurationMs, zodat het beheer ziet wáár de tijd van een vraag zit.
+    /// Null bij traces van vóór de meting.</summary>
+    public string? PhaseTimings { get; set; }
     public bool Ok { get; set; } = true;
     /// <summary>Ingelogde vrager (#42); null = anoniem.</summary>
     public long? UserId { get; set; }

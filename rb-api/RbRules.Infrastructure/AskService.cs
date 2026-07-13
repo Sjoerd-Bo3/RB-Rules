@@ -149,6 +149,13 @@ public class AskService(
         CancellationToken ct)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        // Per-fase-metingen (#152): wandkloktijd van rewrite, embed-batches,
+        // retrieval-totaal en de afrondende AI-call — als compacte JSON op de
+        // trace (AskPhases). Puur Stopwatch-werk: kan een vraag nooit laten
+        // falen. De fasen overlappen elkaar (parallelle pipeline), dus de som
+        // is bewust niet gelijk aan de totale duur.
+        long rewriteMs = 0, embedMs = 0, retrievalMs = 0, aiMs = 0;
+        var retrievalStart = sw.ElapsedMilliseconds;
         // Doorvragen (#41): eerdere rondes gaan gecapt mee; de retrieval
         // kijkt naar follow-up + eerdere vragen zodat nieuwe relevante §'s
         // bijgeladen worden.
@@ -189,8 +196,10 @@ public class AskService(
         // Uitval of onzin-output = verwacht pad: rewrite blijft null en we
         // zoeken met de rauwe vraag(+historie), het gedrag van vóór #66.
         QueryRewrite? rewrite = null;
+        var rewriteSw = System.Diagnostics.Stopwatch.StartNew();
         var rewriteRes = await ai.AskWithUsageAsync(
             QueryRewriter.BuildPrompt(retrievalText), QueryRewriter.SystemPrompt, ct: ct);
+        rewriteMs = rewriteSw.ElapsedMilliseconds;
         usage = AddUsage(usage, rewriteRes?.Usage);
         if (rewriteRes is not null) rewrite = QueryRewriter.Parse(rewriteRes.Answer);
         var searchText = rewrite?.NormalizedQuestion ?? retrievalText;
@@ -208,6 +217,7 @@ public class AskService(
             : [searchText, .. rewrite.SearchQueries
                 .Where(q => !q.Equals(searchText, StringComparison.OrdinalIgnoreCase))];
         Vector[] queryVectors = [];
+        var embedSw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             queryVectors = await embeddings.EmbedAsync(embedTexts, ct);
@@ -222,6 +232,7 @@ public class AskService(
                 "Embedding voor /ask mislukt — vector-kanalen overgeslagen, " +
                 "degradatie naar FTS + lexicale kanalen");
         }
+        embedMs = embedSw.ElapsedMilliseconds;
         var qv = queryVectors.Length > 0 ? queryVectors[0] : null;
         var vectorLists = new List<List<(long Id, string SourceId)>>();
         foreach (var vec in queryVectors)
@@ -463,6 +474,9 @@ public class AskService(
                     .Select(s => new AskMisconceptionSource(s.Name, s.Url, s.QuoteExcerpt))])));
         }
 
+        // Alle retrieval-kanalen (incl. citatie-hydratie) zijn nu klaar (#152).
+        retrievalMs = sw.ElapsedMilliseconds - retrievalStart;
+
         // Doorvraag-gesprek (#41): eerdere rondes gecapt in de prompt.
         var historyBlock = turns.Count == 0
             ? ""
@@ -524,6 +538,9 @@ public class AskService(
         string? agenticProposals = null;
         var agentAnswered = false;
         var clientGone = false;
+        // Afrondende AI-fase (#152): bij agentic de hele agent-run (plus een
+        // eventueel vangnet), bij streaming tot en met het slotframe.
+        var aiSw = System.Diagnostics.Stopwatch.StartNew();
         if (agentic)
         {
             try
@@ -577,6 +594,7 @@ public class AskService(
             aiAnswer = single?.Answer;
             usage = AddUsage(usage, single?.Usage);
         }
+        aiMs = aiSw.ElapsedMilliseconds;
         var answer = aiAnswer ?? RbAiClient.UnavailableAnswer;
 
         // Kosten-eerlijkheid (#42, review #107): Model boekt het pad dat het
@@ -667,6 +685,11 @@ public class AskService(
                 // GESPREK-blok in de prompt meegingen.
                 Answer = answer,
                 History = SerializeHistory(turns),
+                // Per-fase-wandkloktijden (#152) — de fasen overlappen
+                // (parallelle pipeline), dus de som ≠ TotalMs.
+                PhaseTimings = new AskPhases(
+                    rewriteMs, embedMs, retrievalMs, aiMs,
+                    sw.ElapsedMilliseconds).ToJson(),
                 Ok = aiAnswer is not null,
                 UserId = userContext.User?.Id,
             });
