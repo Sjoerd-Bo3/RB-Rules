@@ -134,8 +134,9 @@ public static class BrainQuery
     /// <summary>Neo4j-label per ref-soort. Deze vaste mapping is de enige
     /// tekst die een Cypher-statement in gaat (labels zijn niet
     /// parametriseerbaar) — gebruikersinvoer komt er nooit doorheen.
-    /// Ruling heeft bewust geen graph-knoop (geverifieerde rulings leven
-    /// alleen in Postgres) → null.</summary>
+    /// Sinds #191 heeft ook een geverifieerde ruling een graph-knoop
+    /// (:Ruling); alleen Relation blijft bewust null — een dynamische
+    /// relatie (#116) is altijd een edge, nooit een eigen knoop.</summary>
     public static string? GraphLabel(BrainRefKind kind) => kind switch
     {
         BrainRefKind.Card => "Card",
@@ -149,6 +150,7 @@ public static class BrainQuery
         BrainRefKind.Set => "Set",
         BrainRefKind.Domain => "Domain",
         BrainRefKind.Tag => "Tag",
+        BrainRefKind.Ruling => "Ruling",
         _ => null,
     };
 

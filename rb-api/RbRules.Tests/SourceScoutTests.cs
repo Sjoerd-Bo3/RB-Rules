@@ -369,4 +369,22 @@ public class SourceScoutTests
     [InlineData("https://riftbound.gg/judge-faq", "https://mobalytics.gg/judge-faq")] // andere host
     public void StrongNormalizeUrl_DifferentPagesStayDifferent(string a, string b) =>
         Assert.NotEqual(SourceScout.StrongNormalizeUrl(a), SourceScout.StrongNormalizeUrl(b));
+
+    // ── UrlCandidates (#171-patroon, hergebruikt door #191 voor de
+    // FROM_SOURCE/SUPPORTED_BY-graph-matching in GraphSyncService) ────────
+
+    [Fact]
+    public void UrlCandidates_ContainsLiteralAndNormalizedForms()
+    {
+        var candidates = SourceScout.UrlCandidates("https://riftbound.gg/judge-faq/");
+        Assert.Contains("https://riftbound.gg/judge-faq/", candidates); // letterlijk
+        Assert.Contains("https://riftbound.gg/judge-faq", candidates); // genormaliseerd (geen trailing slash)
+    }
+
+    [Fact]
+    public void UrlCandidates_UrlWithoutTrailingSlash_MatchesItsOwnNormalizedForm()
+    {
+        var candidates = SourceScout.UrlCandidates("https://riftbound.gg/judge-faq");
+        Assert.Contains("https://riftbound.gg/judge-faq", candidates);
+    }
 }

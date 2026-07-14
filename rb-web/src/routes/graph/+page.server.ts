@@ -110,7 +110,7 @@ export const load: PageServerLoad = async ({ url }) => {
 					status === 404
 						? 'Deze knoop staat (nog) niet in de kennisgraaf — draai de graph-job in het beheer.'
 						: status === 400
-							? 'Deze knoopsoort heeft geen graph-buren (geverifieerde rulings leven alleen in Postgres).'
+							? 'Deze knoopsoort heeft geen graph-buren (dynamische relaties zijn altijd edges, nooit een eigen knoop).'
 							: 'Graph niet beschikbaar — buren vragen een draaiende Neo4j; de knoop zelf komt uit Postgres.';
 			}
 			brain = { node: nodeR.value, neighbors, graphError };

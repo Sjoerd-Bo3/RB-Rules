@@ -35,9 +35,11 @@ public record BrainPathResponse(string From, string To, IReadOnlyList<object> Pa
 public class BrainGraphService(IDriver driver)
 {
     /// <summary>Weergavenaam over alle knooptypes heen: elke soort heeft een
-    /// eigen "naam"-property (Card.name, Concept.title, RuleSection.code, …).</summary>
+    /// eigen "naam"-property (Card.name, Concept.title, RuleSection.code, …).
+    /// Ruling (#191) heeft geen titel — m.text (de ruling zelf) is het beste
+    /// alternatief, zelfde rol als Claim.statement.</summary>
     private const string NameCoalesce =
-        "coalesce(m.name, m.title, m.code, m.cardName, m.statement, m.label, m.changeType, toString(m.id))";
+        "coalesce(m.name, m.title, m.code, m.cardName, m.statement, m.text, m.label, m.changeType, toString(m.id))";
 
     /// <summary>Knopen per label, voor de drift-meting in het
     /// kennis-gaten-rapport (#108, docs/BRAIN.md §4). Eén query over de hele

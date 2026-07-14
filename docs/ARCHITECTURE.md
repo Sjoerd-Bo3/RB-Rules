@@ -481,7 +481,13 @@ kennislagen: `RuleSection` (+`PART_OF`), `Concept` (+`EXPLAINS`), `Claim`
 (+`ABOUT`/`SUPPORTED_BY`, alleen accepted/unreviewed), `Source`, `Erratum`
 (+`SUPERSEDES`), `Change` (+`AFFECTS`), plus de dynamische
 `RELATES_TO {kind, trust, explanation, status}`-relaties via de reviewpoort
-(`RelationProjection`). Elke knoop draagt een `ref`-property volgens de
+(`RelationProjection`). Sinds #191 ook `Ruling` (+`ABOUT`/`SUPPORTED_BY`,
+alleen `status=verified`) voor geverifieerde rulings/clarificaties —
+dezelfde ABOUT-resolutie als `Claim` (`RulingTopicMapper`, Scope→topic via
+`RulingsTopics`), gematcht op `SourceRef` t.o.v. `Source.Url`
+(`SourceScout.UrlCandidates`, gedeeld met het bron-dossier #171); `kind`
+(clarify/chat/review-note/other, uit `Provenance`) onderscheidt de
+herkomst. Elke knoop draagt een `ref`-property volgens de
 `BrainRef`-conventie. Wees-opruiming verwijdert kaarten/facetten die geen
 canonieke printing meer zijn (#57).
 

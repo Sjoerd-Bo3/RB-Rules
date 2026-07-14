@@ -2,6 +2,71 @@ using RbRules.Domain;
 
 namespace RbRules.Tests;
 
+/// <summary>Correction.Provenance → graph-"kind" (#191): onderscheidt
+/// clarify-gemined van in-chat-rulings zonder het rauwe Provenance-formaat
+/// elders te hoeven kennen.</summary>
+public class RulingKindTests
+{
+    [Theory]
+    [InlineData("clarify-mining:riftbound-rules-hub", "clarify")]
+    [InlineData("clarify-mining:x", "clarify")]
+    [InlineData("chat-ruling:admin", "chat")]
+    [InlineData("chat-ruling:user", "chat")]
+    [InlineData("review-notitie", "review-note")]
+    [InlineData("iets-onbekends", "other")]
+    [InlineData(null, "other")]
+    public void FromProvenance_MapsToGraphKind(string? provenance, string expected) =>
+        Assert.Equal(expected, RulingKind.FromProvenance(provenance));
+}
+
+/// <summary>Correction (verified ruling) → ABOUT-doel (#191): dezelfde
+/// resolutie als Claim, via het gedeelde topic-vocabulaire zodat Scope
+/// "rule_section" eerst "section" wordt. Fixture spiegelt
+/// ClaimTopicMapperTests zodat kaart/mechaniek/sectie/concept-namen
+/// herkenbaar zijn.</summary>
+public class RulingTopicMapperTests
+{
+    private static ClaimTopicMapper CreateMapper() => ClaimTopicMapper.Create(
+        cards: [("ogn-011-298", "Viktor", null)],
+        mechanics: ["Accelerate"],
+        sections: [("core-rules-pdf", "101.2")],
+        concepts: [("turn-structure", "De beurtstructuur")]);
+
+    [Fact]
+    public void Resolve_CardScope_MapsToCard() =>
+        Assert.Equal("card:ogn-011-298",
+            RulingTopicMapper.Resolve(CreateMapper(), "card", "Viktor")?.Format());
+
+    [Fact]
+    public void Resolve_RuleSectionScope_UsesStorageFormat_MapsToSection() =>
+        // "rule_section" is het Correction.Scope-opslagformaat (niet "section").
+        Assert.Equal("section:core-rules-pdf/101.2",
+            RulingTopicMapper.Resolve(CreateMapper(), "rule_section", "101.2")?.Format());
+
+    [Fact]
+    public void Resolve_MechanicScope_MapsToMechanic() =>
+        Assert.Equal("mechanic:Accelerate",
+            RulingTopicMapper.Resolve(CreateMapper(), "mechanic", "accelerate")?.Format());
+
+    [Fact]
+    public void Resolve_ConceptScope_MapsToConcept() =>
+        Assert.Equal("concept:turn-structure",
+            RulingTopicMapper.Resolve(CreateMapper(), "concept", "turn-structure")?.Format());
+
+    [Theory]
+    [InlineData("answer")]  // chat-ruling zonder anker
+    [InlineData("claim")]   // review-notitie-promotie (#124)
+    [InlineData("relation")] // idem
+    [InlineData("iets-onbekends")]
+    [InlineData(null)]
+    public void Resolve_NoAnchorScope_ReturnsNull_NoAboutEdge(string? scope) =>
+        Assert.Null(RulingTopicMapper.Resolve(CreateMapper(), scope, "wat dan ook"));
+
+    [Fact]
+    public void Resolve_UnknownReference_ReturnsNull() =>
+        Assert.Null(RulingTopicMapper.Resolve(CreateMapper(), "card", "Onbekende Kaart"));
+}
+
 public class RulingsTopicsTests
 {
     [Theory]

@@ -114,7 +114,9 @@ public class SourceDossierService(RbRulesDbContext db)
         // ── SourceUrl-koppelvorm — vergelijkingsvormen vóór de query's
         // bepalen (CONVENTIONS: eigen methodes horen niet in expression
         // trees), genormaliseerd zoals #167 dat al doet voor bron-URL's.
-        var urlCandidates = UrlCandidates(source.Url);
+        // SourceScout.UrlCandidates (Domain, #191): gedeeld met de
+        // FROM_SOURCE/SUPPORTED_BY-matching in GraphSyncService.
+        var urlCandidates = SourceScout.UrlCandidates(source.Url);
 
         var bansTotal = await db.BanEntries.AsNoTracking()
             .CountAsync(b => urlCandidates.Contains(b.SourceUrl), ct);
@@ -262,16 +264,5 @@ public class SourceDossierService(RbRulesDbContext db)
             lastScan?.Status, anyFailed, anyPending, opbrengstTotaal);
 
         return new(lastScan, followUps, status, SourceDossierCompleteness.Note(status));
-    }
-
-    /// <summary>Genormaliseerde varianten van de bron-URL om tegen SourceUrl/
-    /// SourceRef te matchen (#171: "match SourceUrl op Source.Url,
-    /// genormaliseerd") — letterlijke kandidaten vóór de query, dan een
-    /// vertaalbare <c>Contains</c> op een gesloten lijst (geen TrimEnd per
-    /// rij, dat vertaalt niet bewezen naar SQL).</summary>
-    private static HashSet<string> UrlCandidates(string url)
-    {
-        var normalized = SourceScout.NormalizeUrl(url);
-        return [url, normalized, normalized + "/"];
     }
 }
