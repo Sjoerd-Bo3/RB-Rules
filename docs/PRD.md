@@ -186,6 +186,13 @@ apart in §6.
   bestaande data (#127-patroon) — geen embeddings, geen LLM.
   *Route* `/admin` (uitklap per bron) · *endpoint*
   `GET /api/admin/sources/{id}/dossier`.
+- **Temporele precedentie** (#168) — naast gezag (`TrustTier`) telt nu ook
+  wanneer iets gepubliceerd/bijgewerkt is. `Source.PublishedAt` (uit de
+  bron-feed-artikeldatum) en `Source.UpdatedAt` (detectiemoment van een
+  échte content-wijziging) zijn zichtbaar als "geldig sinds"/"laatst
+  bijgewerkt" op de regelsectiepagina. Bij gelijk gezag beslist recency —
+  zie §4.4 voor de errata- en `/ask`-toepassing.
+  *Route* `/rules/[code]` · *endpoint* `/api/rules/section/{code}`.
 
 ### 4.2 Kaarten
 
@@ -195,7 +202,11 @@ apart in §6.
   `/api/cards/facets`, `/api/cards/search`.
 - **Kaartdetail** — het kaart-dossier: stats en tekst (met icoontokens),
   gekoppelde regels/errata, ontdekte interacties, en "similar-why" (semantische
-  uitleg waarom kaarten op elkaar lijken) met versies/varianten.
+  uitleg waarom kaarten op elkaar lijken) met versies/varianten. Bij meerdere
+  errata over dezelfde kaart (#168) wint de tekst met de hoogste
+  temporele precedentie (TrustTier, dan nieuwste `EffectiveFrom`) — die staat
+  bovenaan met "geldig sinds \<datum\>"; oudere versies blijven zichtbaar,
+  gemarkeerd als eerdere versie.
   *Route* `/cards/[id]` · *endpoints* `/api/cards/{id}`, `/api/cards/{id}/rules`,
   `/api/cards/{id}/interactions`, `/api/cards/{id}/similar`,
   `/api/cards/{id}/similar/{otherId}/explain`.
@@ -233,7 +244,10 @@ apart in §6.
   op, met de essentie in één oogopslag.
 - **Citaties & bewijs** — uitklap-citaties tonen de regel plus de ouderregel
   voor context (#39); betrokken kaarten als bewijs; widget-markers
-  `[[rule:…]]` / `[[card:…]]` worden interactieve blokken.
+  `[[rule:…]]` / `[[card:…]]` worden interactieve blokken. Elke citatie toont
+  ook "geldig sinds"/"laatst bijgewerkt \<datum\>" van haar bron (#168); bij
+  twee even gezaghebbende (gelijke TrustTier) fragmenten die in de fusie-
+  rangorde naast elkaar staan, krijgt het recentste voorrang.
 - **Board-state-foto's (vision)** — een foto meesturen; het antwoord redeneert
   over het herkende bord.
 - **Streaming + voorlezen** — het antwoord komt woord voor woord binnen
@@ -291,6 +305,15 @@ apart in §6.
 
 - **Kennispiramide** — officieel > geverifieerde rulings > primer > community >
   meta, expliciet gelabeld in de prompt en het antwoordformat.
+- **Temporele precedentie** (#168) — naast gezag (TrustTier) telt nu ook
+  recency als tie-breaker: `Precedence.Compare` (pure Domain-functie) kiest
+  bij gelijke tier de nieuwste datum, met een ontbrekende datum als oudste
+  (nooit geraden). Toegepast op de errata-resolutie (welke tekst NU geldt
+  voor een kaart, §4.2) en op de `/ask`-citatie-volgorde (§4.3). Waar een
+  nieuwere officiële errata-bron een oudere over dezelfde kaart aantoonbaar
+  overtreft, toont het errata-beheeroverzicht een kandidaat-supersede-signaal
+  (puur berekend, geen automatische verwijdering) met verwijzing naar de
+  opvolger.
 - **Game-primer** — ~12 concept-docs (beurt, resources, combat, prioriteit,
   zones, scoren, keyword-gedrag) gedistilleerd uit de regels, met draft →
   approve in beheer; altijd als achtergrondblok mee in `/ask` en read-only op
@@ -580,7 +603,10 @@ openstaande PR.
 - **Kosten per vraag**: (geschatte) kosten in euro's bovenop de tokentotalen
   van #121, als budgetbewaking naast de puur informatieve tellingen.
 - **Kennis-versheid**: doorlooptijd van set-release/erratum tot bijgewerkte
-  primer/claims (invalidatie → hertoetsing → re-review).
+  primer/claims (invalidatie → hertoetsing → re-review). De temporele
+  precedentie-datums (#168: `Source.PublishedAt`/`UpdatedAt`,
+  `Erratum.EffectiveFrom`) leveren de ruwe tijdstempels die deze metriek
+  straks berekenbaar maken — nu nog puur zichtbaar, niet geaggregeerd.
 - **Drift** (brein): aantallen per knooptype in Postgres vs. Neo4j, om een
   achterlopende projectie te meten in plaats van te raden.
 

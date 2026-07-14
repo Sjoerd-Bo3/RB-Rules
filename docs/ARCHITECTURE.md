@@ -500,6 +500,30 @@ kan rb-api eerder starten dan Postgres klaar is.
   meta) wordt in élk koppelvlak expliciet gelabeld; het antwoordformat scheidt
   "Regelbasis" van "Community-consensus" (`AskService.BasePrompt`,
   `ClaimRetrieval`).
+- **Temporele precedentie** (#168) — een tweede, orthogonale precedentie-as
+  naast trust: `Precedence.Compare<TDate>` (Domain, generiek over
+  `DateTimeOffset`/`DateOnly`) vergelijkt twee (TrustTier, datum)-sleutels —
+  TrustTier blijft primair, een ontbrekende datum sorteert als oudste (nooit
+  geraden), bij gelijke tier wint de nieuwste datum. Datums komen uit
+  bestaande bronnen zonder gokken: `Source.PublishedAt` uit de bron-feed-
+  artikeldatum (`FeedCrawlService`, alleen het AutoApprove-pad), `Source.
+  UpdatedAt` bij een échte content-wijziging (`IngestService.ScanOneAsync`,
+  zelfde detectiemoment-aanname als `Change.DetectedAt`), en `Erratum.
+  EffectiveFrom` afgeleid van de errata-bron (`UpdatedAt ?? PublishedAt`,
+  `BanErrataSyncService`). Drie toepassingen, alle bovenop bestaande
+  ordening/fusie gehangen — geen nieuw retrieval-kanaal: (1)
+  `CardDetailService.ErrataForCardAsync` kiest de NU-geldende errata-tekst
+  op volledige precedentie-sortering, met `DetectedAt` als laatste tie-break
+  zolang `EffectiveFrom` nog niet overal bekend is; (2) `AskService` past
+  `Precedence.ReorderTiedByTier` toe op de al RRF-gefuseerde citatie-lijst —
+  een stabiele tie-breaker die alleen binnen een aaneengesloten reeks van
+  gelijke TrustTier herschikt op recency, de fusie-/relevantierangorde zelf
+  blijft ongemoeid (bewust minimale AskCoreAsync-voetafdruk); `Citation`
+  draagt `PublishedAt`/`UpdatedAt` voor de "geldig sinds"/"laatst
+  bijgewerkt"-weergave; (3) `AdminOverviewService.ErrataAsync` berekent per
+  kaart met errata uit meerdere bronnen een supersede-kandidaat
+  (`SupersededByErratumId`) — puur gelezen/berekend, geen eigen status-kolom,
+  geen automatische verwijdering; het beheer toont het als signaal.
 - **Wie mag de antwoord-beïnvloedende laag schrijven** (#166) — een
   `Correction` met `Status = verified` telt direct mee in `/ask` (self-learning
   override-kanaal) en `/rulings`; wie dat rechtstreeks mag zetten is
