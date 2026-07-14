@@ -84,6 +84,39 @@ public class AskServiceBenchmarkIsolationTests
         Assert.Empty(await db.AskTraces.ToListAsync());
     }
 
+    // ── Model-sweep (#174): AskOptions.Model reist door naar rb-ai ─────
+
+    [Fact]
+    public async Task Benchmark_MetModelOverride_ReistDoorNaarDeRbAiPayload()
+    {
+        // Directe bedradingsproef (los van de sweep-servicetests): de
+        // model-override op AskOptions komt daadwerkelijk als "model"-veld
+        // in de JSON-payload naar rb-ai terecht — niet alleen door de
+        // C#-objectgraaf, maar op de wire. Zonder override (de bestaande
+        // /ask-calls) blijft "model" gewoon afwezig/null.
+        using var db = NewDb();
+        await SeedRulesAsync(db);
+        var seenModels = new List<string?>();
+        var svc = Svc(db, AiCapturingModel(seenModels, "**Oordeel:** Antwoord. [1]"));
+
+        await svc.AskAsync(Question, options: new AskOptions { Benchmark = true, Model = "claude-opus-4-8" });
+
+        Assert.Contains("claude-opus-4-8", seenModels);
+    }
+
+    [Fact]
+    public async Task ControleTest_ZonderModelOverride_GeenModelVeldOpDePayload()
+    {
+        using var db = NewDb();
+        await SeedRulesAsync(db);
+        var seenModels = new List<string?>();
+        var svc = Svc(db, AiCapturingModel(seenModels, "**Oordeel:** Antwoord. [1]"));
+
+        await svc.AskAsync(Question, options: new AskOptions { Benchmark = true });
+
+        Assert.DoesNotContain(seenModels, m => m is not null);
+    }
+
     // ── Agentic pad: relatie-terugkoppeling (#120) ─────────────────────
 
     private const string ProposalsBlock = """
@@ -249,6 +282,24 @@ public class AskServiceBenchmarkIsolationTests
     /// (rewrite én single-pass) antwoordt hetzelfde.</summary>
     private static RbAiClient Ai(string answer) => new(
         new HttpClient(new StubHandler(_ => Json(HttpStatusCode.OK, new { answer })))
+        { BaseAddress = new Uri("http://rb-ai.test") },
+        NullLogger<RbAiClient>.Instance);
+
+    /// <summary>Zelfde vaste antwoord als <see cref="Ai"/>, maar legt het
+    /// "model"-veld van élke /ask-payload vast in <paramref name="seenModels"/>
+    /// (#174: bewijs dat AskOptions.Model daadwerkelijk op de wire naar rb-ai
+    /// gaat). Synchrone body-lezing is hier veilig — geen echte netwerk-I/O.</summary>
+    private static RbAiClient AiCapturingModel(List<string?> seenModels, string answer) => new(
+        new HttpClient(new StubHandler(req =>
+        {
+            var body = req.Content is null ? "" : req.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var doc = JsonDocument.Parse(string.IsNullOrEmpty(body) ? "{}" : body);
+            seenModels.Add(
+                doc.RootElement.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.String
+                    ? m.GetString()
+                    : null);
+            return Json(HttpStatusCode.OK, new { answer });
+        }))
         { BaseAddress = new Uri("http://rb-ai.test") },
         NullLogger<RbAiClient>.Instance);
 
