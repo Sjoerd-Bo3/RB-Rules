@@ -150,8 +150,35 @@ public record BenchmarkResultOverviewItem(
     int DurationMs, long? InputTokens, long? OutputTokens);
 public record BenchmarkRunDetail(
     BenchmarkRunOverviewItem Run, IReadOnlyList<BenchmarkResultOverviewItem> Results);
+
+/// <summary>Model-sweep (#174): één (model, run_index)-rij binnen een sweep,
+/// met de tijdsmaten die BenchmarkRun zelf niet vastlegt (totaal/gemiddeld
+/// per vraag) — afgeleid uit BenchmarkResult zodat BenchmarkRun geen
+/// gedupliceerde kolommen nodig heeft.</summary>
+public record BenchmarkSweepRunItem(
+    long RunId, int RunIndex, double? ScorePercent, int KeyedCount, int CorrectCount,
+    int QuestionCount, long TotalDurationMs, double AvgDurationMs,
+    long TotalInputTokens, long TotalOutputTokens);
+
+/// <summary>Eén model binnen een sweep: beide runs naast elkaar + de
+/// consistentie-vraag uit issue #174 ("scoren de 2 runs gelijk, of was de
+/// eerste een toevalstreffer?") — true/false alleen als beide runs een
+/// score hebben (allebei gekeyde vragen), anders null ("nog niet te zeggen").</summary>
+public record BenchmarkSweepModelItem(
+    string Model, IReadOnlyList<BenchmarkSweepRunItem> Runs, bool? Consistent);
+
+/// <summary>Rij in de sweep-historie (verloop over tijd, #174) — SweepId is
+/// de UTC-starttijd in ms (BenchmarkService.RunSweepAsync), dus meteen
+/// sorteerbaar en om te zetten naar StartedAt zonder extra kolom.</summary>
+public record BenchmarkSweepSummary(
+    long SweepId, DateTimeOffset StartedAt, int ModelCount, int QuestionCount);
+
+public record BenchmarkSweepDetail(
+    long SweepId, DateTimeOffset StartedAt, IReadOnlyList<BenchmarkSweepModelItem> Models);
+
 public record BenchmarkOverview(
-    IReadOnlyList<BenchmarkRunOverviewItem> Runs, BenchmarkRunDetail? Selected);
+    IReadOnlyList<BenchmarkRunOverviewItem> Runs, BenchmarkRunDetail? Selected,
+    IReadOnlyList<BenchmarkSweepSummary> Sweeps, BenchmarkSweepDetail? SelectedSweep);
 
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
@@ -720,12 +747,18 @@ public class AdminOverviewService(RbRulesDbContext db)
         return new(items.Count, items.Count(i => i.MissingNumbers.Count > 0), items);
     }
 
-    /// <summary>Benchmark-tegel (#158): laatste 50 runs + het detail van de
-    /// gevraagde (of, zonder parameter, meest recente) run. Zonder runs is
-    /// Selected null — de UI toont dan de nette lege staat ("start de job").</summary>
-    public async Task<BenchmarkOverview> BenchmarkAsync(long? runId)
+    /// <summary>Benchmark-tegel (#158, uitgebreid met de model-sweep #174):
+    /// laatste 50 single-model runs + het detail van de gevraagde (of, zonder
+    /// parameter, meest recente) run, plús de sweep-historie en het detail
+    /// van de gevraagde (of meest recente) sweep. Sweep-runs (SweepId != null)
+    /// blijven buiten de single-run-lijst — anders verdrinkt een sweep van
+    /// N modellen × 2 die lijst in rijen die niet los bedoeld zijn. Zonder
+    /// runs/sweeps zijn Selected/SelectedSweep null — de UI toont dan de
+    /// nette lege staat ("start de job").</summary>
+    public async Task<BenchmarkOverview> BenchmarkAsync(long? runId, long? sweepId = null)
     {
         var runs = await db.BenchmarkRuns.AsNoTracking()
+            .Where(r => r.SweepId == null)
             .OrderByDescending(r => r.StartedAt)
             .Take(50)
             .Select(r => new BenchmarkRunOverviewItem(
@@ -754,6 +787,76 @@ public class AdminOverviewService(RbRulesDbContext db)
                 selected = new(run, results);
             }
         }
-        return new(runs, selected);
+
+        // Sweeps (#174): SweepId is de UTC-starttijd in ms (zie
+        // BenchmarkService.RunSweepAsync) — DESC sorteren = nieuwste eerst,
+        // en dubbelt meteen als StartedAt zonder extra kolom.
+        var sweepRuns = await db.BenchmarkRuns.AsNoTracking()
+            .Where(r => r.SweepId != null)
+            .OrderByDescending(r => r.SweepId)
+            .ToListAsync();
+        var sweeps = sweepRuns
+            .GroupBy(r => r.SweepId!.Value)
+            .OrderByDescending(g => g.Key)
+            .Select(g => new BenchmarkSweepSummary(
+                g.Key, DateTimeOffset.FromUnixTimeMilliseconds(g.Key),
+                g.Select(r => r.Model).Distinct().Count(), g.Max(r => r.QuestionCount)))
+            .ToList();
+
+        var selectedSweepId = sweepId ?? sweeps.FirstOrDefault()?.SweepId;
+        BenchmarkSweepDetail? selectedSweep = null;
+        if (selectedSweepId is { } sid)
+        {
+            var runsForSweep = sweepRuns.Where(r => r.SweepId == sid).ToList();
+            if (runsForSweep.Count > 0)
+            {
+                // Tijdsmaten (#174: "totale/gemiddelde tijd — de eerlijke
+                // tijdsvergelijking") komen uit benchmark_result, niet uit
+                // BenchmarkRun zelf — één aggregatiequery voor alle runs van
+                // deze sweep in plaats van er één per run.
+                var runIds = runsForSweep.Select(r => r.Id).ToList();
+                var aggregates = await db.BenchmarkResults.AsNoTracking()
+                    .Where(r => runIds.Contains(r.RunId))
+                    .GroupBy(r => r.RunId)
+                    .Select(g => new
+                    {
+                        RunId = g.Key,
+                        TotalDurationMs = g.Sum(x => (long)x.DurationMs),
+                        AvgDurationMs = g.Average(x => x.DurationMs),
+                        TotalInputTokens = g.Sum(x => x.InputTokens ?? 0),
+                        TotalOutputTokens = g.Sum(x => x.OutputTokens ?? 0),
+                    })
+                    .ToDictionaryAsync(x => x.RunId);
+
+                var models = runsForSweep
+                    .GroupBy(r => r.Model ?? "onbekend")
+                    .Select(g =>
+                    {
+                        var runItems = g.OrderBy(r => r.RunIndex)
+                            .Select(r =>
+                            {
+                                var agg = aggregates.GetValueOrDefault(r.Id);
+                                return new BenchmarkSweepRunItem(
+                                    r.Id, r.RunIndex ?? 0, r.ScorePercent, r.KeyedCount,
+                                    r.CorrectCount, r.QuestionCount,
+                                    agg?.TotalDurationMs ?? 0,
+                                    agg is null ? 0 : Math.Round(agg.AvgDurationMs, 0),
+                                    agg?.TotalInputTokens ?? 0, agg?.TotalOutputTokens ?? 0);
+                            })
+                            .ToList();
+                        // Consistentie (issue-eis): alleen te bepalen met
+                        // precies 2 gescoorde runs — anders "nog niet te zeggen".
+                        bool? consistent = runItems.Count == 2
+                            && runItems[0].ScorePercent is { } s0 && runItems[1].ScorePercent is { } s1
+                            ? Math.Abs(s0 - s1) < 0.05
+                            : null;
+                        return new BenchmarkSweepModelItem(g.Key, runItems, consistent);
+                    })
+                    .ToList();
+                selectedSweep = new(sid, DateTimeOffset.FromUnixTimeMilliseconds(sid), models);
+            }
+        }
+
+        return new(runs, selected, sweeps, selectedSweep);
     }
 }

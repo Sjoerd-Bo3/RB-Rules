@@ -8,6 +8,10 @@ export interface AskRequest {
   system?: string;
   task: Task;
   images: AskImage[];
+  /** Model-sweep (#174): expliciete modeloverride voor benchmarkruns —
+   * doorgegeven ongewijzigd naar askClaude()/de SDK-query(). Undefined
+   * zonder override (het bestaande gedrag, MODEL[task]). */
+  model?: string;
 }
 
 export type ParseResult =
@@ -55,5 +59,11 @@ export function parseAskRequest(body: unknown): ParseResult {
     images.push({ mediaType, data });
   }
 
-  return { ok: true, request: { prompt, system, task, images } };
+  // Model-sweep (#174): puur doorgeefluik — geen allowlist/validatie van de
+  // waarde hier. Een onbekend model laten we de SDK-call zelf laten falen
+  // (nette degradatie via het bestaande foutpad in server.ts), net zoals een
+  // ontbrekend model of een tikfout in `task` dat al deed.
+  const model = typeof b.model === "string" && b.model.trim() ? b.model.trim() : undefined;
+
+  return { ok: true, request: { prompt, system, task, images, ...(model ? { model } : {}) } };
 }

@@ -70,6 +70,15 @@ public static class JobCatalog
             // benchmarkrun meet kwaliteit, hij hoort niet bij het bijwerken
             // van de kennisbank).
             new("benchmark", BenchmarkAsync),
+            // Model-sweep (#174): een eigen job in plaats van "benchmark" te
+            // laten vertakken — de kosten zijn wezenlijk anders
+            // (N_modellen × 2 × vragen ask-aanroepen versus 1×) en een
+            // sweep is altijd een expliciete, dure beheerdersbeslissing
+            // (issue-eis: "draai als expliciete admin-job, niet automatisch").
+            // Twee losse knoppen houden dat onderscheid zichtbaar in het
+            // jobs-paneel in plaats van een verborgen modus-vlag op
+            // "benchmark" — zelfde precedent als "scan" vs. de losse "feeds".
+            new("benchmarksweep", BenchmarkSweepAsync),
         }.ToDictionary(j => j.Name);
 
     private static async Task<string> RunAllAsync(
@@ -277,6 +286,14 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<BenchmarkService>()
             .RunAsync(label: null, progress: report, ct: ct);
+        return r.Message;
+    }
+
+    private static async Task<string> BenchmarkSweepAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BenchmarkService>()
+            .RunSweepAsync(models: null, progress: report, ct: ct);
         return r.Message;
     }
 }

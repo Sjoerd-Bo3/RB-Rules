@@ -245,7 +245,12 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
-  op `AskService` met `AskOptions.Benchmark = true`, #158),
+  op `AskService` met `AskOptions.Benchmark = true`, #158; sinds #174 ook
+  `RunSweepAsync` — dezelfde vragenset door elk model uit `AI_BENCHMARK_MODELS`
+  (of een verstandige default), elk 2×, met `Model`/`RunIndex`/`SweepId` op
+  `BenchmarkRun` als groepering — de gedeelde kern `RunOneAsync` draait één
+  volledige vragenset-doorloop en wordt door zowel `RunAsync` als
+  `RunSweepAsync` aangeroepen),
   `KnowledgeGapsService` (kennis-gaten-rapport; sinds #171 ook het
   bron-verwerkingssignaal, zelfde `SourceDossierCompleteness`-statusfunctie
   als de dossier-service), `SourceDossierService` (#171, spiegelbeeld van
@@ -629,6 +634,20 @@ kan rb-api eerder starten dan Postgres klaar is.
   `benchmark_run`/`benchmark_result`-rijen, strikt gescheiden van de
   kennisbank-tabellen; bewezen met een servicetest die 0 rijen in
   ask_trace/ask_metric/relations verwacht (`AskServiceBenchmarkIsolationTests`).
+- **Model-sweep-override reist mee, isolatie blijft hard** (#174) —
+  `AskOptions.Model` (alleen zinvol samen met `Benchmark = true`) reist via
+  `RbAiClient` als optioneel `model`-veld in de `/ask`-payload naar rb-ai, dat
+  het als expliciete modeloverride aan de SDK-`query()` meegeeft
+  (`buildQueryOptions({..., model})` in `ai.ts`) — zonder override blijft
+  rb-ai's eigen `MODEL[task]` (cheap/hard/research/agentic) gelden. De
+  override slaat de warme-sessiepool (#154) bewust over: die pool is altijd
+  op `MODEL.cheap` voorverwarmd, dus een claim zou de override stilzwijgend
+  negeren. Een onbekend model crasht niets: AskService/RbAiClient degraderen
+  een rb-ai-fout al naar `RbAiClient.UnavailableAnswer` zonder exception —
+  die vraag komt gewoon als onscoorbaar resultaat de sweep in, de rest draait
+  door. De isolatietest (`AskServiceBenchmarkIsolationTests`) blijft ongewijzigd
+  van toepassing: `Model` verandert niets aan welke tabellen wel/niet
+  geschreven worden, alleen welk model het antwoord genereert.
 
 ---
 

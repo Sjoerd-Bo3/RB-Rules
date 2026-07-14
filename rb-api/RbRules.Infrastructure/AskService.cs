@@ -80,6 +80,11 @@ public sealed record AskOptions
 {
     public static readonly AskOptions Default = new();
     public bool Benchmark { get; init; }
+    /// <summary>Model-sweep (#174): expliciete modeloverride voor déze ask-
+    /// aanroep — reist ongewijzigd door naar rb-ai (RbAiClient → SDK-
+    /// query()-modeloverride). Alleen zinvol samen met Benchmark = true;
+    /// null laat het bestaande cheap/hard/agentic-gedrag intact.</summary>
+    public string? Model { get; init; }
 }
 
 /// <summary>Vroege metadata voor het streamingpad (#31): vraagtype, citaties
@@ -667,7 +672,7 @@ public class AskService(
         {
             try
             {
-                var agenticAnswer = await ai.AskAgenticAsync(prompt, system, images, ct);
+                var agenticAnswer = await ai.AskAgenticAsync(prompt, system, images, ct, options.Model);
                 // Usage van de agent-run (#121): de som over alle beurten die
                 // rb-ai rapporteert — ook bij het vangnet hieronder blijft
                 // een eventueel gemeten deel meetellen.
@@ -711,7 +716,10 @@ public class AskService(
         if (aiAnswer is null && !clientGone)
         {
             var single = onDelta is null
-                ? await ai.AskWithUsageAsync(prompt, system, task, images, ct)
+                // Model-sweep (#174): options.Model reist alleen hier expliciet
+                // mee — StreamAnswerAsync blijft ongewijzigd omdat een
+                // benchmarkrun (BenchmarkService) nooit streamt.
+                ? await ai.AskWithUsageAsync(prompt, system, task, images, ct, options.Model)
                 : await StreamAnswerAsync(prompt, system, task, images, onDelta, ct);
             aiAnswer = single?.Answer;
             usage = AddUsage(usage, single?.Usage);

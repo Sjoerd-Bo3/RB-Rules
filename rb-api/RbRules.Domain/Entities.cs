@@ -690,7 +690,11 @@ public class BenchmarkQuestion
 /// /ask-pipeline met de isolatie-vlag aan (AskService.AskOptions.Benchmark) —
 /// geen ask_trace/ask_metric-rij, geen agentic-relatie-terugkoppeling (#120).
 /// Score/tellingen liggen hier vast bij afronding zodat run-over-run
-/// vergelijken geen herberekening nodig heeft.</summary>
+/// vergelijken geen herberekening nodig heeft.
+///
+/// Model-sweep (#174, uitbreiding op #158): drie extra, puur additieve
+/// velden — allemaal null voor een gewone single-model run via het
+/// jobs-paneel (het bestaande "benchmark"-pad blijft ongewijzigd).</summary>
 public class BenchmarkRun
 {
     public long Id { get; set; }
@@ -707,6 +711,22 @@ public class BenchmarkRun
     public double? ScorePercent { get; set; }
     public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? CompletedAt { get; set; }
+    /// <summary>Model-sweep (#174): het rb-ai-modelId dat déze run gebruikte
+    /// (bv. "claude-opus-4-8") — meegegeven als AskOptions.Model. Null buiten
+    /// een sweep (het standaardmodel van de gewone benchmark-job).</summary>
+    public string? Model { get; set; }
+    /// <summary>Model-sweep (#174): 1 of 2 — welke van de twee herhalingen
+    /// binnen ditzelfde model dit is (de consistentie-check uit issue #174:
+    /// scoren de twee runs gelijk, of was de eerste een toevalstreffer?).
+    /// Null buiten een sweep.</summary>
+    public int? RunIndex { get; set; }
+    /// <summary>Model-sweep (#174): groepeert alle (model, run_index)-rijen
+    /// van één sweep — alle runs met dezelfde SweepId horen bij dezelfde
+    /// vergelijking en delen dezelfde vragenset-snapshot. Gezet op de
+    /// UTC-starttijd van de sweep in milliseconden (dubbelt meteen als
+    /// sorteerbare "wanneer"-waarde voor het verloop-over-tijd-overzicht).
+    /// Null voor een niet-sweep-run.</summary>
+    public long? SweepId { get; set; }
 }
 
 /// <summary>Antwoord van één vraag binnen een run (#158): het volledige

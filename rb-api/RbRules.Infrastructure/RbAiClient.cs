@@ -72,21 +72,26 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
 
     public async Task<string?> AskAsync(
         string prompt, string? system = null, string task = "cheap",
-        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default) =>
-        (await AskWithUsageAsync(prompt, system, task, images, ct))?.Answer;
+        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default,
+        string? model = null) =>
+        (await AskWithUsageAsync(prompt, system, task, images, ct, model))?.Answer;
 
     /// <summary>Als <see cref="AskAsync"/>, maar mét de token-usage uit de
     /// respons (#121) — voor aanroepers die per vraag kosten boeken
-    /// (AskService → ask_metric). Overige aanroepers blijven op AskAsync.</summary>
+    /// (AskService → ask_metric). Overige aanroepers blijven op AskAsync.
+    /// <paramref name="model"/> is de model-sweep-override (#174): alleen
+    /// gezet door een benchmarkrun (AskService.AskOptions.Model) — null
+    /// betekent het bestaande gedrag (rb-ai's MODEL[task]).</summary>
     public async Task<AiAnswer?> AskWithUsageAsync(
         string prompt, string? system = null, string task = "cheap",
-        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default)
+        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default,
+        string? model = null)
     {
         try
         {
             var payload = new
             {
-                prompt, system, task,
+                prompt, system, task, model,
                 images = images?.Select(i => new { mediaType = i.MediaType, data = i.Data }),
             };
             var res = await http.PostAsJsonAsync("/ask", payload, ct);
@@ -125,16 +130,21 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
     /// (of het hele resultaat null) — de aanroeper (AskService) draait dan
     /// het vangnet: de klassieke single-pass. De harde rem zit in rb-ai zelf
     /// (maxTurns, tool-cap, 120s-timeout); loopt zelfs die vast, dan maakt
-    /// de 6-minuten-HttpClient-timeout hier alsnog een vangnet-null van.</summary>
+    /// de 6-minuten-HttpClient-timeout hier alsnog een vangnet-null van.
+    /// <paramref name="model"/> is de model-sweep-override (#174, zie
+    /// AskWithUsageAsync) — ook de agentic-gate kan tijdens een benchmarkrun
+    /// escaleren (#158 onderdrukt alleen leer-/meetneveneffecten, niet de
+    /// escalatie zelf), dus de override reist ook hierheen door.</summary>
     public async Task<AgenticAnswer?> AskAgenticAsync(
         string prompt, string? system = null,
-        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default)
+        IReadOnlyList<AiImage>? images = null, CancellationToken ct = default,
+        string? model = null)
     {
         try
         {
             var payload = new
             {
-                prompt, system, task = "agentic",
+                prompt, system, task = "agentic", model,
                 images = images?.Select(i => new { mediaType = i.MediaType, data = i.Data }),
             };
             var res = await http.PostAsJsonAsync("/ask", payload, ct);
