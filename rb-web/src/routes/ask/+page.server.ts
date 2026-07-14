@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
+import { firePrewarm } from '$lib/prewarm';
 import { quotaMessage } from '$lib/quota';
 import { USER_COOKIE, userHeaders } from '$lib/server/user';
 
@@ -35,7 +36,12 @@ export interface AskAccount {
 	agenticToday: number;
 }
 
-export const load: PageServerLoad = async ({ cookies }) => {
+export const load: PageServerLoad = async ({ cookies, getClientAddress }) => {
+	// Voorverwarmsignaal (#154), fire-and-forget: mag het renderen nooit
+	// vertragen of laten falen ($lib/prewarm slikt alles).
+	firePrewarm(() =>
+		api('/api/ask/prewarm', { method: 'POST', headers: { 'x-client-ip': getClientAddress() } })
+	);
 	let stats: AskStats;
 	try {
 		stats = await api<AskStats>('/api/ask/stats');
