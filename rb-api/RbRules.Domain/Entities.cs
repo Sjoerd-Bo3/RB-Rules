@@ -187,6 +187,11 @@ public class AskMetric
     /// apart. Vangnet-inzet (agent faalde, single-pass antwoordde) telt als
     /// false en is herkenbaar aan de marker in AskTrace.BrainSteps.</summary>
     public bool Agentic { get; set; }
+    /// <summary>Wie de escalatie afdwong (#153): "gate" of "user"; null =
+    /// niet geëscaleerd. Staat óók bij vangnet-inzet (de poging is gedaan):
+    /// "user"-rijen zijn de teller voor het Grondig-dagquotum — bewust
+    /// inclusief mislukte pogingen, conservatief net als het vraagquotum.</summary>
+    public string? EscalatedBy { get; set; }
     /// <summary>Echte token-tellingen per vraag (#121), opgeteld over álle
     /// LLM-calls die de vraag kostte (rewrite + antwoord; bij agentic alle
     /// beurten incl. tool-overhead — input telt rb-ai's cache-tokens mee).
@@ -250,6 +255,10 @@ public class AskTrace
     /// agent (docs/BRAIN.md §2.4). Escalaties die op het vangnet eindigden
     /// staan op false en zijn herkenbaar aan de marker in BrainSteps.</summary>
     public bool Agentic { get; set; }
+    /// <summary>Wie de escalatie afdwong (#153): "gate" of "user"; null =
+    /// niet geëscaleerd — de badge "agentic (gate/gebruiker)" in de
+    /// beheer-traces.</summary>
+    public string? EscalatedBy { get; set; }
     /// <summary>Brein-stappen van de agent (#107): één regel per tool-call
     /// (toolnaam + argumenten), zoals rb-ai ze teruggeeft — bij vangnet-inzet
     /// de vóór de uitval al gedane stappen plus een expliciete marker; null
@@ -286,6 +295,10 @@ public class AppUser
     public int DailyQuota { get; set; } = 30;
     /// <summary>Foto-vragen per UTC-dag — die forceren het dure model.</summary>
     public int DailyPhotoQuota { get; set; } = 5;
+    /// <summary>Zelf geforceerde Grondig-vragen per UTC-dag (#153) — die
+    /// forceren de brein-agent. Alleen gehonoreerde gebruikerskeuzes tellen
+    /// (metric-rijen met EscalatedBy "user"); gate-escalaties niet.</summary>
+    public int DailyAgenticQuota { get; set; } = 5;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastLoginAt { get; set; }
     /// <summary>WebAuthn user handle (#109): willekeurige bytes die het account
