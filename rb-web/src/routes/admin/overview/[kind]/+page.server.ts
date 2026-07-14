@@ -34,7 +34,10 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	// Set-dekking (#145): per set aanwezige/ontbrekende basisnummers.
 	setdekking: null,
 	// Gebruikers + kosteninzicht (#42): de chips kiezen de meetperiode.
-	gebruikers: { allowed: ['vandaag', '7d', '30d'], fallback: '7d' }
+	gebruikers: { allowed: ['vandaag', '7d', '30d'], fallback: '7d' },
+	// Judge-benchmark (#158): geen filter-chips, wel een los "run"-nummer
+	// voor de run-historie (zie de load-case hieronder).
+	benchmark: null
 };
 
 export const load: PageServerLoad = async ({ params, url, cookies }) => {
@@ -107,6 +110,14 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 			case 'gebruikers': {
 				const qs = new URLSearchParams({ page: String(page), period: filter });
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/users?${qs}`) };
+			}
+			case 'benchmark': {
+				// Los "run"-nummer (geen page/filter): welke run getoond wordt.
+				// Zonder parameter kiest rb-api de meest recente.
+				const qs = new URLSearchParams();
+				const run = url.searchParams.get('run');
+				if (run) qs.set('run', run);
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/benchmark?${qs}`) };
 			}
 			default:
 				throw error(404, 'Onbekend overzicht');
