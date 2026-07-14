@@ -8,11 +8,22 @@ public record FeedCrawlResult(
 
 /// <summary>Bron-feeds (#167): index-pagina's periodiek afspeuren op nieuwe
 /// artikel-URL's en die — per feed — direct als <see cref="Source"/>
-/// (AutoApprove, vertrouwde/officiële feed) of als <see cref="SourceProposal"/>
-/// (reviewqueue) toevoegen. Registreert alleen de artikel-URL zelf; of de
-/// inhoud daarachter inline HTML of een opake Sanity-CDN-PDF is, bepaalt de
-/// bestaande artikel-ingest (<see cref="IngestService"/>) bij de eerstvolgende
-/// bron-scan — deze service raadt nooit zelf een PDF-link.
+/// (AutoApprove) of als <see cref="SourceProposal"/> (reviewqueue) toevoegen.
+/// Registreert alleen de artikel-URL zelf; of de inhoud daarachter inline HTML
+/// of een opake Sanity-CDN-PDF is, bepaalt de bestaande artikel-ingest
+/// (<see cref="IngestService"/>) bij de eerstvolgende bron-scan — deze service
+/// raadt nooit zelf een PDF-link.
+///
+/// AutoApprove-gate (#167, security): AutoApprove maakt van een artikel alléén
+/// dírect een enabled trust-1 official Source wanneer zowel de feed-URL als de
+/// artikel-URL op een officieel Riot-domein staan (<see cref="OfficialDomains"/>).
+/// Een AutoApprove-feed op élke andere host — een typo, een look-alike-domein —
+/// routeert nieuwe artikelen naar de reviewqueue in plaats van onbeheerd een
+/// stroom trust-1 official bronnen te fabriceren die /ask-citaties en de
+/// TrustTier==1-gefilterde ban/errata/claim-pipelines voeden. De admin-endpoint
+/// weigert AutoApprove=true al bij het opslaan op een niet-officieel domein
+/// (nette melding); deze crawl-check is de tweede laag (defense-in-depth, net
+/// als UrlGuard: endpoint + fetch-rand).
 ///
 /// Idempotent op genormaliseerde URL: een artikel dat al een Source of
 /// SourceProposal is (uit een eerdere run, of uit een andere feed eerder in
@@ -36,11 +47,12 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
 {
     public const string LedgerKind = "feeds";
 
-    /// <summary>Auto-ontdekte artikelen zijn per definitie official/trust 1,
-    /// maar staan lager dan de handmatig-curated officiële bronnen (rank
-    /// 90-110 in SourceSeed) — een beheerder die zo'n bron handmatig omhoog
-    /// curateert wint altijd. Boven partner (70): het blijft Riot's eigen
-    /// site, alleen automatisch ontdekt in plaats van handmatig gekozen.</summary>
+    /// <summary>Auto-ontdekte artikelen (alleen via de officiële-domein-gate,
+    /// dus per definitie official/trust 1) staan lager dan de handmatig-curated
+    /// officiële bronnen (rank 90-110 in SourceSeed) — een beheerder die zo'n
+    /// bron handmatig omhoog curateert wint altijd. Boven partner (70): het
+    /// blijft Riot's eigen site, alleen automatisch ontdekt in plaats van
+    /// handmatig gekozen.</summary>
     public const int AutoDiscoveredRank = 80;
 
     public async Task<FeedCrawlResult> RunAsync(
@@ -123,6 +135,11 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
             }
 
             var articles = RiotNewsFeed.ParseArticles(html, new Uri(feed.Url), feed.CategoryFilter);
+            // Officiële-domein-gate (#167): alleen een feed op een officieel
+            // Riot-domein mag via AutoApprove auto-enablen. De artikel-URL
+            // wordt hieronder per stuk óók gecheckt (defense-in-depth naast de
+            // same-host-filter in de parser).
+            var feedOfficial = OfficialDomains.IsOfficialUrl(feed.Url);
             var newSources = 0;
             var newProposals = 0;
             foreach (var article in articles)
@@ -134,7 +151,12 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
                 // link mag nooit ongezien het register in.
                 if (UrlGuard.Check(article.Url) is { Allowed: false }) continue;
 
-                if (feed.AutoApprove)
+                // Auto-approve alleen als feed én artikel op een officieel
+                // domein staan; een look-alike-pagina die een externe-host-URL
+                // als "artikel" injecteert (articleOfficial=false) belandt zo
+                // in de reviewqueue, nooit als enabled trust-1 bron.
+                var articleOfficial = OfficialDomains.IsOfficialUrl(article.Url);
+                if (feed.AutoApprove && feedOfficial && articleOfficial)
                 {
                     var id = UniqueSourceId(SourceScout.SlugForUrl(article.Url), knownIds);
                     db.Sources.Add(new Source
@@ -151,15 +173,22 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
                 }
                 else
                 {
+                    // Type-inschatting: alleen een officieel-domein-artikel
+                    // heet "official"; al het andere degradeert naar community
+                    // (de beheerder beslist bij het accepteren — bron-trust is
+                    // heilig, docs/KNOWLEDGE.md).
+                    var kind = articleOfficial ? "official" : "community";
                     db.SourceProposals.Add(new SourceProposal
                     {
                         Url = article.Url,
                         Name = article.Title,
-                        Type = "official", // alle drie de hoofdfeeds zijn Riot's eigen site
+                        Type = kind,
                         Motivation = $"Nieuw artikel gevonden via feed '{feed.Name}'"
                             + (article.Category is not null ? $" ({article.Category})" : "")
                             + (article.Date is not null ? $", gepubliceerd {article.Date:yyyy-MM-dd}" : "")
-                            + " — mogelijk een nieuwe regel-/errata-pagina.",
+                            + (feed.AutoApprove && !feedOfficial
+                                ? " — feed staat op een niet-officieel domein, dus ter review i.p.v. auto-toegevoegd."
+                                : " — mogelijk een nieuwe regel-/errata-pagina."),
                     });
                     newProposals++;
                 }

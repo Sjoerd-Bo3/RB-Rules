@@ -126,7 +126,12 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
   élke feed, niet alleen de brede hub); sommige artikel-URL's missen het
   categorie-segment (`/en-us/news/<slug>` i.p.v. `/en-us/news/<categorie>/
   <slug>`) en een enkele kaart linkt extern (bv. YouTube) — de parser sluit
-  die uit op host in plaats van op categorie.
+  die uit op host in plaats van op categorie. AutoApprove auto-enablet een
+  artikel alléén als feed én artikel op een officieel Riot-domein staan
+  (`OfficialDomains`) — anders reviewqueue, ook met AutoApprove aan; zo maakt
+  een typo/look-alike nooit onbeheerd trust-1 official bronnen aan
+  (`FeedCrawlService`, endpoint-guard + crawl-guard, defense-in-depth net als
+  `UrlGuard`).
 
 ### Contextdiagram
 
@@ -215,6 +220,7 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   #144), `SetCoverage` (dekking per set, #145), `ClaimMining`,
   `RelationMining`, `AgenticGate`, `SourceSeed`, `SourceFeedSeed` (#167),
   `RiotCardMapper`, `HubDiscovery`, `RiotNewsFeed` (bron-feed-parser, #167),
+  `OfficialDomains` (Riot-domein-allowlist voor de feed-AutoApprove-gate, #167),
   `PiltoverDeckPage`/`PiltoverSitemap`/`DeckCardLinker`
   (#15), `IpHashing` (HMAC-SHA256 IP-hash voor de ask-geschiedenis, #157),
   `BenchmarkPrompt` (gecommitteerde-keuze-prompt + deterministische

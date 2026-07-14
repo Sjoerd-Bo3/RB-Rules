@@ -319,6 +319,84 @@ public class FeedCrawlServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_AutoApproveFeedOnNonOfficialHost_RoutesToProposalNotSource()
+    {
+        // Security-gate (#167): een AutoApprove-feed op een niet-officieel
+        // domein (typo/look-alike) mag NOOIT auto-enablen — nieuwe artikelen
+        // gaan naar de reviewqueue, community-getypeerd, nooit trust-1.
+        using var db = NewDb();
+        const string evilBase = "https://playriftbound.com.evil.example/en-us/news/";
+        db.SourceFeeds.Add(new SourceFeed
+        {
+            Id = "look-alike", Name = "Look-alike feed", Url = evilBase,
+            AutoApprove = true, Cadence = "daily",
+        });
+        await db.SaveChangesAsync();
+        var (svc, _) = Service(db,
+            (evilBase, Ok(Card($"{evilBase}rules-and-releases/nep-artikel", "Nep Artikel"))));
+
+        var r = await svc.RunAsync(onlyDue: false);
+
+        Assert.Equal(0, r.NewSources);
+        Assert.Empty(await db.Sources.ToListAsync());
+        Assert.Equal(1, r.NewProposals);
+        var p = await db.SourceProposals.SingleAsync();
+        Assert.Equal("proposed", p.Status);
+        Assert.Equal("community", p.Type); // gedegradeerd: geen officieel domein
+        Assert.Contains("niet-officieel domein", p.Motivation);
+    }
+
+    [Fact]
+    public async Task RunAsync_OfficialAutoApproveFeed_StaysTrustOneOfficial()
+    {
+        // Positieve keerzijde: op een officieel domein doet AutoApprove
+        // gewoon zijn werk — enabled, official, trust 1.
+        using var db = NewDb();
+        db.SourceFeeds.Add(new SourceFeed
+        {
+            Id = "off", Name = "Officiële feed", Url = Base, AutoApprove = true, Cadence = "daily",
+        });
+        await db.SaveChangesAsync();
+        var (svc, _) = Service(db, (Base, Ok(Card($"{Base}nieuw", "Nieuw"))));
+
+        await svc.RunAsync(onlyDue: false);
+
+        var src = await db.Sources.SingleAsync();
+        Assert.Equal("official", src.Type);
+        Assert.Equal(1, src.TrustTier);
+        Assert.True(src.Enabled);
+    }
+
+    [Fact]
+    public async Task RunAsync_TombstonedUrl_IsNotReCreatedAsSource()
+    {
+        // Tombstone (#167): een bewust verwijderde feed-bron laat een
+        // "rejected" SourceProposal achter; die houdt de URL in de known-set,
+        // dus de crawl maakt hem bij een reparse niet stil opnieuw aan — ook
+        // niet op een officiële AutoApprove-feed.
+        using var db = NewDb();
+        var url = $"{Base}verwijderd-artikel";
+        db.SourceProposals.Add(new SourceProposal
+        {
+            Url = url, Name = "Verwijderd", Type = "official", Status = "rejected",
+            Motivation = "Handmatig verwijderde feed-bron — niet opnieuw automatisch toevoegen (#167).",
+        });
+        db.SourceFeeds.Add(new SourceFeed
+        {
+            Id = "off", Name = "Officiële feed", Url = Base, AutoApprove = true, Cadence = "daily",
+        });
+        await db.SaveChangesAsync();
+        var (svc, _) = Service(db, (Base, Ok(Card(url, "Verwijderd"))));
+
+        var r = await svc.RunAsync(onlyDue: false);
+
+        Assert.Equal(0, r.NewSources);
+        Assert.Empty(await db.Sources.ToListAsync());
+        // De tombstone blijft precies één rij (geen duplicaat-proposal).
+        Assert.Single(await db.SourceProposals.ToListAsync());
+    }
+
+    [Fact]
     public async Task RunAsync_CategoryFilterOnFeed_AppliesDuringCrawl()
     {
         using var db = NewDb();

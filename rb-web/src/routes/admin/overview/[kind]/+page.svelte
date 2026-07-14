@@ -875,6 +875,7 @@
 					<label class="checkbox"><input type="checkbox" name="autoApprove" value="true" /> AutoApprove (direct bron i.p.v. voorstel)</label>
 					<button>Toevoegen</button>
 				</form>
+				<p class="meta">AutoApprove kan alleen aan op een officieel Riot-domein (playriftbound.com); op elk ander domein komen nieuwe artikelen altijd eerst in de reviewqueue (Bronvoorstellen).</p>
 				{#if form?.error && formFeedId === null}<p class="warn">{form.error}</p>{/if}
 			</details>
 

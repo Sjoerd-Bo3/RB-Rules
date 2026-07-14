@@ -145,13 +145,20 @@ apart in §6.
   periodiek op nieuwe artikel-URL's worden afgespeurd, vóór elke bron-scan
   (`IngestService`/`FeedCrawlService`). Drie officiële hoofdfeeds (rules-
   and-releases, de brede nieuws-hub met categoriefilter, de Rules Hub-
-  artikelcarrousel), elk met een optioneel categoriefilter. AutoApprove-feeds
-  zetten een nieuw artikel direct als `Source` (met `FeedId`-herkomst,
-  zichtbaar bij de bron als "stamt van: …"); andere feeds leggen het als
-  `SourceProposal` in dezelfde reviewqueue als de bronnenjacht. Idempotent op
-  genormaliseerde URL (ook binnen één run, over feeds heen) en doof voor een
-  per-request wisselende linkvolgorde — registreert alleen de artikel-URL,
-  nooit zelf een PDF-link. Zelf uitbreidbaar in het beheer.
+  artikelcarrousel), elk met een optioneel categoriefilter. AutoApprove zet
+  een nieuw artikel direct als `Source` (met `FeedId`-herkomst, zichtbaar bij
+  de bron als "stamt van: …") — maar **alleen** wanneer de feed én het artikel
+  op een officieel Riot-domein staan (`OfficialDomains`: playriftbound.com,
+  legacy riftbound.leagueoflegends.com); op elk ander domein routeert een
+  nieuw artikel naar `SourceProposal` (reviewqueue), ook met AutoApprove aan.
+  Zo fabriceert een typo/look-alike-domein nooit onbeheerd trust-1 official
+  bronnen (het beheer weigert AutoApprove al fail-fast op een niet-officieel
+  domein; de crawl handhaaft het nogmaals). Een handmatig verwijderde
+  feed-bron krijgt een tombstone (rejected `SourceProposal`) zodat de crawl
+  hem niet stil opnieuw aanmaakt. Idempotent op genormaliseerde URL (ook
+  binnen één run, over feeds heen) en doof voor een per-request wisselende
+  linkvolgorde — registreert alleen de artikel-URL, nooit zelf een PDF-link.
+  Zelf uitbreidbaar in het beheer.
   *Route* `/admin/overview/feeds` · *endpoints*
   `GET/POST/PATCH/DELETE /api/admin/feeds`, `/api/admin/overview/feeds`.
 
