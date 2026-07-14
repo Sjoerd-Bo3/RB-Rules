@@ -205,11 +205,13 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   #144), `SetCoverage` (dekking per set, #145), `ClaimMining`,
   `RelationMining`, `AgenticGate`, `SourceSeed`, `RiotCardMapper`,
   `HubDiscovery`, `PiltoverDeckPage`/`PiltoverSitemap`/`DeckCardLinker`
-  (#15), `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
+  (#15), `IpHashing` (HMAC-SHA256 IP-hash voor de ask-geschiedenis, #157),
+  `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
   datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `RuleChunkPipeline`, `CardSyncService`,
   `CardEmbeddingPipeline`, `EmbeddingService` (Ollama), `AskService`,
+  `AskHistoryService` (eigen ask-geschiedenis op user_id/ip_hash, #157),
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`
   (Neo4j), `BrainService`, `MechanicMiningService`, `ClaimMiningService`,
   `RelationMiningService`, `InteractionService`, `PrimerService`,
@@ -228,11 +230,12 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
 
 Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
-contradictions), `/api/ask` + `/api/ask/stream`, `/api/auth/*` (magic-link +
-passkeys), `/api/changes|sources|bans|sets/upcoming`, `/api/push/*`,
-`/api/admin/*` (o.a. vraag-traces: `/asktraces` als slanke lijst,
-`/asktraces/{id}` met het volledige gesprek — antwoord + eerdere beurten,
-#143).
+contradictions), `/api/ask` + `/api/ask/stream` + `/api/ask/history` (eigen
+ask-geschiedenis op user_id/ip_hash, geen id-parameter, #157), `/api/auth/*`
+(magic-link + passkeys), `/api/changes|sources|bans|sets/upcoming`,
+`/api/push/*`, `/api/admin/*` (o.a. vraag-traces: `/asktraces` als slanke
+lijst, `/asktraces/{id}` met het volledige gesprek — antwoord + eerdere
+beurten, #143).
 
 ### rb-ai — belangrijkste modules
 
@@ -516,6 +519,17 @@ kan rb-api eerder starten dan Postgres klaar is.
   SDK vast op `query()`-moment, dus warm werkt alleen bij byte-gelijke opties
   — de antwoord-call (systeemprompt per vraagtype) blijft koud. Warm bestaat
   alleen rond activiteit (TTL 10 min, signaal-gedreven).
+- **Privacy-concept: IP-hashing i.p.v. rauw IP** (#157) — waar rb-api "zelfde
+  IP" moet herkennen (anonieme ask-geschiedenis) bewaart het nooit het
+  client-IP zelf: `UserQuotaFilter` stempelt op élk request (ook zonder
+  sessietoken) een HMAC-SHA256-hash (`IpHashing.Hash`, secret uit
+  `ASK_IP_HASH_SECRET`) op `RequestUserContext.IpHash`, met exact hetzelfde
+  IP-patroon als de rate-limiter (`X-Client-Ip`-header ?? `RemoteIpAddress`).
+  `AskService` stempelt die hash op `AskTrace.IpHash` naast `UserId`;
+  `AskHistoryService` leest de eigen historie op `user_id` (ingelogd) of
+  `ip_hash` (anoniem) — nooit op een aanroeper-gestuurde id. Ontbreekt het
+  secret, dan blijft `IpHash` overal null: stille degradatie, nooit een
+  crash.
 - **Best-effort achtergrondwerk** — `JobCatalog` registreert jobs als één
   switch-vrije catalogus; `RunAllAsync` ("Alles bijwerken") draait elke stap
   best-effort in volgorde.

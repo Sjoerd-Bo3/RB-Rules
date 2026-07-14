@@ -225,6 +225,14 @@ apart in §6.
   kanaal blijft altijd gedegradeerd (leeg kanaal + trace-marker), nooit een
   500; de uitkomst (antwoord, citaties, prompt) blijft byte-voor-byte gelijk
   aan de oude seriële pipeline.
+- **Eigen ask-geschiedenis** — uitklap-paneel "Mijn eerdere vragen" op `/ask`
+  (dicht standaard): de laatste 20 eigen vragen met tijdstip, vraagtype en het
+  antwoord (gerenderd zoals het origineel, met dezelfde sanitize/widgets),
+  plus of de vraag agentic beantwoord werd. Scope is altijd de vrager zelf —
+  ingelogd op het account (`user_id`), anders op de gehashte IP-koppeling
+  (`ip_hash`, zie §4.6/§5) van het huidige request; geen id-parameter, dus
+  geen enumeratie van andermans historie mogelijk (#157). *Endpoint*
+  `/api/ask/history`.
 
 ### 4.4 Kennisbank / het brein
 
@@ -340,6 +348,14 @@ apart in §6.
   toont het verbruik en resterend tegoed van alle drie.
   *Routes* `/account`, `/account/verify` · *endpoints* `/api/auth/request`,
   `/api/auth/verify`, `/api/auth/me`, `/api/auth/logout`.
+- **Privacy-nette IP-koppeling (#157)** — waar rb-api "zelfde IP" moet
+  herkennen (anonieme ask-geschiedenis) bewaart het nooit het rauwe IP: een
+  HMAC-SHA256-hash met een server-secret (`ASK_IP_HASH_SECRET`, VM-`.env`).
+  Ontbreekt het secret of is het IP niet vast te stellen, dan blijft de hash
+  leeg — stille degradatie, de vraag blijft gewoon werken, alleen de
+  geschiedenis-koppeling valt weg. De UI meldt expliciet dat anonieme
+  geschiedenis aan het IP/apparaat hangt en verdwijnt bij een IP-wissel;
+  ingelogd hangt hij aan het account.
 - **Passkeys (WebAuthn)** — inloggen zonder mailafhankelijkheid; passkeys
   beheren op de accountpagina. *Routes* `/account/passkey/*` · *endpoints*
   `/api/auth/passkey/register/*`, `/api/auth/passkey/login/*`,
@@ -380,7 +396,10 @@ Bindende kwaliteitseisen; ze zijn uitgeschreven in `docs/CONVENTIONS.md` en
 - **Veiligheid & privacy.** Secrets nooit in code, logs of chat (GitHub Secrets
   / VM-`.env`); de browser praat nooit rechtstreeks met rb-api (server-loads of
   `+server.ts`-proxy's); niets ongesaniteerd in `{@html}`; rb-ai en de brein-API
-  zijn alleen compose-intern bereikbaar.
+  zijn alleen compose-intern bereikbaar. IP-adressen worden nooit rauw
+  opgeslagen — waar "zelfde IP" herkenbaar moet zijn (anonieme
+  ask-geschiedenis, #157) staat alleen een HMAC-SHA256-hash met een
+  server-secret; zonder secret degradeert de koppeling stil naar leeg.
 - **Beheer-continuïteit.** Nooit mergen/deployen terwijl een live admin-job
   draait — de deploy herstart de container en breekt de job af. Lange operaties
   draaien via `JobRunner` (202/409 + voortgang), nooit synchroon in een request.
