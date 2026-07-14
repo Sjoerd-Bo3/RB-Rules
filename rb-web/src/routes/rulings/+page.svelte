@@ -48,6 +48,10 @@
 		return ref.replace(':', '-');
 	}
 
+	// Bronverwijzing (#166) is URL of vrije citatie — alleen linken als het
+	// er echt een is (zelfde patroon als /ask).
+	const isHttp = (url: string) => /^https?:\/\//.test(url);
+
 	const lastPage = $derived(Math.max(1, Math.ceil(data.total / data.pageSize)));
 </script>
 
@@ -159,6 +163,16 @@
 
 						{#if item.provenance}
 							<p class="meta small">Bron: {item.provenance}</p>
+						{/if}
+						{#if item.sourceRef}
+							<p class="meta small">
+								Bron van deze ruling:
+								{#if isHttp(item.sourceRef)}
+									<a href={item.sourceRef} target="_blank" rel="noopener">{item.sourceRef}</a>
+								{:else}
+									{item.sourceRef}
+								{/if}
+							</p>
 						{/if}
 						{#each item.sources as src (src.name + (src.url ?? ''))}
 							<div class="source">

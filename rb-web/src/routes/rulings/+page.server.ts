@@ -28,6 +28,8 @@ export interface RulingsItem {
 	score: number | null;
 	sections: RulingsSectionRef[];
 	sources: RulingsSource[];
+	/** "Waar besloten" (#166) — URL of vrije citatie; alleen op rulings. */
+	sourceRef: string | null;
 }
 interface RulingsResponse {
 	items: RulingsItem[];

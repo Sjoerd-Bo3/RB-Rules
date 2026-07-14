@@ -26,7 +26,9 @@ public record CardDetail(
 
 public record CardDossierRuling(
     long Id, string? Question, string Text, string? Provenance,
-    DateTimeOffset Date, IReadOnlyList<RulingsSectionRef> Sections);
+    DateTimeOffset Date, IReadOnlyList<RulingsSectionRef> Sections,
+    // "Waar besloten" (#166) — URL of vrije citatie, getoond als bewijs.
+    string? SourceRef = null);
 
 public record CardDossierClaim(
     long Id, string Statement, int Corroboration, double TrustScore,
@@ -186,7 +188,7 @@ public class CardDetailService(RbRulesDbContext db, CardResolver resolver)
                 (c.Question != null && EF.Functions.ILike(c.Question, namePattern, "\\")))
             .OrderByDescending(c => c.VerifiedAt ?? c.CreatedAt)
             .Take(DossierRulings)
-            .Select(c => new { c.Id, c.Question, c.Text, c.Provenance, c.CreatedAt, c.VerifiedAt })
+            .Select(c => new { c.Id, c.Question, c.Text, c.Provenance, c.SourceRef, c.CreatedAt, c.VerifiedAt })
             .ToListAsync(ct);
 
         // §-verwijzingen in de rulings klikbaar maken (zelfde extractor als
@@ -210,7 +212,8 @@ public class CardDetailService(RbRulesDbContext db, CardResolver resolver)
                     {
                         var split = s.Key.IndexOf('/');
                         return new RulingsSectionRef(s.Key[..split], s.Key[(split + 1)..]);
-                    })]))];
+                    })],
+                r.SourceRef))];
         }
 
         // Geaccepteerde community-claims over de kaart: claims dragen de

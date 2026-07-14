@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
+import { adminApi, authed } from '$lib/server/admin';
 import { firePrewarm } from '$lib/prewarm';
 import { quotaMessage } from '$lib/quota';
 import { USER_COOKIE, userHeaders } from '$lib/server/user';
@@ -74,7 +75,15 @@ export const load: PageServerLoad = async ({ cookies, getClientAddress }) => {
 	}
 	// loggedIn voor de privacy-melding in het geschiedenis-paneel (#157) —
 	// geen extra accountcall nodig, alleen of er een sessietoken meeging.
-	return { stats, account, askHistory, loggedIn: 'X-User-Token' in userAuthHeaders };
+	// isAdmin (#166): bepaalt of "Vastleggen als ruling" direct verifieert —
+	// zelfde rb_admin-cookiecheck als het beheer, geen extra rb-api-call.
+	return {
+		stats,
+		account,
+		askHistory,
+		loggedIn: 'X-User-Token' in userAuthHeaders,
+		isAdmin: authed(cookies)
+	};
 };
 
 interface Citation {
@@ -252,6 +261,77 @@ export const actions: Actions = {
 				cards,
 				claims,
 				misconceptions
+			});
+		}
+	},
+	// In-chat ruling vastleggen (#166): autoriteit bepaalt de route — rb-api
+	// beslist server-authoritatief (X-Admin-Key resp. X-User-Token), hier
+	// alleen welke credentials meegaan. Anoniem: de knop is al niet zichtbaar
+	// (+page.svelte), en rb-api wijst het sowieso af (401).
+	ruling: async ({ request, cookies, getClientAddress }) => {
+		const form = await request.formData();
+		const statement = String(form.get('statement') ?? '').trim();
+		const scope = String(form.get('scope') ?? 'answer').trim();
+		const topicRef = String(form.get('topicRef') ?? '').trim() || undefined;
+		const sourceRef = String(form.get('sourceRef') ?? '').trim();
+		const question = String(form.get('question') ?? '').trim() || undefined;
+		const answer = String(form.get('answer') ?? '');
+		let citations: Citation[] = [];
+		let cards: AskCard[] = [];
+		let claims: AskClaim[] = [];
+		let misconceptions: AskMisconception[] = [];
+		try {
+			citations = JSON.parse(String(form.get('citations') ?? '[]'));
+			cards = JSON.parse(String(form.get('cards') ?? '[]'));
+			claims = JSON.parse(String(form.get('claims') ?? '[]'));
+			misconceptions = JSON.parse(String(form.get('misconceptions') ?? '[]'));
+		} catch {
+			/* corrupt doorgegeven state — dan zonder */
+		}
+		// Het antwoord blijft zichtbaar ná deze action (zelfde reden als
+		// feedback hierboven): zonder deze velden terug te geven verdwijnt het
+		// zojuist gegeven antwoord van de pagina.
+		const context = { question, answer, citations, cards, claims, misconceptions };
+
+		if (!statement) return fail(400, { rulingError: 'Vul een uitspraak in.', ...context });
+		if (!sourceRef) {
+			return fail(400, {
+				rulingError: 'Een bronverwijzing (waar besloten) is verplicht.',
+				...context
+			});
+		}
+		if ((scope === 'card' || scope === 'rule_section') && !topicRef) {
+			return fail(400, {
+				rulingError:
+					scope === 'card' ? 'Kies een kaart voor deze scope.' : 'Kies een §-sectie voor deze scope.',
+				...context
+			});
+		}
+
+		const admin = authed(cookies);
+		const loggedIn = Boolean(cookies.get(USER_COOKIE));
+		if (!admin && !loggedIn) {
+			return fail(401, {
+				rulingError: 'Log in (of als beheerder) om een ruling vast te leggen.',
+				...context
+			});
+		}
+
+		const body = JSON.stringify({ statement, scope, topicRef, sourceRef, question });
+		try {
+			const result = admin
+				? await adminApi<{ verified: boolean }>('/api/ask/ruling', { method: 'POST', body })
+				: await api<{ verified: boolean }>('/api/ask/ruling', {
+						method: 'POST',
+						headers: { 'x-client-ip': getClientAddress(), ...userHeaders(cookies) },
+						body
+					});
+			return { rulingSaved: true, rulingVerified: result.verified, ...context };
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			return fail(500, {
+				rulingError: quotaError(msg, `Vastleggen mislukt (${msg})`),
+				...context
 			});
 		}
 	}

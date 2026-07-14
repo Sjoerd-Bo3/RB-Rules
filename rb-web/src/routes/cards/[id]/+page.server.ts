@@ -72,6 +72,8 @@ export interface CardDossier {
 		provenance: string | null;
 		date: string;
 		sections: { sourceId: string; code: string }[];
+		/** "Waar besloten" (#166) — URL of vrije citatie. */
+		sourceRef: string | null;
 	}[];
 	claims: {
 		id: number;

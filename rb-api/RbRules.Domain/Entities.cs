@@ -111,6 +111,11 @@ public class Correction
     public required string Text { get; set; }
     public string? Question { get; set; }
     public string? Provenance { get; set; }
+    /// <summary>"Waar besloten" (#166): URL (UrlGuard-gecheckt) of vrije
+    /// citatie (Discord-thread, officiële post, toernooi + datum) — verplicht
+    /// bij in-chat-rulings, optioneel voor oudere/andere ontstaanswegen van
+    /// een Correction. Sanitize gebeurt bij weergave, niet bij opslag.</summary>
+    public string? SourceRef { get; set; }
     public string Status { get; set; } = "unverified";  // unverified|verified
     public Vector? Embedding { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

@@ -137,7 +137,9 @@ apart in §6.
 - **Rulings-databank** — doorzoekbare collectie van geverifieerde correcties
   en officieel bevestigde claims, met trust-labels, bron en citaat per item,
   §-chips en permalink-anchors; hybride zoeken (best-effort embed → vector +
-  FTS → RRF, degradatie naar alleen-FTS eerlijk gemeld).
+  FTS → RRF, degradatie naar alleen-FTS eerlijk gemeld). Elke ruling toont ook
+  zijn "waar besloten"-bronverwijzing (URL of vrije citatie, #166), ook in het
+  kaart-dossier en de reviewqueue.
   *Route* `/rulings` · *endpoint* `/api/rulings`.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed
   en gekoppeld aan kaarten. *Endpoint* `/api/bans`.
@@ -253,6 +255,14 @@ apart in §6.
   (`ip_hash`, zie §4.6/§5) van het huidige request; geen id-parameter, dus
   geen enumeratie van andermans historie mogelijk (#157). *Endpoint*
   `/api/ask/history`.
+- **Ruling vastleggen vanuit het gesprek** (#166) — bij een antwoord een
+  compacte actie "Vastleggen als ruling": de uitspraak (voorgevuld vanuit het
+  antwoord, bewerkbaar), onderwerp/scope (kaart/§-sectie/algemeen) en een
+  verplichte bronverwijzing ("waar besloten" — Discord-link, officiële post,
+  toernooibeslissing, of een vrije citatie). Alleen zichtbaar voor ingelogd of
+  beheerder; anoniem ziet de actie niet. Autoriteit bepaalt de route (§4.4):
+  beheerder ⇒ direct geverifieerd, ingelogde gebruiker ⇒ voorstel in de
+  reviewqueue. *Endpoint* `/api/ask/ruling`.
 
 ### 4.4 Kennisbank / het brein
 
@@ -295,6 +305,16 @@ apart in §6.
 - **Self-learning** — negatieve/positieve feedback → reviewqueue →
   geverifieerde correcties (embedded, gezaghebbend) die semantisch terugkomen
   in de prompt.
+- **Autoriteitsroute voor de antwoord-beïnvloedende laag** (#166) — wie mag
+  een Correction rechtstreeks `verified` maken (telt meteen mee in `/ask` en
+  `/rulings`) is streng server-authoritatief: alleen de beheerder (X-Admin-Key)
+  krijgt dat pad, direct embedded via hetzelfde verify-pad als de
+  reviewqueue. Een ingelogde gebruiker legt altijd een `pending`-voorstel vast
+  (nooit direct verified/geëmbed) — precies dezelfde poort als de
+  review-notitie-promotie (#124); pas na beheerder-goedkeuring (het bestaande
+  verify-pad) telt het mee. Anoniem wordt bij dit pad geweigerd (401) — geen
+  invoer zonder identiteit. Dit is de anti-vergiftigingsgrens uit
+  docs/KNOWLEDGE.md in code.
 
 ### 4.5 Beheer (`/admin`)
 

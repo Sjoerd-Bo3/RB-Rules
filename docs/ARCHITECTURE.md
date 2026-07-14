@@ -238,7 +238,9 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
   op `AskService` met `AskOptions.Benchmark = true`, #158),
-  `KnowledgeGapsService`, `JobLedger`, `PushService`,
+  `KnowledgeGapsService`, `ReviewNoteService` (#124, beheerder-notitie →
+  geverifieerde ruling), `ChatRulingService` (#166, in-chat-ruling →
+  verified/pending naar autoriteit), `JobLedger`, `PushService`,
   `MailService`, `UserAccountService`, `PasskeyService`, en de migraties in
   `Migrations/`.
 - **`RbRules.Api`** — compositie: `Program.cs` doet alleen DI-registratie,
@@ -253,7 +255,9 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
 Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
 contradictions), `/api/ask` + `/api/ask/stream` + `/api/ask/history` (eigen
-ask-geschiedenis op user_id/ip_hash, geen id-parameter, #157), `/api/auth/*`
+ask-geschiedenis op user_id/ip_hash, geen id-parameter, #157) +
+`/api/ask/ruling` (in-chat ruling vastleggen, autoriteit bepaalt verified vs
+pending, #166), `/api/auth/*`
 (magic-link + passkeys), `/api/changes|sources|bans|sets/upcoming`,
 `/api/push/*`, `/api/admin/*` (o.a. vraag-traces: `/asktraces` als slanke
 lijst, `/asktraces/{id}` met het volledige gesprek — antwoord + eerdere
@@ -487,6 +491,21 @@ kan rb-api eerder starten dan Postgres klaar is.
   meta) wordt in élk koppelvlak expliciet gelabeld; het antwoordformat scheidt
   "Regelbasis" van "Community-consensus" (`AskService.BasePrompt`,
   `ClaimRetrieval`).
+- **Wie mag de antwoord-beïnvloedende laag schrijven** (#166) — een
+  `Correction` met `Status = verified` telt direct mee in `/ask` (self-learning
+  override-kanaal) en `/rulings`; wie dat rechtstreeks mag zetten is
+  server-authoritatief, nooit uit de request-body. `ChatRulingService`
+  (in-chat-rulings vanuit `/ask`, `POST /api/ask/ruling`) en `ReviewNoteService`
+  (#124, beheerder-notitie → ruling) zijn de enige twee schrijfpaden naar die
+  laag: `AdminAuthFilter.IsAdmin` (echte `ADMIN_PASSWORD`-check, X-Admin-Key)
+  geeft direct `verified` + embed; een ingelogde gebruiker
+  (`RequestUserContext.User`, via `UserQuotaFilter`/X-User-Token) krijgt altijd
+  `unverified` (pending) — nooit geëmbed, nooit direct zichtbaar in
+  `/ask`/`/rulings`, tot een beheerder het bestaande verify-pad
+  (`admin/corrections/{id}/verify`) gebruikt. Anoniem wordt afgewezen (401)
+  vóórdat de service wordt aangeroepen. Een bronverwijzing (`Correction.
+  SourceRef` — URL door `UrlGuard`, of vrije citatie) is verplicht: een ruling
+  zonder herkomst wordt geweigerd.
 - **Het brein & BrainRef** (`docs/BRAIN.md`). Eén tekstuele identiteit
   (`card:…`, `section:sourceId/code`, `claim:…`) over pgvector, Neo4j én
   API-contracten (`BrainRef.cs`). De brein-API (`/api/brain/*`) biedt zes

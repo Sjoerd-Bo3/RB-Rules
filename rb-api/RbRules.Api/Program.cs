@@ -88,6 +88,8 @@ builder.Services.AddScoped<RelationMiningService>();
 builder.Services.AddScoped<AgenticRelationService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<ReviewNoteService>();
+// In-chat rulings vanuit /ask (#166): autoriteit bepaalt verified vs pending.
+builder.Services.AddScoped<ChatRulingService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();
 // Judge-benchmark (#158): draait de vaste vragenset met de isolatie-vlag aan
