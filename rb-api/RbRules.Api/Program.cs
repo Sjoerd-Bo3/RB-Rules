@@ -86,6 +86,9 @@ builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<ReviewNoteService>();
 builder.Services.AddScoped<SetReleaseService>();
 builder.Services.AddScoped<KnowledgeGapsService>();
+// Judge-benchmark (#158): draait de vaste vragenset met de isolatie-vlag aan
+// (AskOptions.Benchmark) — voedt geen ask_trace/ask_metric/relaties.
+builder.Services.AddScoped<BenchmarkService>();
 // Run_log-grootboek voor periodieke jobs (#122): vensters voor de scheduler
 // en "laatste run per job" voor beheer.
 builder.Services.AddScoped<JobLedger>();
@@ -218,6 +221,15 @@ if (!app.Environment.IsEnvironment("Testing"))
     var existing = await db.Sources.Select(s => s.Id).ToHashSetAsync();
     foreach (var src in SourceSeed.Defaults.Where(s => !existing.Contains(s.Id)))
         db.Sources.Add(src);
+    await db.SaveChangesAsync();
+
+    // Benchmark-seed (#158): idempotent op ExternalKey, zelfde patroon als
+    // hierboven — nieuwe delen van de judge-test komen vanzelf mee bij de
+    // volgende deploy (BenchmarkSeed.Defaults uitbreiden volstaat); bestaande
+    // vragen (en een eventuele CorrectIndex-update) blijven ongemoeid.
+    var existingBq = await db.BenchmarkQuestions.Select(q => q.ExternalKey).ToHashSetAsync();
+    foreach (var q in BenchmarkSeed.Defaults.Where(q => !existingBq.Contains(q.ExternalKey)))
+        db.BenchmarkQuestions.Add(q);
     await db.SaveChangesAsync();
 
     try
