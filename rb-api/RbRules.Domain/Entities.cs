@@ -25,6 +25,38 @@ public class Source
     public bool Enabled { get; set; } = true;
     public string? LastHash { get; set; }
     public DateTimeOffset? LastChecked { get; set; }
+    /// <summary>Herkomst (#167): welke <see cref="SourceFeed"/> deze bron
+    /// ontdekte via de feed-crawl (alleen het AutoApprove-pad vult dit).
+    /// Null = handmatig/legacy toegevoegd, of via de scout/hub-ontdekking
+    /// (een ander, ouder ontdekkingspad met een eigen reviewqueue).</summary>
+    public string? FeedId { get; set; }
+}
+
+/// <summary>Bron-feed (#167): een index-pagina die periodiek wordt afgespeurd
+/// op nieuwe artikel-URL's — een feed IS geen inhoudelijke bron; hij
+/// <em>ontdekt</em> bronnen. <see cref="AutoApprove"/> onderscheidt een
+/// vertrouwde/officiële feed (nieuw artikel ⇒ meteen een <see cref="Source"/>
+/// in het register, enabled) van een minder vertrouwde (⇒ <see
+/// cref="SourceProposal"/> in de reviewqueue). <see cref="CategoryFilter"/>
+/// is een komma-gescheiden lijst toegestane categorieën (het
+/// &lt;categorie&gt;-padsegment in playriftbound.com/en-us/news/&lt;categorie&gt;/
+/// &lt;slug&gt;) — null/leeg = alle categorieën, ook artikelen zonder
+/// categorie-segment. <see cref="LastHash"/> is puur een goedkope
+/// skip-optimalisatie (ongewijzigde pagina ⇒ geen nieuwe artikelen mogelijk);
+/// de echte idempotentie zit in de per-URL-dedupe tegen het bronnenregister
+/// en de reviewqueue, dus een per-request wisselende linkvolgorde (zoals de
+/// Rules Hub laat zien) kan hier nooit dubbele bronnen of ruis opleveren.</summary>
+public class SourceFeed
+{
+    public required string Id { get; set; }
+    public required string Name { get; set; }
+    public required string Url { get; set; }
+    public bool Enabled { get; set; } = true;
+    public bool AutoApprove { get; set; }
+    public string? CategoryFilter { get; set; }
+    public required string Cadence { get; set; }       // daily | weekly
+    public DateTimeOffset? LastChecked { get; set; }
+    public string? LastHash { get; set; }
 }
 
 public class Document
