@@ -17,6 +17,17 @@ public class UserQuotaFilter : IEndpointFilter
         EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var http = context.HttpContext;
+
+        // Ask-geschiedenis (#157): vóór de token-check, want ook anonieme
+        // requests krijgen een ip_hash op RequestUserContext — zelfde
+        // client-IP-patroon als de rate-limiter (Program.cs). Ontbreekt
+        // ASK_IP_HASH_SECRET of het IP: IpHashing.Hash geeft null (stille
+        // degradatie, geen ip_hash op de trace).
+        var clientIp = http.Request.Headers["X-Client-Ip"].FirstOrDefault()
+            ?? http.Connection.RemoteIpAddress?.ToString();
+        http.RequestServices.GetRequiredService<RequestUserContext>().IpHash =
+            IpHashing.Hash(clientIp, Environment.GetEnvironmentVariable("ASK_IP_HASH_SECRET"));
+
         var token = http.Request.Headers[TokenHeader].FirstOrDefault();
         if (string.IsNullOrEmpty(token)) return await next(context);
 

@@ -162,6 +162,9 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("ask_trace");
             e.HasIndex(x => x.CreatedAt);
+            // Eigen ask-geschiedenis (#157): laatste N op user_id resp. ip_hash.
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
+            e.HasIndex(x => new { x.IpHash, x.CreatedAt });
         });
 
         b.Entity<KnowledgeDoc>(e =>

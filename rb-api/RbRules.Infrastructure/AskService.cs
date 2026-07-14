@@ -781,6 +781,10 @@ public class AskService(
                     sw.ElapsedMilliseconds).ToJson(),
                 Ok = aiAnswer is not null,
                 UserId = userContext.User?.Id,
+                // Anonieme ask-geschiedenis (#157): zelfde IpHash-stempel als
+                // UserId hierboven — RequestUserContext.IpHash komt van de
+                // quota-filter (Api-laag), null zonder secret/IP.
+                IpHash = userContext.IpHash,
             });
             // Bewaar alleen de recente historie.
             var cutoff = await db.AskTraces
