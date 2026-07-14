@@ -64,7 +64,7 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
         var errataSources = await db.Sources.AsNoTracking()
             .Where(s => s.Enabled && s.TrustTier == 1 && s.Id.Contains("errata"))
             .OrderByDescending(s => s.Rank)
-            .Select(s => new { s.Id, s.Name, s.Url })
+            .Select(s => new { s.Id, s.Name, s.Url, s.PublishedAt, s.UpdatedAt })
             .ToListAsync(ct);
 
         // Per bron extraheren, buiten de transactie (LLM-calls zijn traag en
@@ -81,12 +81,20 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
             if (raw is null) continue;
             var extracted = BanErrataExtractor.ParseErrata(raw);
             if (extracted.Count == 0) continue;
+            // Temporele precedentie (#168): de errata gelden vanaf de laatste
+            // wérkelijke wijziging van hun bronpagina (UpdatedAt), of anders
+            // haar publicatiedatum — nooit geraden (null als de bron geen van
+            // beide draagt, bijvoorbeeld een legacy/handmatig toegevoegde bron).
+            var effective = s.UpdatedAt ?? s.PublishedAt;
+            DateOnly? effectiveFrom = effective is null
+                ? null : DateOnly.FromDateTime(effective.Value.UtcDateTime);
             perSource.Add((doc.Value.Url, [.. extracted.Select(e => new Erratum
             {
                 CardName = e.CardName,
                 NewText = e.NewText,
                 CardRiftboundId = MatchCard(e.CardName),
                 SourceUrl = doc.Value.Url,
+                EffectiveFrom = effectiveFrom,
             })]));
         }
 

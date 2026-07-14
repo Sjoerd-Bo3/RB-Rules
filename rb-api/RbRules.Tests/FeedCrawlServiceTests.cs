@@ -45,6 +45,9 @@ public class FeedCrawlServiceTests
         Assert.True(src.Enabled);
         Assert.Equal("f1", src.FeedId);
         Assert.Equal(FeedCrawlService.AutoDiscoveredRank, src.Rank);
+        // Temporele precedentie (#168): de <time>-datum uit de artikelkaart
+        // (Card()-fixture: 2026-01-01) komt mee als PublishedAt.
+        Assert.Equal(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), src.PublishedAt);
 
         var feed = await db.SourceFeeds.SingleAsync();
         Assert.NotNull(feed.LastChecked);
@@ -415,6 +418,30 @@ public class FeedCrawlServiceTests
         Assert.Equal(1, r.NewSources);
         var src = await db.Sources.SingleAsync();
         Assert.Equal("Behouden", src.Name);
+    }
+
+    [Fact]
+    public async Task RunAsync_ArticleWithoutTimeElement_PublishedAtStaysNull()
+    {
+        // Geen <time>-element ⇒ RiotNewsFeed.ParseArticles geeft Date: null —
+        // nooit een gok, ook niet als "nu ontdekt" (#168).
+        using var db = NewDb();
+        db.SourceFeeds.Add(new SourceFeed
+        {
+            Id = "f1", Name = "Feed", Url = Base, AutoApprove = true, Cadence = "daily",
+        });
+        await db.SaveChangesAsync();
+        var html = $"""
+                    <a role="button" href="{Base}x" data-testid="articlefeaturedcard-component">
+                      <div data-testid="card-title">Zonder datum</div>
+                    </a>
+                    """;
+        var (svc, _) = Service(db, (Base, Ok(html)));
+
+        await svc.RunAsync(onlyDue: false);
+
+        var src = await db.Sources.SingleAsync();
+        Assert.Null(src.PublishedAt);
     }
 
     // --- testinfra -------------------------------------------------------
