@@ -147,6 +147,40 @@ public static class AskEndpoints
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+
+        // ── Ruling vastleggen vanuit een /ask-gesprek (#166) ───────────
+        // Autoriteit bepaalt de route (de veiligheidskern): een beheerder
+        // (X-Admin-Key) verifieert direct; een ingelogde gebruiker
+        // (X-User-Token, via UserQuotaFilter → RequestUserContext) legt een
+        // voorstel vast in de reviewqueue; anoniem wordt hier al geweerd —
+        // server-authoritatief, geen van beide credentials komt uit de body.
+        app.MapPost("/api/ask/ruling", async (
+            RulingSubmit body, ChatRulingService chatRulings,
+            RequestUserContext userContext, HttpContext http, CancellationToken ct) =>
+        {
+            var isAdmin = AdminAuthFilter.IsAdmin(http);
+            if (!isAdmin && userContext.User is null)
+                return Results.Json(
+                    new { error = "log in (of als beheerder) om een ruling vast te leggen" },
+                    statusCode: StatusCodes.Status401Unauthorized);
+
+            var result = await chatRulings.SubmitAsync(
+                body, isAdmin ? RulingAuthority.Admin : RulingAuthority.User, ct);
+            return result.Status switch
+            {
+                RulingSubmitStatus.InvalidInput => Results.BadRequest(new { error = result.Error }),
+                RulingSubmitStatus.Verified => Results.Ok(new
+                {
+                    ok = true, verified = true,
+                    result.CorrectionId, result.Embedded, result.Updated,
+                }),
+                _ => Results.Ok(new
+                {
+                    ok = true, verified = false,
+                    result.CorrectionId, result.Updated,
+                }),
+            };
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
     }
 
     /// <summary>Gedeelde validatie/normalisatie voor /api/ask en
