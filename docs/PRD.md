@@ -199,6 +199,16 @@ apart in §6.
   synoniemen, NL→EN speltermen) vóór retrieval (#66).
 - **Doorvragen met context** — follow-up-vragen behouden de volledige context
   (#41).
+- **Aanpak-keuze per vraag (alleen ingelogd)** — Auto (de AgenticGate
+  beslist), Snel (geforceerde single-pass, nooit escaleren) of Grondig
+  (de brein-agent forceren), met eerlijke verwachting ("±2 min, telt
+  zwaarder mee") en het resterende dagtegoed bij het formulier (#153).
+  Server-authoritatief: anoniem is altijd Auto, de `ASK_AGENTIC`-flag blijft
+  de meester en foto-vragen blijven op het vision-pad. Grondig kost een
+  eigen dagquotum; is dat op, dan valt de vraag terug op Auto met een nette
+  melding — de gebruikte aanpak en de reden reizen als metadata mee in de
+  respons (en op het streamingpad al in het meta-frame). De keuze reist mee
+  met doorvragen en overleeft de feedback-roundtrip.
 - **UX** — voorbeeldvragen, klikbare citaties, geschiedenis en denk-feedback
   (duim omhoog/omlaag, die de self-learning-loop voedt). *Endpoint*
   `/api/corrections`.
@@ -243,9 +253,12 @@ apart in §6.
 - **Agentic ask** — voor kwalificerende vragen (interactievraag met ≥2
   kaartnamen, of lege retrieval) mag rb-ai als agent over het brein redeneren
   via de brein-tools, achter een feature-flag met vangnet naar single-pass; de
-  brein-stappen staan in de trace. Verbanden die de agent onderweg ontdekt
-  komen als relatievoorstel in de reviewqueue (#120) — het brein verrijkt
-  zichzelf al antwoordend, altijd achter de reviewpoort.
+  brein-stappen staan in de trace. Ingelogde gebruikers kunnen de agent ook
+  zelf forceren of juist uitsluiten via de aanpak-keuze op `/ask` (#153,
+  §4.3), binnen een eigen dagquotum; de trace en het kostenoverzicht
+  onderscheiden gate- en gebruikers-escalaties. Verbanden die de agent
+  onderweg ontdekt komen als relatievoorstel in de reviewqueue (#120) — het
+  brein verrijkt zichzelf al antwoordend, altijd achter de reviewpoort.
 - **Dynamische relaties** — één generiek edge-type `RELATES_TO {kind, trust,
   explanation, status}` met een open, gereviewd vocabulaire; LLM-relaties gaan
   nooit rechtstreeks de graph in (Postgres is de bron, projectie na review).
@@ -300,7 +313,11 @@ apart in §6.
   `/api/admin/asktraces/{id}` (het gesprek, lazy bij het uitklappen).
 - **Token-metering & kostenoverzicht** — echte input/output-tokens per vraag
   (rb-ai geeft usage door, geboekt op `ask_metric`), getotaliseerd per pad
-  (cheap/hard/agentic) en per account in het kostenoverzicht (#121).
+  (cheap/hard/agentic, waarbij agentic splitst op gate- vs
+  gebruikers-escalatie, #153) en per account in het kostenoverzicht (#121);
+  de vraag-traces dragen dezelfde attributie als badge ("agentic (gate)" /
+  "agentic (gebruiker)"). Quota per account (vragen/foto's/Grondig) zijn in
+  het gebruikersoverzicht per rij bij te stellen.
 - **Periodieke zelfverrijking** — relatie-mining nachtelijk en de
   bronnen-scout wekelijks in de scheduler-tick, met job-gate,
   run_log-vensters en degradatiepaden (#122).
@@ -318,6 +335,9 @@ apart in §6.
   `/api/push/subscribe`, `/api/push/unsubscribe`.
 - **Accounts** — login via e-mail (magic-link-verificatie) met per-gebruiker
   quota/kosteninzicht als basis; per-IP rate-limiting op de dure endpoints.
+  Drie dagquota per account (UTC-dag, geteld uit `ask_metric`): vragen,
+  foto-vragen en zelf geforceerde Grondig-vragen (#153) — de accountpagina
+  toont het verbruik en resterend tegoed van alle drie.
   *Routes* `/account`, `/account/verify` · *endpoints* `/api/auth/request`,
   `/api/auth/verify`, `/api/auth/me`, `/api/auth/logout`.
 - **Passkeys (WebAuthn)** — inloggen zonder mailafhankelijkheid; passkeys
