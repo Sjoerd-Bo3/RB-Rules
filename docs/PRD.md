@@ -193,6 +193,21 @@ apart in §6.
   vanaf hun tweede scan gewoon via de normale voor/na-diff. *Job* `clarify`
   (handmatig of nachtelijk via `ScanScheduler`) · *endpoints*
   `/api/admin/jobs/clarify`, `/api/admin/corrections/{id}/reject`.
+  **Bron, opmerking en her-evaluatie in de reviewqueue** (#184): elk
+  correctie-item toont de bron-naam (resolvet voor clarify-mining-items via
+  hun `Provenance`) als gesaniteerde (`UrlGuard`) klikbare link, en een
+  opmerkingsveld (`Correction.ReviewNote`) dat traceerbaar bewaart wordt bij
+  verifiëren/afwijzen/her-evalueren. "Opnieuw evalueren" draait de hybride
+  poort hierboven deterministisch opnieuw voor dát ene item — een opmerking
+  mag een anker-correctie bevatten (bv. "mechanic:Recall", "card:…",
+  "section:402.3", `ReviewNoteAnchor`) die een fout-aangeankerd of onherkend
+  onderwerp overschrijft, zodat een terecht item alsnog `verified` wordt
+  zonder de LLM-extractie te herhalen (`CorrectionReevaluationService`). Een
+  gezette opmerking reist mee: een volgende clarify-her-mine
+  (`ClarificationMiningService.StoreAsync`) laat Status/StatusReason dan
+  ongemoeid (nooit stilzwijgend teruggedraaid), en degradeert een al
+  geverifieerde ruling sowieso nooit. *Endpoint*
+  `/api/admin/corrections/{id}/reevaluate`.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed
   en gekoppeld aan kaarten. *Endpoint* `/api/bans`.
 - **Bron-feeds** (#167) — index-pagina's (playriftbound.com/en-us/news/…) die
@@ -475,7 +490,13 @@ apart in §6.
   precies zoals een gebruikersvoorstel. De trust-1-poort blijft dus een
   beheerdersbeslissing (wie een bron official maakt) én de grounding/anchor-
   poort houdt de LLM eerlijk; het is geen blanket-uitzondering op de
-  anti-vergiftigingsgrens.
+  anti-vergiftigingsgrens. Een vierde weg (#184): een beheerder-opmerking op
+  een `unverified` clarify-item triggert een deterministische her-toets van
+  dezelfde hybride poort voor dát ene item (`CorrectionReevaluationService`)
+  — nog steeds machine-gecontroleerd (grounding/anchoring, evt. met een
+  anker-correctie uit de opmerking), geen directe menselijke override van
+  Status; alleen de beheerder (X-Admin-Key) kan de actie triggeren. Een
+  al `verified` of `rejected` item degradeert/heropent nooit via dit pad.
 
 ### 4.5 Beheer (`/admin`)
 
@@ -531,12 +552,14 @@ apart in §6.
   nummers", met doorklik). *Route* `/admin/overview/setdekking` ·
   *endpoint* `/api/admin/overview/setcoverage` (#145).
 - **Reviewqueues** — claims, relaties (+ kandidaat-kinds), mechaniek-kandidaten
-  en bronvoorstellen accepteren/verwerpen, mét het bewijs per keuze (#123).
+  en bronvoorstellen accepteren/verwerpen, mét het bewijs per keuze (#123):
+  bron-naam + gesaniteerde (`UrlGuard`) klikbare link per claim-bewijs.
   *Endpoints* o.a. `/api/admin/claims/{id}/accept|reject`,
   `/api/admin/relations/{id}/accept|reject`,
   `/api/admin/relationkinds/{id}/accept|reject`,
   `/api/admin/mechanics/{id}/accept|reject`,
-  `/api/admin/proposals/{id}/accept|reject`.
+  `/api/admin/proposals/{id}/accept|reject`. De correcties-reviewqueue heeft
+  daarnaast een eigen bron+opmerking→her-evaluatie-lus (#184, zie §4.1).
 - **Vraag-traces** — per vraag welke kennislagen en brein-stappen meededen
   (#40), en sinds #143 het volledige gesprek: het definitieve antwoord (ook
   het streaming-slotframe; bij AI-uitval de eerlijke uitvalmelding) en een
@@ -599,7 +622,10 @@ apart in §6.
   `/admin/overview/benchmark?sweep=…` · *endpoints*
   `/api/admin/jobs/benchmarksweep`, `/api/admin/overview/benchmark`.
 - **Primer- & correctie-beheer** — drafts goedkeuren/intrekken; correcties
-  verifiëren. *Endpoints* `/api/admin/knowledge/*`, `/api/admin/corrections/*`.
+  verifiëren/afwijzen, met bron-naam+link, een opmerkingsveld en een
+  "opnieuw evalueren"-actie die de opmerking bewaart en de hybride poort
+  her-toetst (#184). *Endpoints* `/api/admin/knowledge/*`,
+  `/api/admin/corrections/*` (incl. `/reevaluate`).
 - **Bronnenbeheer** — bronnen met trust/rank toevoegen/verwijderen.
   *Endpoints* `/api/admin/sources`, `/api/admin/sources/{id}`.
 
@@ -720,16 +746,6 @@ Bindende kwaliteitseisen; ze zijn uitgeschreven in `docs/CONVENTIONS.md` en
 
 Uit de openstaande GitHub-issues, gegroepeerd op thema. **In-flight** =
 openstaande PR.
-
-**Kennisbank verdiepen**
-- **#125** *(in-flight, PR #136)* Misvattingen-laag: verworpen/ontzenuwde
-  claims als negatieve kennis in antwoorden ("hoe het wél én niet zit"), met
-  weerlegging en bron.
-
-**Beheer & reviewqueues**
-- **#124** *(in-flight, PR #137)* Reviewqueues: verworpen/afgehandelde items
-  uit de default-weergave, een archief voor álle queues, en
-  beheerder-notities die doorwerken (optioneel als geverifieerde correctie).
 
 **Ops & platform**
 - **#45** Ops-hardening voor de 8GB-VM: memory-limits, healthchecks +
