@@ -322,6 +322,9 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("benchmark_run");
             e.HasIndex(x => x.StartedAt);
+            // Model-sweep (#174): het sweep-overzicht groepeert per SweepId —
+            // sparse index (de meeste rijen blijven null buiten een sweep).
+            e.HasIndex(x => x.SweepId);
         });
 
         b.Entity<BenchmarkResult>(e =>

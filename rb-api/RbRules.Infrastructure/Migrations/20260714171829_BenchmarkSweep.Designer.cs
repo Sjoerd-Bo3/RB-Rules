@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260714171829_BenchmarkSweep")]
+    partial class BenchmarkSweep
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1144,10 +1147,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("detected_at");
 
-                    b.Property<DateOnly?>("EffectiveFrom")
-                        .HasColumnType("date")
-                        .HasColumnName("effective_from");
-
                     b.Property<string>("NewText")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1751,10 +1750,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("parser");
 
-                    b.Property<DateTimeOffset?>("PublishedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("published_at");
-
                     b.Property<int>("Rank")
                         .HasColumnType("integer")
                         .HasColumnName("rank");
@@ -1767,10 +1762,6 @@ namespace RbRules.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("type");
-
-                    b.Property<DateTimeOffset?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
 
                     b.Property<string>("Url")
                         .IsRequired()
