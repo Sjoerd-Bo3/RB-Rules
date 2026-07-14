@@ -106,9 +106,15 @@
 	interface GapDrift { graphAvailable: boolean; detail: string | null; entries: GapDriftEntry[]; }
 	interface GapAgingSignal { kind: string; title: string; reason: string; at: string; }
 	interface GapSetCoverageSignal { setId: string; name: string; missing: number; baseTotal: number; }
+	// Verwerkingssignaal (#171, GapAgingSignal-stijl): een bron waarvan de
+	// laatste scan/vervolgstap mislukte, hangt, of die nog nooit gescand is.
+	interface GapSourceProcessingSignal {
+		sourceId: string; name: string; status: string; reason: string; at: string | null;
+	}
 	interface GapsReport {
 		coverage: GapCoverage; questions: GapQuestion[]; sources: GapSource[]; drift: GapDrift;
 		aging: GapAgingSignal[]; setCoverage: GapSetCoverageSignal[];
+		sourceProcessing: GapSourceProcessingSignal[];
 	}
 	// Piltover Archive-decks (#15): attributie per deck via sourceUrl;
 	// unknownCards = kaartregels zonder koppeling aan onze kaarten.
@@ -1173,6 +1179,30 @@
 								<span class="badge warn-b">{a.kind === 'primer' ? 'primer-draft' : 'claim verouderd'}</span>
 								<strong>{a.title}</strong>
 								<span class="meta">{a.reason} · {fmtDate(a.at)}</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+
+			<!-- Bron-verwerking als signaal (#171, zelfde stijl als #119): bronnen
+			     waarvan de laatste scan of een vervolgstap (classify/claims-mining)
+			     mislukte, hangt, of die nog nooit gescand zijn. "Leeg" (scan ok,
+			     niets opgeleverd) is bewust geen signaal — dat kan legitiem zijn. -->
+			<h2 class="gap-h">Bron-verwerking <span class="meta">(bronnen die aandacht vragen — bekijk het dossier in de <a class="meta-link" href="/admin">bronnentabel</a> voor het ruwe document en de vervolgstappen)</span></h2>
+			{#if !gaps.sourceProcessing.length}
+				<p class="meta">Geen signalen — elke ingeschakelde bron is gescand en verwerkt (of legitiem leeg).</p>
+			{:else}
+				<div class="panel item">
+					<ul class="gap-list">
+						{#each gaps.sourceProcessing as p (p.sourceId)}
+							<li>
+								<span class="badge {p.status === 'nooit-gescand' ? 'warn-b' : 'err'}">
+									{p.status === 'nooit-gescand' ? 'nooit gescand' : 'onvolledig'}
+								</span>
+								<strong>{p.name}</strong>
+								<span class="meta">{p.reason}{#if p.at} · {fmtDate(p.at)}{/if}</span>
+								<a class="meta-link" href="/admin#bron-{p.sourceId}">bekijk dossier</a>
 							</li>
 						{/each}
 					</ul>

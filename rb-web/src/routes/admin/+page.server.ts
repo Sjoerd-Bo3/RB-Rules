@@ -141,5 +141,20 @@ export const actions: Actions = {
 		} catch (e) {
 			return fail(502, { error: e instanceof Error ? e.message : String(e) });
 		}
+	},
+	// Bron-dossier (#171): re-triggerknop — draait scan (+ classify/claims
+	// zoals de scan dat altijd al deed) opnieuw voor déze ene bron. Synchroon
+	// (geen JobRunner-queue, bestaand endpoint) — het id komt terug zodat de
+	// melding en het opnieuw laden van het dossier bij de juiste rij landen.
+	rescanSource: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = String(form.get('id') ?? '');
+		try {
+			await adminApi(`/api/admin/scan?sourceId=${encodeURIComponent(id)}`, { method: 'POST' });
+			return { ok: true, rescanned: id };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
 	}
 };

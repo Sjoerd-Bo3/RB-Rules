@@ -103,6 +103,62 @@
 		setId: string; name: string; publishedOn: string; cardCount: number | null;
 	}
 
+	// Bron-dossier (#171): herkomst + opbrengst per soort + verwerkingsstatus,
+	// spiegelbeeld van het kaart-dossier (#127).
+	interface SourceDossierOrigin { feedId: string | null; feedName: string | null; }
+	interface SourceYieldChange {
+		id: number; changeType: string; severity: string; summary: string | null; detectedAt: string;
+	}
+	interface SourceYieldBan {
+		id: number; name: string; cardRiftboundId: string | null; kind: string; format: string;
+		effectiveFrom: string | null; detectedAt: string;
+	}
+	interface SourceYieldErratum {
+		id: number; cardName: string; cardRiftboundId: string | null; detectedAt: string;
+	}
+	interface SourceYieldRuling {
+		id: number; scope: string; ref: string; question: string | null; text: string;
+		status: string; at: string;
+	}
+	interface SourceYieldClaim {
+		id: number; topicType: string; topicRef: string; statement: string; status: string; lastSeen: string;
+	}
+	interface SourceDossierYield {
+		documents: number; lastDocumentAt: string | null; ruleChunks: number;
+		changesTotal: number; changes: SourceYieldChange[];
+		bansTotal: number; bans: SourceYieldBan[];
+		errataTotal: number; errata: SourceYieldErratum[];
+		rulingsTotal: number; rulings: SourceYieldRuling[];
+		claimsTotal: number; claims: SourceYieldClaim[];
+	}
+	interface SourceDossierScan { status: string; detail: string | null; at: string; }
+	interface SourceDossierStep { kind: string; status: string; detail: string | null; at: string; }
+	interface SourceDossierProcessing {
+		lastScan: SourceDossierScan | null; followUps: SourceDossierStep[];
+		completenessStatus: string; completenessNote: string;
+	}
+	interface SourceDossier {
+		sourceId: string; sourceName: string; trustTier: number;
+		origin: SourceDossierOrigin; yield: SourceDossierYield; processing: SourceDossierProcessing;
+	}
+	interface SourceDossierState { loading: boolean; error: string | null; data: SourceDossier | null; }
+
+	// Compleetheidssignaal (#171, Domain-functie SourceDossierCompleteness) →
+	// badge-kleur + NL-label; status = kleur + tekst, geen emoji's.
+	function completenessBadge(status: string): string {
+		if (status === 'volledig') return 'ok-b';
+		if (status === 'leeg') return 'warn-b';
+		return 'err';
+	}
+	function completenessLabel(status: string): string {
+		switch (status) {
+			case 'volledig': return 'Volledig verwerkt';
+			case 'leeg': return 'Niets opgeleverd';
+			case 'onvolledig': return 'Onvolledig';
+			default: return 'Nog nooit gescand';
+		}
+	}
+
 	const sources = $derived(data.sources as Source[]);
 	// Herkomst-lookup (#167): id → naam, voor de "stamt van: …"-koppeling in
 	// de bronnentabel; het volledige feed-beheer zit op de eigen pagina.
@@ -135,6 +191,26 @@
 			};
 		}
 	}
+	// Bron-dossier (#171): lazy per bron, pas bij uitklappen — force=true na
+	// een re-trigger, zodat de zojuist opnieuw gedraaide scan direct zichtbaar
+	// wordt zonder de hele pagina te herladen.
+	let sourceDossiers = $state<Record<string, SourceDossierState>>({});
+	async function loadSourceDossier(id: string, force = false) {
+		const cur = sourceDossiers[id];
+		if (!force && (cur?.loading || cur?.data)) return;
+		sourceDossiers[id] = { loading: true, error: null, data: null };
+		try {
+			const r = await fetch(`/admin/sources/${encodeURIComponent(id)}`);
+			if (!r.ok) throw new Error(`status ${r.status}`);
+			sourceDossiers[id] = { loading: false, error: null, data: await r.json() };
+		} catch {
+			sourceDossiers[id] = {
+				loading: false, data: null,
+				error: 'Dossier laden mislukt — klap opnieuw uit om het nog eens te proberen'
+			};
+		}
+	}
+
 	const upcoming = $derived((data.upcoming ?? []) as UpcomingSet[]);
 
 	// Lazy gesprek per trace (#143): pas fetchen bij de eerste uitklap —
@@ -426,7 +502,8 @@
 			<thead><tr><th>Bron</th><th>Trust</th><th>Cadans</th><th>Herkomst</th><th>Laatst gecontroleerd</th><th>Actief</th></tr></thead>
 			<tbody>
 				{#each sources as s (s.id)}
-					<tr>
+					{@const dossier = sourceDossiers[s.id]}
+					<tr id="bron-{s.id}">
 						<td><strong>{s.name}</strong><br /><a class="meta" href={s.url}>{s.id}</a></td>
 						<td>{s.trustTier}</td>
 						<td>{s.cadence}</td>
@@ -444,6 +521,118 @@
 								<input type="hidden" name="enabled" value={String(!s.enabled)} />
 								<button class="ghost small">{s.enabled ? 'Aan' : 'Uit'}</button>
 							</form>
+						</td>
+					</tr>
+					<tr class="dossier-row">
+						<td colspan="6" class="dossier-cell">
+							<!-- Bron-dossier (#171): wat heeft déze bron opgeleverd, en is dat
+							     compleet verwerkt? Lazy, zelfde uitklap-patroon als de
+							     mechaniek-bewijs hierboven. -->
+							<details class="evidence" ontoggle={(e) => { if (e.currentTarget.open) loadSourceDossier(s.id); }}>
+								<summary>Dossier — wat heeft deze bron opgeleverd, en is dat compleet verwerkt?</summary>
+								{#if dossier?.loading}
+									<p class="meta">Dossier laden…</p>
+								{:else if dossier?.error}
+									<p class="warn">{dossier.error}</p>
+								{:else if dossier?.data}
+									{@const d = dossier.data}
+									<div class="dossier-body">
+										<p>
+											<span class="badge {completenessBadge(d.processing.completenessStatus)}">{completenessLabel(d.processing.completenessStatus)}</span>
+											<span class="meta">{d.processing.completenessNote}</span>
+										</p>
+										{#if d.processing.lastScan}
+											<p class="meta">
+												Laatste scan: {d.processing.lastScan.status} · {new Date(d.processing.lastScan.at).toLocaleString('nl-NL')}
+												{#if d.processing.lastScan.detail}— {d.processing.lastScan.detail}{/if}
+											</p>
+										{/if}
+										{#if d.processing.followUps.length}
+											<p class="meta">Vervolgstappen (classify/claims-mining):</p>
+											<ul class="dossier-list">
+												{#each d.processing.followUps as f, i (i)}
+													<li>
+														<span class="badge {f.status === 'error' ? 'err' : 'ok-b'}">{f.kind}</span>
+														{f.status}{#if f.detail} — {f.detail}{/if}
+														<span class="meta">· {new Date(f.at).toLocaleString('nl-NL')}</span>
+													</li>
+												{/each}
+											</ul>
+										{/if}
+										<form
+											method="POST" action="?/rescanSource"
+											use:enhance={() => async ({ update }) => { await update(); await loadSourceDossier(s.id, true); }}
+										>
+											<input type="hidden" name="id" value={s.id} />
+											<button class="ghost small" title="Draait scan (en classify/claims-mining als vervolg) opnieuw voor deze ene bron">Opnieuw scannen</button>
+										</form>
+
+										<p class="meta">
+											{d.yield.documents} document(en){#if d.yield.lastDocumentAt}, laatste {new Date(d.yield.lastDocumentAt).toLocaleDateString('nl-NL')}{/if}
+											· <a class="meta-link" href="/admin/overview/regelsecties?source={s.id}">{d.yield.ruleChunks} regelsecties bekijken</a>
+										</p>
+
+										<div class="dossier-grid">
+											{#if d.yield.changesTotal}
+												<div>
+													<p class="meta"><strong>Wijzigingen ({d.yield.changesTotal})</strong></p>
+													<ul class="dossier-list">
+														{#each d.yield.changes as c (c.id)}
+															<li>
+																{c.changeType} · {c.severity}{#if c.summary} — {c.summary}{/if}
+																<span class="meta">· {new Date(c.detectedAt).toLocaleDateString('nl-NL')}</span>
+															</li>
+														{/each}
+													</ul>
+												</div>
+											{/if}
+											{#if d.yield.bansTotal}
+												<div>
+													<p class="meta"><strong>Bans ({d.yield.bansTotal})</strong></p>
+													<ul class="dossier-list">
+														{#each d.yield.bans as b (b.id)}
+															<li>
+																{#if b.cardRiftboundId}<a href="/cards/{b.cardRiftboundId}">{b.name}</a>{:else}{b.name}{/if}
+																· {b.format}
+															</li>
+														{/each}
+													</ul>
+												</div>
+											{/if}
+											{#if d.yield.errataTotal}
+												<div>
+													<p class="meta"><strong>Errata ({d.yield.errataTotal})</strong></p>
+													<ul class="dossier-list">
+														{#each d.yield.errata as e (e.id)}
+															<li>{#if e.cardRiftboundId}<a href="/cards/{e.cardRiftboundId}">{e.cardName}</a>{:else}{e.cardName}{/if}</li>
+														{/each}
+													</ul>
+												</div>
+											{/if}
+											{#if d.yield.rulingsTotal}
+												<div>
+													<p class="meta"><strong>Rulings ({d.yield.rulingsTotal})</strong></p>
+													<ul class="dossier-list">
+														{#each d.yield.rulings as r (r.id)}
+															<li>{r.scope}: {r.ref} <span class="meta">— {r.status}</span></li>
+														{/each}
+													</ul>
+												</div>
+											{/if}
+											{#if d.yield.claimsTotal}
+												<div>
+													<p class="meta"><strong>Claims ({d.yield.claimsTotal})</strong></p>
+													<ul class="dossier-list">
+														{#each d.yield.claims as c (c.id)}
+															<li>{c.topicRef} <span class="meta">— {c.status}</span></li>
+														{/each}
+													</ul>
+												</div>
+											{/if}
+										</div>
+									</div>
+								{/if}
+							</details>
 						</td>
 					</tr>
 				{/each}
@@ -668,6 +857,20 @@
 	.correction .q { margin: 0 0 4px; color: var(--muted); font-size: 0.88rem; }
 	.correction .t { margin: 0 0 4px; }
 	.correction-actions { display: flex; flex-direction: column; gap: 6px; }
+	/* Bron-dossier (#171): losse rij ónder elke bron — geen eigen rand, de
+	   bovenliggende rij scheidt de bronnen al. overflow-wrap overal: lange
+	   changelog-samenvattingen/rulings mogen nooit horizontaal overlopen op
+	   390px. */
+	.dossier-row td { border-bottom: 1px solid var(--border); padding-top: 0; }
+	.dossier-cell { padding-top: 0 !important; }
+	.dossier-body { overflow-wrap: anywhere; }
+	.dossier-body form { margin: 8px 0; }
+	.dossier-grid {
+		display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+		gap: 14px; margin-top: 8px;
+	}
+	.dossier-list { margin: 4px 0 0; padding-left: 18px; }
+	.dossier-list li { margin-bottom: 4px; line-height: 1.5; overflow-wrap: anywhere; }
 	table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
 	th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 	th { color: var(--muted); font-size: 0.82rem; font-weight: 600; }
