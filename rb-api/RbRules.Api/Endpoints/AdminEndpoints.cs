@@ -398,15 +398,18 @@ public static class AdminEndpoints
         {
             var user = await db.Users.FindAsync(id);
             if (user is null) return Results.NotFound();
-            if (patch.DailyQuota is < 0 or > 10_000 || patch.DailyPhotoQuota is < 0 or > 10_000)
+            if (patch.DailyQuota is < 0 or > 10_000 || patch.DailyPhotoQuota is < 0 or > 10_000
+                || patch.DailyAgenticQuota is < 0 or > 10_000)
                 return Results.BadRequest(new { error = "quotum moet tussen 0 en 10000 liggen" });
             if (patch.Blocked is not null) user.Blocked = patch.Blocked.Value;
             if (patch.DailyQuota is not null) user.DailyQuota = patch.DailyQuota.Value;
             if (patch.DailyPhotoQuota is not null) user.DailyPhotoQuota = patch.DailyPhotoQuota.Value;
+            if (patch.DailyAgenticQuota is not null) user.DailyAgenticQuota = patch.DailyAgenticQuota.Value;
             await db.SaveChangesAsync();
             return Results.Ok(new
             {
                 user.Id, user.Email, user.Blocked, user.DailyQuota, user.DailyPhotoQuota,
+                user.DailyAgenticQuota,
             });
         });
 

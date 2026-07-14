@@ -41,7 +41,11 @@ public static class AuthEndpoints
             return Results.Ok(new
             {
                 user.Email, user.Blocked, user.DailyQuota, user.DailyPhotoQuota,
+                user.DailyAgenticQuota,
                 QuestionsToday = usage.Questions, PhotosToday = usage.Photos,
+                // #153: verbruik van het Grondig-dagquotum (alleen door de
+                // gebruiker geforceerde agentic-vragen tellen).
+                AgenticToday = usage.AgenticForced,
                 user.CreatedAt,
             });
         });

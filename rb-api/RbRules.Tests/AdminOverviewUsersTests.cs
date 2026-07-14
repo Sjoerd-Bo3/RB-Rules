@@ -25,30 +25,41 @@ public class AdminOverviewUsersTests
             // Gebruiker 2: oude rij zonder model én zonder usage (vóór #42/#121):
             // telt als cheap-vraag met 0 tokens.
             Metric(userId: 2, model: null, input: null, output: null),
-            // Anoniem: agentic mét usage — telt mee in het pad-totaal.
-            Metric(userId: null, model: "agentic", input: 52_000, output: 700));
+            // Anoniem: agentic mét usage, van vóór #153 (EscalatedBy null) —
+            // dat waren per definitie gate-escalaties.
+            Metric(userId: null, model: "agentic", input: 52_000, output: 700),
+            // Gebruiker 1: zelf geforceerde Grondig-vraag (#153) — eigen pad
+            // in het kostenoverzicht.
+            Metric(userId: 1, model: "agentic", input: 40_000, output: 500,
+                escalatedBy: "user"));
         await db.SaveChangesAsync();
 
         var overview = await new AdminOverviewService(db).UsersAsync("7d", page: 1);
 
         var a = overview.Items.Single(u => u.Email == "a@example.com");
-        Assert.Equal(6_000, a.InputTokens);
-        Assert.Equal(500, a.OutputTokens);
+        Assert.Equal(46_000, a.InputTokens);
+        Assert.Equal(1_000, a.OutputTokens);
         var b = overview.Items.Single(u => u.Email == "b@example.com");
         Assert.Equal(0, b.InputTokens);
         Assert.Equal(0, b.OutputTokens);
 
         // Pad-totalen over álle vragen (incl. anoniem), vaste volgorde
-        // cheap → hard → agentic.
-        Assert.Equal(["cheap", "hard", "agentic"], overview.Paths.Select(p => p.Path));
+        // cheap → hard → agentic (gate) → agentic (gebruiker) (#153).
+        Assert.Equal(
+            ["cheap", "hard", "agentic (gate)", "agentic (gebruiker)"],
+            overview.Paths.Select(p => p.Path));
         var cheap = overview.Paths.Single(p => p.Path == "cheap");
         Assert.Equal(2, cheap.Questions);
         Assert.Equal(1_000, cheap.InputTokens);
         Assert.Equal(100, cheap.OutputTokens);
-        var agentic = overview.Paths.Single(p => p.Path == "agentic");
-        Assert.Equal(1, agentic.Questions);
-        Assert.Equal(52_000, agentic.InputTokens);
-        Assert.Equal(700, agentic.OutputTokens);
+        var gate = overview.Paths.Single(p => p.Path == "agentic (gate)");
+        Assert.Equal(1, gate.Questions);
+        Assert.Equal(52_000, gate.InputTokens);
+        Assert.Equal(700, gate.OutputTokens);
+        var forced = overview.Paths.Single(p => p.Path == "agentic (gebruiker)");
+        Assert.Equal(1, forced.Questions);
+        Assert.Equal(40_000, forced.InputTokens);
+        Assert.Equal(500, forced.OutputTokens);
     }
 
     [Fact]
@@ -71,7 +82,8 @@ public class AdminOverviewUsersTests
     // --- testinfra -------------------------------------------------------
 
     private static AskMetric Metric(
-        long? userId, string? model, long? input, long? output, bool hadImage = false) => new()
+        long? userId, string? model, long? input, long? output, bool hadImage = false,
+        string? escalatedBy = null) => new()
     {
         DurationMs = 1_000,
         QuestionType = "Ruling",
@@ -80,6 +92,7 @@ public class AdminOverviewUsersTests
         Model = model,
         InputTokens = input,
         OutputTokens = output,
+        EscalatedBy = escalatedBy,
     };
 
     private static RbRulesDbContext NewDb() => new InMemoryDbContext(

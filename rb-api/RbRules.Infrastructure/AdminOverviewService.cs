@@ -81,6 +81,7 @@ public record ProposalOverview(
 
 public record UserOverviewItem(
     long Id, string Email, bool Blocked, int DailyQuota, int DailyPhotoQuota,
+    int DailyAgenticQuota,
     DateTimeOffset CreatedAt, DateTimeOffset? LastLoginAt,
     int Questions, int Photos, int Cheap, int Hard, int Failed, int AvgDurationMs,
     long InputTokens, long OutputTokens);
@@ -102,8 +103,8 @@ public record AskTraceListItem(
     string? SourceBias, bool MentionsCard, string? MechanicMatches,
     string? Sections, string? ContextCards, string? PrimerDocs,
     string? CommunityClaims, int VerifiedRulings, string? Model, bool HadImage,
-    int DurationMs, string? PhaseTimings, bool Agentic, string? BrainSteps,
-    bool Ok, DateTimeOffset CreatedAt);
+    int DurationMs, string? PhaseTimings, bool Agentic, string? EscalatedBy,
+    string? BrainSteps, bool Ok, DateTimeOffset CreatedAt);
 public record AskTraceTurn(string Question, string Answer);
 /// <summary>Trace-detail (#143): het definitieve antwoord en de eerdere
 /// beurten van het gesprek — de metadata zit al in de lijst.</summary>
@@ -497,11 +498,15 @@ public class AdminOverviewService(RbRulesDbContext db)
 
         // Tokentotalen per antwoordpad (#121), over álle vragen in de periode
         // (incl. anoniem). Zelfde model-afleiding als hierboven: oude rijen
-        // zonder model vallen op basis van HadImage onder cheap/hard.
-        var pathOrder = new[] { "cheap", "hard", "agentic" };
+        // zonder model vallen op basis van HadImage onder cheap/hard. Het
+        // agentic-pad splitst op wie escaleerde (#153): rijen van vóór #153
+        // (EscalatedBy null) waren per definitie gate-escalaties.
+        var pathOrder = new[] { "cheap", "hard", "agentic (gate)", "agentic (gebruiker)" };
         var paths = (await db.AskMetrics.AsNoTracking()
                 .Where(m => m.CreatedAt >= since)
-                .GroupBy(m => m.Model ?? (m.HadImage ? "hard" : "cheap"))
+                .GroupBy(m => m.Model == "agentic"
+                    ? (m.EscalatedBy == "user" ? "agentic (gebruiker)" : "agentic (gate)")
+                    : m.Model ?? (m.HadImage ? "hard" : "cheap"))
                 .Select(g => new
                 {
                     Path = g.Key,
@@ -526,6 +531,7 @@ public class AdminOverviewService(RbRulesDbContext db)
             var s = byUser.GetValueOrDefault(u.Id);
             return new UserOverviewItem(
                 u.Id, u.Email, u.Blocked, u.DailyQuota, u.DailyPhotoQuota,
+                u.DailyAgenticQuota,
                 u.CreatedAt, u.LastLoginAt,
                 s?.Questions ?? 0, s?.Photos ?? 0,
                 (s?.Questions ?? 0) - (s?.Hard ?? 0), s?.Hard ?? 0,
@@ -561,7 +567,7 @@ public class AdminOverviewService(RbRulesDbContext db)
                 t.Id, t.Question, t.QuestionType, t.RewrittenQuery, t.SourceBias,
                 t.MentionsCard, t.MechanicMatches, t.Sections, t.ContextCards,
                 t.PrimerDocs, t.CommunityClaims, t.VerifiedRulings, t.Model,
-                t.HadImage, t.DurationMs, t.PhaseTimings, t.Agentic,
+                t.HadImage, t.DurationMs, t.PhaseTimings, t.Agentic, t.EscalatedBy,
                 t.BrainSteps, t.Ok, t.CreatedAt))
             .ToListAsync();
 

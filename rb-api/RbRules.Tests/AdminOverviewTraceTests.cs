@@ -16,9 +16,14 @@ public class AdminOverviewTraceTests
     public async Task AskTracesAsync_LijstBlijftSlank_NieuwsteEerst()
     {
         using var db = NewDb();
+        var forced = Trace("nieuwe vraag", createdAt: DateTimeOffset.UtcNow);
+        // #153: door de gebruiker geforceerde escalatie — de lijst draagt de
+        // attributie voor de badge "agentic (gebruiker)".
+        forced.Agentic = true;
+        forced.EscalatedBy = "user";
         db.AskTraces.AddRange(
             Trace("oude vraag", createdAt: DateTimeOffset.UtcNow.AddMinutes(-5)),
-            Trace("nieuwe vraag", createdAt: DateTimeOffset.UtcNow));
+            forced);
         await db.SaveChangesAsync();
 
         var items = await new AdminOverviewService(db).AskTracesAsync();
@@ -26,6 +31,8 @@ public class AdminOverviewTraceTests
         Assert.Equal(["nieuwe vraag", "oude vraag"], items.Select(t => t.Question));
         // Route-metadata blijft aanwezig in de lijst.
         Assert.All(items, t => Assert.Equal("Ruling", t.QuestionType));
+        Assert.Equal("user", items.Single(t => t.Question == "nieuwe vraag").EscalatedBy);
+        Assert.Null(items.Single(t => t.Question == "oude vraag").EscalatedBy);
     }
 
     [Fact]
