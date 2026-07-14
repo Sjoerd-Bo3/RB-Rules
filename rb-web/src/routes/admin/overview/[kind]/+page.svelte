@@ -44,13 +44,24 @@
 		provenance: string | null; status: string; createdAt: string; verifiedAt: string | null;
 		/** "Waar besloten" (#166) — bewijs bij het reviewen van een voorstel. */
 		sourceRef: string | null;
+		/** Bron-naam (#184) — resolvet alleen voor clarify-mining-items; anders null. */
+		sourceName: string | null;
+		/** UrlGuard-gecheckt (#184, sanitize vóór {@html}) — alleen dan een klikbare link. */
+		sourceRefSafe: boolean;
+		/** Waarom een clarify-item (nog) niet verified is (#177 hybride poort). */
+		statusReason: string | null;
+		/** Beheerder-opmerking (#184) — bewaard en meegenomen bij her-evaluatie. */
+		reviewNote: string | null;
 	}
 	interface KnowledgeItem {
 		id: number; kind: string; topic: string; title: string; body: string;
 		sectionRefs: string | null; status: string; updatedAt: string;
 	}
 	interface ClaimSourceItem {
-		sourceId: string; sourceName: string; url: string; quote: string | null; seenAt: string;
+		sourceId: string; sourceName: string; url: string;
+		/** UrlGuard-gecheckt (#184, sanitize vóór {@html}) — alleen dan een klikbare link. */
+		urlSafe: boolean;
+		quote: string | null; seenAt: string;
 	}
 	interface ClaimItem {
 		id: number; topicType: string; topicRef: string; statement: string;
@@ -234,6 +245,16 @@
 		rejected: { label: 'verworpen', badge: 'err' },
 		superseded: { label: 'verouderd', badge: 'err' }
 	};
+
+	// Status-vocabulaire van de correcties/clarify-reviewqueue (#177/#184).
+	const CORRECTION_STATUS: Record<string, { label: string; badge: string }> = {
+		unverified: { label: 'ter review', badge: 'warn-b' },
+		verified: { label: 'geverifieerd', badge: 'ok-b' },
+		rejected: { label: 'afgewezen', badge: 'err' }
+	};
+	function correctionStatus(status: string): { label: string; badge: string } {
+		return CORRECTION_STATUS[status] ?? { label: status, badge: 'warn-b' };
+	}
 	function claimStatus(status: string): { label: string; badge: string } {
 		return CLAIM_STATUS[status] ?? { label: status, badge: 'warn-b' };
 	}
@@ -362,10 +383,6 @@
 	function fmtDate(iso: string | null): string {
 		return iso ? new Date(iso).toLocaleDateString('nl-NL') : '—';
 	}
-
-	// Bronverwijzing (#166) is URL of vrije citatie — alleen linken als het
-	// er echt een is (zelfde patroon als /ask, /rulings).
-	const isHttp = (url: string) => /^https?:\/\//.test(url);
 
 	// Tokentellingen (#121): NL-groepering (12.345) — grote getallen blijven
 	// zo scanbaar in de tabellen.
@@ -610,40 +627,65 @@
 			{/each}
 		{/if}
 
-		<!-- Correcties -->
+		<!-- Correcties (#177) — bron+link en opmerking→her-evaluatie (#184) -->
 		{#if data.kind === 'correcties'}
 			{#each corrections as c (c.id)}
 				<div class="panel item corr">
 					<div class="corr-body">
 						<p class="item-head">
-							<span class="badge {c.status === 'verified' ? 'ok-b' : 'warn-b'}">{c.status === 'verified' ? 'geverifieerd' : 'open'}</span>
+							<span class="badge {correctionStatus(c.status).badge}">{correctionStatus(c.status).label}</span>
 							<span class="meta">{c.scope} · {c.ref === 'down' ? 'gemeld als onjuist' : c.ref === 'up' ? 'bevestigd als juist' : c.ref} · {fmtDate(c.createdAt)}</span>
 						</p>
 						{#if c.question}<p class="meta">{c.question}</p>{/if}
 						<p class="pre">{c.text}</p>
+						<!-- Reden dat het item (nog) niet verified is (#177 hybride poort). -->
+						{#if c.statusReason}<p class="meta refs">{c.statusReason}</p>{/if}
+						{#if c.reviewNote && c.reviewNote !== c.statusReason}
+							<p class="meta refs">Opmerking beheerder: {c.reviewNote}</p>
+						{/if}
 						{#if c.sourceRef}
-							<p class="meta">
-								Bron (waar besloten):
-								{#if isHttp(c.sourceRef)}
-									<a href={c.sourceRef} target="_blank" rel="noopener">{c.sourceRef}</a>
+							<p class="meta refs">
+								Bron: {#if c.sourceRefSafe}
+									<a href={c.sourceRef} target="_blank" rel="noopener">{c.sourceName ?? c.sourceRef}</a>
 								{:else}
-									{c.sourceRef}
+									{c.sourceName ?? c.sourceRef}
 								{/if}
 							</p>
 						{/if}
 					</div>
-					{#if c.status !== 'verified'}
-						<div class="corr-actions">
-							<form method="POST" action="?/verifyCorrection" use:enhance>
-								<input type="hidden" name="id" value={c.id} />
-								<button title="Maakt dit een gezaghebbende ruling voor toekomstige antwoorden">Verifieer</button>
-							</form>
-							<form method="POST" action="?/deleteCorrection" use:enhance>
-								<input type="hidden" name="id" value={c.id} />
-								<button class="ghost small">Verwijder</button>
-							</form>
-						</div>
-					{/if}
+					<div class="corr-actions review">
+						<!-- Zelfde vorm als claims/relaties: één formulier, de opmerking
+						     gaat mee met de knop die hem indient (formaction). -->
+						<form method="POST" action="?/verifyCorrection" use:enhance class="review-form">
+							<input type="hidden" name="id" value={c.id} />
+							<textarea
+								name="note"
+								rows="2"
+								placeholder="Opmerking — bv. een anker-correctie (mechanic:Recall) of toelichting (optioneel)"
+								aria-label="Beheerder-opmerking"
+								value={c.reviewNote ?? ''}
+							></textarea>
+							<div class="row">
+								{#if c.status !== 'verified'}
+									<button class="small" formaction="?/verifyCorrection" title="Maakt dit een gezaghebbende ruling voor toekomstige antwoorden">Verifieer</button>
+								{/if}
+								{#if c.status !== 'rejected'}
+									<button class="ghost small" formaction="?/rejectCorrection" title="Zachte afwijzing — een volgende her-mine respecteert dit">Verwerp</button>
+								{/if}
+								{#if c.status === 'unverified'}
+									<button class="ghost small" formaction="?/reevaluateCorrection" title="Bewaart de opmerking en draait de grondings-/anker-poort opnieuw voor dit item">Opnieuw evalueren</button>
+								{/if}
+								<button class="ghost small" formaction="?/deleteCorrection" title="Definitief verwijderen">Verwijder</button>
+							</div>
+							{#if form?.error && formDocId === c.id}<p class="warn">{form.error}</p>{/if}
+							{#if form && 'reevaluated' in form && form.reevaluated && formDocId === c.id}
+								<p class="meta">
+									{#if form.outcome === 'Verified'}Her-evaluatie: geverifieerd.
+									{:else}Her-evaluatie: blijft ter review{form.reason ? ` — ${form.reason}` : ''}.{/if}
+								</p>
+							{/if}
+						</form>
+					</div>
 				</div>
 			{/each}
 			{#if !corrections.length}<p class="meta">Geen correcties.</p>{/if}
@@ -726,7 +768,13 @@
 						{#if c.reviewNote && c.reviewNote !== c.statusReason}<p class="meta refs">Notitie beheerder: {c.reviewNote}</p>{/if}
 						{#each c.sources as s (s.sourceId)}
 							<p class="meta refs">
-								<a href={s.url}>{s.sourceName}</a>
+								<!-- Bron+link (#184): UrlGuard-gecheckt server-side (sanitize
+								     vóór {@html}) — zonder dat alleen de kale naam. -->
+								{#if s.urlSafe}
+									<a href={s.url} target="_blank" rel="noopener">{s.sourceName}</a>
+								{:else}
+									{s.sourceName}
+								{/if}
 								{#if s.quote}<span> — "{s.quote}"</span>{/if}
 							</p>
 						{/each}
