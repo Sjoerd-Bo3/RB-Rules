@@ -3,6 +3,9 @@
 
 	let { data } = $props();
 	const c = $derived(data.card);
+	// Bronverwijzing (#166) is URL of vrije citatie — alleen linken als het
+	// er echt een is, anders gewoon (geëscapete) tekst.
+	const isHttp = (url: string) => /^https?:\/\//.test(url);
 
 	// LLM-uitleg per vergelijkbaar paar (#30), lazy en server-side gecachet.
 	let explanations = $state<Record<string, string>>({});
@@ -193,6 +196,16 @@
 						{new Date(r.date).toLocaleDateString('nl-NL')}
 						{#if r.provenance}· bron: {r.provenance}{/if}
 					</p>
+					{#if r.sourceRef}
+						<p class="meta small">
+							Bron van deze ruling:
+							{#if isHttp(r.sourceRef)}
+								<a href={r.sourceRef} target="_blank" rel="noopener">{r.sourceRef}</a>
+							{:else}
+								{r.sourceRef}
+							{/if}
+						</p>
+					{/if}
 				</div>
 			{/each}
 		</section>

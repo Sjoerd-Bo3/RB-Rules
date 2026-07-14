@@ -56,6 +56,8 @@
 	let question = $state('');
 	let correcting = $state(false);
 	let followUp = $state('');
+	// Ruling vastleggen vanuit dit gesprek (#166) — alleen ingelogd/admin.
+	let rulingOpen = $state(false);
 
 	// Historie voor de volgende doorvraag: eerdere rondes + de huidige.
 	const nextHistory = $derived(
@@ -787,6 +789,57 @@
 					<button type="submit">Verstuur correctie</button>
 				</form>
 			{/if}
+
+			{#if data.isAdmin || data.loggedIn}
+				<!-- Ruling vastleggen vanuit dit gesprek (#166): hergebruikt de
+				     Correction-infrastructuur. Beheerder ⇒ direct geverifieerd;
+				     ingelogde gebruiker ⇒ voorstel in de reviewqueue. Anoniem ziet
+				     deze actie niet — rb-api wijst het bovendien af. -->
+				<div class="ruling-cta">
+					{#if form?.rulingSaved}
+						<p class="meta">
+							{form.rulingVerified
+								? 'Vastgelegd als geverifieerde ruling.'
+								: 'Ter beoordeling ingediend — telt mee na goedkeuring door de beheerder.'}
+						</p>
+					{:else}
+						<button type="button" class="fb" onclick={() => (rulingOpen = !rulingOpen)}>
+							Vastleggen als ruling
+						</button>
+					{/if}
+				</div>
+				{#if rulingOpen && !form?.rulingSaved}
+					<form
+						method="POST"
+						action="?/ruling"
+						use:enhance={() => async ({ update }) => { rulingOpen = false; await update(); }}
+						class="correct-form ruling-form"
+					>
+						<input type="hidden" name="question" value={form?.question ?? ''} />
+						<input type="hidden" name="answer" value={form?.answer ?? ''} />
+						<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
+						<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
+						<input type="hidden" name="claims" value={JSON.stringify(form?.claims ?? [])} />
+						<input
+							type="hidden"
+							name="misconceptions"
+							value={JSON.stringify(form?.misconceptions ?? [])}
+						/>
+						<label for="ruling-statement">Uitspraak</label>
+						<textarea id="ruling-statement" name="statement" rows="3">{form?.answer ?? ''}</textarea>
+						<label for="ruling-scope">Onderwerp</label>
+						<select id="ruling-scope" name="scope">
+							<option value="answer">Algemeen</option>
+							<option value="card">Kaart</option>
+							<option value="rule_section">Regelsectie</option>
+						</select>
+						<input type="text" name="topicRef" placeholder="Kaartnaam of §-code (bij kaart/regelsectie)" />
+						<input type="text" name="sourceRef" required placeholder="Waar besloten? (URL of citaat, verplicht)" />
+						<button type="submit">Vastleggen</button>
+					</form>
+				{/if}
+				{#if form?.rulingError}<p class="warn">{form.rulingError}</p>{/if}
+			{/if}
 		</article>
 	{/if}
 
@@ -1033,6 +1086,13 @@
 	.correct-form button {
 		margin-top: 8px; background: var(--accent); color: var(--accent-ink); border: 0;
 		border-radius: 8px; padding: 7px 14px; font-weight: 600; cursor: pointer;
+	}
+	.ruling-cta { margin-top: 10px; }
+	.ruling-form label { display: block; font-size: 0.8rem; color: var(--muted); margin: 8px 0 4px; }
+	.ruling-form label:first-of-type { margin-top: 0; }
+	.ruling-form select, .ruling-form input[type='text'] {
+		width: 100%; box-sizing: border-box; background: var(--surface-deep); color: var(--text);
+		border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px;
 	}
 	.followup { padding: 14px 16px; margin-top: 14px; }
 	.followup h2 { margin: 0 0 2px; }

@@ -36,6 +36,8 @@
 	interface CorrectionItem {
 		id: number; scope: string; ref: string; text: string; question: string | null;
 		provenance: string | null; status: string; createdAt: string; verifiedAt: string | null;
+		/** "Waar besloten" (#166) — bewijs bij het reviewen van een voorstel. */
+		sourceRef: string | null;
 	}
 	interface KnowledgeItem {
 		id: number; kind: string; topic: string; title: string; body: string;
@@ -304,6 +306,10 @@
 		return iso ? new Date(iso).toLocaleDateString('nl-NL') : '—';
 	}
 
+	// Bronverwijzing (#166) is URL of vrije citatie — alleen linken als het
+	// er echt een is (zelfde patroon als /ask, /rulings).
+	const isHttp = (url: string) => /^https?:\/\//.test(url);
+
 	// Tokentellingen (#121): NL-groepering (12.345) — grote getallen blijven
 	// zo scanbaar in de tabellen.
 	function fmtTokens(n: number): string {
@@ -550,6 +556,16 @@
 						</p>
 						{#if c.question}<p class="meta">{c.question}</p>{/if}
 						<p class="pre">{c.text}</p>
+						{#if c.sourceRef}
+							<p class="meta">
+								Bron (waar besloten):
+								{#if isHttp(c.sourceRef)}
+									<a href={c.sourceRef} target="_blank" rel="noopener">{c.sourceRef}</a>
+								{:else}
+									{c.sourceRef}
+								{/if}
+							</p>
+						{/if}
 					</div>
 					{#if c.status !== 'verified'}
 						<div class="corr-actions">
