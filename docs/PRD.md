@@ -141,6 +141,19 @@ apart in §6.
   *Route* `/rulings` · *endpoint* `/api/rulings`.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed
   en gekoppeld aan kaarten. *Endpoint* `/api/bans`.
+- **Bron-feeds** (#167) — index-pagina's (playriftbound.com/en-us/news/…) die
+  periodiek op nieuwe artikel-URL's worden afgespeurd, vóór elke bron-scan
+  (`IngestService`/`FeedCrawlService`). Drie officiële hoofdfeeds (rules-
+  and-releases, de brede nieuws-hub met categoriefilter, de Rules Hub-
+  artikelcarrousel), elk met een optioneel categoriefilter. AutoApprove-feeds
+  zetten een nieuw artikel direct als `Source` (met `FeedId`-herkomst,
+  zichtbaar bij de bron als "stamt van: …"); andere feeds leggen het als
+  `SourceProposal` in dezelfde reviewqueue als de bronnenjacht. Idempotent op
+  genormaliseerde URL (ook binnen één run, over feeds heen) en doof voor een
+  per-request wisselende linkvolgorde — registreert alleen de artikel-URL,
+  nooit zelf een PDF-link. Zelf uitbreidbaar in het beheer.
+  *Route* `/admin/overview/feeds` · *endpoints*
+  `GET/POST/PATCH/DELETE /api/admin/feeds`, `/api/admin/overview/feeds`.
 
 ### 4.2 Kaarten
 
@@ -279,10 +292,15 @@ apart in §6.
 ### 4.5 Beheer (`/admin`)
 
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
-  (scan, cards, embed, mine, rules, bans, graph, primer, interactions, scout,
-  classify, claims, relations, setrelease, decks) draaien via `JobRunner` met
-  live-voortgang en run_log. *Route* `/admin` · *endpoints* `/api/admin/jobs/{name}`,
-  `/api/admin/status`, `/api/admin/logs`.
+  (scan, feeds, cards, embed, mine, rules, bans, graph, primer, interactions,
+  scout, classify, claims, relations, setrelease, decks, benchmark) draaien via
+  `JobRunner` met live-voortgang en run_log. *Route* `/admin` · *endpoints*
+  `/api/admin/jobs/{name}`, `/api/admin/status`, `/api/admin/logs`.
+- **Bron-feeds beheer** (#167) — feeds zelf toevoegen/bewerken/aan-uitzetten/
+  verwijderen, met per feed het aantal ontdekte bronnen en de laatste vangst;
+  elke bron toont zijn herkomstfeed (klikbaar terug). *Route*
+  `/admin/overview/feeds` · *endpoints*
+  `GET/POST/PATCH/DELETE /api/admin/feeds`, `/api/admin/overview/feeds`.
 - **Deck-ingest (Piltover Archive)** — job "decks" haalt publieke
   community-decks binnen via de PA-sitemap (#15, Piltover-first: géén eigen
   deckbuilder). Robots-compliant (alleen `/sitemap*` en `/decks/view/{uuid}`;
@@ -295,7 +313,7 @@ apart in §6.
 - **Aanklikbare status-tegels** — elke teller opent een overzichtspagina.
   *Route* `/admin/overview/[kind]` · *endpoints* `/api/admin/overview/{cards,
   rulechunks, bans, errata, interactions, changes, claims, proposals, relations,
-  users, gaps, setcoverage, benchmark}`.
+  users, gaps, setcoverage, benchmark, feeds}`.
 - **Set-dekking** — tegel + overzichtspagina: per set het basistotaal,
   aanwezige én exact ontbrekende kaartnummers (compacte reeksweergave,
   bv. "12, 45–47, 203"), dekking %, variantentelling, afwijkende
