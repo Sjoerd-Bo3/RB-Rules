@@ -4,6 +4,25 @@ import { AiSemaphore, ConcurrencyLimitError } from "./concurrency.js";
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
+/** Wacht op een productie-timeout die met `unref()` is afgesteld.
+ *
+ * De semaphore-timeout roept bewust `timer.unref()` aan (correct: een
+ * wachttijd-timeout mag het proces nooit levend houden). In `node:test`
+ * betekent dat: als de rejectie-timer het énige openstaande handle is, sluit
+ * de event-loop af vóór hij vuurt en blijft de acquire-promise "pending" bij
+ * teardown → flaky. Deze helper houdt tijdens het wachten één ref'd timer
+ * open (die de unref'd timeout gewoon laat vuren) en ruimt hem daarna op, dus
+ * de test wacht deterministisch op de rejectie zónder de productiecode te
+ * raken. */
+async function withKeepAlive<T>(fn: () => Promise<T>): Promise<T> {
+  const handle = setTimeout(() => {}, 5_000);
+  try {
+    return await fn();
+  } finally {
+    clearTimeout(handle);
+  }
+}
+
 /** Volgt of een promise al gesettled is zonder erop te wachten. */
 function track<T>(p: Promise<T>) {
   const state = { settled: false, rejected: undefined as unknown };
@@ -37,9 +56,11 @@ test("cap afgedwongen: de N+1e wacht tot er een permit vrijkomt", async () => {
 test("wachttijd-overschrijding geeft ConcurrencyLimitError met machine-leesbare code", async () => {
   const sem = new AiSemaphore(1);
   const release = await sem.acquire(1, { maxWaitMs: 1_000 });
-  await assert.rejects(
-    sem.acquire(1, { maxWaitMs: 15 }),
-    (e: unknown) => e instanceof ConcurrencyLimitError && e.code === "concurrency_limit",
+  await withKeepAlive(() =>
+    assert.rejects(
+      sem.acquire(1, { maxWaitMs: 15 }),
+      (e: unknown) => e instanceof ConcurrencyLimitError && e.code === "concurrency_limit",
+    ),
   );
   assert.equal(sem.snapshot().rejectedTotal, 1);
   assert.equal(sem.snapshot().waiting, 0, "de afgewezen wachter is uit de rij");
@@ -96,8 +117,10 @@ test("FIFO: een zware wachter vooraan wordt niet ingehaald door lichte nieuwkome
   const sem = new AiSemaphore(2);
   const r1 = await sem.acquire(1, { maxWaitMs: 1_000 });
   const r2 = await sem.acquire(1, { maxWaitMs: 1_000 });
-  const heavy = track(sem.acquire(2, { maxWaitMs: 1_000 }));
-  const light = track(sem.acquire(1, { maxWaitMs: 1_000 }));
+  const heavyP = sem.acquire(2, { maxWaitMs: 1_000 });
+  const heavy = track(heavyP);
+  const lightP = sem.acquire(1, { maxWaitMs: 1_000 });
+  const light = track(lightP);
   r1();
   await tick();
   assert.equal(heavy.settled, false, "zwaar past nog niet (1 van 2 vrij)");
@@ -106,13 +129,18 @@ test("FIFO: een zware wachter vooraan wordt niet ingehaald door lichte nieuwkome
   await tick();
   assert.equal(heavy.settled, true, "zwaar gaat als eerste");
   assert.equal(light.settled, false, "licht wacht tot zwaar klaar is");
+  // Opruimen: laat zwaar los zodat licht alsnog aan de beurt komt en beide
+  // wachters afgehandeld zijn — geen dangling (unref'd) timer of pending
+  // promise die node:test-teardown kan verstoren.
+  (await heavyP)();
+  (await lightP)();
 });
 
 test("tellers: waited en rejected lopen mee voor bijstelling op cijfers", async () => {
   const sem = new AiSemaphore(1);
   const release = await sem.acquire(1, { maxWaitMs: 1_000 });
   const waiting = sem.acquire(1, { maxWaitMs: 1_000 });
-  await assert.rejects(sem.acquire(1, { maxWaitMs: 10 }));
+  await withKeepAlive(() => assert.rejects(sem.acquire(1, { maxWaitMs: 10 })));
   release();
   (await waiting)();
   const snap = sem.snapshot();
