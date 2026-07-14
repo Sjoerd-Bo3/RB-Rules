@@ -42,6 +42,13 @@ public record AskMisconception(
     string Rebuttal, string? RebuttalSection,
     IReadOnlyList<AskMisconceptionSource> Sources);
 
+/// <summary>Token-optelling van een AskResult (#158): puur additief veld zodat
+/// de benchmark (duur/tokens per vraag) bij het bestaande resultaat kan
+/// zonder AskCoreAsync's interne AiUsage-boekhouding naar buiten te trekken.
+/// Null = geen enkele call gaf usage terug (zelfde "onbekend ≠ 0"-regel als
+/// AskMetric/AskTrace).</summary>
+public record AskUsageInfo(long? InputTokens, long? OutputTokens);
+
 public record AskResult(
     string Answer, IReadOnlyList<Citation> Citations,
     IReadOnlyList<AskCard> Cards, string QuestionType,
@@ -51,7 +58,23 @@ public record AskResult(
     // "thorough") en — als de gebruikerskeuze niet gehonoreerd is — waarom
     // (AgenticGate.Reason*). De UI toont daarop de nette melding
     // ("quota op — automatisch beantwoord").
-    string? Approach = null, string? ApproachReason = null);
+    string? Approach = null, string? ApproachReason = null,
+    AskUsageInfo? Usage = null);
+
+/// <summary>De benchmark-vlag (#158) — het ENE punt waarmee een benchmarkrun
+/// door de ask-aanroep reist zonder de flow te herschrijven. Benchmark = true
+/// laat retrieval/prompt/agentic-gate exact zoals een normale vraag, maar
+/// onderdrukt ieder leer-/meetneveneffect: geen ask_trace- en geen
+/// ask_metric-rij, en geen agentic-relatie-terugkoppeling (#120). Claims en
+/// geverifieerde rulings worden door AskCoreAsync toch al alleen gelezen,
+/// nooit geschreven, dus die blijven vanzelf buiten schot. De meerkeuze-
+/// opties zelf zitten NIET hier — die gaan als gewone tekst in de
+/// `question` mee (zie BenchmarkPrompt in RbRules.Domain).</summary>
+public sealed record AskOptions
+{
+    public static readonly AskOptions Default = new();
+    public bool Benchmark { get; init; }
+}
 
 /// <summary>Vroege metadata voor het streamingpad (#31): vraagtype, citaties
 /// en community-claims staan al vast vóór de LLM-call — de UI kan daarmee de
@@ -155,8 +178,10 @@ public class AskService(
         string question, IReadOnlyList<RbAiClient.AiImage>? images = null,
         IReadOnlyList<AskTurn>? history = null,
         AskApproach approach = AskApproach.Auto,
+        AskOptions? options = null,
         CancellationToken ct = default) =>
-        AskCoreAsync(question, images, history, approach, onMeta: null, onDelta: null, ct);
+        AskCoreAsync(question, images, history, approach, options ?? AskOptions.Default,
+            onMeta: null, onDelta: null, ct);
 
     /// <summary>Streamende variant (#31): identieke retrieval en afronding als
     /// <see cref="AskAsync"/> (één pass), maar het antwoord komt via
@@ -168,12 +193,14 @@ public class AskService(
         IReadOnlyList<AskTurn>? history,
         Func<AskStreamMeta, Task> onMeta, Func<string, Task> onDelta,
         AskApproach approach = AskApproach.Auto,
+        AskOptions? options = null,
         CancellationToken ct = default) =>
-        AskCoreAsync(question, images, history, approach, onMeta, onDelta, ct);
+        AskCoreAsync(question, images, history, approach, options ?? AskOptions.Default,
+            onMeta, onDelta, ct);
 
     private async Task<AskResult> AskCoreAsync(
         string question, IReadOnlyList<RbAiClient.AiImage>? images,
-        IReadOnlyList<AskTurn>? history, AskApproach approach,
+        IReadOnlyList<AskTurn>? history, AskApproach approach, AskOptions options,
         Func<AskStreamMeta, Task>? onMeta, Func<string, Task>? onDelta,
         CancellationToken ct)
     {
@@ -433,8 +460,10 @@ public class AskService(
         if (topIds.Count == 0)
         {
             sw.Stop();
-            // De rewrite-call is al gemaakt — die tokens tellen mee (#121).
-            await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false, usage: usage);
+            // BENCHMARK-VLAG (#158): geen ask_metric-rij voor een benchmarkrun.
+            if (!options.Benchmark)
+                // De rewrite-call is al gemaakt — die tokens tellen mee (#121).
+                await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false, usage: usage);
             // Gedegradeerd (#100) én geen tekst-match: eerlijk melden wat er
             // aan de hand is — niet doen alsof de index leeg is.
             return new(qv is null
@@ -695,116 +724,130 @@ public class AskService(
         var cards = await MatchCardsAsync($"{qLower}\n{answer.ToLowerInvariant()}", finishCt);
         sw.Stop();
 
-        // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
-        // pagina (#59: uit het endpoint — de service meet hier toch al);
-        // de token-teller (#121) voedt het kostenoverzicht in het beheer.
-        await RecordMetricAsync(
-            sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null,
-            agentic: agentAnswered, model: usedModel, usage: usage,
-            // #153: attributie op de póging (ook bij vangnet/abort) — de
-            // kosten zijn dan al gemaakt, dus het quotum telt de rij mee.
-            escalatedBy: escalatedBy);
-
-        // Agentic-terugkoppeling (#120): door de agent ontdekte verbanden als
-        // relatievoorstel achterlaten — het brein verrijkt zichzelf al
-        // antwoordend. Best-effort én buiten de duurmeting: het antwoord is
-        // al af (en op de streamingroute al verstuurd); een haperende opslag
-        // mag het nooit alsnog blokkeren. De teller landt in BrainSteps zodat
-        // de vraag-trace toont wat de agent achterliet.
-        if (agentAnswered && agenticProposals is not null)
+        // BENCHMARK-VLAG (#158): het hart van de isolatie-eis — een
+        // benchmarkrun mag NIETS leren of meten buiten de benchmark-tabellen.
+        // Retrieval en prompt hierboven zijn identiek aan een normale vraag;
+        // vanaf hier onderdrukken we élk leer-/meetneveneffect: geen
+        // ask_metric-rij (dus ook geen escalated_by-quotumtelling, #153), geen
+        // agentic-relatie-terugkoppeling (#120) en geen ask_trace-rij (dus ook
+        // geen phase-timings, #152, en geen ip_hash-stempel, #157).
+        // BenchmarkService (Infrastructure) boekt zelf de benchmark_result-rij
+        // met antwoord/duur/tokens.
+        if (!options.Benchmark)
         {
+            // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
+            // pagina (#59: uit het endpoint — de service meet hier toch al);
+            // de token-teller (#121) voedt het kostenoverzicht in het beheer.
+            await RecordMetricAsync(
+                sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null,
+                agentic: agentAnswered, model: usedModel, usage: usage,
+                // #153: attributie op de póging (ook bij vangnet/abort) — de
+                // kosten zijn dan al gemaakt, dus het quotum telt de rij mee.
+                escalatedBy: escalatedBy);
+
+            // Agentic-terugkoppeling (#120): door de agent ontdekte verbanden
+            // als relatievoorstel achterlaten — het brein verrijkt zichzelf
+            // al antwoordend. Best-effort én buiten de duurmeting: het
+            // antwoord is al af (en op de streamingroute al verstuurd); een
+            // haperende opslag mag het nooit alsnog blokkeren. De teller
+            // landt in BrainSteps zodat de vraag-trace toont wat de agent
+            // achterliet.
+            if (agentAnswered && agenticProposals is not null)
+            {
+                try
+                {
+                    var harvest = await agenticRelations.StoreProposalsAsync(
+                        question, agenticProposals, finishCt);
+                    brainSteps += "\n" + harvest.TraceLine;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "relatievoorstellen uit de agentic ask niet opgeslagen");
+                    brainSteps += "\n[relatievoorstellen: opslaan mislukt — zie logs]";
+                }
+            }
+
+            // Denkstappen-trace voor het beheer (#40) — best-effort.
             try
             {
-                var harvest = await agenticRelations.StoreProposalsAsync(
-                    question, agenticProposals, finishCt);
-                brainSteps += "\n" + harvest.TraceLine;
+                db.AskTraces.Add(new AskTrace
+                {
+                    Question = question.Length > 500 ? question[..500] : question,
+                    QuestionType = type.ToString(),
+                    RewrittenQuery = rewrite is null ? null :
+                        $"{rewrite.NormalizedQuestion} | queries: " +
+                        $"{string.Join("; ", rewrite.SearchQueries)} | termen: " +
+                        $"{string.Join("; ", rewrite.LexicalTerms)}",
+                    SourceBias = sourceBias,
+                    MentionsCard = mentionsCard,
+                    MechanicMatches = string.Join(", ", cardContext.Mechanics),
+                    // Degradatie-kanttekeningen (#100/#152): de beheerder moet in
+                    // de trace kunnen zien dat een antwoord zonder vector-kanalen
+                    // of met uitgevallen kanalen tot stand kwam (bewust zonder
+                    // migratie — geen eigen kolom; de reden staat in de logs).
+                    Sections = (qv is null
+                            ? "[embedding-uitval: vector-kanalen overgeslagen] " : "")
+                        + (failedChannels.Count > 0
+                            ? $"[kanaal-uitval: {string.Join(", ", failedChannels)}] " : "")
+                        + string.Join(", ", citations
+                            .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
+                    ContextCards = string.Join(", ", cardContext.CardNames),
+                    PrimerDocs = string.Join(", ", primerTitles),
+                    CommunityClaims = string.Join(", ", claimTraceRefs),
+                    VerifiedRulings = rulings.Count,
+                    Model = usedModel,
+                    HadImage = images is { Count: > 0 },
+                    DurationMs = (int)sw.ElapsedMilliseconds,
+                    // Agentic ask (#107): Agentic = de agent leverde het antwoord;
+                    // vangnet-inzet en client-aborts blijven zichtbaar via de
+                    // marker in BrainSteps — dezelfde controleerbaarheid als de
+                    // denkstappen.
+                    Agentic = agentAnswered,
+                    // #153: wie de escalatie afdwong (gate/gebruiker) — de badge
+                    // in de beheer-traces; null als er niet geëscaleerd is.
+                    EscalatedBy = escalatedBy,
+                    BrainSteps = brainSteps,
+                    // Het volledige gesprek (#143): het definitieve antwoord —
+                    // op de streamingroute is dat het slotframe uit
+                    // StreamAnswerAsync (of UnavailableAnswer bij uitval, Ok=false)
+                    // — plus de gecapte doorvraag-beurten (#41) zoals ze als
+                    // GESPREK-blok in de prompt meegingen.
+                    Answer = answer,
+                    History = SerializeHistory(turns),
+                    // Per-fase-wandkloktijden (#152) — de fasen overlappen
+                    // (parallelle pipeline), dus de som ≠ TotalMs.
+                    PhaseTimings = new AskPhases(
+                        rewriteMs, embedMs, retrievalMs, aiMs,
+                        sw.ElapsedMilliseconds).ToJson(),
+                    Ok = aiAnswer is not null,
+                    UserId = userContext.User?.Id,
+                    // Anonieme ask-geschiedenis (#157): zelfde IpHash-stempel als
+                    // UserId hierboven — RequestUserContext.IpHash komt van de
+                    // quota-filter (Api-laag), null zonder secret/IP.
+                    IpHash = userContext.IpHash,
+                });
+                // Bewaar alleen de recente historie.
+                var cutoff = await db.AskTraces
+                    .OrderByDescending(t => t.CreatedAt)
+                    .Skip(200)
+                    .Select(t => t.CreatedAt)
+                    .FirstOrDefaultAsync(finishCt);
+                if (cutoff != default)
+                    await db.AskTraces.Where(t => t.CreatedAt <= cutoff).ExecuteDeleteAsync(finishCt);
+                await db.SaveChangesAsync(finishCt);
             }
-            catch (Exception ex)
+            catch
             {
-                logger.LogWarning(ex,
-                    "relatievoorstellen uit de agentic ask niet opgeslagen");
-                brainSteps += "\n[relatievoorstellen: opslaan mislukt — zie logs]";
+                // trace mag een antwoord nooit blokkeren
             }
-        }
-
-        // Denkstappen-trace voor het beheer (#40) — best-effort.
-        try
-        {
-            db.AskTraces.Add(new AskTrace
-            {
-                Question = question.Length > 500 ? question[..500] : question,
-                QuestionType = type.ToString(),
-                RewrittenQuery = rewrite is null ? null :
-                    $"{rewrite.NormalizedQuestion} | queries: " +
-                    $"{string.Join("; ", rewrite.SearchQueries)} | termen: " +
-                    $"{string.Join("; ", rewrite.LexicalTerms)}",
-                SourceBias = sourceBias,
-                MentionsCard = mentionsCard,
-                MechanicMatches = string.Join(", ", cardContext.Mechanics),
-                // Degradatie-kanttekeningen (#100/#152): de beheerder moet in
-                // de trace kunnen zien dat een antwoord zonder vector-kanalen
-                // of met uitgevallen kanalen tot stand kwam (bewust zonder
-                // migratie — geen eigen kolom; de reden staat in de logs).
-                Sections = (qv is null
-                        ? "[embedding-uitval: vector-kanalen overgeslagen] " : "")
-                    + (failedChannels.Count > 0
-                        ? $"[kanaal-uitval: {string.Join(", ", failedChannels)}] " : "")
-                    + string.Join(", ", citations
-                        .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
-                ContextCards = string.Join(", ", cardContext.CardNames),
-                PrimerDocs = string.Join(", ", primerTitles),
-                CommunityClaims = string.Join(", ", claimTraceRefs),
-                VerifiedRulings = rulings.Count,
-                Model = usedModel,
-                HadImage = images is { Count: > 0 },
-                DurationMs = (int)sw.ElapsedMilliseconds,
-                // Agentic ask (#107): Agentic = de agent leverde het antwoord;
-                // vangnet-inzet en client-aborts blijven zichtbaar via de
-                // marker in BrainSteps — dezelfde controleerbaarheid als de
-                // denkstappen.
-                Agentic = agentAnswered,
-                // #153: wie de escalatie afdwong (gate/gebruiker) — de badge
-                // in de beheer-traces; null als er niet geëscaleerd is.
-                EscalatedBy = escalatedBy,
-                BrainSteps = brainSteps,
-                // Het volledige gesprek (#143): het definitieve antwoord —
-                // op de streamingroute is dat het slotframe uit
-                // StreamAnswerAsync (of UnavailableAnswer bij uitval, Ok=false)
-                // — plus de gecapte doorvraag-beurten (#41) zoals ze als
-                // GESPREK-blok in de prompt meegingen.
-                Answer = answer,
-                History = SerializeHistory(turns),
-                // Per-fase-wandkloktijden (#152) — de fasen overlappen
-                // (parallelle pipeline), dus de som ≠ TotalMs.
-                PhaseTimings = new AskPhases(
-                    rewriteMs, embedMs, retrievalMs, aiMs,
-                    sw.ElapsedMilliseconds).ToJson(),
-                Ok = aiAnswer is not null,
-                UserId = userContext.User?.Id,
-                // Anonieme ask-geschiedenis (#157): zelfde IpHash-stempel als
-                // UserId hierboven — RequestUserContext.IpHash komt van de
-                // quota-filter (Api-laag), null zonder secret/IP.
-                IpHash = userContext.IpHash,
-            });
-            // Bewaar alleen de recente historie.
-            var cutoff = await db.AskTraces
-                .OrderByDescending(t => t.CreatedAt)
-                .Skip(200)
-                .Select(t => t.CreatedAt)
-                .FirstOrDefaultAsync(finishCt);
-            if (cutoff != default)
-                await db.AskTraces.Where(t => t.CreatedAt <= cutoff).ExecuteDeleteAsync(finishCt);
-            await db.SaveChangesAsync(finishCt);
-        }
-        catch
-        {
-            // trace mag een antwoord nooit blokkeren
         }
 
         return new(answer, citations, cards, type.ToString(),
             Ok: aiAnswer is not null, Claims: askClaims,
             Misconceptions: askMisconceptions,
-            Approach: approachUsed, ApproachReason: decision.FallbackReason);
+            Approach: approachUsed, ApproachReason: decision.FallbackReason,
+            Usage: usage is null ? null : new AskUsageInfo(usage.InputTokens, usage.OutputTokens));
     }
 
     /// <summary>Consumeert de rb-ai-stream: deltas door naar de UI, het

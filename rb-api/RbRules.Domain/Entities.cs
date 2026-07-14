@@ -602,3 +602,76 @@ public class RelationKind
     public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ReviewedAt { get; set; }
 }
+
+/// <summary>Benchmark-vraag (#158, de scheidsrechter-judge-test): vaste,
+/// extern aangeleverde meerkeuzevraag. Seed-import via BenchmarkSeed
+/// (Program.cs-startup, idempotent op ExternalKey — zelfde patroon als
+/// SourceSeed): ontbrekende sleutels komen erbij zodra Sjoerd een nieuw deel
+/// van de set aanlevert, bestaande rijen blijven ongemoeid. CorrectIndex is
+/// meestal nog null — de officiële antwoordsleutel volgt in delen; zónder
+/// sleutel mag een run de vraag wél stellen en het antwoord tonen, maar
+/// NOOIT als correct/fout scoren (zie BenchmarkService/BenchmarkRun).</summary>
+public class BenchmarkQuestion
+{
+    public long Id { get; set; }
+    /// <summary>Stabiele idempotentie-sleutel voor de seed (bv. "judge-1") —
+    /// zelfde rol als Source.Id.</summary>
+    public required string ExternalKey { get; set; }
+    public required string Category { get; set; }         // "judge"
+    public required string Question { get; set; }
+    /// <summary>Geordende opties (A/B/C/…) — de index is de sleutel voor
+    /// CorrectIndex en voor de letter die de agent kiest (BenchmarkPrompt).</summary>
+    public required string[] Options { get; set; }
+    /// <summary>0-based; null = nog geen officiële sleutel.</summary>
+    public int? CorrectIndex { get; set; }
+    /// <summary>Optionele toelichting/regelbasis-referentie voor bij het bekijken.</summary>
+    public string? Explanation { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Eén benchmarkrun (#158): de vaste vragenset door de bestaande
+/// /ask-pipeline met de isolatie-vlag aan (AskService.AskOptions.Benchmark) —
+/// geen ask_trace/ask_metric-rij, geen agentic-relatie-terugkoppeling (#120).
+/// Score/tellingen liggen hier vast bij afronding zodat run-over-run
+/// vergelijken geen herberekening nodig heeft.</summary>
+public class BenchmarkRun
+{
+    public long Id { get; set; }
+    /// <summary>Vrij label (model-context e.d.); null bij een gewone
+    /// handmatige run via het jobs-paneel.</summary>
+    public string? Label { get; set; }
+    public int QuestionCount { get; set; }
+    /// <summary>Aantal vragen mét officiële sleutel (CorrectIndex != null) op
+    /// het moment van deze run — de noemer van ScorePercent.</summary>
+    public int KeyedCount { get; set; }
+    public int CorrectCount { get; set; }
+    /// <summary>% correct over de gekeyde vragen; null zolang geen enkele
+    /// vraag een sleutel heeft (nog niets te scoren, wel te bekijken).</summary>
+    public double? ScorePercent { get; set; }
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
+/// <summary>Antwoord van één vraag binnen een run (#158): het volledige
+/// scheidsrechter-antwoord (met de gecommitteerde-keuze-instructie uit
+/// BenchmarkPrompt) plus de door de deterministische parser herkende letter.
+/// Correct is uitsluitend null wanneer de vraag geen sleutel heeft — een
+/// parse-mislukking op een wél gekeyde vraag levert gewoon false op
+/// (ChosenIndex null ≠ CorrectIndex), nooit een crash van de run.</summary>
+public class BenchmarkResult
+{
+    public long Id { get; set; }
+    public long RunId { get; set; }
+    public BenchmarkRun? Run { get; set; }
+    public long QuestionId { get; set; }
+    public BenchmarkQuestion? Question { get; set; }
+    public required string Answer { get; set; }
+    /// <summary>0-based; null = de deterministische parser vond geen
+    /// eenduidige letter in het antwoord (geen match ⇒ null, geen fout).</summary>
+    public int? ChosenIndex { get; set; }
+    public bool? Correct { get; set; }
+    public int DurationMs { get; set; }
+    public long? InputTokens { get; set; }
+    public long? OutputTokens { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}

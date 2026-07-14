@@ -38,6 +38,9 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<LoginToken> LoginTokens => Set<LoginToken>();
     public DbSet<PasskeyCredential> PasskeyCredentials => Set<PasskeyCredential>();
     public DbSet<PasskeyChallenge> PasskeyChallenges => Set<PasskeyChallenge>();
+    public DbSet<BenchmarkQuestion> BenchmarkQuestions => Set<BenchmarkQuestion>();
+    public DbSet<BenchmarkRun> BenchmarkRuns => Set<BenchmarkRun>();
+    public DbSet<BenchmarkResult> BenchmarkResults => Set<BenchmarkResult>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -291,6 +294,33 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("passkey_challenge");
             e.HasIndex(x => x.TokenHash).IsUnique();
+        });
+
+        // Benchmark (#158): vaste vragenset + runs, strikt gescheiden van
+        // ask_trace/ask_metric — zie AskService.AskOptions.Benchmark.
+        b.Entity<BenchmarkQuestion>(e =>
+        {
+            e.ToTable("benchmark_question");
+            e.HasIndex(x => x.ExternalKey).IsUnique();
+        });
+
+        b.Entity<BenchmarkRun>(e =>
+        {
+            e.ToTable("benchmark_run");
+            e.HasIndex(x => x.StartedAt);
+        });
+
+        b.Entity<BenchmarkResult>(e =>
+        {
+            e.ToTable("benchmark_result");
+            e.HasOne(x => x.Run).WithMany().HasForeignKey(x => x.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Vragen zijn vaste seed-data — een vraag verwijderen mag geen
+            // historische resultaten meeslepen (audit-trail blijft leesbaar).
+            e.HasOne(x => x.Question).WithMany().HasForeignKey(x => x.QuestionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => x.RunId);
+            e.HasIndex(x => x.QuestionId);
         });
     }
 }

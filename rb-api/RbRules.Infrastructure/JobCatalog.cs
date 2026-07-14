@@ -58,6 +58,11 @@ public static class JobCatalog
             // "alles"-keten (een backfill-run duurt met de netiquette-throttle
             // tot ~10 minuten en heeft geen volgorde-afhankelijkheid).
             new("decks", DecksAsync),
+            // Judge-benchmark (#158): vaste vragenset door de ask-pipeline met
+            // de isolatie-vlag aan — bewust géén stap in de "alles"-keten (een
+            // benchmarkrun meet kwaliteit, hij hoort niet bij het bijwerken
+            // van de kennisbank).
+            new("benchmark", BenchmarkAsync),
         }.ToDictionary(j => j.Name);
 
     private static async Task<string> RunAllAsync(
@@ -247,6 +252,14 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<DeckIngestService>()
             .RunAsync(progress: report, ct: ct);
+        return r.Message;
+    }
+
+    private static async Task<string> BenchmarkAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BenchmarkService>()
+            .RunAsync(label: null, progress: report, ct: ct);
         return r.Message;
     }
 }

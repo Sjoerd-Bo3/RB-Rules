@@ -393,6 +393,11 @@ public static class AdminEndpoints
         admin.MapGet("/overview/setcoverage", async (AdminOverviewService overview) =>
             Results.Ok(await overview.SetCoverageAsync()));
 
+        // Judge-benchmark (#158): run-historie + het detail van de gekozen
+        // (of meest recente) run — de job zelf draait via /jobs/benchmark.
+        admin.MapGet("/overview/benchmark", async (long? run, AdminOverviewService overview) =>
+            Results.Ok(await overview.BenchmarkAsync(run)));
+
         // Accountbeheer (#42): blokkeren en quota bijstellen.
         admin.MapPatch("/users/{id:long}", async (long id, UserPatch patch, RbRulesDbContext db) =>
         {

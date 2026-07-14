@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { compactRanges } from '$lib/ranges';
+	import AnswerView from '$lib/AnswerView.svelte';
 
 	let { data, form } = $props();
 
@@ -130,6 +131,21 @@
 		period: string; anonQuestions: number; anonPhotos: number; paths: PathUsage[];
 	}
 
+	// Judge-benchmark (#158): run-historie + het detail van de gekozen run.
+	interface BenchmarkRunItem {
+		id: number; label: string | null; questionCount: number; keyedCount: number;
+		correctCount: number; scorePercent: number | null;
+		startedAt: string; completedAt: string | null;
+	}
+	interface BenchmarkResultItem {
+		id: number; questionId: number; externalKey: string; category: string; question: string;
+		options: string[]; correctIndex: number | null; explanation: string | null;
+		answer: string; chosenIndex: number | null; correct: boolean | null;
+		durationMs: number; inputTokens: number | null; outputTokens: number | null;
+	}
+	interface BenchmarkRunDetail { run: BenchmarkRunItem; results: BenchmarkResultItem[]; }
+	interface BenchmarkOverview { runs: BenchmarkRunItem[]; selected: BenchmarkRunDetail | null; }
+
 	const TITLES: Record<string, { title: string; sub: string }> = {
 		kaarten: { title: 'Kaarten', sub: 'alle kaarten in de database, doorklikbaar naar de kaartpagina' },
 		embeddings: { title: 'Embeddings', sub: 'welke kaarten een embedding hebben — en welke nog niet' },
@@ -147,7 +163,8 @@
 		gaten: { title: 'Kennis-gaten', sub: 'waar de kennisbank dun is — gemeten, niet geraden: dekking, vraag-signalen en bron-versheid' },
 		decks: { title: 'Decks', sub: 'community-decks van Piltover Archive, met bronvermelding en deep-link terug — wij bouwen bewust geen eigen deckbuilder (#15)' },
 		setdekking: { title: 'Set-dekking', sub: 'per set welke kaartnummers we hebben en wélke exact ontbreken — afgeleid uit de riftbound-id\'s zelf ("ogn-074-298" = nr. 74 van 298)' },
-		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — tokentotalen per pad en per account zijn het kosteninzicht; quota en blokkade zijn hier bij te stellen' }
+		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — tokentotalen per pad en per account zijn het kosteninzicht; quota en blokkade zijn hier bij te stellen' },
+		benchmark: { title: 'Benchmark', sub: 'de vaste scheidsrechter-vragenset door de /ask-pipeline — geïsoleerd van de kennisbank (geen trace, metric of relatie-terugkoppeling); score alleen over de vragen met een bevestigd antwoord' }
 	};
 	const meta = $derived(TITLES[data.kind]);
 
@@ -205,6 +222,7 @@
 	const decks = $derived(data.kind === 'decks' ? (data.data as Paged<DeckItem> | null) : null);
 	const coverage = $derived(data.kind === 'setdekking' ? (data.data as SetCoverageOverview | null) : null);
 	const users = $derived(data.kind === 'gebruikers' ? (data.data as UserOverview | null) : null);
+	const benchmark = $derived(data.kind === 'benchmark' ? (data.data as BenchmarkOverview | null) : null);
 
 	// Meetperiode voor het gebruikers-overzicht (#42): chip-label per waarde.
 	const PERIODS: { value: string; label: string }[] = [
@@ -270,6 +288,12 @@
 	// zo scanbaar in de tabellen.
 	function fmtTokens(n: number): string {
 		return n.toLocaleString('nl-NL');
+	}
+
+	// Judge-benchmark (#158): A/B/C/… voor optie-index 0/1/2/… — zelfde
+	// letterlijst als BenchmarkPrompt.Label in rb-api.
+	function optionLabel(i: number): string {
+		return String.fromCharCode(65 + i);
 	}
 </script>
 
@@ -861,6 +885,99 @@
 			{/if}
 		{/if}
 
+		<!-- Judge-benchmark (#158): score bovenaan, per vraag het antwoord naast
+		     gekozen vs. juiste optie (goed/fout alleen bij een gekeyde vraag),
+		     en run-historie om kwaliteit over tijd te vergelijken. Isolatie: deze
+		     run voedde geen ask_trace/ask_metric/relaties (AskOptions.Benchmark,
+		     zie rb-api/AskService). -->
+		{#if benchmark}
+			{#if !benchmark.selected}
+				<p class="meta">Nog geen benchmarkrun — start "Judge-benchmark" in het beheer.</p>
+			{:else}
+				{@const run = benchmark.selected.run}
+				<div class="panel bench-score">
+					<span class="num">{run.scorePercent === null ? '—' : `${run.scorePercent}%`}</span>
+					<span class="lbl">
+						{run.correctCount} correct van {run.keyedCount} gekeyde vragen
+						<span class="of">
+							({run.questionCount} vragen totaal{run.questionCount > run.keyedCount
+								? `, ${run.questionCount - run.keyedCount} nog niet gekeyd`
+								: ''})
+						</span>
+					</span>
+				</div>
+
+				<div class="table-wrap">
+					<table>
+						<thead>
+							<tr>
+								<th>Vraag</th><th>Antwoord</th><th>Gekozen</th><th>Juist</th>
+								<th>Resultaat</th><th>Duur</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each benchmark.selected.results as r (r.id)}
+								<tr>
+									<td class="bench-question">
+										<strong>{r.question}</strong>
+										<ul class="bench-options">
+											{#each r.options as o, i (i)}
+												<li
+													class:bench-correct={r.correctIndex === i}
+													class:bench-chosen={r.chosenIndex === i}
+												>
+													{optionLabel(i)}. {o}
+												</li>
+											{/each}
+										</ul>
+										{#if r.explanation}<p class="meta">{r.explanation}</p>{/if}
+									</td>
+									<td class="bench-answer"><AnswerView answer={r.answer} /></td>
+									<td class="meta">{r.chosenIndex === null ? '—' : optionLabel(r.chosenIndex)}</td>
+									<td class="meta">
+										{r.correctIndex === null ? 'nog niet gekeyd' : optionLabel(r.correctIndex)}
+									</td>
+									<td>
+										{#if r.correctIndex === null}
+											<span class="badge mute">nog niet gekeyd</span>
+										{:else if r.correct}
+											<span class="badge ok-b">goed</span>
+										{:else}
+											<span class="badge err">fout</span>
+										{/if}
+									</td>
+									<td class="meta nowrap">{(r.durationMs / 1000).toFixed(1)}s</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+
+			{#if benchmark.runs.length > 1}
+				<h2 class="gap-h">Run-historie <span class="meta">(vergelijk kwaliteit over tijd/versies)</span></h2>
+				<div class="table-wrap">
+					<table>
+						<thead><tr><th>Gestart</th><th>Score</th><th>Gekeyed</th><th>Vragen</th></tr></thead>
+						<tbody>
+							{#each benchmark.runs as r (r.id)}
+								<tr>
+									<td>
+										<a href="?run={r.id}" aria-current={benchmark.selected?.run.id === r.id ? 'page' : undefined}>
+											{fmtDate(r.startedAt)}{r.label ? ` · ${r.label}` : ''}
+										</a>
+									</td>
+									<td class="meta">{r.scorePercent === null ? '—' : `${r.scorePercent}%`}</td>
+									<td class="meta">{r.keyedCount}</td>
+									<td class="meta">{r.questionCount}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		{/if}
+
 		<!-- Kennis-gaten-rapport (#52) -->
 		{#if gaps}
 			<h2 class="gap-h">Dekking</h2>
@@ -1205,4 +1322,19 @@
 	.meta { color: var(--muted); font-size: 0.85rem; }
 	/* .badge-stijlen: gedeelde bouwsteen in app.css (#59). */
 	.warn { color: var(--err); }
+
+	/* Judge-benchmark (#158): score-tegel + per-vraag opties, zelfde
+	   bouwstenen als .gap-stat hierboven. */
+	.bench-score { display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; margin-bottom: 16px; }
+	.bench-score .num { font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+	.bench-score .lbl { color: var(--muted); font-size: 0.9rem; }
+	.bench-score .of { opacity: 0.75; }
+	.bench-question { min-width: 220px; max-width: 340px; }
+	.bench-options { margin: 6px 0 0; padding-left: 18px; }
+	.bench-options li { margin-bottom: 2px; }
+	.bench-options .bench-chosen { font-weight: 600; }
+	.bench-options .bench-correct { color: var(--ok); }
+	/* Het gerenderde antwoord hoort op 390px nooit horizontaal te overflowen —
+	   AnswerView zelf breekt tekst af; hier alleen de kolombreedte begrenzen. */
+	.bench-answer { min-width: 260px; max-width: 480px; overflow-wrap: anywhere; }
 </style>

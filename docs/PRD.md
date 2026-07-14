@@ -295,7 +295,7 @@ apart in §6.
 - **Aanklikbare status-tegels** — elke teller opent een overzichtspagina.
   *Route* `/admin/overview/[kind]` · *endpoints* `/api/admin/overview/{cards,
   rulechunks, bans, errata, interactions, changes, claims, proposals, relations,
-  users, gaps, setcoverage}`.
+  users, gaps, setcoverage, benchmark}`.
 - **Set-dekking** — tegel + overzichtspagina: per set het basistotaal,
   aanwezige én exact ontbrekende kaartnummers (compacte reeksweergave,
   bv. "12, 45–47, 203"), dekking %, variantentelling, afwijkende
@@ -331,6 +331,21 @@ apart in §6.
   run_log-vensters en degradatiepaden (#122).
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest. *Endpoint* `/api/admin/overview/gaps`.
+- **Judge-benchmark** (#158) — job "benchmark" draait een vaste, extern
+  aangeleverde meerkeuzevragenset (de scheidsrechter-judge-test, seed
+  `BenchmarkSeed`) door exact dezelfde `/ask`-pipeline (retrieval + prompt
+  ongewijzigd), met per vraag de opties in de vraagtekst en de instructie om
+  zich op één letter te committeren ("gecommitteerde keuze"); een
+  deterministische parser (`BenchmarkPrompt.ParseChoice`) haalt de gekozen
+  letter uit het antwoord — geen match ⇒ onscoorbaar, geen fout. **Isolatie
+  is hard**: de run zet `AskOptions.Benchmark = true`, waarmee AskService élk
+  leer-/meetneveneffect onderdrukt — geen `ask_trace`/`ask_metric`-rij en geen
+  agentic-relatie-terugkoppeling (#120); de vragenset voedt de kennisbank dus
+  nooit (zie ook §8 in ARCHITECTURE.md). Score = % correct over de vragen mét
+  een bevestigde antwoordsleutel (`correct_index != null`); ongekeyde vragen
+  draaien gewoon mee (bewijs voor de agent-kwaliteit) maar tellen niet mee in
+  het percentage. *Route* `/admin/overview/benchmark` · *endpoints*
+  `/api/admin/jobs/benchmark`, `/api/admin/overview/benchmark`.
 - **Primer- & correctie-beheer** — drafts goedkeuren/intrekken; correcties
   verifiëren. *Endpoints* `/api/admin/knowledge/*`, `/api/admin/corrections/*`.
 - **Bronnenbeheer** — bronnen met trust/rank toevoegen/verwijderen.
@@ -483,6 +498,11 @@ openstaande PR.
   aandeel aanwezige basisnummers en de exacte ontbrekende nummers — meet of
   de kaartenbank compleet is in plaats van het aan te nemen; onvolledige
   sets zijn een signaal in het kennis-gaten-rapport.
+- **Judge-benchmark** (`/api/admin/overview/benchmark`, #158): score (%
+  correct) van de vaste scheidsrechter-vragenset over runs heen — een echte
+  regressiemeter bij prompt-/retrieval-/modelwijzigingen, volledig
+  losgekoppeld van de kennisbank (geen trace/metric/relatie-instroom) zodat
+  het meten zelf de bank nooit vervuilt.
 
 **Zinnige volgende metrieken**
 - **Dekking**: aandeel `/ask`-antwoorden met een "Zeker/Redelijk zeker"-label

@@ -207,7 +207,7 @@ public static class AskEndpoints
                     approach = m.Approach, approachReason = m.ApproachReason,
                 }),
                 onDelta: text => WriteFrameAsync(new { type = "delta", text }),
-                approach, http.RequestAborted);
+                approach, ct: http.RequestAborted);
             await WriteFrameAsync(new { type = "final", result });
         }
         catch (OperationCanceledException)

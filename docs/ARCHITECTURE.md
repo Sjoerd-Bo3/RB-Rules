@@ -206,7 +206,9 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `RelationMining`, `AgenticGate`, `SourceSeed`, `RiotCardMapper`,
   `HubDiscovery`, `PiltoverDeckPage`/`PiltoverSitemap`/`DeckCardLinker`
   (#15), `IpHashing` (HMAC-SHA256 IP-hash voor de ask-geschiedenis, #157),
-  `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
+  `BenchmarkPrompt` (gecommitteerde-keuze-prompt + deterministische
+  letter-parser, #158), `BenchmarkSeed` (judge-vragenset, idempotent net als
+  `SourceSeed`), `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
   datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `RuleChunkPipeline`, `CardSyncService`,
@@ -216,7 +218,9 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   (Neo4j), `BrainService`, `MechanicMiningService`, `ClaimMiningService`,
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
-  Piltover Archive-ingest), `KnowledgeGapsService`, `JobLedger`, `PushService`,
+  Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
+  op `AskService` met `AskOptions.Benchmark = true`, #158),
+  `KnowledgeGapsService`, `JobLedger`, `PushService`,
   `MailService`, `UserAccountService`, `PasskeyService`, en de migraties in
   `Migrations/`.
 - **`RbRules.Api`** — compositie: `Program.cs` doet alleen DI-registratie,
@@ -533,6 +537,18 @@ kan rb-api eerder starten dan Postgres klaar is.
 - **Best-effort achtergrondwerk** — `JobCatalog` registreert jobs als één
   switch-vrije catalogus; `RunAllAsync` ("Alles bijwerken") draait elke stap
   best-effort in volgorde.
+- **Benchmark voedt de kennisbank niet** (#158) — de judge-benchmark draait
+  exact dezelfde retrieval/prompt/agentic-gate als een normale vraag, via
+  `AskService.AskOptions { Benchmark = true }`: één vlag door de
+  ask-aanroep die élk leer-/meetneveneffect onderdrukt — geen
+  `ask_trace`/`ask_metric`-rij (dus buiten de duurstatistiek en het
+  kennis-gaten-rapport, die op die tabellen leunen) en geen agentic-
+  relatie-terugkoppeling (#120). Claims en geverifieerde rulings worden door
+  `AskCoreAsync` sowieso alleen gelézen, nooit geschreven, dus die blijven
+  toch al buiten schot. `BenchmarkService` boekt zijn eigen
+  `benchmark_run`/`benchmark_result`-rijen, strikt gescheiden van de
+  kennisbank-tabellen; bewezen met een servicetest die 0 rijen in
+  ask_trace/ask_metric/relations verwacht (`AskServiceBenchmarkIsolationTests`).
 
 ---
 

@@ -121,6 +121,23 @@ public record SetCoverageOverviewItem(
 public record SetCoverageOverview(
     int Sets, int Incomplete, IReadOnlyList<SetCoverageOverviewItem> Items);
 
+/// <summary>Benchmark-overzicht (#158): run-historie (voor run-over-run-
+/// vergelijking) + het geselecteerde run-detail met per vraag het antwoord
+/// naast gekozen vs. juiste optie. Score/tellingen komen ongewijzigd van
+/// BenchmarkRun — geen herberekening in de UI-laag.</summary>
+public record BenchmarkRunOverviewItem(
+    long Id, string? Label, int QuestionCount, int KeyedCount, int CorrectCount,
+    double? ScorePercent, DateTimeOffset StartedAt, DateTimeOffset? CompletedAt);
+public record BenchmarkResultOverviewItem(
+    long Id, long QuestionId, string ExternalKey, string Category, string Question,
+    IReadOnlyList<string> Options, int? CorrectIndex, string? Explanation,
+    string Answer, int? ChosenIndex, bool? Correct,
+    int DurationMs, long? InputTokens, long? OutputTokens);
+public record BenchmarkRunDetail(
+    BenchmarkRunOverviewItem Run, IReadOnlyList<BenchmarkResultOverviewItem> Results);
+public record BenchmarkOverview(
+    IReadOnlyList<BenchmarkRunOverviewItem> Runs, BenchmarkRunDetail? Selected);
+
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
 /// server-side gepagineerd waar lijsten groot zijn.</summary>
@@ -625,5 +642,42 @@ public class AdminOverviewService(RbRulesDbContext db)
             })
             .ToList();
         return new(items.Count, items.Count(i => i.MissingNumbers.Count > 0), items);
+    }
+
+    /// <summary>Benchmark-tegel (#158): laatste 50 runs + het detail van de
+    /// gevraagde (of, zonder parameter, meest recente) run. Zonder runs is
+    /// Selected null — de UI toont dan de nette lege staat ("start de job").</summary>
+    public async Task<BenchmarkOverview> BenchmarkAsync(long? runId)
+    {
+        var runs = await db.BenchmarkRuns.AsNoTracking()
+            .OrderByDescending(r => r.StartedAt)
+            .Take(50)
+            .Select(r => new BenchmarkRunOverviewItem(
+                r.Id, r.Label, r.QuestionCount, r.KeyedCount, r.CorrectCount,
+                r.ScorePercent, r.StartedAt, r.CompletedAt))
+            .ToListAsync();
+
+        var selectedId = runId ?? runs.FirstOrDefault()?.Id;
+        BenchmarkRunDetail? selected = null;
+        if (selectedId is { } id)
+        {
+            var run = runs.FirstOrDefault(r => r.Id == id);
+            if (run is not null)
+            {
+                var results = await db.BenchmarkResults.AsNoTracking()
+                    .Where(r => r.RunId == id)
+                    .Join(db.BenchmarkQuestions.AsNoTracking(), r => r.QuestionId, q => q.Id,
+                        (r, q) => new { r, q })
+                    .OrderBy(x => x.q.Id)
+                    .Select(x => new BenchmarkResultOverviewItem(
+                        x.r.Id, x.q.Id, x.q.ExternalKey, x.q.Category, x.q.Question,
+                        x.q.Options, x.q.CorrectIndex, x.q.Explanation,
+                        x.r.Answer, x.r.ChosenIndex, x.r.Correct,
+                        x.r.DurationMs, x.r.InputTokens, x.r.OutputTokens))
+                    .ToListAsync();
+                selected = new(run, results);
+            }
+        }
+        return new(runs, selected);
     }
 }
