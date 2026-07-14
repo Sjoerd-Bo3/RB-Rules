@@ -20,9 +20,9 @@ public class RelationMiningTests
             Here are the relations [1]:
             {"relations": [
               {"from": "mechanic:deflect", "to": "SECTION:core-rules-pdf/7.4",
-               "kind": "Wordt beperkt door", "explanation": "Deflect only reduces combat damage."},
+               "kind": "Is limited by", "explanation": "Deflect only reduces combat damage."},
               {"from": "mechanic:Tank", "to": "concept:combat",
-               "kind": "versterkt", "explanation": "Tank directs the block in combat."}
+               "kind": "strengthens", "explanation": "Tank directs the block in combat."}
             ]}
             """;
 
@@ -34,8 +34,8 @@ public class RelationMiningTests
         // is genormaliseerd naar kleine letters.
         Assert.Equal(new ExtractedRelation(
             "mechanic:Deflect", "section:core-rules-pdf/7.4",
-            "wordt beperkt door", "Deflect only reduces combat damage."), parsed[0]);
-        Assert.Equal("versterkt", parsed[1].Kind);
+            "is limited by", "Deflect only reduces combat damage."), parsed[0]);
+        Assert.Equal("strengthens", parsed[1].Kind);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class RelationMiningTests
         var raw = """
             Proposals:
             {"relations": [
-              {"from": "mechanic:Deflect", "to": "concept:combat", "kind": "verduidelijkt", "explanation": "x"},
+              {"from": "mechanic:Deflect", "to": "concept:combat", "kind": "clarifies", "explanation": "x"},
               {"from": "MECHANIC:deflect", "to": "card:verzonnen-999", "kind": "counters", "explanation": "x"},
               "geen object — genegeerd"
             ]}
@@ -160,8 +160,8 @@ public class RelationMiningTests
 
     [Theory]
     [InlineData("Counters", "counters")]
-    [InlineData("  wordt   beperkt door.", "wordt beperkt door")]
-    [InlineData("WORDT_BEPERKT_DOOR", "wordt beperkt door")]
+    [InlineData("  is   limited by.", "is limited by")]
+    [InlineData("IS_LIMITED_BY", "is limited by")]
     [InlineData("\"enables\"", "enables")]
     public void NormalizeKind_NormaliseertCasingWhitespaceEnRandtekens(string input, string expected)
     {
@@ -182,18 +182,18 @@ public class RelationMiningTests
     [Fact]
     public void KindVocabulary_SeedPlusGeaccepteerd_GededupedEnGenormaliseerd()
     {
-        var vocab = RelationMiner.KindVocabulary(["Counters", "ONTGRENDELT", "ontgrendelt", " "]);
-        // "counters" zit al in de seed; "ontgrendelt" komt er één keer bij.
+        var vocab = RelationMiner.KindVocabulary(["Counters", "UNLOCKS", "unlocks", " "]);
+        // "counters" zit al in de seed; "unlocks" komt er één keer bij.
         Assert.Equal(RelationMiner.SeedKinds.Length + 1, vocab.Count);
-        Assert.Contains("ontgrendelt", vocab);
+        Assert.Contains("unlocks", vocab);
     }
 
     [Fact]
     public void GetSystemPrompt_BevatHetEffectieveVocabulaire()
     {
-        var prompt = RelationMiner.GetSystemPrompt(["ontgrendelt"]);
+        var prompt = RelationMiner.GetSystemPrompt(["unlocks"]);
         Assert.Contains("counters", prompt);
-        Assert.Contains("ontgrendelt", prompt);
+        Assert.Contains("unlocks", prompt);
         Assert.DoesNotContain("{KINDS}", prompt);
     }
 
@@ -220,11 +220,11 @@ public class RelationMiningTests
     [Fact]
     public void ShouldProject_AcceptedEnUnreviewed_AlleenMetGeaccepteerdKind()
     {
-        var kinds = RelationProjection.AcceptedKindSet(["ontgrendelt"]);
+        var kinds = RelationProjection.AcceptedKindSet(["unlocks"]);
 
         // Seed-kind en geaccepteerd kind doen mee, beide statussen.
         Assert.True(RelationProjection.ShouldProject("accepted", "counters", kinds));
-        Assert.True(RelationProjection.ShouldProject("unreviewed", "ontgrendelt", kinds));
+        Assert.True(RelationProjection.ShouldProject("unreviewed", "unlocks", kinds));
 
         // Kandidaat-kind (niet geaccepteerd) blijft buiten de graph, ook als
         // de relatie zelf accepted is — het vocabulaire is de tweede poort.
@@ -235,7 +235,7 @@ public class RelationMiningTests
     [Fact]
     public void AcceptedKindSet_IsCaseOngevoelig()
     {
-        var kinds = RelationProjection.AcceptedKindSet(["Ontgrendelt"]);
-        Assert.True(RelationProjection.ShouldProject("accepted", "ontgrendelt", kinds));
+        var kinds = RelationProjection.AcceptedKindSet(["Unlocks"]);
+        Assert.True(RelationProjection.ShouldProject("accepted", "unlocks", kinds));
     }
 }

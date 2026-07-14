@@ -649,8 +649,14 @@ kan rb-api eerder starten dan Postgres klaar is.
   extraheert/synthetiseert — `ClaimMiner.ExtractionSystemPrompt`,
   `PrimerService`'s systeemprompt, `RelationMiner`'s `explanation`-instructie
   en rb-ai's `AGENT_ADDENDUM` (dezelfde relatie-`explanation`, via de
-  agentic-terugkoppeling, #120) — levert voortaan Engels, dicht bij de
-  officiële bewoording: geen vertaalstap tussen brontekst en opgeslagen
+  agentic-terugkoppeling, #120), de relatie-kind-labels
+  (`RelationMiner.SeedKinds` — Engels, met de vier oude NL-labels als
+  uitstervende legacy zodat een Relation-rij die de deploy→wipe-window nog
+  draagt geldig blijft; de wipe raakt de `RelationKind`-reviewstate niet), en
+  de claim-toets-redenering (`OfficialCheck`/`ClaimJudge` — de `reason` die als
+  `Claim.StatusReason` de weerleg-/misvattingstekst in `/ask` voedt, #125) —
+  levert voortaan Engels, dicht bij de officiële bewoording: geen vertaalstap
+  tussen brontekst en opgeslagen
   kennis, dus geen vertaalverlies of -drift, en de embeddings van bron en
   afgeleide laag liggen in dezelfde taalruimte (bge-m3 is weliswaar
   meertalig, maar eentalige consistentie is scherper dan cross-lingual

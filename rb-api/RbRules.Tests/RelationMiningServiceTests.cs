@@ -21,9 +21,9 @@ public class RelationMiningServiceTests
     private const string GoodAnswer = """
         {"relations": [
           {"from": "mechanic:Deflect", "to": "section:core-rules-pdf/7.4",
-           "kind": "wordt beperkt door", "explanation": "Deflect only applies to combat damage (§7.4)."},
+           "kind": "is limited by", "explanation": "Deflect only applies to combat damage (§7.4)."},
           {"from": "concept:combat", "to": "mechanic:Deflect",
-           "kind": "ontgrendelt", "explanation": "Combat makes Deflect relevant."}
+           "kind": "unlocks", "explanation": "Combat makes Deflect relevant."}
         ]}
         """;
 
@@ -49,12 +49,12 @@ public class RelationMiningServiceTests
             Assert.Equal("concept:combat", rel.Provenance);
             Assert.Equal(ClaimScoring.TierWeight(2), rel.Trust);
         });
-        Assert.Equal("wordt beperkt door", relations[0].Kind);
+        Assert.Equal("is limited by", relations[0].Kind);
 
-        // "ontgrendelt" is geen seed-kind → kandidaat in de reviewqueue;
-        // "wordt beperkt door" is seed en wordt dus níét als kandidaat gemeld.
+        // "unlocks" is geen seed-kind → kandidaat in de reviewqueue;
+        // "is limited by" is seed en wordt dus níét als kandidaat gemeld.
         var kind = Assert.Single(await db.RelationKinds.ToListAsync());
-        Assert.Equal("ontgrendelt", kind.Kind);
+        Assert.Equal("unlocks", kind.Kind);
         Assert.Equal("candidate", kind.Status);
         Assert.Equal(1, kind.Occurrences);
         Assert.Equal(1, r.NewKinds);
@@ -146,7 +146,7 @@ public class RelationMiningServiceTests
         await SeedConceptWorldAsync(db);
         db.RelationKinds.Add(new RelationKind
         {
-            Kind = "ontgrendelt", Status = "rejected", Occurrences = 1,
+            Kind = "unlocks", Status = "rejected", Occurrences = 1,
         });
         await db.SaveChangesAsync();
         var svc = new RelationMiningService(db, Ai(() => GoodAnswer));
@@ -159,7 +159,7 @@ public class RelationMiningServiceTests
         Assert.Equal(1, r.Duplicates);
         Assert.Equal(0, r.NewKinds);
         var rel = Assert.Single(await db.Relations.ToListAsync());
-        Assert.Equal("wordt beperkt door", rel.Kind);
+        Assert.Equal("is limited by", rel.Kind);
         var kind = Assert.Single(await db.RelationKinds.ToListAsync());
         Assert.Equal("rejected", kind.Status);
         Assert.Equal(1, kind.Occurrences);

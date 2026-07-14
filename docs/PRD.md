@@ -433,11 +433,13 @@ apart in §6.
   `SUPPORTED_BY`-edge naar de bron — de brein-API en de graph-verkenner tonen
   een ruling voortaan bij haar onderwerp, niet alleen via semantisch zoeken.
 - **Afgeleide kennis in het Engels** (#187) — de mining-prompts (claims,
-  primer, relatie-`explanation`) extraheren/synthetiseren in het Engels, dicht
-  bij de officiële bewoording — geen vertaalstap; UI en `/ask`-antwoorden
-  blijven Nederlands. Een wipe-en-regenereer-job (`regenerateknowledge`, zie
-  §4.5) gooit de bestaande Nederlandse afgeleide laag schoon weg i.p.v.
-  in-place te vertalen.
+  primer, relatie-`explanation`), de relatie-kind-labels en de
+  claim-toets-redenering (`OfficialCheck`/`ClaimJudge` → de weerleg-/
+  misvattingstekst op `Claim.StatusReason` die `/ask` gebruikt, #125)
+  extraheren/synthetiseren in het Engels, dicht bij de officiële bewoording —
+  geen vertaalstap; UI en `/ask`-antwoorden blijven Nederlands. Een
+  wipe-en-regenereer-job (`regenerateknowledge`, zie §4.5) gooit de bestaande
+  Nederlandse afgeleide laag schoon weg i.p.v. in-place te vertalen.
 - **Graph-verkenner** — interactieve kaart↔mechaniek↔regel-visualisatie.
   *Route* `/graph` · *endpoint* `/api/graph/neighbors`.
 - **Self-learning** — negatieve/positieve feedback → reviewqueue →

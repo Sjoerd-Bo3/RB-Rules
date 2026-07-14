@@ -118,18 +118,21 @@ public static partial class ClaimMiner
 /// tegenspreekt (contradicts → Conflict-model) of nieuw is (different).</summary>
 public static class ClaimJudge
 {
+    // #187: afgeleide-kennis-redenering in de brontaal (Engels) — het verdict
+    // is een enum, maar de prompt hoort bij dezelfde claims-pijplijn die
+    // voortaan Engels extraheert; consistent Engels houdt de mining eentalig.
     public const string SystemPrompt = """
-        Je vergelijkt een NIEUWE bewering over Riftbound TCG met bestaande,
-        genummerde beweringen. Antwoord UITSLUITEND met JSON:
+        You compare a NEW claim about Riftbound TCG with existing, numbered
+        claims. Respond ONLY with JSON:
         {"verdict": "same" | "contradicts" | "different", "match": N}
-        - "same": de nieuwe bewering zegt inhoudelijk hetzelfde als bestaande
-          bewering N (een parafrase of deelherhaling telt als hetzelfde)
-        - "contradicts": de nieuwe bewering gaat over hetzelfde onderwerp als
-          bewering N maar beweert het tegenovergestelde
-        - "different": de nieuwe bewering staat los van alle bestaande
-          beweringen (laat match dan weg)
-        Kies bij twijfel "different".
-        Geen tekst buiten de JSON.
+        - "same": the new claim says substantively the same thing as
+          existing claim N (a paraphrase or partial repeat counts as the same)
+        - "contradicts": the new claim is about the same subject as claim N
+          but asserts the opposite
+        - "different": the new claim stands apart from all existing claims
+          (then omit match)
+        When in doubt, choose "different".
+        No text outside the JSON.
         """;
 
     public static string BuildPrompt(string statement, IReadOnlyList<string> candidates) =>
@@ -179,15 +182,19 @@ public static class OfficialCheck
 {
     public const int MaxReasonLength = 300;
 
+    // #187: de reason-tekst wordt als weerlegging/misvatting in /ask gebruikt
+    // (#125, negatieve kennis) — dus afgeleide kennis, en die slaan we in de
+    // brontaal (Engels) op, dicht bij de officiële bewoording. De UI/‌ask-
+    // antwoorden zelf blijven Nederlands (AskService.BasePrompt).
     public const string SystemPrompt = """
-        Je toetst een community-bewering over Riftbound TCG aan officiële
-        regelsecties. Antwoord UITSLUITEND met JSON:
+        You test a community claim about Riftbound TCG against official rule
+        sections. Respond ONLY with JSON:
         {"verdict": "confirmed" | "contradicted" | "unclear", "reason": "..."}
-        - "confirmed": de secties bevestigen de bewering
-        - "contradicted": de secties spreken de bewering aantoonbaar tegen
-        - "unclear": de secties geven geen uitsluitsel — kies dit bij twijfel
-        - reason: 1 zin (NL) met de relevante §-verwijzing
-        Geen tekst buiten de JSON.
+        - "confirmed": the sections confirm the claim
+        - "contradicted": the sections demonstrably contradict the claim
+        - "unclear": the sections give no verdict — choose this when in doubt
+        - reason: 1 sentence (English) with the relevant § reference
+        No text outside the JSON.
         """;
 
     public static string BuildPrompt(

@@ -285,9 +285,9 @@ public class ClaimJudgeTests
     [Fact]
     public void BuildPrompt_NumbersCandidatesOneBased()
     {
-        var p = ClaimJudge.BuildPrompt("nieuw", ["eerste", "tweede"]);
-        Assert.Contains("1. eerste", p);
-        Assert.Contains("2. tweede", p);
+        var p = ClaimJudge.BuildPrompt("new", ["first", "second"]);
+        Assert.Contains("1. first", p);
+        Assert.Contains("2. second", p);
     }
 }
 
@@ -297,10 +297,10 @@ public class OfficialCheckTests
     public void Parse_Contradicted_CarriesReason()
     {
         var v = OfficialCheck.Parse(
-            """{"verdict": "contradicted", "reason": "§534.1 zegt dat de aanvaller kiest."}""");
+            """{"verdict": "contradicted", "reason": "§534.1 says the attacker chooses."}""");
         Assert.NotNull(v);
         Assert.Equal("contradicted", v.Verdict);
-        Assert.Equal("§534.1 zegt dat de aanvaller kiest.", v.Reason);
+        Assert.Equal("§534.1 says the attacker chooses.", v.Reason);
     }
 
     [Theory]
@@ -337,8 +337,8 @@ public class OfficialCheckTests
         // Zelfde first-bracket-regressie als de extractie (#93): een
         // §-verwijzing met haakjes vóór de JSON mag het oordeel niet breken.
         var v = OfficialCheck.Parse("""
-            Op basis van [1] (§534.1):
-            {"verdict": "confirmed", "reason": "§534.1 bevestigt dit."}
+            Based on [1] (§534.1):
+            {"verdict": "confirmed", "reason": "§534.1 confirms this."}
             """);
         Assert.NotNull(v);
         Assert.Equal("confirmed", v.Verdict);
@@ -347,8 +347,8 @@ public class OfficialCheckTests
     [Fact]
     public void BuildPrompt_IncludesSectionCodes()
     {
-        var p = OfficialCheck.BuildPrompt("bewering", [("534.1", "De aanvaller kiest.")]);
-        Assert.Contains("§534.1: De aanvaller kiest.", p);
+        var p = OfficialCheck.BuildPrompt("a claim", [("534.1", "The attacker chooses.")]);
+        Assert.Contains("§534.1: The attacker chooses.", p);
     }
 }
 
