@@ -30,6 +30,18 @@ public class Source
     /// Null = handmatig/legacy toegevoegd, of via de scout/hub-ontdekking
     /// (een ander, ouder ontdekkingspad met een eigen reviewqueue).</summary>
     public string? FeedId { get; set; }
+    /// <summary>Temporele precedentie (#168): publicatiedatum van het artikel
+    /// zelf, uit de bron-feed (<see cref="RiotNewsFeed.RiotNewsArticle.Date"/>)
+    /// — alleen gevuld voor via <see cref="SourceFeed"/> AutoApprove ontdekte
+    /// bronnen; een handmatig/legacy toegevoegde bron kent haar eigen
+    /// publicatiedatum niet en blijft null (nooit raden).</summary>
+    public DateTimeOffset? PublishedAt { get; set; }
+    /// <summary>Temporele precedentie (#168): wanneer de scan voor het laatst
+    /// een écht gewijzigde inhoud detecteerde (niet elke <see
+    /// cref="LastChecked"/> — alleen een reële content-wijziging, zelfde
+    /// moment als het bijbehorende <see cref="Change"/>-item). Null = nog
+    /// nooit een wijziging gezien sinds deze kolom bestaat.</summary>
+    public DateTimeOffset? UpdatedAt { get; set; }
 }
 
 /// <summary>Bron-feed (#167): een index-pagina die periodiek wordt afgespeurd
@@ -446,6 +458,14 @@ public class Erratum
     public required string NewText { get; set; }
     public required string SourceUrl { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Temporele precedentie (#168): vanaf wanneer deze errata-tekst
+    /// gold, afgeleid van de bron die haar publiceerde (<see
+    /// cref="Source.UpdatedAt"/> ?? <see cref="Source.PublishedAt"/> van de
+    /// bron achter <see cref="SourceUrl"/>). Null als die bron geen datum
+    /// draagt — nooit raden. Tie-breaker bij meerdere errata over dezelfde
+    /// kaart (zie <see cref="Precedence"/>): hoogste TrustTier, dan nieuwste
+    /// EffectiveFrom wint.</summary>
+    public DateOnly? EffectiveFrom { get; set; }
 }
 
 /// <summary>Kennislaag 2 (#50): een geparafraseerde community-bewering over
