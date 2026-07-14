@@ -137,6 +137,45 @@
 		</div>
 	</div>
 
+	<!-- Deck-gebruikssignaal (#15 golf 1 spoor B): altijd zichtbaar, ook als
+	     de bank nog (bijna) leeg is — de eerlijke lege/dunne staat is zelf
+	     de informatie, geen reden om het blok te verbergen. -->
+	<section id="in-decks">
+		<h2>
+			In decks
+			<a class="graph-link" href="/decks?card={encodeURIComponent(c.riftboundId)}">Bekijk in de deck-browser →</a>
+		</h2>
+		{#if data.dossier.deckPopularity.recentDeckCount === 0}
+			<p class="meta">Nog geen deckdata beschikbaar — de deck-backfill (Piltover Archive) loopt nog.</p>
+		{:else if data.dossier.deckPopularity.thinData}
+			<p>
+				{data.dossier.deckPopularity.deckCount} van {data.dossier.deckPopularity.recentDeckCount} recente decks bevatten deze kaart.
+			</p>
+			<p class="meta small">Nog te weinig deckdata voor een betrouwbaar percentage.</p>
+		{:else}
+			<p class="deckpct"><strong>{data.dossier.deckPopularity.percentage}%</strong> van recente decks speelt deze kaart</p>
+			<p class="meta small">
+				{data.dossier.deckPopularity.deckCount} van {data.dossier.deckPopularity.recentDeckCount} recente decks (Piltover Archive)
+			</p>
+		{/if}
+		{#if data.dossier.deckPopularity.deckCount > 0}
+			{#if data.dossier.deckPopularity.averageCopiesWhenPlayed !== null}
+				<p class="meta small">
+					Gemiddeld {data.dossier.deckPopularity.averageCopiesWhenPlayed}
+					{data.dossier.deckPopularity.averageCopiesWhenPlayed === 1 ? 'exemplaar' : 'exemplaren'} wanneer gespeeld.
+				</p>
+			{/if}
+			{#if data.dossier.deckPopularity.topCoPlayed.length}
+				<p class="meta small">Vaak samen gespeeld met:</p>
+				<p>
+					{#each data.dossier.deckPopularity.topCoPlayed as co (co.riftboundId)}
+						<a class="chip" href="/cards/{co.riftboundId}">{co.name}</a>
+					{/each}
+				</p>
+			{/if}
+		{/if}
+	</section>
+
 	{#if data.interactions.length}
 		<section>
 			<h2>Interacties (geverifieerd)</h2>
@@ -381,4 +420,6 @@
 	.secrefs { margin: 6px 0 2px; display: flex; gap: 6px; flex-wrap: wrap; }
 	.chip.relkind { color: var(--warn); }
 	.chip.unreviewed { color: var(--muted); font-size: 0.72rem; }
+	.deckpct { font-size: 1.05rem; }
+	.deckpct strong { color: var(--accent); font-size: 1.3rem; }
 </style>
