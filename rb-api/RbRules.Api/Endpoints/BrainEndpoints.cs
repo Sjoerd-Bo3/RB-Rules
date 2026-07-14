@@ -57,7 +57,7 @@ public static class BrainEndpoints
             if (BrainQuery.GraphLabel(nodeRef.Kind) is not { } label)
                 return Problem(400, "ongeldige aanvraag",
                     $"refs van deze soort staan niet in de kennisgraaf: {nodeRef.Format()} " +
-                    "(geverifieerde rulings leven alleen in Postgres — gebruik node/search)");
+                    "(dynamische relaties zijn altijd edges, nooit een eigen knoop — gebruik node/search)");
             if (!BrainQuery.TryParseEdges(edges, out var edgeFilter, out var fout))
                 return Problem(400, "ongeldige aanvraag", fout);
             // Kind (#116) is een property-waarde uit het open vocabulaire —

@@ -142,16 +142,17 @@ public class BrainQueryTests
     [InlineData(BrainRefKind.Set, "Set")]
     [InlineData(BrainRefKind.Domain, "Domain")]
     [InlineData(BrainRefKind.Tag, "Tag")]
+    [InlineData(BrainRefKind.Ruling, "Ruling")] // #191: geverifieerde rulings hebben nu een graph-knoop
     public void GraphLabel_MapsEveryGraphKind(BrainRefKind kind, string label)
     {
         Assert.Equal(label, BrainQuery.GraphLabel(kind));
     }
 
     [Fact]
-    public void GraphLabel_Ruling_HasNoGraphNode()
+    public void GraphLabel_Relation_HasNoGraphNode()
     {
-        // Geverifieerde rulings leven alleen in Postgres (docs/BRAIN.md §2.2).
-        Assert.Null(BrainQuery.GraphLabel(BrainRefKind.Ruling));
+        // Een dynamische relatie (#116) is altijd een edge, nooit een eigen knoop.
+        Assert.Null(BrainQuery.GraphLabel(BrainRefKind.Relation));
     }
 
     // ── route-refs (de %2F-afspraak met de rb-ai-tools) ────────────────
