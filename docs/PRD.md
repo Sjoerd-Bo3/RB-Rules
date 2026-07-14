@@ -384,9 +384,10 @@ apart in §6.
 
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
   (scan, feeds, cards, embed, mine, rules, bans, graph, primer, interactions,
-  scout, classify, claims, relations, setrelease, decks, benchmark) draaien via
-  `JobRunner` met live-voortgang en run_log. *Route* `/admin` · *endpoints*
-  `/api/admin/jobs/{name}`, `/api/admin/status`, `/api/admin/logs`.
+  scout, classify, claims, relations, setrelease, decks, benchmark,
+  benchmarksweep) draaien via `JobRunner` met live-voortgang en run_log.
+  *Route* `/admin` · *endpoints* `/api/admin/jobs/{name}`,
+  `/api/admin/status`, `/api/admin/logs`.
 - **Bron-feeds beheer** (#167) — feeds zelf toevoegen/bewerken/aan-uitzetten/
   verwijderen, met per feed het aantal ontdekte bronnen en de laatste vangst;
   elke bron toont zijn herkomstfeed (klikbaar terug). *Route*
@@ -463,6 +464,27 @@ apart in §6.
   draaien gewoon mee (bewijs voor de agent-kwaliteit) maar tellen niet mee in
   het percentage. *Route* `/admin/overview/benchmark` · *endpoints*
   `/api/admin/jobs/benchmark`, `/api/admin/overview/benchmark`.
+- **Model-sweep** (#174, uitbreiding op de judge-benchmark) — eigen job
+  "benchmarksweep" draait dezelfde vragenset door élk model uit een
+  geconfigureerde lijst (env `AI_BENCHMARK_MODELS`, comma-gescheiden;
+  standaard een spreiding over de modellen die rb-ai al inzet plus enkele
+  nieuwere varianten), elk 2× — voor een eerlijke score/tijd-vergelijking en
+  een consistentie-check (scoren de 2 runs gelijk, of was de eerste een
+  toevalstreffer?). rb-ai's `/ask` accepteert daarvoor een optioneel expliciet
+  `model`-veld dat de SDK-`query()`-modeloverride ingaat — puur additief,
+  zonder override ongewijzigd cheap/hard/agentic-gedrag; onbekende modellen
+  degraderen netjes (dezelfde AI-uitval-afhandeling als altijd, geen crash).
+  `benchmark_run` draagt daarvoor `Model`, `RunIndex` (1/2) en `SweepId` (de
+  groepeersleutel, tevens de starttijd van de sweep). Sequentieel uitgevoerd:
+  elke ask-aanroep gaat toch al door rb-ai's globale gelijktijdigheids-cap
+  (#155) heen, dus een sweep kan de VM niet omvertrekken zonder een eigen
+  lokale semafoor nodig te hebben. De geschatte omvang (N modellen × 2 × de
+  vragenset) staat vóór de eerste aanroep al in het job-log. Het
+  sweep-overzicht toont per model beide runs naast elkaar (score, gemiddelde
+  tijd per vraag, consistentie), sorteerbaar op score of snelheid, plus de
+  sweep-historie (verloop van modelkwaliteit/-snelheid over tijd). *Route*
+  `/admin/overview/benchmark?sweep=…` · *endpoints*
+  `/api/admin/jobs/benchmarksweep`, `/api/admin/overview/benchmark`.
 - **Primer- & correctie-beheer** — drafts goedkeuren/intrekken; correcties
   verifiëren. *Endpoints* `/api/admin/knowledge/*`, `/api/admin/corrections/*`.
 - **Bronnenbeheer** — bronnen met trust/rank toevoegen/verwijderen.
@@ -623,6 +645,12 @@ openstaande PR.
   regressiemeter bij prompt-/retrieval-/modelwijzigingen, volledig
   losgekoppeld van de kennisbank (geen trace/metric/relatie-instroom) zodat
   het meten zelf de bank nooit vervuilt.
+- **Model-sweep** (`/api/admin/overview/benchmark?sweep=…`, #174): dezelfde
+  regressiemeter, maar dan als kwaliteits-/kostenmetriek tussen modellen
+  onderling — score én tijd naast elkaar per model (elk 2× voor een
+  consistentie-check), gerangschikt op score en op snelheid, met een
+  sweep-historie zodat modelkeuzes voor rb-ai (cheap/hard/agentic) op cijfers
+  te onderbouwen zijn in plaats van op aanname.
 
 **Zinnige volgende metrieken**
 - **Dekking**: aandeel `/ask`-antwoorden met een "Zeker/Redelijk zeker"-label
