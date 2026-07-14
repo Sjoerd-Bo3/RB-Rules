@@ -14,6 +14,11 @@ public class RequestUserContext
     /// (#153) — zo kan de aanpak-beslissing in AskService het Grondig-quotum
     /// toetsen zonder een tweede telling. Null = anoniem of geen vraag-route.</summary>
     public UsageToday? Usage { get; set; }
+    /// <summary>Ask-geschiedenis-koppeling (#157): de IpHashing.Hash van dit
+    /// request, gezet door dezelfde quota-filter — voor élk request (ook
+    /// zonder sessietoken), zodat anonieme vragen ook matchbaar blijven op
+    /// "zelfde IP". Null zonder ASK_IP_HASH_SECRET of zonder vaststelbaar IP.</summary>
+    public string? IpHash { get; set; }
 }
 
 public record LoginRequestResult(

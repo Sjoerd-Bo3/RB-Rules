@@ -55,6 +55,9 @@ services:
       # Agentic ask (#107): off/auto/force. Default auto sinds 2026-07-13
       # (keuze Sjoerd); via .env terug te zetten zonder repo-wijziging.
       ASK_AGENTIC: ${ASK_AGENTIC:-auto}
+      # Ask-geschiedenis (#157): HMAC-secret voor de ip_hash-koppeling. Zonder
+      # secret degradeert de anonieme geschiedenis stil naar leeg — geen crash.
+      ASK_IP_HASH_SECRET: ${ASK_IP_HASH_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

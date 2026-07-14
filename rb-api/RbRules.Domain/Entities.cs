@@ -280,6 +280,11 @@ public class AskTrace
     public bool Ok { get; set; } = true;
     /// <summary>Ingelogde vrager (#42); null = anoniem.</summary>
     public long? UserId { get; set; }
+    /// <summary>Privacy-nette IP-koppeling (#157): HMAC-SHA256 van het
+    /// client-IP (IpHashing.Hash), nooit het rauwe IP. Null als
+    /// ASK_IP_HASH_SECRET ontbreekt of het IP niet vastgesteld kon worden —
+    /// zo'n vraag telt dan niet mee in de anonieme ask-geschiedenis (#157).</summary>
+    public string? IpHash { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

@@ -36,31 +36,45 @@ export interface AskAccount {
 	agenticToday: number;
 }
 
+/** Eigen ask-geschiedenis (#157): user_id (ingelogd) of ip_hash (anoniem) —
+ *  rb-api bepaalt de scope zelf uit de request, hier geen parameter nodig. */
+export interface AskHistoryItem {
+	id: number;
+	question: string;
+	createdAt: string;
+	questionType: string | null;
+	answer: string | null;
+	agentic: boolean;
+}
+
 export const load: PageServerLoad = async ({ cookies, getClientAddress }) => {
 	// Voorverwarmsignaal (#154), fire-and-forget: mag het renderen nooit
 	// vertragen of laten falen ($lib/prewarm slikt alles).
 	firePrewarm(() =>
 		api('/api/ask/prewarm', { method: 'POST', headers: { 'x-client-ip': getClientAddress() } })
 	);
-	let stats: AskStats;
-	try {
-		stats = await api<AskStats>('/api/ask/stats');
-	} catch {
-		stats = { count: 0 };
-	}
+	const userAuthHeaders = userHeaders(cookies);
+	const headers = { 'x-client-ip': getClientAddress(), ...userAuthHeaders };
+	// Duurstatistiek en eigen geschiedenis (#157) parallel — beide best-effort.
+	const [stats, askHistory] = await Promise.all([
+		api<AskStats>('/api/ask/stats').catch(() => ({ count: 0 }) as AskStats),
+		api<AskHistoryItem[]>('/api/ask/history', { headers }).catch(() => [] as AskHistoryItem[])
+	]);
 	// Ingelogd (#153): dagtegoed voor Grondig ophalen — best-effort, want
 	// zonder account werkt de pagina gewoon (dan is er geen keuze en beslist
 	// de server sowieso Auto).
 	let account: AskAccount | null = null;
 	if (cookies.get(USER_COOKIE)) {
 		try {
-			const me = await api<AskAccount>('/api/auth/me', { headers: userHeaders(cookies) });
+			const me = await api<AskAccount>('/api/auth/me', { headers: userAuthHeaders });
 			account = { dailyAgenticQuota: me.dailyAgenticQuota, agenticToday: me.agenticToday };
 		} catch {
 			account = null;
 		}
 	}
-	return { stats, account };
+	// loggedIn voor de privacy-melding in het geschiedenis-paneel (#157) —
+	// geen extra accountcall nodig, alleen of er een sessietoken meeging.
+	return { stats, account, askHistory, loggedIn: 'X-User-Token' in userAuthHeaders };
 };
 
 interface Citation {

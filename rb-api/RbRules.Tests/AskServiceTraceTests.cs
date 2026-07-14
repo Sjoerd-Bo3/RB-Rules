@@ -106,6 +106,39 @@ public class AskServiceTraceTests
     }
 
     [Fact]
+    public async Task AskAsync_MetIpHashInContext_TraceDraagtIpHash()
+    {
+        // Ask-geschiedenis (#157): RequestUserContext.IpHash (door de
+        // quota-filter gezet, buiten AskService om) landt één-op-één op de
+        // trace — zelfde stempel-patroon als UserId.
+        using var db = NewDb();
+        await SeedRulesAsync(db);
+        var userContext = new RequestUserContext { IpHash = "abc123deadbeef" };
+        var svc = Svc(db, Ai(Answer), userContext);
+
+        await svc.AskAsync(Question);
+
+        var trace = await db.AskTraces.SingleAsync();
+        Assert.Equal("abc123deadbeef", trace.IpHash);
+    }
+
+    [Fact]
+    public async Task AskAsync_ZonderIpHashInContext_TraceIpHashBlijftNull()
+    {
+        // Anoniem zonder ASK_IP_HASH_SECRET (of zonder vaststelbaar IP): de
+        // filter laat IpHash op null staan — de trace mag dan geen ip_hash
+        // verzinnen.
+        using var db = NewDb();
+        await SeedRulesAsync(db);
+        var svc = Svc(db, Ai(Answer), new RequestUserContext());
+
+        await svc.AskAsync(Question);
+
+        var trace = await db.AskTraces.SingleAsync();
+        Assert.Null(trace.IpHash);
+    }
+
+    [Fact]
     public async Task AskAsync_AiUitval_TraceDraagtUnavailableAnswer_OkFalse()
     {
         using var db = NewDb();
@@ -134,11 +167,12 @@ public class AskServiceTraceTests
     /// test-seam als AskServiceDegradationTests (tsvector vertaalt niet naar
     /// EF InMemory).</summary>
     private sealed class TestableAskService(
-        RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai)
+        RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai,
+        RequestUserContext userContext)
         : AskService(db, embeddings, ai,
             new AgenticRelationService(db, new BrainService(
                 db, embeddings, new CardResolver(db), NullLogger<BrainService>.Instance)),
-            new RequestUserContext(), NullLogger<AskService>.Instance)
+            userContext, NullLogger<AskService>.Instance)
     {
         private readonly RbRulesDbContext _db = db;
 
@@ -158,8 +192,9 @@ public class AskServiceTraceTests
         }
     }
 
-    private static TestableAskService Svc(RbRulesDbContext db, RbAiClient ai) =>
-        new(db, FailingEmbeddings(), ai);
+    private static TestableAskService Svc(
+        RbRulesDbContext db, RbAiClient ai, RequestUserContext? userContext = null) =>
+        new(db, FailingEmbeddings(), ai, userContext ?? new RequestUserContext());
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
         : HttpMessageHandler
