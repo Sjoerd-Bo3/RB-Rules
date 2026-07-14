@@ -215,6 +215,21 @@ apart in §6.
   geaccepteerde claims met trust-label en bron/citaat, relaties achter
   dezelfde reviewpoort als de graph-projectie, en de volledige ban-historie
   per variantgroep. *Endpoint* `/api/cards/{id}/dossier`.
+- **"In decks"** *(#15 golf 1 spoor B)* — deck-gebruikssignaal op basis van de
+  Piltover Archive-decks: het aandeel van de 500 meest recent bijgewerkte
+  decks (PA's `updatedAt`, een vaste poolgrootte i.p.v. een kalendervenster —
+  zodat de noemer stabiel blijft terwijl de deck-backfill nog loopt) dat de
+  kaart speelt, gematcht op de canonieke kaart over champions/hoofddeck/
+  runes/battlefields (sideboard, bench en de 1-op-1 legend tellen bewust
+  niet mee — geen kernidentiteit van het ingeleverde deck). Altijd het
+  percentage mét het absolute aantal en de noemer ("N van M recente decks"),
+  plus gemiddeld aantal exemplaren wanneer gespeeld en de top vijf
+  mede-gespeelde kaarten (co-occurrence). Onder de 20 recente decks
+  (drempel) toont het blok alleen de absolute aantallen — geen misleidend
+  percentage op een kleine noemer — met een "nog te weinig deckdata"-notitie;
+  bij nul decks een expliciete lege staat. Link naar de deck-browser
+  (spoor A, `/decks`). *Endpoint* `/api/cards/{id}/dossier`
+  (`deckPopularity`-veld).
 - **Variantgroepering op basisnaam** — "Naam (Alternate Art)" telt als dezelfde
   kaart; de naamloze printing is canoniek, ook toekomstvast bij herdrukken
   (canonical-flip). Alleen canonieke printings gaan de graph in.
@@ -566,10 +581,11 @@ openstaande PR.
   deep-links terug. Fase 1 — deck-codes (PR #146: C#-port van
   RiftboundDeckCodes, Apache 2.0, Domain-laag). Fase 2 — deck-model +
   robots-compliant PA-ingest (PR #148); backfill van ~10k decks droppelt
-  binnen, nu automatisch via de scheduler (spoor C, elke 3 uur). Fase 3,
-  golf 1 (parallelle sporen): (A) deck-browser + legaliteitscheck, (B)
-  "populair in N% van recente decks" op de kaartpagina, (C) periodieke
-  decks-verversing in de scheduler-tick — deze PR. Golf 2 (ná golf 1): (D)
+  binnen, automatisch ververst via de scheduler (spoor C, PR #179, elke 3
+  uur). Fase 3, golf 1 (parallelle sporen): (A) deck-browser +
+  legaliteitscheck — *in-flight*, (B) "In decks"-dossierblok op de
+  kaartpagina — deze PR, (C) periodieke decks-verversing in de
+  scheduler-tick — gemerged (PR #179). Golf 2 (ná golf 1): (D)
   co-occurrence/archetype-signalen als kennispiramide-laag 3 in /ask.
   Onderzoek in `docs/ENGINE.md` §5.
 
