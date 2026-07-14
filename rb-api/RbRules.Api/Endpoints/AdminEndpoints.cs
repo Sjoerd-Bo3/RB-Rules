@@ -168,6 +168,8 @@ public static class AdminEndpoints
                 Counts = new
                 {
                     Sources = await db.Sources.CountAsync(s => s.Enabled),
+                    // Bron-feeds (#167): index-pagina's die op nieuwe artikelen worden afgespeurd.
+                    Feeds = await db.SourceFeeds.CountAsync(f => f.Enabled),
                     Changes = await db.Changes.CountAsync(),
                     Cards = await db.Cards.CountAsync(),
                     CardsEmbedded = await db.Cards.CountAsync(c => c.Embedding != null),
@@ -227,6 +229,53 @@ public static class AdminEndpoints
             await db.Documents.Where(d => d.SourceId == id).ExecuteDeleteAsync();
             await db.Changes.Where(c => c.SourceId == id).ExecuteDeleteAsync();
             db.Sources.Remove(src);
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Bron-feeds (#167): zelf toevoegen/beheren, patroon van de
+        // sources-endpoints hierboven. UrlGuard op elke (nieuwe) URL — een
+        // feed-URL is net zo goed externe/beheerder-invoer als een bron-URL.
+        admin.MapGet("/feeds", async (RbRulesDbContext db) =>
+            await db.SourceFeeds.OrderBy(f => f.Id).ToListAsync());
+
+        admin.MapPost("/feeds", async (SourceFeed feed, RbRulesDbContext db) =>
+        {
+            if (string.IsNullOrWhiteSpace(feed.Id) || string.IsNullOrWhiteSpace(feed.Url))
+                return Results.BadRequest(new { error = "id en url zijn verplicht" });
+            if (UrlGuard.Check(feed.Url) is { Allowed: false } g)
+                return Results.UnprocessableEntity(new { error = $"URL geweigerd (SSRF-guard): {g.Reason}" });
+            db.SourceFeeds.Add(feed);
+            await db.SaveChangesAsync();
+            return Results.Created($"/api/admin/feeds/{feed.Id}", feed);
+        });
+
+        admin.MapPatch("/feeds/{id}", async (string id, FeedPatch patch, RbRulesDbContext db) =>
+        {
+            var feed = await db.SourceFeeds.FindAsync(id);
+            if (feed is null) return Results.NotFound();
+            if (patch.Url is not null)
+            {
+                if (UrlGuard.Check(patch.Url) is { Allowed: false } g)
+                    return Results.UnprocessableEntity(new { error = $"URL geweigerd (SSRF-guard): {g.Reason}" });
+                feed.Url = patch.Url;
+            }
+            if (patch.Name is not null) feed.Name = patch.Name;
+            // Leeg (niet null) betekent expliciet "alle categorieën" — het filter uit.
+            if (patch.CategoryFilter is not null)
+                feed.CategoryFilter = string.IsNullOrWhiteSpace(patch.CategoryFilter) ? null : patch.CategoryFilter;
+            if (patch.AutoApprove is not null) feed.AutoApprove = patch.AutoApprove.Value;
+            if (patch.Cadence is not null) feed.Cadence = patch.Cadence;
+            if (patch.Enabled is not null) feed.Enabled = patch.Enabled.Value;
+            await db.SaveChangesAsync();
+            return Results.Ok(feed);
+        });
+
+        admin.MapDelete("/feeds/{id}", async (string id, RbRulesDbContext db) =>
+        {
+            var feed = await db.SourceFeeds.FindAsync(id);
+            if (feed is null) return Results.NotFound();
+            db.SourceFeeds.Remove(feed);
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
@@ -370,6 +419,10 @@ public static class AdminEndpoints
         admin.MapGet("/overview/proposals", async (
                 string? status, int? page, AdminOverviewService overview) =>
             Results.Ok(await overview.ProposalsAsync(status, page ?? 1)));
+
+        // Bron-feeds (#167): per feed laatste vangst + aantal ontdekte bronnen.
+        admin.MapGet("/overview/feeds", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.FeedsAsync()));
 
         // Relatievoorstellen (#116): status-chips + kind-vocabulaire + queue.
         admin.MapGet("/overview/relations", async (

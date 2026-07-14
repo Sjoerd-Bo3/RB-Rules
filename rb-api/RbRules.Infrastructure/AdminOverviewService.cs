@@ -79,6 +79,15 @@ public record ProposalOverview(
     int Total, int Page, int PageSize,
     IReadOnlyList<ProposalStatusCount> StatusCounts, IReadOnlyList<ProposalOverviewItem> Items);
 
+/// <summary>Bron-feed in het beheeroverzicht (#167): SourceCount is hoeveel
+/// bronnen deze feed tot nu toe ontdekte (Source.FeedId) — alleen zinvol voor
+/// AutoApprove-feeds; een niet-AutoApprove-feed levert altijd voorstellen,
+/// dus 0 hier is geen alarmsignaal.</summary>
+public record FeedOverviewItem(
+    string Id, string Name, string Url, bool Enabled, bool AutoApprove,
+    string? CategoryFilter, string Cadence, DateTimeOffset? LastChecked,
+    int SourceCount);
+
 public record UserOverviewItem(
     long Id, string Email, bool Blocked, int DailyQuota, int DailyPhotoQuota,
     int DailyAgenticQuota,
@@ -472,6 +481,22 @@ public class AdminOverviewService(RbRulesDbContext db)
                 p.Status, p.FoundAt, p.ReviewedAt))
             .ToListAsync();
         return new(total, page, PageSize, statusCounts, items);
+    }
+
+    /// <summary>Bron-feeds (#167): geen paginering (net als de bronnentabel
+    /// zelf) — het aantal feeds blijft klein en overzichtelijk.</summary>
+    public async Task<IReadOnlyList<FeedOverviewItem>> FeedsAsync()
+    {
+        var feeds = await db.SourceFeeds.AsNoTracking().OrderBy(f => f.Id).ToListAsync();
+        var counts = await db.Sources.AsNoTracking()
+            .Where(s => s.FeedId != null)
+            .GroupBy(s => s.FeedId!)
+            .Select(g => new { FeedId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.FeedId, x => x.Count);
+        return feeds.Select(f => new FeedOverviewItem(
+                f.Id, f.Name, f.Url, f.Enabled, f.AutoApprove, f.CategoryFilter,
+                f.Cadence, f.LastChecked, counts.GetValueOrDefault(f.Id, 0)))
+            .ToList();
     }
 
     /// <summary>Gebruikers met hun LLM-gebruik in de gekozen periode (#42):

@@ -5,6 +5,12 @@ namespace RbRules.Api;
 public record SourcePatch(
     string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled);
 
+/// <summary>Beheerder-bewerking van een bron-feed (#167). CategoryFilter leeg
+/// (""), niet null, betekent expliciet "alle categorieën" (het filter uit).</summary>
+public record FeedPatch(
+    string? Name, string? Url, string? CategoryFilter, bool? AutoApprove,
+    string? Cadence, bool? Enabled);
+
 /// <summary>Beheerder-bewerking van een kennisdoc (#70).</summary>
 public record KnowledgePatch(string? Title, string? Body);
 
