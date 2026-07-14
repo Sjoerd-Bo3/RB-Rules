@@ -105,6 +105,14 @@ met quota en rate-limiting.
   (CategoryFilter dus overal, niet alleen op de brede hub); sommige
   artikel-URL's missen het categorie-segment en een enkele kaart linkt extern
   (YouTube) — uitsluiten op host, niet op categorie.
+- Bron-overlap (#175): meerdere `Source`-rijen kunnen bewust dezelfde
+  letterlijke URL delen (de Rules Hub-PDF/HTML-drieling in `SourceSeed`, elk
+  met een eigen Parser) — dat is GEEN near-duplicaat. De near-duplicaat-
+  samenvoeging in `FeedCrawlService.MergeNearDuplicateSourcesAsync` telt een
+  groep daarom alleen mee als élke rij een eigen (zwak-genormaliseerde)
+  URL-vorm heeft; zit er ergens in de groep een letterlijk-gelijk paar
+  tussen, dan blijft de hele groep ongemoeid — anders eet een toevallige
+  http/https- of www-variant per ongeluk een bewust-gedeelde bron op.
 
 ## Waar het werk staat
 - Roadmap: **docs/PRD.md §6** (uit de open issues, in-flight PR's

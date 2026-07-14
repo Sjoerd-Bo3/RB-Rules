@@ -163,6 +163,24 @@ apart in §6.
   Zelf uitbreidbaar in het beheer.
   *Route* `/admin/overview/feeds` · *endpoints*
   `GET/POST/PATCH/DELETE /api/admin/feeds`, `/api/admin/overview/feeds`.
+- **Herkomst-adoptie & near-duplicaat-samenvoeging** (#175) — de overlap
+  tussen handmatig toegevoegde bronnen en feed-afstammelingen wordt niet
+  meer stil overgeslagen. Herontdekt een feed-crawl een artikel-URL die
+  (genormaliseerd) al een bestaande `Source` is zonder `FeedId`, dan
+  adopteert die bron de feed als herkomst — `Enabled`/`TrustTier`/`Rank`
+  blijven exact zoals ze zijn (adoptie is geen nieuwe beoordeling, een
+  uitgezette of laag-getrouwde bron blijft zo). Los daarvan voegt elke
+  feed-crawl-run near-duplicaat-bronnen samen: rijen die vóór deze fix als
+  aparte `Source` bestonden maar alleen in URL-*vorm* verschillen (trailing
+  slash, http/https, www). Winnaar: de rij mét `FeedId` (herkomst al
+  vastgesteld), anders de hoogste `Rank`, anders de laagste Id. Referenties
+  hangen mee om (#144-patroon: Document/Change/RuleChunk/`ClaimSource` op
+  `SourceId`, `Conflict` op zijn Source-velden, BanEntry/Erratum/Correction
+  op de URL-vorm). Bronnen die bewust dezelfde URL delen (zoals de Rules
+  Hub-PDF/HTML-drieling, elk met een eigen Parser) zijn geen near-duplicaat
+  en blijven ongemoeid. Beide stappen zijn idempotent en stil — geen nieuwe
+  UI, alleen een run_log-regel; de bestaande bron-herkomstweergave (bron-
+  dossier, §4.1 hierboven) toont een geadopteerde bron meteen correct.
 - **Bron-dossier** (#171, spiegelbeeld van #167) — per bron in één oogopslag
   wat die aan het systeem heeft toegevoegd en of dat compleet verwerkt is.
   Herkomst (bovenstroom): welke bron-feed het artikel ontdekte, of
