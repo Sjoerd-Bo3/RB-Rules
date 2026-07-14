@@ -12,7 +12,7 @@ public static class Classifier
         Je bent een Riftbound TCG regels-analist. Je krijgt een diff van een
         regelbron. Classificeer de wijziging en antwoord UITSLUITEND met JSON:
         {"change_type": "...", "severity": "...", "summary": "...", "meaning": "..."}
-        - change_type ∈ ban | errata | core-rule | tournament-rule | set-release | editorial
+        - change_type ∈ ban | errata | core-rule | tournament-rule | set-release | editorial | clarification
         - severity ∈ high (verandert legaliteit/interactie) | medium (verduidelijking) | low (redactioneel)
         - summary: korte, feitelijke samenvatting (NL)
         - meaning: "wat betekent dit voor spelers" in 1-2 zinnen (NL)

@@ -85,6 +85,13 @@ public class Document
     /// null = nog niet. Een nieuwe documentversie (bronwijziging) krijgt een
     /// eigen rij en wordt dus vanzelf opnieuw gemined.</summary>
     public DateTimeOffset? ClaimsMinedAt { get; set; }
+    /// <summary>Wanneer de concept-extractie voor FAQ-/clarificatie-artikelen
+    /// (#177, ClarificationMiningService) dit document verwerkte; null = nog
+    /// niet (of geen clarificatie-bron). Zelfde #92/#93-patroon als
+    /// ClaimsMinedAt: pas gezet ná een volledig geslaagde run, zodat een
+    /// gedeeltelijke of mislukte poging vanzelf terugkomt; een nieuwe
+    /// documentversie krijgt een eigen rij en wordt dus opnieuw gemined.</summary>
+    public DateTimeOffset? ClarifiedAt { get; set; }
     public DateTimeOffset RetrievedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -93,7 +100,9 @@ public class Change
     public long Id { get; set; }
     public required string SourceId { get; set; }
     public Source? Source { get; set; }
-    public string ChangeType { get; set; } = "unknown"; // ban|errata|core-rule|tournament-rule|set-release|editorial
+    // clarification (#177): sjabloon-change bij de eerste scan van een
+    // FAQ-/clarificatie-artikel (er is nog geen vorige versie om te diffen).
+    public string ChangeType { get; set; } = "unknown"; // ban|errata|core-rule|tournament-rule|set-release|editorial|clarification
     public string Severity { get; set; } = "medium";    // high|medium|low
     public string? Summary { get; set; }
     public string? Meaning { get; set; }
@@ -118,7 +127,12 @@ public class Conflict
 public class Correction
 {
     public long Id { get; set; }
-    public required string Scope { get; set; }          // card | rule_section | answer
+    // card | rule_section | answer (chat-ruling/review-notitie-scopes) |
+    // mechanic | concept (#177, ClarificationMiningService — RulingsTopics
+    // kent beide al als gedeeld filter-vocabulaire, dus geen migratie nodig)
+    // | claim | relation (review-notitie-promotie, #124 — bucketen als
+    // "answer" in RulingsTopics, geen eigen filterknop).
+    public required string Scope { get; set; }
     public required string Ref { get; set; }
     public required string Text { get; set; }
     public string? Question { get; set; }

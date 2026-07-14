@@ -13,13 +13,18 @@ public static class RulingsTopics
     public static readonly string[] All = ["card", "mechanic", "section", "concept", "answer"];
 
     /// <summary>Correction.Scope → gedeeld topic: "rule_section" (het
-    /// opslagformaat) wordt "section"; al het overige is een antwoord-ruling
-    /// (de web-feedback slaat scope "answer" op, met up/down als Ref).</summary>
+    /// opslagformaat) wordt "section"; "mechanic"/"concept" (#177,
+    /// ClarificationMiningService) mappen 1-op-1; al het overige (incl. de
+    /// "claim"/"relation"-scopes van review-notitie-promoties, #124) is een
+    /// antwoord-ruling (de web-feedback slaat scope "answer" op, met up/down
+    /// als Ref).</summary>
     public static string FromCorrectionScope(string? scope) =>
         scope?.Trim().ToLowerInvariant() switch
         {
             "card" => "card",
             "rule_section" or "section" => "section",
+            "mechanic" => "mechanic",
+            "concept" => "concept",
             _ => "answer",
         };
 
