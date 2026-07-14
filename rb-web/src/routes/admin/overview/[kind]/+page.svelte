@@ -115,6 +115,14 @@
 		cards: number; unknownCards: number; views: number; likes: number;
 		sourceUrl: string; paUpdatedAt: string | null; fetchedAt: string;
 	}
+	// Bron-feeds (#167): index-pagina die periodiek op nieuwe artikel-URL's
+	// wordt afgespeurd. sourceCount = hoeveel bronnen deze feed tot nu toe
+	// ontdekte (alleen zinvol bij autoApprove).
+	interface FeedItem {
+		id: string; name: string; url: string; enabled: boolean; autoApprove: boolean;
+		categoryFilter: string | null; cadence: string; lastChecked: string | null;
+		sourceCount: number;
+	}
 	interface UserItem {
 		id: number; email: string; blocked: boolean; dailyQuota: number; dailyPhotoQuota: number;
 		dailyAgenticQuota: number;
@@ -164,7 +172,8 @@
 		decks: { title: 'Decks', sub: 'community-decks van Piltover Archive, met bronvermelding en deep-link terug — wij bouwen bewust geen eigen deckbuilder (#15)' },
 		setdekking: { title: 'Set-dekking', sub: 'per set welke kaartnummers we hebben en wélke exact ontbreken — afgeleid uit de riftbound-id\'s zelf ("ogn-074-298" = nr. 74 van 298)' },
 		gebruikers: { title: 'Gebruikers', sub: 'accounts met hun LLM-gebruik per periode — tokentotalen per pad en per account zijn het kosteninzicht; quota en blokkade zijn hier bij te stellen' },
-		benchmark: { title: 'Benchmark', sub: 'de vaste scheidsrechter-vragenset door de /ask-pipeline — geïsoleerd van de kennisbank (geen trace, metric of relatie-terugkoppeling); score alleen over de vragen met een bevestigd antwoord' }
+		benchmark: { title: 'Benchmark', sub: 'de vaste scheidsrechter-vragenset door de /ask-pipeline — geïsoleerd van de kennisbank (geen trace, metric of relatie-terugkoppeling); score alleen over de vragen met een bevestigd antwoord' },
+		feeds: { title: 'Bron-feeds', sub: 'index-pagina\'s die periodiek op nieuwe artikelen worden afgespeurd — vertrouwde feeds zetten een nieuw artikel direct als bron, andere als voorstel (#167)' }
 	};
 	const meta = $derived(TITLES[data.kind]);
 
@@ -223,6 +232,14 @@
 	const coverage = $derived(data.kind === 'setdekking' ? (data.data as SetCoverageOverview | null) : null);
 	const users = $derived(data.kind === 'gebruikers' ? (data.data as UserOverview | null) : null);
 	const benchmark = $derived(data.kind === 'benchmark' ? (data.data as BenchmarkOverview | null) : null);
+	const feeds = $derived(data.kind === 'feeds' ? ((data.data ?? []) as FeedItem[]) : []);
+	// Welke feed in bewerk-modus staat; zelfde reset-bij-route-wissel-patroon
+	// als primer se `editing` hierboven, maar op string-id (feed-id's zijn geen getallen).
+	let editingFeed = $state<string | null>(null);
+	$effect(() => {
+		void data.kind;
+		editingFeed = null;
+	});
 
 	// Meetperiode voor het gebruikers-overzicht (#42): chip-label per waarde.
 	const PERIODS: { value: string; label: string }[] = [
@@ -252,6 +269,9 @@
 	// saveKnowledge-fouten dragen het doc-id mee zodat de melding bij het
 	// juiste bewerkformulier landt; andere actie-fouten hebben geen id.
 	const formDocId = $derived(form && 'id' in form ? (form.id as number) : null);
+	// Feed-id's zijn strings (geen getallen) — eigen variant van formDocId
+	// hierboven, zelfde fail-vorm ({ error, id }) van saveFeed/deleteFeed.
+	const formFeedId = $derived(form && 'id' in form ? String(form.id) : null);
 
 	// Welk primer-doc in bewerk-modus staat; reset bij route-hergebruik
 	// (dit component blijft leven bij navigatie tussen kinds).
@@ -836,6 +856,100 @@
 			{/if}
 		{/if}
 
+		<!-- Bron-feeds (#167): index-pagina's die periodiek op nieuwe
+		     artikel-URL's worden afgespeurd — zelf toevoegen/bewerken. -->
+		{#if data.kind === 'feeds'}
+			<details class="panel add-feed">
+				<summary>Nieuwe feed toevoegen</summary>
+				<form method="POST" action="?/createFeed" use:enhance class="feed-form">
+					<label>Id <input type="text" name="id" placeholder="riot-mijn-feed" required /></label>
+					<label>Naam <input type="text" name="name" placeholder="Mijn nieuwe feed" required /></label>
+					<label class="wide">URL <input type="url" name="url" placeholder="https://playriftbound.com/en-us/news/…/" required /></label>
+					<label>Categoriefilter <input type="text" name="categoryFilter" placeholder="rules-and-releases (leeg = alles)" /></label>
+					<label>Cadans
+						<select name="cadence">
+							<option value="daily">daily</option>
+							<option value="weekly">weekly</option>
+						</select>
+					</label>
+					<label class="checkbox"><input type="checkbox" name="autoApprove" value="true" /> AutoApprove (direct bron i.p.v. voorstel)</label>
+					<button>Toevoegen</button>
+				</form>
+				{#if form?.error && formFeedId === null}<p class="warn">{form.error}</p>{/if}
+			</details>
+
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>Feed</th><th>Categoriefilter</th><th>Aanpak</th><th>Cadans</th>
+							<th>Bronnen</th><th>Laatst gecontroleerd</th><th>Actief</th><th></th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each feeds as f (f.id)}
+							<tr id="feed-{f.id}">
+								<td><strong>{f.name}</strong><br /><a class="meta" href={f.url}>{f.id}</a></td>
+								<td class="meta">{f.categoryFilter ?? 'alles'}</td>
+								<td><span class="badge {f.autoApprove ? 'ok-b' : 'warn-b'}">{f.autoApprove ? 'AutoApprove' : 'reviewqueue'}</span></td>
+								<td class="meta">{f.cadence}</td>
+								<td class="meta">{f.sourceCount}</td>
+								<td class="meta">{fmtDate(f.lastChecked)}</td>
+								<td>
+									<form method="POST" action="?/saveFeed" use:enhance>
+										<input type="hidden" name="id" value={f.id} />
+										<input type="hidden" name="enabled" value={String(!f.enabled)} />
+										<button class="ghost small">{f.enabled ? 'Aan' : 'Uit'}</button>
+									</form>
+								</td>
+								<td class="feed-actions">
+									<button
+										type="button"
+										class="ghost small"
+										onclick={() => (editingFeed = editingFeed === f.id ? null : f.id)}
+									>{editingFeed === f.id ? 'Sluit' : 'Bewerk'}</button>
+									<form method="POST" action="?/deleteFeed" use:enhance>
+										<input type="hidden" name="id" value={f.id} />
+										<button class="ghost small">Verwijder</button>
+									</form>
+									<!-- Toggle-/verwijder-fouten (saveFeed/deleteFeed dragen het
+									     feed-id mee bij fail); de edit-save-fout hieronder toont
+									     zichzelf al bij de bewerkrij, dus niet dubbel tonen. -->
+									{#if form?.error && formFeedId === f.id && editingFeed !== f.id}
+										<p class="warn">{form.error}</p>
+									{/if}
+								</td>
+							</tr>
+							{#if editingFeed === f.id}
+								<tr class="edit-row">
+									<td colspan="8">
+										<form method="POST" action="?/saveFeed" use:enhance class="feed-form">
+											<input type="hidden" name="id" value={f.id} />
+											<label>Naam <input type="text" name="name" value={f.name} required /></label>
+											<label class="wide">URL <input type="url" name="url" value={f.url} required /></label>
+											<label>Categoriefilter <input type="text" name="categoryFilter" value={f.categoryFilter ?? ''} placeholder="leeg = alles" /></label>
+											<label>Cadans
+												<select name="cadence" value={f.cadence}>
+													<option value="daily">daily</option>
+													<option value="weekly">weekly</option>
+												</select>
+											</label>
+											<label class="checkbox"><input type="checkbox" name="autoApprove" value="true" checked={f.autoApprove} /> AutoApprove</label>
+											<button class="small">Opslaan</button>
+										</form>
+										{#if form?.error && formFeedId === f.id}<p class="warn">{form.error}</p>{/if}
+									</td>
+								</tr>
+							{/if}
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			{#if !feeds.length}
+				<p class="meta">Nog geen feeds — voeg er hierboven één toe, of draai "Bron-feeds afspeuren" nadat de seed-feeds er staan.</p>
+			{/if}
+		{/if}
+
 		<!-- Set-dekking (#145): status = kleur + tekst; de ontbrekende nummers
 		     compact als reeksen ("12, 45–47, 203"), de API levert de exacte lijst. -->
 		{#if coverage}
@@ -1305,6 +1419,27 @@
 		border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
 		font-size: 16px; /* iOS zoomt in op form-controls kleiner dan 16px */
 	}
+	/* Bron-feeds (#167): toevoeg-/bewerkformulier, breekt netjes op 390px. */
+	.add-feed { padding: 12px 14px; margin-bottom: 14px; }
+	.add-feed summary { cursor: pointer; color: var(--accent); }
+	.add-feed form { margin-top: 10px; }
+	.feed-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+	.feed-form label {
+		display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 0.75rem;
+	}
+	.feed-form label.wide { flex: 1 1 260px; }
+	.feed-form label.checkbox {
+		flex-direction: row; align-items: center; gap: 6px; font-size: 0.85rem;
+	}
+	.feed-form input[type='text'],
+	.feed-form input[type='url'],
+	.feed-form select {
+		background: var(--surface-deep); color: var(--text);
+		border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+		font-size: 16px; /* iOS zoomt in op form-controls kleiner dan 16px */
+	}
+	.edit-row td { padding-top: 0; }
+	.feed-actions { display: flex; flex-direction: column; gap: 6px; }
 	.gap-h { color: var(--accent); font-size: 1.02rem; margin: 22px 0 10px; }
 	.gap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
 	.gap-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; }

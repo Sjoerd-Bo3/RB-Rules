@@ -7,10 +7,10 @@ export const load: PageServerLoad = async ({ cookies }) => {
 	if (!authed(cookies))
 		return {
 			authed: false, sources: [], status: null, corrections: [],
-			askTraces: [], knowledge: [], mechanics: [], upcoming: []
+			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: []
 		};
 	try {
-		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming] =
+		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds] =
 			await Promise.all([
 				adminApi<unknown[]>('/api/sources'),
 				adminApi<unknown>('/api/admin/status'),
@@ -20,16 +20,20 @@ export const load: PageServerLoad = async ({ cookies }) => {
 				// Mechaniek-kandidaten (#52): reviewqueue voor het vocabulaire.
 				adminApi<unknown[]>('/api/admin/mechanics').catch(() => []),
 				// Aankomende sets (#52): publiek endpoint, hier als beheersignaal.
-				adminApi<unknown[]>('/api/sets/upcoming').catch(() => [])
+				adminApi<unknown[]>('/api/sets/upcoming').catch(() => []),
+				// Bron-feeds (#167): alleen de naam/id nodig voor "stamt van: …"
+				// bij de bronnentabel hieronder; het volledige beheer zit op
+				// /admin/overview/feeds.
+				adminApi<unknown[]>('/api/admin/overview/feeds').catch(() => [])
 			]);
 		return {
 			authed: true, sources, status, corrections, askTraces,
-			knowledge, mechanics, upcoming, apiDown: false
+			knowledge, mechanics, upcoming, feeds, apiDown: false
 		};
 	} catch {
 		return {
 			authed: true, sources: [], status: null, corrections: [],
-			askTraces: [], knowledge: [], mechanics: [], upcoming: [], apiDown: true
+			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], apiDown: true
 		};
 	}
 };
