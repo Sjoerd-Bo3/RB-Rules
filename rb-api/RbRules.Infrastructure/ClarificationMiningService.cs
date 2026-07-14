@@ -28,10 +28,18 @@ public record ClarificationMineResult(int Documents, int NewItems, int Failed, s
 /// Idempotent op twee niveaus (#92/#93-patroon): <see
 /// cref="Document.ClarifiedAt"/> slaat een document pas over als een eerdere
 /// run volledig slaagde (een gedeeltelijke/mislukte poging komt vanzelf
-/// terug), en per item voorkomt een exacte (bron, onderwerp, tekst)-toets
-/// dubbele rijen binnen hetzelfde document — ook bij <c>force</c> of een
-/// her-run met een LLM-antwoord dat toevallig identiek is. Best-effort en
-/// gecapt per run; elke faalstap is herleidbaar in run_log (kind "clarify").
+/// terug), en per <b>concept</b> dedupliceert <see cref="StoreAsync"/> op
+/// (bron, Scope, Ref) + semantische nabijheid — niet op exacte tekst. Dat is
+/// cruciaal: een her-run na een gedeeltelijk mislukt/gecapt document (of na
+/// een cosmetische bronwijziging die een nieuwe Document-rij maakt)
+/// herverwerkt het HELE document, en de LLM herformuleert een verduidelijking
+/// dan net iets anders. Een exacte-tekst-toets zou die parafrase niet
+/// herkennen en een tweede geverifieerde ruling opstapelen (zichtbaar in
+/// /ask, /rulings en op de mechaniekpagina, zonder reviewqueue). De
+/// (Scope, Ref)+embedding-poort (zelfde patroon als
+/// <see cref="ClaimMiningService"/>) herkent de parafrase en werkt de
+/// bestaande ruling bij in plaats van te dupliceren. Best-effort en gecapt
+/// per run; elke faalstap is herleidbaar in run_log (kind "clarify").
 ///
 /// Backfilt bestaande bronnen vanzelf (Sjoerd-eis, #177-vervolg): de
 /// bronselectie hierboven heeft geen tijdvenster — elke enabled trust-1 bron
@@ -57,6 +65,25 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
     private const int MaxSegmentsPerDocument = 4;
     private const int ResponseSnippetLength = 400;
     private const string ProvenancePrefix = "clarify-mining:";
+
+    /// <summary>Embedding-afstandspoort voor de concept-dedupe: binnen dit
+    /// venster telt een bestaande ruling over hetzelfde onderwerp als "dezelfde
+    /// verduidelijking, anders verwoord" en wordt hij bijgewerkt in plaats van
+    /// gedupliceerd. Zelfde waarde als
+    /// <see cref="ClaimMiningService"/>'s JudgeGateDistance (0.35), maar hier
+    /// zonder LLM-natoets: de vergelijking gebeurt binnen een al op
+    /// (bron, Scope, Ref) gefilterde verzameling — twee verduidelijkingen over
+    /// exact hetzelfde onderwerp die zó dicht bij elkaar liggen, zíjn dezelfde.
+    /// Blijkt de poort te grof, dan is een lichte LLM-"zelfde verduidelijking?"-
+    /// toets (ClaimJudge-patroon) de volgende stap — bewust nog niet gedaan
+    /// (KISS/YAGNI).</summary>
+    private const double DedupeGateDistance = 0.35;
+
+    /// <summary>Scheidingsmarkering tussen de verduidelijking en het
+    /// (optionele) bronscitaat in <see cref="Correction.Text"/>; gedeeld door
+    /// <see cref="BuildText"/> (schrijven) en <see cref="ClarificationOf"/>
+    /// (de dedupe-vergelijking, die het citaat bewust buiten de sleutel laat).</summary>
+    private const string QuoteMarker = "\n\nCitaat uit de bron: ";
 
     public async Task<ClarificationMineResult> RunAsync(
         bool force = false, int maxItems = 60,
@@ -178,42 +205,82 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         return new(docs, newItems, failed, message);
     }
 
-    /// <summary>Eén concept opslaan als geverifieerde ruling. Idempotent per
-    /// (bron, onderwerp, tekst): een exacte herhaling (zelfde Provenance/
-    /// Scope/Ref/Text) is al bekend en wordt overgeslagen — géén tweede rij,
-    /// ook niet bij een geforceerde her-run over hetzelfde document.</summary>
+    /// <summary>Eén concept opslaan als geverifieerde ruling, met dedupe op
+    /// conceptniveau. De sleutel is (Provenance=bron, Scope, Ref) — het citaat
+    /// telt bewust NIET mee — plus semantische nabijheid: binnen die al
+    /// gefilterde verzameling geldt een genormaliseerd-gelijke óf embedding-
+    /// nabije verduidelijking als "dezelfde, anders verwoord" en wordt de
+    /// bestaande ruling bijgewerkt (tekst/citaat/embedding vernieuwd) in plaats
+    /// van gedupliceerd. Zo is een her-mine (na retry OF na een cosmetische
+    /// bronwijziging met een nieuwe Document-rij) idempotent op conceptniveau.
+    /// Degradeert bij Ollama-uitval naar de genormaliseerde exacte-tekst-toets:
+    /// een re-run dupliceert dan nog steeds niet, maar een écht nieuw concept
+    /// wacht op een run met werkende embeddings (nooit een verified ruling
+    /// zonder embedding, #100).</summary>
     private async Task<(bool IsNew, string? Failure)> StoreAsync(
         Source src, ExtractedClarification ec, CancellationToken ct)
     {
         var scope = ScopeFor(ec.TopicType);
         var topicRef = ec.TopicRef.Trim();
-        var text = BuildText(ec);
         var provenance = $"{ProvenancePrefix}{src.Id}";
+        var normClarification = ClaimMiner.NormalizeStatement(ec.Clarification);
 
-        var existing = await db.Corrections.FirstOrDefaultAsync(
-            c => c.Provenance == provenance && c.Scope == scope
-                 && c.Ref == topicRef && c.Text == text, ct);
-        if (existing is not null) return (false, null);
+        // Dedupe-scope: alle clarify-rulings van déze bron voor ditzelfde
+        // onderwerp (Scope, Ref). Klein per (bron, onderwerp), dus tracked
+        // materialiseren en de afstand in-memory berekenen (geen pgvector-SQL
+        // nodig — werkt zo ook in de InMemory-tests, net als de test-seam van
+        // ClaimMiningService.CheckOfficialAsync).
+        var refLower = topicRef.ToLowerInvariant();
+        var siblings = await db.Corrections
+            .Where(c => c.Provenance == provenance && c.Scope == scope
+                        && c.Ref.ToLower() == refLower)
+            .ToListAsync(ct);
 
         Pgvector.Vector vec;
         try
         {
             // Gefocuste embedding (issue #177): alleen onderwerp + verduide-
-            // lijking, niet de hele slab — zelfde embed-vorm als de
-            // claims-pipeline (topicRef + statement) zodat een gerichte
-            // vraag dit item wél boven haalt.
-            vec = await embeddings.EmbedOneAsync($"{topicRef}\n{text}", ct);
+            // lijking (zonder citaat), niet de hele slab — zo haalt een
+            // gerichte vraag dit item wél boven, en is de embedding meteen de
+            // dedupe-maat (quote buiten de sleutel).
+            vec = await embeddings.EmbedOneAsync($"{topicRef}\n{ec.Clarification.Trim()}", ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return (false, $"embedding mislukt (Ollama): {ex.Message}");
+            // Ollama weg: geen embedding om mee te vergelijken én geen om op te
+            // slaan. Val terug op de genormaliseerde exacte-tekst-toets zodat
+            // een her-run niet dupliceert; is het concept écht nieuw, dan telt
+            // het als faal (document blijft staan voor een volgende run).
+            var known = siblings.Any(c => ClaimMiner.NormalizeStatement(ClarificationOf(c.Text)) == normClarification);
+            return known ? (false, null) : (false, $"embedding mislukt (Ollama): {ex.Message}");
+        }
+
+        // Match: genormaliseerd-gelijk (snelle, deterministische weg) of
+        // binnen de embedding-poort (parafrase van dezelfde verduidelijking).
+        var match = siblings.FirstOrDefault(
+            c => ClaimMiner.NormalizeStatement(ClarificationOf(c.Text)) == normClarification)
+            ?? NearestWithin(siblings, vec, DedupeGateDistance);
+
+        if (match is not null)
+        {
+            // Bijwerken i.p.v. dupliceren: de nieuwste formulering + citaat +
+            // embedding winnen. VerifiedAt blijft staan — een verversing is
+            // geen nieuwe verificatie en mag de /rulings-recencyvolgorde niet
+            // elke nacht omgooien.
+            match.Text = BuildText(ec);
+            match.Question = QuestionLabelFor(ec);
+            match.SourceRef = src.Url;
+            match.Embedding = vec;
+            match.Status = "verified";
+            await db.SaveChangesAsync(ct);
+            return (false, null);
         }
 
         db.Corrections.Add(new Correction
         {
             Scope = scope,
             Ref = topicRef,
-            Text = text,
+            Text = BuildText(ec),
             Question = QuestionLabelFor(ec),
             SourceRef = src.Url,
             Provenance = provenance,
@@ -225,6 +292,52 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         });
         await db.SaveChangesAsync(ct);
         return (true, null);
+    }
+
+    /// <summary>Dichtstbijzijnde sibling binnen de poort (cosine-afstand), of
+    /// null. In-memory berekend over een kleine, al op (bron, Scope, Ref)
+    /// gefilterde verzameling.</summary>
+    private static Correction? NearestWithin(
+        List<Correction> siblings, Pgvector.Vector vec, double gate)
+    {
+        Correction? nearest = null;
+        var best = double.MaxValue;
+        foreach (var c in siblings)
+        {
+            if (c.Embedding is null) continue;
+            var d = CosineDistance(c.Embedding, vec);
+            if (d < best) { best = d; nearest = c; }
+        }
+        return best <= gate ? nearest : null;
+    }
+
+    /// <summary>Cosine-afstand (1 − cosine-similariteit), identiek aan wat
+    /// pgvector's CosineDistance in SQL doet — hier in-memory zodat de dedupe
+    /// ook zonder Postgres (en in de InMemory-tests) werkt. Een nulvector of
+    /// dimensie-mismatch geeft de maximale afstand (nooit een crash).</summary>
+    private static double CosineDistance(Pgvector.Vector a, Pgvector.Vector b)
+    {
+        var x = a.ToArray();
+        var y = b.ToArray();
+        if (x.Length != y.Length) return 1.0;
+        double dot = 0, nx = 0, ny = 0;
+        for (var i = 0; i < x.Length; i++)
+        {
+            dot += (double)x[i] * y[i];
+            nx += (double)x[i] * x[i];
+            ny += (double)y[i] * y[i];
+        }
+        return nx == 0 || ny == 0 ? 1.0 : 1.0 - dot / (Math.Sqrt(nx) * Math.Sqrt(ny));
+    }
+
+    /// <summary>De verduidelijking uit een opgeslagen <see cref="Correction.
+    /// Text"/> terug — het (optionele) bronscitaat na <see cref="QuoteMarker"/>
+    /// valt weg, zodat de dedupe alleen op de verduidelijking zelf vergelijkt
+    /// (quote niet in de sleutel).</summary>
+    private static string ClarificationOf(string text)
+    {
+        var i = text.IndexOf(QuoteMarker, StringComparison.Ordinal);
+        return i < 0 ? text : text[..i];
     }
 
     /// <summary>topicType → Correction.Scope: "section" wordt het bestaande
@@ -245,7 +358,7 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
     private static string BuildText(ExtractedClarification ec) =>
         string.IsNullOrWhiteSpace(ec.Quote)
             ? ec.Clarification
-            : $"{ec.Clarification}\n\nCitaat uit de bron: “{ec.Quote}”";
+            : $"{ec.Clarification}{QuoteMarker}“{ec.Quote}”";
 
     /// <summary>Question fungeert hier als kort label (onderwerp, evt. met
     /// §-verwijzing) voor de snippet-weergave in /ask en /rulings — niet als

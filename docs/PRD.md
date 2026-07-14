@@ -161,8 +161,13 @@ apart in §6.
   terugwerkende kracht: geen tijdvenster op de bronselectie, dus ook
   al-geïngeste FAQ-artikelen van vóór deze feature worden bij de eerste run
   meegenomen. Idempotent op documentniveau (`Document.ClarifiedAt`, #92/#93-
-  patroon) én per item (exacte bron+onderwerp+tekst-toets); de eerste scan
-  van zo'n bron krijgt ook meteen een sjabloon-`Change` (type
+  patroon) én op conceptniveau: een her-mine dedupliceert een verduidelijking
+  op (bron, Scope, Ref) + semantische nabijheid (embedding-poort, quote buiten
+  de sleutel) en werkt de bestaande ruling bij i.p.v. een tweede te stapelen —
+  ook als de LLM bij een retry/cosmetische bronwijziging een parafrase
+  teruggeeft (embedding-uitval degradeert naar een genormaliseerde
+  exacte-tekst-toets). De eerste scan van zo'n bron krijgt ook meteen een
+  sjabloon-`Change` (type
   "clarification") zodat de aankomst zelf al in de wijzigingen-feed
   verschijnt (er is dan nog geen vorige versie om te diffen). *Job* `clarify`
   (handmatig of nachtelijk via `ScanScheduler`) · *endpoint*

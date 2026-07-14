@@ -13,10 +13,12 @@ namespace RbRules.Tests;
 /// <summary>Regressietests voor de FAQ-/clarificatie-concept-extractie
 /// (#177): losse verduidelijkingen worden direct geverifieerde rulings (de
 /// bron is per definitie officieel), met een gefocuste embedding en
-/// idempotentie op documentniveau (ClarifiedAt, #92/#93-patroon) én op
-/// itemniveau (exacte bron+onderwerp+tekst-toets). Zelfde testinfra-patroon
-/// als ClaimMiningServiceTests: echte RbAiClient/EmbeddingService op gestubde
-/// HTTP-handlers, EF InMemory (vector als tekst-conversie).</summary>
+/// idempotentie op documentniveau (ClarifiedAt, #92/#93-patroon). De
+/// concept-niveau-dedupe (parafrase-herkenning via de embedding-poort) staat
+/// apart in ClarificationMiningDedupeTests, met een bag-of-words-embedding-
+/// stub. Zelfde testinfra-patroon als ClaimMiningServiceTests: echte
+/// RbAiClient/EmbeddingService op gestubde HTTP-handlers, EF InMemory (vector
+/// als tekst-conversie).</summary>
 public class ClarificationMiningServiceTests
 {
     private const string SourceId = "playriftbound-com-unleashed-rules-faq-and-clarifications";
@@ -106,9 +108,10 @@ public class ClarificationMiningServiceTests
     [Fact]
     public async Task RunAsync_GeforceerdeHerRun_ZelfdeExtractie_MaaktGeenDubbeleRuling()
     {
-        // Idempotent per (bron, onderwerp, tekst) — óók als het document
-        // opnieuw wordt verwerkt (force) en de LLM exact hetzelfde antwoordt:
-        // de exacte-tekst-toets in StoreAsync voorkomt dubbele rijen.
+        // Idempotent op conceptniveau — óók als het document opnieuw wordt
+        // verwerkt (force) en de LLM identiek antwoordt: StoreAsync werkt de
+        // bestaande rulings bij i.p.v. te dupliceren. (Parafrase-herkenning:
+        // zie ClarificationMiningDedupeTests.)
         using var db = NewDb();
         await SeedFaqDocAsync(db);
         var svc = new ClarificationMiningService(db, Ai(() => TwoConceptsAnswer), Embeddings(ok: true));
@@ -117,7 +120,7 @@ public class ClarificationMiningServiceTests
         var second = await svc.RunAsync(force: true);
 
         Assert.Equal(2, first.NewItems);
-        Assert.Equal(0, second.NewItems); // exact dezelfde (bron, onderwerp, tekst) al bekend
+        Assert.Equal(0, second.NewItems); // zelfde concepten al bekend — bijgewerkt, niet gedupliceerd
         Assert.Equal(2, await db.Corrections.CountAsync());
     }
 

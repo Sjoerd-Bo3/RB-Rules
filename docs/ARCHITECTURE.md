@@ -250,8 +250,11 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   (Neo4j), `BrainService`, `MechanicMiningService`, `ClaimMiningService`,
   `ClarificationMiningService` (#177, job "clarify" — concept-extractie uit
   officiële FAQ-/clarificatie-artikelen naar direct-verified `Correction`s met
-  eigen gefocuste embedding en onderwerp-anker; backfilt bestaande bronnen
-  vanzelf, geen tijdvenster op de bronselectie),
+  eigen gefocuste embedding en onderwerp-anker; dedupliceert per concept op
+  (bron, Scope, Ref) + embedding-nabijheid — een parafrase bij een her-mine
+  werkt de bestaande ruling bij i.p.v. te stapelen, zelfde poort-patroon als
+  `ClaimMiningService`; backfilt bestaande bronnen vanzelf, geen tijdvenster op
+  de bronselectie),
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
