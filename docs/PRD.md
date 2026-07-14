@@ -152,9 +152,16 @@ apart in §6.
   plat, dus een gerichte vraag ("Legion = finalize an item on the chain")
   haalt het chunk niet boven. Herkenning via een naam-/URL-heuristiek
   (`ClarificationSources.IsMatch`, geen migratie nodig — Source draagt Url/
-  Name al) op officiële (TrustTier 1) bronnen; job "clarify" destilleert er
-  via rb-ai discrete concepten uit (onderwerp + gefocuste verduidelijking +
-  evt. §-verwijzing + citaat) en slaat elk op als ruling met een eigen,
+  Name al) op officiële (TrustTier 1) bronnen. **Patch-notes-bronnen doen
+  sinds #185 níét meer mee** (`IsPatchNotesSignal`) — een patch-notes-artikel
+  is een regelwijziging (delta) en hoort in de wijzigingen-feed, niet als
+  op-zichzelf-staande ruling; elke clarify-run trekt bovendien de vóór #185
+  ten onrechte gemínede patch-notes-rulings terug
+  (`RetractPatchNotesCorrectionsAsync`, verified én pending, idempotent). Job
+  "clarify" destilleert er via rb-ai discrete concepten uit (onderwerp +
+  gefocuste verduidelijking + evt. §-verwijzing + citaat; de verduidelijking
+  in het **Engels** opgeslagen, dicht bij de officiële bronbewoording, #186)
+  en slaat elk op als ruling met een eigen,
   gefocuste embedding (alleen de verduidelijking, niet de hele slab) — zo komt
   het item wél boven bij een gerichte vraag, in `/ask`, `/rulings` en (bij een
   kaart-onderwerp) het kaartdossier. **Hybride autoriteitspoort** (autoriteits-
@@ -163,7 +170,10 @@ apart in §6.
   komt écht in de brontekst voor — vangt een gehallucineerd citaat) én
   *anchored* (het onderwerp resolvet naar een bestaande knoop: kaartnaam,
   mechaniek-vocabulaire, §-code of primer-concept — vangt een verzonnen/fout
-  anker dat anders stil aan een kaartpagina zou koppelen). Anders gaat het als
+  anker dat anders stil aan een kaartpagina zou koppelen) én *informative*
+  (#185: geen kale aankondigingszin — "X is verduidelijkt/gewijzigd" — zonder
+  de regel/definitie/interactie zelf; `ClarificationInformativeness`, de vorm
+  van de lege Legion-"ruling"). Anders gaat het als
   `unverified` met een reden (`Correction.StatusReason`) de bestaande
   corrections-reviewqueue in, waar de beheerder het corrigeert, goedkeurt
   (`/verify`) of afwijst (`/reject` — een `rejected` tombstone die een
@@ -176,9 +186,11 @@ apart in §6.
   bestaande ruling bij (nooit degraderend) i.p.v. een tweede te stapelen — ook
   als de LLM bij een retry/cosmetische bronwijziging een parafrase teruggeeft
   (embedding-uitval degradeert naar een genormaliseerde exacte-tekst-toets).
-  De eerste scan van zo'n bron krijgt ook meteen een sjabloon-`Change` (type
-  "clarification") zodat de aankomst zelf al in de wijzigingen-feed
-  verschijnt (er is dan nog geen vorige versie om te diffen). *Job* `clarify`
+  De eerste scan van een **FAQ-/clarificatie**-bron krijgt ook meteen een
+  sjabloon-`Change` (type "clarification") zodat de aankomst zelf al in de
+  wijzigingen-feed verschijnt (er is dan nog geen vorige versie om te diffen);
+  patch-notes-bronnen krijgen dat sjabloon sinds #185 níét — hun duiding komt
+  vanaf hun tweede scan gewoon via de normale voor/na-diff. *Job* `clarify`
   (handmatig of nachtelijk via `ScanScheduler`) · *endpoints*
   `/api/admin/jobs/clarify`, `/api/admin/corrections/{id}/reject`.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed

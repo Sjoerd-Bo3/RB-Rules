@@ -278,6 +278,21 @@ public class IngestService(
                 // LLM-call — de concept-extractie levert de echte duiding
                 // later, apart als job); alleen voor officiële bronnen,
                 // zelfde trust-gate als de mining zelf.
+                //
+                // #185: ClarificationSources.IsMatch matcht patch-notes-bronnen
+                // niet meer, dus deze tak vuurt sindsdien vanzelf niet meer op
+                // hun allereerste scan — een patch-notes-artikel heeft dan
+                // gewoon "new"-status zonder Change, exact zoals elke andere
+                // gewone bron (er is nog niets om te diffen). Bewust geen
+                // vervangende templated Change voor patch notes: hun ÉCHTE
+                // duiding komt vanaf hun TWEEDE scan gewoon via de normale
+                // diff hierboven (voor/na), en die is inhoudelijk beter dan
+                // een sjabloonzin zonder regeltekst. Voor FAQ-/clarificatie-
+                // bronnen blijft dit sjabloon wél zinvol: die krijgen NOOIT
+                // een diff-Change (elke scan mint dezelfde soort inhoud
+                // opnieuw als losse rulings, niet als delta), dus zonder dit
+                // sjabloon zou hun aankomst permanent onzichtbaar blijven in
+                // de wijzigingen-feed.
                 db.Changes.Add(new Change
                 {
                     SourceId = src.Id,

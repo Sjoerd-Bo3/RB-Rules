@@ -216,6 +216,51 @@ public class ClarificationMiningServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_DubbeleKeywordBron_WordtNietGemined_MaarWelOpgeruimd()
+    {
+        // Review-regressie (#185): een bron waarvan de naam/url ZOWEL een
+        // FAQ- ALS een patch-notes-woord bevat matcht beide predicaten. Zou
+        // mining niet expliciet IsPatchNotesSignal uitsluiten, dan werd zo'n
+        // bron gemíned én meteen weer door de retractie hard verwijderd, met
+        // de ClarifiedAt-gate die her-mining blokkeert ⇒ stil, permanent
+        // verlies van geldige rulings. Patch-notes wint: de bron wordt NIET
+        // gemíned (r.Documents == 0), de AI-stub wordt genegeerd, en een
+        // eventuele oude clarify-Correction van die bron wordt eenmalig
+        // opgeruimd (geen thrash).
+        using var db = NewDb();
+        const string dualId = "rules-faq-and-patch-notes";
+        const string dualUrl =
+            "https://playriftbound.com/en-us/news/rules-and-releases/rules-faq-and-patch-notes/";
+        db.Sources.Add(new Source
+        {
+            Id = dualId, Name = "Rules FAQ and Patch Notes", Url = dualUrl,
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = dualId, Content = "Legion means you finalize an item on the chain.",
+            ContentHash = "hash",
+        });
+        // Een al bestaande (verified) clarify-ruling van vóór deze splitsing.
+        db.Corrections.Add(new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = "Legion means you finalize an item on the chain.",
+            Provenance = $"clarify-mining:{dualId}", SourceRef = dualUrl,
+            Status = "verified", VerifiedAt = DateTimeOffset.UtcNow,
+            Embedding = new Vector(Enumerable.Repeat(0.1f, EmbeddingConfig.Dimensions).ToArray()),
+        });
+        await db.SaveChangesAsync();
+        var svc = new ClarificationMiningService(db, Ai(() => TwoConceptsAnswer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Documents);   // niet gemíned (patch-notes wint)
+        Assert.Equal(1, r.Retracted);   // oude ruling eenmalig opgeruimd
+        Assert.Empty(await db.Corrections.ToListAsync()); // en niet opnieuw aangemaakt (geen thrash)
+    }
+
+    [Fact]
     public async Task RunAsync_EmbeddingFailure_LaatDocumentOngemarkeerd_EnLogtReden()
     {
         using var db = NewDb();
@@ -402,6 +447,63 @@ public class ClarificationMiningServiceTests
         Assert.Equal(1, r.Updated);
         var ruling = await db.Corrections.SingleAsync(); // geen duplicaat
         Assert.Equal("verified", ruling.Status);
+    }
+
+    // --- informativiteits-poort (#185) — de échte Legion-FAQ-fixture ----
+
+    [Fact]
+    public async Task Gate_LegionOperatieveUitleg_GroundedAnchoredInformative_Verified()
+    {
+        // De #185-promptinstructie: vat de werkende uitspraak vast (play =
+        // finalize voor Legion) MÉT het verbindende voorbeeld (Battering Ram)
+        // — dit is precies wat de échte Unleashed Rules FAQ zegt over Legion,
+        // in tegenstelling tot de kale aankondiging uit de patch notes. In
+        // het Engels opgeslagen (#185, Sjoerd-eis): dicht bij de brontekst,
+        // geen Nederlandse parafrase in de corpus.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = $$"""
+            {"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "sectionRef": "402.3",
+              "clarification": "Play has three technical meanings; for Legion the relevant one is 'finalize' — the moment an item is actually resolved on the chain. Conditional effects such as on Battering Ram check this finalize status.",
+              "quote": "{{LegionQuote}}"}]}
+            """;
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Verified);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("verified", ruling.Status);
+        Assert.Null(ruling.StatusReason);
+    }
+
+    [Fact]
+    public async Task Gate_LegionKaleAankondiging_GroundedAnchoredMaarNietInformatief_Unverified()
+    {
+        // De #185-bugvorm: het citaat klopt (grounded) en het onderwerp
+        // resolvet (anchored — mechaniek "Legion"), maar de "verduidelijking"
+        // zelf zegt alleen DÁT Legion is verduidelijkt, niet WAT er nu geldt.
+        // Vóór #185 verifieerde dit soort item automatisch (grounded+anchored
+        // was toen de hele poort) — exact de lege Legion-"ruling" uit issue
+        // #185. De informativiteits-poort moet dit nu naar review sturen.
+        // (Ook al in het Engels, #185-opslagtaal.)
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = $$"""
+            {"clarifications": [{"topicType": "mechanic", "topicRef": "Legion",
+              "clarification": "Legion's behavior was clarified in this update.",
+              "quote": "{{LegionQuote}}"}]}
+            """;
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Verified);
+        Assert.Equal(1, r.Pending);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("unverified", ruling.Status);
+        Assert.Contains("aankondiging zonder regelinhoud", ruling.StatusReason);
+        Assert.Null(ruling.VerifiedAt);
     }
 
     // --- testinfra (zelfde patroon als ClaimMiningServiceTests) ----------

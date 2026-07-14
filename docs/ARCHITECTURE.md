@@ -232,10 +232,13 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   illegaal-met-reden (nog niet legale set of geband) / onvolledig bij
   niet-gekoppelde kaarten of een set zonder bekende releasedatum),
   `ClarificationMining` (#177: `ClarificationSources.IsMatch`, naam-/URL-
-  heuristiek die een FAQ-/clarificatie-bron herkent; `ClarificationMiner`,
-  prompt+parser voor de concept-extractie; en `ClarificationGrounding`, de
-  citaat-in-brontekst-check van de hybride autoriteitspoort — puur en getest,
-  zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
+  heuristiek die een FAQ-/clarificatie-bron herkent — sinds #185 alléén FAQ/
+  clarifications; patch-notes zijn een apart `IsPatchNotesSignal`-predicaat en
+  doen niet mee in de clarify-pijplijn; `ClarificationMiner`, prompt+parser
+  voor de concept-extractie (output in het Engels, #186); `ClarificationGrounding`,
+  de citaat-in-brontekst-check; en `ClarificationInformativeness.IsMetaOnly`
+  (#185), de derde poort-toets die een kale aankondigingszin zonder regelinhoud
+  weert — puur en getest, zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
   het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
@@ -254,8 +257,12 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   embedding en onderwerp-anker. Hybride autoriteitspoort: alleen `verified` als
   het concept grounded is (`ClarificationGrounding`: citaat in `Document.
   Content`) én anchored (`ClaimTopicMapper.Resolve` op kaartnaam/mechaniek-
-  vocabulaire/§-code/primer-concept) — anders `unverified` + `StatusReason` de
-  reviewqueue in; een `rejected` tombstone wordt nooit heropend. Dedupliceert
+  vocabulaire/§-code/primer-concept) én informative (#185:
+  `ClarificationInformativeness` — geen kale aankondigingszin) — anders
+  `unverified` + `StatusReason` de reviewqueue in; een `rejected` tombstone
+  wordt nooit heropend. Sinds #185 trekt elke run bovendien vóóraf de eerder
+  ten onrechte gemínede patch-notes-`Correction`s terug
+  (`RetractPatchNotesCorrectionsAsync`, hard delete, idempotent). Dedupliceert
   per concept op (bron, Scope, Ref) + embedding-nabijheid — een parafrase bij
   een her-mine werkt de bestaande ruling bij (nooit degraderend) i.p.v. te
   stapelen, zelfde poort-patroon als `ClaimMiningService`; backfilt bestaande
