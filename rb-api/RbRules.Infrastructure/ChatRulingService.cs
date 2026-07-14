@@ -52,19 +52,27 @@ public class ChatRulingService(RbRulesDbContext db, EmbeddingService embeddings)
     public async Task<RulingSubmitResult> SubmitAsync(
         RulingSubmit body, RulingAuthority authority, CancellationToken ct = default)
     {
+        // De verplichte velden zijn non-nullable in RulingSubmit, maar
+        // System.Text.Json handhaaft dat niet: een ontbrekend of expliciet
+        // null JSON-veld bindt naar null. Guard vóór elke .Trim() (patroon
+        // AskEndpoints.ValidateAsk) zodat een kwaadaardige/slordige body een
+        // nette InvalidInput/400 geeft in plaats van een NullReferenceException
+        // → kale 500.
+        if (string.IsNullOrWhiteSpace(body.Scope))
+            return Invalid("onbekende scope — kies card, rule_section of answer");
         var scope = body.Scope.Trim().ToLowerInvariant();
         if (Array.IndexOf(ValidScopes, scope) < 0)
             return Invalid("onbekende scope — kies card, rule_section of answer");
 
-        var statement = body.Statement.Trim();
-        if (statement.Length == 0)
+        if (string.IsNullOrWhiteSpace(body.Statement))
             return Invalid("de uitspraak ontbreekt");
+        var statement = body.Statement.Trim();
         if (statement.Length > MaxStatementLength)
             return Invalid($"de uitspraak is te lang (max {MaxStatementLength} tekens)");
 
-        var sourceRef = body.SourceRef.Trim();
-        if (sourceRef.Length == 0)
+        if (string.IsNullOrWhiteSpace(body.SourceRef))
             return Invalid("een bronverwijzing (waar besloten) is verplicht — een ruling zonder herkomst is geen ruling");
+        var sourceRef = body.SourceRef.Trim();
         if (sourceRef.Length > MaxSourceRefLength)
             return Invalid($"de bronverwijzing is te lang (max {MaxSourceRefLength} tekens)");
         // Alleen als absolute URL door UrlGuard (SSRF, #45) — een vrije

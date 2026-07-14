@@ -174,6 +174,34 @@ public class ChatRulingServiceTests
     }
 
     [Fact]
+    public async Task VerplichtVeldExplicietNull_GeeftInvalidInput_GeenException()
+    {
+        // System.Text.Json handhaaft de non-nullable string-velden van
+        // RulingSubmit niet: een ontbrekend of expliciet-null JSON-veld bindt
+        // naar C#-null. Zonder guard gooit de eerste .Trim() een
+        // NullReferenceException → kale 500 i.p.v. de nette InvalidInput. Elk
+        // van de drie verplichte velden apart null (niet alleen ""/whitespace).
+        using var db = NewDb();
+        var svc = new ChatRulingService(db, Embeddings(ok: true));
+
+        var scopeNull = await svc.SubmitAsync(
+            new RulingSubmit(Statement, null!, null, Source, null), RulingAuthority.Admin);
+        Assert.Equal(RulingSubmitStatus.InvalidInput, scopeNull.Status);
+
+        var statementNull = await svc.SubmitAsync(
+            new RulingSubmit(null!, "answer", null, Source, null), RulingAuthority.Admin);
+        Assert.Equal(RulingSubmitStatus.InvalidInput, statementNull.Status);
+
+        var sourceNull = await svc.SubmitAsync(
+            new RulingSubmit(Statement, "answer", null, null!, null), RulingAuthority.Admin);
+        Assert.Equal(RulingSubmitStatus.InvalidInput, sourceNull.Status);
+        Assert.Contains("bronverwijzing", sourceNull.Error);
+
+        // Geen enkele null-inzending mag een rij hebben aangemaakt.
+        Assert.Empty(await db.Corrections.ToListAsync());
+    }
+
+    [Fact]
     public async Task OnbekendeScope_GeeftInvalidInput()
     {
         using var db = NewDb();
