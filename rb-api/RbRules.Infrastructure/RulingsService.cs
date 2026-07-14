@@ -179,8 +179,10 @@ public class RulingsService(
 
     /// <summary>Alleen geverifieerde rulings zijn publiek; het topic-filter
     /// vertaalt naar de opgeslagen scope (RulingsTopics is de ene bron van
-    /// die vertaling). Mechanic/concept bestaan niet als correction-scope,
-    /// dus die filters laten alleen claims over.</summary>
+    /// die vertaling). Sinds #177 (ClarificationMiningService) bestaan
+    /// mechanic/concept ook als correction-scope; "answer" blijft de
+    /// vangnet-bucket voor al het overige (incl. de claim/relation-scopes
+    /// van review-notitie-promoties, #124).</summary>
     private IQueryable<Correction> FilterCorrections(string? topic)
     {
         var query = db.Corrections.AsNoTracking().Where(c => c.Status == "verified");
@@ -189,7 +191,11 @@ public class RulingsService(
             null => query,
             "card" => query.Where(c => c.Scope == "card"),
             "section" => query.Where(c => c.Scope == "rule_section"),
-            "answer" => query.Where(c => c.Scope != "card" && c.Scope != "rule_section"),
+            "mechanic" => query.Where(c => c.Scope == "mechanic"),
+            "concept" => query.Where(c => c.Scope == "concept"),
+            "answer" => query.Where(c =>
+                c.Scope != "card" && c.Scope != "rule_section"
+                && c.Scope != "mechanic" && c.Scope != "concept"),
             _ => query.Where(c => false),
         };
     }

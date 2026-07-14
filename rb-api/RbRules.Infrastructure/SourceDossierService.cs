@@ -209,7 +209,19 @@ public class SourceDossierService(RbRulesDbContext db)
                 .Select(l => new SourceDossierStep("classify", l.Status, l.Detail, l.CreatedAt))
                 .ToListAsync(ct);
 
-        var followUps = claimSteps.Concat(classifySteps)
+        // Clarify-mining-stappen (#177) voor deze bron (Ref = source.Id) —
+        // alleen relevant voor FAQ-/clarificatie-bronnen (zelfde poort als
+        // ClarificationMiningService: TrustTier == 1 + de naam-/URL-
+        // heuristiek), maar de query zelf kost niets als er nooit een
+        // clarify-stap voor deze bron liep.
+        var clarifySteps = await db.RunLogs.AsNoTracking()
+            .Where(l => l.Kind == ClarificationMiningService.LedgerKind && l.Ref == id)
+            .OrderByDescending(l => l.CreatedAt)
+            .Take(FollowUpListSize)
+            .Select(l => new SourceDossierStep("clarify", l.Status, l.Detail, l.CreatedAt))
+            .ToListAsync(ct);
+
+        var followUps = claimSteps.Concat(classifySteps).Concat(clarifySteps)
             .OrderByDescending(s => s.At)
             .Take(FollowUpListSize)
             .ToList();
@@ -228,6 +240,20 @@ public class SourceDossierService(RbRulesDbContext db)
                 .Select(d => d.ClaimsMinedAt)
                 .FirstAsync(ct);
             anyPending = latestDocMined is null;
+        }
+
+        // Idem voor clarify-mining (#177), maar dan de FAQ-/clarificatie-poort
+        // (TrustTier == 1 + naam-/URL-heuristiek) in plaats van trust ≥ 3.
+        if (yield.Documents > 0
+            && source.TrustTier == 1
+            && ClarificationSources.IsMatch(source.Id, source.Url, source.Name))
+        {
+            var latestDocClarified = await db.Documents.AsNoTracking()
+                .Where(d => d.SourceId == id)
+                .OrderByDescending(d => d.RetrievedAt)
+                .Select(d => d.ClarifiedAt)
+                .FirstAsync(ct);
+            anyPending = anyPending || latestDocClarified is null;
         }
 
         var opbrengstTotaal = yield.RuleChunks + yield.ChangesTotal + yield.BansTotal

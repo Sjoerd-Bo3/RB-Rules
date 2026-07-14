@@ -231,8 +231,12 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `DeckLegality` (#15 fase 3 spoor A: puur op platte kaartfeiten — legaal /
   illegaal-met-reden (nog niet legale set of geband) / onvolledig bij
   niet-gekoppelde kaarten of een set zonder bekende releasedatum),
-  `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
-  datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
+  `ClarificationMining` (#177: `ClarificationSources.IsMatch`, naam-/URL-
+  heuristiek die een FAQ-/clarificatie-bron herkent; `ClarificationMiner`,
+  prompt+parser voor de concept-extractie; en `ClarificationGrounding`, de
+  citaat-in-brontekst-check van de hybride autoriteitspoort — puur en getest,
+  zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
+  het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
@@ -245,6 +249,17 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `AskHistoryService` (eigen ask-geschiedenis op user_id/ip_hash, #157),
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`
   (Neo4j), `BrainService`, `MechanicMiningService`, `ClaimMiningService`,
+  `ClarificationMiningService` (#177, job "clarify" — concept-extractie uit
+  officiële FAQ-/clarificatie-artikelen naar `Correction`s met eigen gefocuste
+  embedding en onderwerp-anker. Hybride autoriteitspoort: alleen `verified` als
+  het concept grounded is (`ClarificationGrounding`: citaat in `Document.
+  Content`) én anchored (`ClaimTopicMapper.Resolve` op kaartnaam/mechaniek-
+  vocabulaire/§-code/primer-concept) — anders `unverified` + `StatusReason` de
+  reviewqueue in; een `rejected` tombstone wordt nooit heropend. Dedupliceert
+  per concept op (bron, Scope, Ref) + embedding-nabijheid — een parafrase bij
+  een her-mine werkt de bestaande ruling bij (nooit degraderend) i.p.v. te
+  stapelen, zelfde poort-patroon als `ClaimMiningService`; backfilt bestaande
+  bronnen vanzelf, geen tijdvenster op de bronselectie),
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
@@ -554,16 +569,50 @@ kan rb-api eerder starten dan Postgres klaar is.
   override-kanaal) en `/rulings`; wie dat rechtstreeks mag zetten is
   server-authoritatief, nooit uit de request-body. `ChatRulingService`
   (in-chat-rulings vanuit `/ask`, `POST /api/ask/ruling`) en `ReviewNoteService`
-  (#124, beheerder-notitie → ruling) zijn de enige twee schrijfpaden naar die
-  laag: `AdminAuthFilter.IsAdmin` (echte `ADMIN_PASSWORD`-check, X-Admin-Key)
-  geeft direct `verified` + embed; een ingelogde gebruiker
+  (#124, beheerder-notitie → ruling) zijn de twee schrijfpaden achter een
+  échte beheerder: `AdminAuthFilter.IsAdmin` (echte `ADMIN_PASSWORD`-check,
+  X-Admin-Key) geeft direct `verified` + embed; een ingelogde gebruiker
   (`RequestUserContext.User`, via `UserQuotaFilter`/X-User-Token) krijgt altijd
   `unverified` (pending) — nooit geëmbed, nooit direct zichtbaar in
   `/ask`/`/rulings`, tot een beheerder het bestaande verify-pad
   (`admin/corrections/{id}/verify`) gebruikt. Anoniem wordt afgewezen (401)
   vóórdat de service wordt aangeroepen. Een bronverwijzing (`Correction.
   SourceRef` — URL door `UrlGuard`, of vrije citatie) is verplicht: een ruling
-  zonder herkomst wordt geweigerd.
+  zonder herkomst wordt geweigerd. Sinds #177 is er een derde, niet-menselijke
+  schrijfroute: `ClarificationMiningService` zet `verified` zonder
+  beheerdersactie, maar alléén voor concepten uit een `TrustTier == 1`-bron
+  **die bovendien de hybride poort halen** — grounded (`ClarificationGrounding`:
+  citaat écht in `Document.Content`; vangt een gehallucineerd citaat) én
+  anchored (`ClaimTopicMapper.Resolve`: het onderwerp bestaat als kaart/
+  mechaniek/§/primer-concept; vangt een verzonnen/fout anker dat anders stil
+  aan een kaartpagina zou koppelen — de MEDIUM anker-bevinding). Haalt een
+  concept de poort niet, dan gaat het `unverified` + `StatusReason` de
+  reviewqueue in (`/corrections`), waar de beheerder verifieert (`/verify`) of
+  afwijst (`/reject` — een `rejected`-tombstone die een volgende mining-run
+  respecteert i.p.v. te heropenen; `Correction.StatusReason`, migratie
+  `20260714195640_ClarificationAuthorityGate`). De poort is dus dubbel: het
+  bronnenregister (wie een bron trust 1 maakt — een bestaande
+  beheerdersbeslissing) én grounding+anchoring per concept; geen blanket-
+  uitzondering op de anti-vergiftigingsgrens. Alleen voor een bron die al
+  official is én een concept dat zowel bewijs (citaat) als een echt anker
+  heeft, geldt hetzelfde direct-verified-patroon als `BanErrataSyncService`.
+- **Concept-uitgelijnd chunken vs vaste-lengte-chunken slaat de vector plat**
+  (#177) — de Core Rules-PDF wordt per §-sectie geknipt (`RuleChunkPipeline`):
+  elk chunk is al één concept, dus de embedding erover is scherp. Een
+  HTML-artikel zonder zo'n structuur (een FAQ/clarificatie-pagina) valt terug
+  op de generieke lengte-chunker in `IngestService`/`RuleChunkPipeline` —
+  vaste-lengte-slabs die toevallig meerdere, ongerelateerde
+  verduidelijkingen mengen. Eén embedding over zo'n slab is het gemiddelde
+  van alle concepten erin: een gerichte vraag over één ervan ("Legion =
+  finalize") verdunt tegen de andere en haalt het chunk niet meer boven de
+  relevantiedrempel. **Fijner knippen lost dit niet op** (je krijgt dan
+  willekeurige, niet-concept-uitgelijnde grenzen in plaats van te brede) — de
+  juiste fix is concept-extractie: rb-ai destilleert de discrete
+  verduidelijkingen zelf (`ClarificationMiner`/`ClarificationMiningService`)
+  en elk item krijgt zijn eigen, gefocuste embedding, net als een §-chunk dat
+  al vanzelf heeft. De vaste-lengte-chunks van het artikel blijven daarnaast
+  gewoon bestaan (volledigheid, page-context) maar dragen de retrieval niet
+  meer alleen.
 - **Het brein & BrainRef** (`docs/BRAIN.md`). Eén tekstuele identiteit
   (`card:…`, `section:sourceId/code`, `claim:…`) over pgvector, Neo4j én
   API-contracten (`BrainRef.cs`). De brein-API (`/api/brain/*`) biedt zes

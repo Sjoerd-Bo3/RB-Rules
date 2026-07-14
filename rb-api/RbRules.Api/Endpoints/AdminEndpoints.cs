@@ -760,7 +760,9 @@ public static class AdminEndpoints
                     c.Id, c.Scope, c.Ref, c.Text, c.Question,
                     // SourceRef (#166): "waar besloten" — bewijs bij het reviewen
                     // van een in-chat-ruling-voorstel.
-                    c.Provenance, c.SourceRef, c.Status, c.CreatedAt, c.VerifiedAt,
+                    // StatusReason (#177): waaróm een clarify-item nog ter review
+                    // staat (citaat niet in bron / onderwerp niet herkend).
+                    c.Provenance, c.SourceRef, c.Status, c.StatusReason, c.CreatedAt, c.VerifiedAt,
                 })
                 .ToListAsync());
 
@@ -770,6 +772,8 @@ public static class AdminEndpoints
             var c = await db.Corrections.FindAsync(id);
             if (c is null) return Results.NotFound();
             c.Status = "verified";
+            // #177: een goedgekeurd clarify-item heeft geen openstaande reden meer.
+            c.StatusReason = null;
             c.VerifiedAt = DateTimeOffset.UtcNow;
             try
             {
@@ -782,6 +786,20 @@ public static class AdminEndpoints
             }
             await db.SaveChangesAsync();
             return Results.Ok(c);
+        });
+
+        // Zacht afwijzen (#177): een pending clarify-item als rejected markeren
+        // in plaats van verwijderen. De tombstone laat de mining de afwijzing
+        // respecteren — een volgende run heropent hetzelfde concept niet. Voor
+        // definitief opruimen bestaat DELETE nog.
+        admin.MapPost("/corrections/{id:long}/reject", async (long id, RbRulesDbContext db) =>
+        {
+            var c = await db.Corrections.FindAsync(id);
+            if (c is null) return Results.NotFound();
+            c.Status = "rejected";
+            c.VerifiedAt = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
         });
 
         admin.MapDelete("/corrections/{id:long}", async (long id, RbRulesDbContext db) =>

@@ -266,6 +266,27 @@ public class IngestService(
                 // Change.DetectedAt elders in deze pipeline).
                 src.UpdatedAt = DateTimeOffset.UtcNow;
             }
+            else if (src.TrustTier == 1 && ClarificationSources.IsMatch(src.Id, src.Url, src.Name))
+            {
+                // #177: een FAQ-/clarificatie-artikel heeft bij zijn
+                // allereerste scan geen vorige versie om te diffen (isNew),
+                // dus bleef de aankomst zelf onzichtbaar in de wijzigingen-
+                // feed (bug-rapport: "0 changes" voor de Unleashed Rules
+                // FAQ) — terwijl de losse concepten er via
+                // ClarificationMiningService straks wél als citeerbare
+                // rulings uitkomen. Eén sjabloon-change bij aankomst (geen
+                // LLM-call — de concept-extractie levert de echte duiding
+                // later, apart als job); alleen voor officiële bronnen,
+                // zelfde trust-gate als de mining zelf.
+                db.Changes.Add(new Change
+                {
+                    SourceId = src.Id,
+                    ChangeType = "clarification",
+                    Severity = "medium",
+                    Summary = $"Nieuw FAQ-/clarificatie-artikel: {src.Name}",
+                });
+                src.UpdatedAt = DateTimeOffset.UtcNow;
+            }
 
             src.LastHash = hash;
             return new(src.Id, isNew ? "new" : "changed");

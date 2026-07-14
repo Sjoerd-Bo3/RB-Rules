@@ -7,9 +7,10 @@ namespace RbRules.Api;
 /// <summary>In-app scheduler (audit-fix: geen handmatige crontab meer).
 /// Elk uur: scan bronnen die volgens hun cadence aan de beurt zijn.
 /// Elke week: kaart-sync (nieuwe sets/errata). Periodieke zelfverrijking
-/// (#122): relatie-mining nachtelijk, de bronnen-scout wekelijks en de
-/// Piltover-decks-verversing (#15 fase 3, spoor C) elke paar uur, als
-/// gewone JobRunner-jobs op het run_log-grootboek.</summary>
+/// (#122): relatie-mining nachtelijk, de bronnen-scout wekelijks, de
+/// Piltover-decks-verversing (#15 fase 3, spoor C) elke paar uur en de
+/// FAQ-/clarificatie-concept-extractie nachtelijk (#177), als gewone
+/// JobRunner-jobs op het run_log-grootboek.</summary>
 public class ScanScheduler(
     IServiceScopeFactory scopeFactory, JobRunner jobs, ILogger<ScanScheduler> logger)
     : BackgroundService
@@ -40,6 +41,10 @@ public class ScanScheduler(
     // nieuwe of gewijzigde decks nog door, dus vers spul komt met dezelfde
     // 3-uurscadans vanzelf binnen — geen handmatige job meer nodig.
     private static readonly TimeSpan DecksInterval = TimeSpan.FromHours(3);
+    // FAQ-/clarificatie-concept-extractie (#177): zelfde nachtritme als de
+    // claims-harvest — nieuwe FAQ-artikelen verschijnen niet vaker dan
+    // dagelijks, en de run is idempotent (ClarifiedAt + exacte-tekst-toets).
+    private static readonly TimeSpan ClarifyMineInterval = TimeSpan.FromDays(1);
     private DateTimeOffset _lastCardSync = DateTimeOffset.MinValue;
     private DateTimeOffset _lastClaimsMine = DateTimeOffset.MinValue;
 
@@ -197,6 +202,7 @@ public class ScanScheduler(
                 await TryStartPeriodicJobAsync(scope.ServiceProvider, "relations", RelationsMineInterval, ct);
                 await TryStartPeriodicJobAsync(scope.ServiceProvider, "scout", ScoutInterval, ct);
                 await TryStartPeriodicJobAsync(scope.ServiceProvider, "decks", DecksInterval, ct);
+                await TryStartPeriodicJobAsync(scope.ServiceProvider, "clarify", ClarifyMineInterval, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
