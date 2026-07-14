@@ -18,13 +18,19 @@
 		incomplete: 'Onvolledig te beoordelen'
 	};
 
-	function href(params: { domain?: string; sort?: string; page?: number }): string {
+	const cardFilter = $derived(data.result.cardFilter);
+
+	function href(params: { domain?: string; sort?: string; page?: number; card?: string }): string {
 		const p = new URLSearchParams();
 		const domain = params.domain ?? data.domain;
 		const sort = params.sort ?? data.sort;
+		// Het kaart-filter reist standaard mee met paginering en facetten;
+		// een expliciete lege string (filter wissen) laat het weg.
+		const card = params.card ?? data.card;
 		if (domain) p.set('domain', domain);
 		if (sort && sort !== 'recent') p.set('sort', sort);
 		if (params.page && params.page > 1) p.set('page', String(params.page));
+		if (card) p.set('card', card);
 		const qs = p.toString();
 		return qs ? `/decks?${qs}` : '/decks';
 	}
@@ -50,7 +56,16 @@
 		deck een legaliteitscheck tegen de actuele sets en banlijst en een link terug naar de bron.
 	</p>
 
+	{#if cardFilter}
+		<p class="card-filter">
+			Gefilterd op kaart:
+			<a href="/cards/{cardFilter.canonicalId}">{cardFilter.name ?? cardFilter.canonicalId}</a>
+			<a class="clear" href={href({ page: 1, card: '' })}>filter wissen</a>
+		</p>
+	{/if}
+
 	<form method="GET" class="filters">
+		{#if data.card}<input type="hidden" name="card" value={data.card} />{/if}
 		<select name="domain">
 			<option value="">Domein</option>
 			{#each data.facets.domains as d (d)}
@@ -63,7 +78,9 @@
 			{/each}
 		</select>
 		<button type="submit" disabled={busy}>{busy ? 'Laden…' : 'Toepassen'}</button>
-		<a href="/decks" class="reset">Reset</a>
+		<a href={data.card ? `/decks?card=${encodeURIComponent(data.card)}` : '/decks'} class="reset">
+			Reset
+		</a>
 	</form>
 
 	{#if data.error}
@@ -71,7 +88,13 @@
 	{:else if busy}
 		<div class="loading"><span class="spin"></span> Decks laden…</div>
 	{:else if data.result.items.length === 0}
-		<p class="meta">Geen decks gevonden{data.domain ? ' voor dit domein' : ''}.</p>
+		<p class="meta">
+			Geen decks gevonden{cardFilter
+				? ' met deze kaart'
+				: data.domain
+					? ' voor dit domein'
+					: ''}.
+		</p>
 	{:else}
 		<p class="meta count">{data.result.total} decks · pagina {data.result.page} van {lastPage}</p>
 		<div class="grid">
@@ -126,6 +149,28 @@
 	}
 	.subtitle a {
 		color: var(--accent);
+	}
+	.card-filter {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 8px 12px;
+		margin: 14px 0 0;
+		color: var(--muted);
+		font-size: 0.9rem;
+	}
+	.card-filter a {
+		color: var(--accent);
+		text-decoration: none;
+		font-weight: 600;
+	}
+	.card-filter a:hover {
+		text-decoration: underline;
+	}
+	.card-filter .clear {
+		color: var(--muted);
+		font-weight: 400;
+		margin-left: 8px;
 	}
 	.filters {
 		display: flex;

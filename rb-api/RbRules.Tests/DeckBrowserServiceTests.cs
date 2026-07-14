@@ -115,6 +115,77 @@ public class DeckBrowserServiceTests
     }
 
     [Fact]
+    public async Task ListAsync_KaartFilter_HoudtAlleenDecksMetDieKaart_EnGeeftCardFilterTerug()
+    {
+        using var db = NewDb();
+        SeedLegalCard(db, "ogn-050-298", "Poppy, Keeper of the Hammer");
+        SeedLegalCard(db, "ogn-051-298", "Andere Kaart");
+        var metKaart = AddDeck(db, "deck-met", ["Body"]);
+        db.DeckCards.Add(new DeckCard
+        {
+            Deck = metKaart, Section = "maindeck", CardCode = "OGN-050",
+            CanonicalRiftboundId = "ogn-050-298", Quantity = 3,
+        });
+        var zonderKaart = AddDeck(db, "deck-zonder", ["Body"]);
+        db.DeckCards.Add(new DeckCard
+        {
+            Deck = zonderKaart, Section = "maindeck", CardCode = "OGN-051",
+            CanonicalRiftboundId = "ogn-051-298", Quantity = 3,
+        });
+        await db.SaveChangesAsync();
+
+        var svc = new DeckBrowserService(db);
+        var result = await svc.ListAsync(domain: null, sort: null, page: 1, card: "ogn-050-298");
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal("deck-met", item.Id);
+        Assert.Equal(1, result.Total);
+        Assert.NotNull(result.CardFilter);
+        Assert.Equal("ogn-050-298", result.CardFilter!.CanonicalId);
+        Assert.Equal("Poppy, Keeper of the Hammer", result.CardFilter.Name);
+    }
+
+    [Fact]
+    public async Task ListAsync_KaartFilterOpVariant_ResolvedNaarCanoniek()
+    {
+        using var db = NewDb();
+        SeedLegalCard(db, "ogn-050-298", "Poppy, Keeper of the Hammer");
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-050a-298", Name = "Poppy, Keeper of the Hammer (Alternate Art)",
+            SetId = "ogn", VariantOf = "ogn-050-298",
+        });
+        var deck = AddDeck(db, "deck-canon", ["Body"]);
+        db.DeckCards.Add(new DeckCard
+        {
+            Deck = deck, Section = "maindeck", CardCode = "OGN-050",
+            CanonicalRiftboundId = "ogn-050-298", Quantity = 3,
+        });
+        await db.SaveChangesAsync();
+
+        var svc = new DeckBrowserService(db);
+        // De kaartpagina van de alt-art linkt met het variant-id; dat moet
+        // naar de canonieke groep resolven en het canonieke deck vinden.
+        var result = await svc.ListAsync(domain: null, sort: null, page: 1, card: "ogn-050a-298");
+
+        Assert.Single(result.Items);
+        Assert.Equal("ogn-050-298", result.CardFilter!.CanonicalId);
+    }
+
+    [Fact]
+    public async Task ListAsync_ZonderKaartFilter_CardFilterIsNull()
+    {
+        using var db = NewDb();
+        AddDeck(db, "deck", ["Body"]);
+        await db.SaveChangesAsync();
+
+        var svc = new DeckBrowserService(db);
+        var result = await svc.ListAsync(domain: null, sort: null, page: 1);
+
+        Assert.Null(result.CardFilter);
+    }
+
+    [Fact]
     public async Task FacetsAsync_GeeftUniekeGesorteerdeDomeinenTerug()
     {
         using var db = NewDb();

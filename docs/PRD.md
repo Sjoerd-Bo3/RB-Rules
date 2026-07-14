@@ -522,7 +522,11 @@ apart in §6.
   Per deck: naam, domeinen, kaartaantal, views/likes, laatste PA-wijziging en
   een legaliteitsbadge (kleur + tekst, geen emoji). Nadrukkelijk géén editor
   en géén deck-mutatie — puur bladeren in wat de ingest al heeft opgeslagen.
-  *Route* `/decks` · *endpoints* `/api/decks`, `/api/decks/facets`.
+  Filtert desgevraagd op één kaart (`?card=<riftboundId>`, gresolvet naar de
+  canonieke groep): de "Bekijk in de deck-browser"-link van het "In decks"-
+  blok op de kaartpagina (spoor B) landt hier op een op die kaart gefilterde
+  lijst, met een wisbare filterkop. *Route* `/decks` · *endpoints*
+  `/api/decks` (`domain`/`sort`/`page`/`format`/`card`), `/api/decks/facets`.
 - **Legaliteitscheck** (`DeckLegality`, pure Domain-logica) — een deck is
   legaal als al zijn gekoppelde kaarten (via `CanonicalRiftboundId`) in een
   legale set zitten (`SetLegality.StatusFor` op de set-releasedatum) én geen

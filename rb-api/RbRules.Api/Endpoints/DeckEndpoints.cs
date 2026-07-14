@@ -11,11 +11,11 @@ public static class DeckEndpoints
     public static void MapDeckEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/decks", async (
-            string? domain, string? sort, int? page, string? format,
+            string? domain, string? sort, int? page, string? format, string? card,
             DeckBrowserService decks, CancellationToken ct) =>
             Results.Ok(await decks.ListAsync(
                 domain, sort, Math.Clamp(page ?? 1, 1, 5000),
-                format ?? DeckBrowserService.DefaultFormat, ct)));
+                format ?? DeckBrowserService.DefaultFormat, card, ct)));
 
         app.MapGet("/api/decks/facets", async (DeckBrowserService decks, CancellationToken ct) =>
             Results.Ok(await decks.FacetsAsync(ct)));

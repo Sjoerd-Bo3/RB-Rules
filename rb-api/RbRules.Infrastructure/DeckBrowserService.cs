@@ -24,7 +24,14 @@ public record DeckSummary(
     string Id, string? Name, string[] Domains, int CardCount, int Views, int Likes,
     string SourceUrl, DateTimeOffset? PaUpdatedAt, DeckLegalityView Legality);
 
-public record DeckListResponse(IReadOnlyList<DeckSummary> Items, int Total, int Page, int PageSize);
+/// <summary>Het actieve kaart-filter (deep-link vanaf de kaartpagina,
+/// #15 spoor B → spoor A): de canonieke kaart waarop gefilterd is, met de
+/// naam voor een leesbare kop. Null als er geen kaart-filter is.</summary>
+public record DeckCardFilter(string CanonicalId, string? Name);
+
+public record DeckListResponse(
+    IReadOnlyList<DeckSummary> Items, int Total, int Page, int PageSize,
+    DeckCardFilter? CardFilter = null);
 
 public record DeckFacets(IReadOnlyList<string> Domains);
 
@@ -58,11 +65,25 @@ public class DeckBrowserService(RbRulesDbContext db)
 
     public async Task<DeckListResponse> ListAsync(
         string? domain, string? sort, int page, string format = DefaultFormat,
-        CancellationToken ct = default)
+        string? card = null, CancellationToken ct = default)
     {
         page = Math.Max(1, page);
         var query = db.Decks.AsNoTracking().AsQueryable();
         if (!string.IsNullOrWhiteSpace(domain)) query = query.Where(d => d.Domains.Contains(domain));
+
+        // Kaart-filter (deep-link vanaf de kaartpagina, spoor B → A): resolve
+        // naar de canonieke groeps-id (net als het deck-gebruikssignaal in
+        // CardDetailService) en beperk tot decks die die kaart bevatten.
+        var cardFilter = await ResolveCardFilterAsync(card, ct);
+        if (cardFilter is not null)
+        {
+            var deckIdsWithCard = await db.DeckCards.AsNoTracking()
+                .Where(dc => dc.CanonicalRiftboundId == cardFilter.CanonicalId)
+                .Select(dc => dc.DeckId)
+                .Distinct()
+                .ToListAsync(ct);
+            query = query.Where(d => deckIdsWithCard.Contains(d.Id));
+        }
 
         var total = await query.CountAsync(ct);
         query = sort switch
@@ -102,7 +123,21 @@ public class DeckBrowserService(RbRulesDbContext db)
                 d.SourceUrl, d.PaUpdatedAt, DeckLegalityView.From(legality));
         }).ToList();
 
-        return new(items, total, page, PageSize);
+        return new(items, total, page, PageSize, cardFilter);
+    }
+
+    /// <summary>Zet een kaart-id (canoniek of variant) om naar het canonieke
+    /// groeps-id met de naam erbij, of null als de kaart onbekend is (dan geen
+    /// filter — het is een deep-link, geen harde eis). Match op
+    /// DeckCard.CanonicalRiftboundId, dat altijd al canoniek is.</summary>
+    private async Task<DeckCardFilter?> ResolveCardFilterAsync(string? card, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(card)) return null;
+        var hit = await db.Cards.AsNoTracking()
+            .Where(c => c.RiftboundId == card)
+            .Select(c => new { CanonicalId = c.VariantOf ?? c.RiftboundId, c.Name })
+            .FirstOrDefaultAsync(ct);
+        return hit is null ? new(card, null) : new(hit.CanonicalId, hit.Name);
     }
 
     public async Task<DeckFacets> FacetsAsync(CancellationToken ct = default)
