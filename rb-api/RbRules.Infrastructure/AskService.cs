@@ -8,10 +8,16 @@ using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
 
+/// <summary>PublishedAt/UpdatedAt (#168): "laatst bijgewerkt" (een echte
+/// content-wijziging) of anders "geldig sinds" (publicatiedatum) — beide null
+/// als de bron geen van beide draagt. Puur weergave: de her-ordening op
+/// recency (bij gelijke TrustTier) is al toegepast vóórdat deze citaties
+/// gebouwd worden (zie AskCoreAsync, Precedence.ReorderTiedByTier).</summary>
 public record Citation(
     int N, string SourceName, string Url, string? Section, int Trust,
     string? Text = null, string? PdfUrl = null, int? Page = null,
-    IReadOnlyList<ParentSection>? Parents = null);
+    IReadOnlyList<ParentSection>? Parents = null,
+    DateTimeOffset? PublishedAt = null, DateTimeOffset? UpdatedAt = null);
 
 public record AskCard(
     string RiftboundId, string Name, string? Type, string? Supertype,
@@ -481,13 +487,19 @@ public class AskService(
             .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
             {
                 c.Id, c.Text, c.SectionCode, c.Page, c.DocumentId, c.SourceId,
-                s.Name, s.Url, s.TrustTier,
+                s.Name, s.Url, s.TrustTier, s.PublishedAt, s.UpdatedAt,
             })
             .ToListAsync(ct);
         // Dictionary-lookup: een chunk kan tussen de twee query's verdwenen
         // zijn (her-index) — dan overslaan i.p.v. InvalidOperationException.
         var chunksById = chunks.ToDictionary(c => c.Id);
         var ordered = topIds.Where(chunksById.ContainsKey).Select(id => chunksById[id]).ToList();
+        // Temporele precedentie (#168): bij gelijke TrustTier (twee even
+        // gezaghebbende fragmenten die elkaar tegenspreken) krijgt de
+        // recentste voorrang — een pure, stabiele tie-breaker bovenop de
+        // RRF-fusie hierboven; de fusie/relevantierangorde zelf verandert niet.
+        ordered = Precedence.ReorderTiedByTier(
+            ordered, c => c.TrustTier, c => c.UpdatedAt ?? c.PublishedAt);
 
         // PDF-bestands-URL's voor deeplinks (…rules.pdf#page=N).
         var docIds = ordered.Select(c => c.DocumentId).Distinct().ToList();
@@ -511,7 +523,8 @@ public class AskService(
             Text: c.Text, PdfUrl: fileUrls.GetValueOrDefault(c.DocumentId), Page: c.Page,
             Parents: c.SectionCode is null
                 ? null
-                : parents.GetValueOrDefault((c.SourceId, c.SectionCode)))).ToList();
+                : parents.GetValueOrDefault((c.SourceId, c.SectionCode)),
+            PublishedAt: c.PublishedAt, UpdatedAt: c.UpdatedAt)).ToList();
 
         var context = string.Join("\n\n", ordered.Select((c, i) =>
             $"[{i + 1}] ({c.Name}, trust {c.TrustTier}{(c.SectionCode is null ? "" : $", §{c.SectionCode}")})\n{c.Text}"));

@@ -9,10 +9,15 @@ public record RuleTocSection(string Code, string Preview);
 public record RuleTocSource(
     string SourceId, string SourceName, IReadOnlyList<RuleTocSection> Sections);
 
+/// <summary>SourceUpdatedAt/SourcePublishedAt (#168): "laatst bijgewerkt" (een
+/// echte content-wijziging, IngestService) valt terug op "geldig sinds" (de
+/// publicatiedatum van de bron) als er nog geen wijziging is gezien; beide
+/// null als de bron geen van beide draagt (legacy/handmatig toegevoegd).</summary>
 public record RuleSection(
     string Code, string SourceId, string SourceName, string SourceUrl,
     string Text, string? PdfUrl, int? Page,
-    IReadOnlyList<ParentSection> Parents, string? Prev, string? Next);
+    IReadOnlyList<ParentSection> Parents, string? Prev, string? Next,
+    DateTimeOffset? SourcePublishedAt, DateTimeOffset? SourceUpdatedAt);
 
 // ── Sectie-dossier (#127) ────────────────────────────────────────────────
 
@@ -89,6 +94,7 @@ public class RuleBrowserService(
             {
                 c.SourceId, SourceName = s.Name, SourceUrl = s.Url,
                 c.ChunkIndex, c.Text, c.Page, c.DocumentId,
+                s.PublishedAt, s.UpdatedAt,
             })
             .ToListAsync(ct);
         if (chunks.Count == 0) return null;
@@ -122,7 +128,8 @@ public class RuleBrowserService(
             fileUrl, chunks[0].Page,
             parents.GetValueOrDefault((srcId, code)) ?? [],
             idx > 0 ? distinct[idx - 1] : null,
-            idx >= 0 && idx < distinct.Count - 1 ? distinct[idx + 1] : null);
+            idx >= 0 && idx < distinct.Count - 1 ? distinct[idx + 1] : null,
+            chunks[0].PublishedAt, chunks[0].UpdatedAt);
     }
 
     private const int DossierCards = 8;
