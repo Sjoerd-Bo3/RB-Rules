@@ -109,9 +109,40 @@ export interface CardDossier {
 		sourceUrl: string;
 		detectedAt: string;
 	}[];
+	deckPopularity: CardDeckPopularity;
 }
 
-const EMPTY_DOSSIER: CardDossier = { rulings: [], claims: [], relations: [], banHistory: [] };
+/** Deck-gebruikssignaal (#15 golf 1 spoor B): aandeel van de recente
+ *  Piltover Archive-decks dat deze kaart speelt. recentDeckCount is de
+ *  noemer — altijd meegegeven zodat "N%" nooit los van zijn basis leest.
+ *  thinData markeert een te kleine noemer (bv. tijdens de lopende
+ *  deck-backfill, #15 spoor 2): dan tonen we absolute aantallen in plaats
+ *  van het percentage. */
+export interface CardDeckPopularity {
+	deckCount: number;
+	recentDeckCount: number;
+	percentage: number;
+	averageCopiesWhenPlayed: number | null;
+	thinData: boolean;
+	topCoPlayed: { riftboundId: string; name: string; deckCount: number }[];
+}
+
+const EMPTY_DECK_POPULARITY: CardDeckPopularity = {
+	deckCount: 0,
+	recentDeckCount: 0,
+	percentage: 0,
+	averageCopiesWhenPlayed: null,
+	thinData: true,
+	topCoPlayed: [],
+};
+
+const EMPTY_DOSSIER: CardDossier = {
+	rulings: [],
+	claims: [],
+	relations: [],
+	banHistory: [],
+	deckPopularity: EMPTY_DECK_POPULARITY,
+};
 
 export const load: PageServerLoad = async ({ params }) => {
 	let card: CardDetail;
