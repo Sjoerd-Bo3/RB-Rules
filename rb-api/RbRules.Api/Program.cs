@@ -78,6 +78,7 @@ builder.Services.AddScoped<ChangeClassificationService>();
 builder.Services.AddScoped<SourceScoutService>();
 builder.Services.AddScoped<CardResolver>();
 builder.Services.AddScoped<CardDetailService>();
+builder.Services.AddScoped<DeckBrowserService>();
 builder.Services.AddScoped<SourceDossierService>();
 builder.Services.AddScoped<CardSimilarityService>();
 builder.Services.AddScoped<SimilarityExplainService>();
@@ -262,6 +263,7 @@ app.MapOpenApi();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "rb-api" }));
 
 app.MapCardEndpoints();
+app.MapDeckEndpoints();
 app.MapRuleEndpoints();
 app.MapRulingsEndpoints();
 app.MapKnowledgeEndpoints();

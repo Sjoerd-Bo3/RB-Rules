@@ -228,6 +228,9 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `SourceSeed`), `SourceDossierCompleteness` (#171, pure statusfunctie —
   scan/vervolgstap-uitkomst + opbrengst → volledig/onvolledig/leeg/nooit
   gescand, gedeeld door de dossier-service en het kennis-gaten-rapport),
+  `DeckLegality` (#15 fase 3 spoor A: puur op platte kaartfeiten — legaal /
+  illegaal-met-reden (nog niet legale set of geband) / onvolledig bij
+  niet-gekoppelde kaarten of een set zonder bekende releasedatum),
   `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
   datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
@@ -259,19 +262,24 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   — BanEntry/Erratum/Correction — plus claims via de `ClaimSource`-FK, en
   verwerkingsstatus uit `run_log`), `ReviewNoteService` (#124, beheerder-
   notitie → geverifieerde ruling), `ChatRulingService` (#166, in-chat-ruling →
-  verified/pending naar autoriteit), `JobLedger`, `PushService`,
+  verified/pending naar autoriteit), `DeckBrowserService` (#15 fase 3 spoor A:
+  read-only projectie boven op de Piltover Archive-decks — lijst/facetten/
+  paginering + de per-deck `DeckLegality`-uitkomst; laadt set-releasedatums en
+  gebande canonieke kaarten per format één keer per aanroep, net als
+  `CardEndpoints`' set-legaliteitslookup), `JobLedger`, `PushService`,
   `MailService`, `UserAccountService`, `PasskeyService`, en de migraties in
   `Migrations/`.
 - **`RbRules.Api`** — compositie: `Program.cs` doet alleen DI-registratie,
   migratie/seed/graph-constraints bij opstart en de `MapXxxEndpoints()`-
   aanroepen. Endpoints per feature als extension-methods:
-  `CardEndpoints`, `RuleEndpoints`, `KnowledgeEndpoints`, `BrainEndpoints`,
-  `AskEndpoints`, `AuthEndpoints`, `FeedEndpoints`, `PushEndpoints`,
-  `AdminEndpoints`. Achtergrondwerk via `JobRunner` + `JobCatalog` +
-  `ScanScheduler`; contracten in `ApiContracts.cs`; admin achter
-  `AdminAuthFilter`, gebruikersquota via `UserQuotaFilter`.
+  `CardEndpoints`, `DeckEndpoints`, `RuleEndpoints`, `KnowledgeEndpoints`,
+  `BrainEndpoints`, `AskEndpoints`, `AuthEndpoints`, `FeedEndpoints`,
+  `PushEndpoints`, `AdminEndpoints`. Achtergrondwerk via `JobRunner` +
+  `JobCatalog` + `ScanScheduler`; contracten in `ApiContracts.cs`; admin
+  achter `AdminAuthFilter`, gebruikersquota via `UserQuotaFilter`.
 
-Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/rules*`,
+Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/decks*`
+(#15 fase 3 spoor A: lijst/facetten/detail, read-only), `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
 contradictions), `/api/ask` + `/api/ask/stream` + `/api/ask/history` (eigen
 ask-geschiedenis op user_id/ip_hash, geen id-parameter, #157) +
@@ -311,9 +319,11 @@ beurten, #143; bron-dossier: `/sources/{id}/dossier`, #171).
 
 Paginastructuur (`rb-web/src/routes/`): `/` (wijzigingen-feed), `/rules`
 (+ `/rules/[code]`), `/primer`, `/ask` (+ `/ask/stream`), `/cards`
-(+ `/cards/[id]` + `explain`), `/graph` ("Brein"-verkenner), `/account`
-(+ passkey/verify), `/admin` (+ `/admin/status`, `/admin/overview/[kind]`).
-Navigatie in `+layout.svelte`.
+(+ `/cards/[id]` + `explain`), `/decks` (+ `/decks/[id]`, #15 fase 3 spoor A:
+browser + legaliteitsbadge, detail met decklijst per sectie en deep-link naar
+Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
+`/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
+`/admin/overview/[kind]`). Navigatie in `+layout.svelte`.
 
 Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 `RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `markdown.ts` +
@@ -755,8 +765,9 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   vermeden (`KnowledgeGapsService`).
 - **Openstaande architectuurrakende issues.** O.a. #122 (periodieke
   zelfverrijking in de scheduler), #121 (echte token-metering), #124/#125
-  (reviewqueue-/misvattingen-laag), #127 (publieke databank), #15 (decks/
-  meta-laag, gedeprioriteerd). Er zijn PR's onderweg; de exacte stand staat in
+  (reviewqueue-/misvattingen-laag), #127 (publieke databank), #15 (decks:
+  deck-browser + legaliteit live, "populair in N%"/scheduler-tick/meta-laag
+  in `/ask` nog in golf 1/2). Er zijn PR's onderweg; de exacte stand staat in
   #55 (masterplan) en #60 (handoff).
 - **Kosten/latency van agentic.** Een geëscaleerde vraag kan van ~10s naar
   30-90s gaan; gemitigeerd door de gate, maxTurns/tool-cap/harde timeout en

@@ -12,6 +12,7 @@
 		{ href: '/rulings', label: 'Rulings' },
 		{ href: '/ask', label: 'Vraag' },
 		{ href: '/cards', label: 'Kaarten' },
+		{ href: '/decks', label: 'Decks' },
 		{ href: '/graph', label: 'Brein' },
 		{ href: '/account', label: 'Account' },
 		{ href: '/admin', label: 'Beheer' }
