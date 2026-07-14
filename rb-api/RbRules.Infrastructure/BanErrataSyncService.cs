@@ -100,17 +100,54 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
 
         if (perSource.Count > 0)
         {
-            // Vervang per geslaagde bron in één transactie (nooit een venster
-            // zonder errata); rijen van bronnen die niet meer meedoen (zoals
-            // de oude alles-in-één-mirror) zijn wees en gaan mee weg.
+            // Reconcilieer in één transactie (nooit een venster zonder errata).
+            // Bewust GEEN blinde delete+rebuild meer (#168, review-fix): dat gaf
+            // elke rij bij elke "Alles bijwerken" een nieuwe Id én een nieuwe
+            // DetectedAt (= UtcNow), waardoor DetectedAt "laatste sync" i.p.v.
+            // "voor het eerst gezien" betekende en de precedentie-tie-break kon
+            // churnen. Nu matchen we op (CardName, NewText): ongewijzigde errata
+            // behouden hun rij (Id + DetectedAt), alleen echt nieuwe komen erbij
+            // en echt verdwenen gaan weg. Volledig getrackt (geen ExecuteDelete
+            // gemengd met tracking, CONVENTIONS): errata is klein (tientallen-
+            // honderden rijen), dus een load-en-reconcilieer is ruim goedkoop.
             await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+            // Wees-errata (bronnen die niet meer meedoen). activeUrls dekt ALLE
+            // geconfigureerde errata-bronnen, niet alleen de geslaagde: een bron
+            // die deze run faalde (geen doc/AI-uitval) staat niet in perSource,
+            // maar zijn bestaande rijen mogen niet als wees sneuvelen.
             var activeUrls = errataSources.Select(s => s.Url).ToList();
-            await db.Errata.Where(e => !activeUrls.Contains(e.SourceUrl)).ExecuteDeleteAsync(ct);
+            var orphans = await db.Errata.Where(e => !activeUrls.Contains(e.SourceUrl)).ToListAsync(ct);
+            db.Errata.RemoveRange(orphans);
+
             foreach (var (url, rows) in perSource)
             {
-                await db.Errata.Where(e => e.SourceUrl == url).ExecuteDeleteAsync(ct);
-                db.Errata.AddRange(rows);
-                errata += rows.Count;
+                var existing = await db.Errata.Where(e => e.SourceUrl == url).ToListAsync(ct);
+                var byKey = existing
+                    .GroupBy(e => (e.CardName, e.NewText))
+                    .ToDictionary(g => g.Key, g => g.OrderBy(e => e.Id).First());
+                var seen = new HashSet<(string, string)>();
+                foreach (var r in rows)
+                {
+                    var key = (r.CardName, r.NewText);
+                    if (!seen.Add(key)) continue; // duplicaat binnen dezelfde extractie
+                    if (byKey.TryGetValue(key, out var keep))
+                    {
+                        // Ongewijzigde tekst ⇒ rij behouden (Id + DetectedAt),
+                        // alleen afgeleiden bijwerken (kaartmatch/brondatum kan
+                        // sinds de vorige sync veranderd zijn — churnt DetectedAt
+                        // niet).
+                        keep.CardRiftboundId = r.CardRiftboundId;
+                        keep.EffectiveFrom = r.EffectiveFrom;
+                    }
+                    else
+                    {
+                        db.Errata.Add(r); // nieuw ⇒ DetectedAt = UtcNow (nu voor het eerst gezien)
+                    }
+                }
+                // Rijen waarvan de (CardName, NewText) niet meer voorkomt: weg.
+                db.Errata.RemoveRange(existing.Where(e => !seen.Contains((e.CardName, e.NewText))));
+                errata += seen.Count;
             }
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
