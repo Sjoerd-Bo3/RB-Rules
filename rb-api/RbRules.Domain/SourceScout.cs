@@ -230,6 +230,18 @@ public static class SourceScout
         return $"{host}{path}{uri.Query}".ToLowerInvariant();
     }
 
+    /// <summary>Genormaliseerde varianten van een bron-URL om tegen opgeslagen
+    /// SourceUrl/SourceRef-waarden te matchen (#171-patroon, hergebruikt door
+    /// #191 voor de FROM_SOURCE/SUPPORTED_BY-graph-edge): letterlijk,
+    /// genormaliseerd, genormaliseerd-met-slash — een gesloten kandidatenlijst
+    /// die de aanroeper vertaalbaar (`Contains` op een vaste set) of als
+    /// in-memory lookup kan gebruiken.</summary>
+    public static HashSet<string> UrlCandidates(string url)
+    {
+        var normalized = NormalizeUrl(url);
+        return [url, normalized, normalized + "/"];
+    }
+
     private static string? GetString(JsonElement obj, string key) =>
         obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString()?.Trim()
