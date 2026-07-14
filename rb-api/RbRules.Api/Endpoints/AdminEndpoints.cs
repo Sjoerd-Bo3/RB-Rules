@@ -748,7 +748,9 @@ public static class AdminEndpoints
                 .Select(c => new
                 {
                     c.Id, c.Scope, c.Ref, c.Text, c.Question,
-                    c.Provenance, c.Status, c.CreatedAt, c.VerifiedAt,
+                    // SourceRef (#166): "waar besloten" — bewijs bij het reviewen
+                    // van een in-chat-ruling-voorstel.
+                    c.Provenance, c.SourceRef, c.Status, c.CreatedAt, c.VerifiedAt,
                 })
                 .ToListAsync());
 

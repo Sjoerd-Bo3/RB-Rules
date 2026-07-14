@@ -22,7 +22,9 @@ public record RulingsItem(
     string? Question, string Text, string TrustLabel, string? Provenance,
     DateTimeOffset Date, double? Score,
     IReadOnlyList<RulingsSectionRef> Sections,
-    IReadOnlyList<RulingsSource> Sources);
+    IReadOnlyList<RulingsSource> Sources,
+    // "Waar besloten" (#166) — alleen op rulings (Correction), niet op claims.
+    string? SourceRef = null);
 
 public record RulingsResponse(
     IReadOnlyList<RulingsItem> Items, int Total, int Page, int PageSize, bool Degraded);
@@ -228,7 +230,7 @@ public class RulingsService(
                 .Where(c => correctionIds.Contains(c.Id))
                 .Select(c => new
                 {
-                    c.Id, c.Scope, c.Ref, c.Text, c.Question, c.Provenance,
+                    c.Id, c.Scope, c.Ref, c.Text, c.Question, c.Provenance, c.SourceRef,
                     c.CreatedAt, c.VerifiedAt,
                 })
                 .ToListAsync(ct);
@@ -256,7 +258,7 @@ public class RulingsService(
                     r.VerifiedAt ?? r.CreatedAt,
                     scores?.GetValueOrDefault(itemRef),
                     ExtractSections(sectionExtractor, $"{r.Question}\n{r.Text}"),
-                    Sources: []));
+                    Sources: [], r.SourceRef));
             }
         }
 
