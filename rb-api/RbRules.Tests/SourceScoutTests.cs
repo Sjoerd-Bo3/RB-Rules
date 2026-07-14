@@ -351,4 +351,22 @@ public class SourceScoutTests
             $"https://example.com/{new string('a', 120)}");
         Assert.True(slug.Length <= 60);
     }
+
+    [Theory]
+    // http/https zijn dezelfde pagina.
+    [InlineData("http://playriftbound.com/en-us/news/x", "https://playriftbound.com/en-us/news/x")]
+    // www. is een aparte-vorm van dezelfde host.
+    [InlineData("https://www.riftbound.gg/judge-faq", "https://riftbound.gg/judge-faq")]
+    // trailing slash.
+    [InlineData("https://riftbound.gg/judge-faq/", "https://riftbound.gg/judge-faq")]
+    // case op host telt niet mee (URL's zijn host-ongevoelig).
+    [InlineData("https://Riftbound.GG/judge-faq", "https://riftbound.gg/judge-faq")]
+    public void StrongNormalizeUrl_TreatsFormVariantsAsEqual(string a, string b) =>
+        Assert.Equal(SourceScout.StrongNormalizeUrl(a), SourceScout.StrongNormalizeUrl(b));
+
+    [Theory]
+    [InlineData("https://riftbound.gg/judge-faq", "https://riftbound.gg/rulings")] // ander pad
+    [InlineData("https://riftbound.gg/judge-faq", "https://mobalytics.gg/judge-faq")] // andere host
+    public void StrongNormalizeUrl_DifferentPagesStayDifferent(string a, string b) =>
+        Assert.NotEqual(SourceScout.StrongNormalizeUrl(a), SourceScout.StrongNormalizeUrl(b));
 }
