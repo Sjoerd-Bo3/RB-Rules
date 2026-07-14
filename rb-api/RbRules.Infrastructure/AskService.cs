@@ -62,11 +62,18 @@ public record AskStreamMeta(
 /// kaartfeiten + geverifieerde rulings + antwoord via rb-ai met [n]-citaten.
 /// Embedding-uitval is een verwacht pad (#100): dan vervallen alleen de
 /// vector-kanalen en degradeert de vraag naar FTS + naam/mechaniek/lexicaal —
-/// nooit een kale 500.</summary>
+/// nooit een kale 500. Sinds #152 draaien de onafhankelijke lees-kanalen
+/// concurrent, elk op een eigen context uit <paramref name="dbFactory"/>
+/// (DbContext is niet thread-safe); zonder factory (tests op EF InMemory)
+/// draaien dezelfde kanalen gewoon één voor één op de scoped context. Eén
+/// uitvallend kanaal levert een leeg kanaal plus een marker in de trace —
+/// nooit een 500. De kanalen leveren aan vaste slots en de prompt-opbouw
+/// blijft sequentieel: zelfde input geeft byte-voor-byte dezelfde prompt.</summary>
 public class AskService(
     RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai,
     AgenticRelationService agenticRelations,
-    RequestUserContext userContext, ILogger<AskService> logger)
+    RequestUserContext userContext, ILogger<AskService> logger,
+    IDbContextFactory<RbRulesDbContext>? dbFactory = null)
 {
     private const int TopK = 8;
 
@@ -178,10 +185,16 @@ public class AskService(
 
         // 0b. Naam-match in SQL (review-fix #43: geen full-table naar de
         // client) + interne router: vraagtype stuurt structuur en bronnen-bias.
+        // Vanaf hier zijn de lees-kanalen ChannelResult-taken (#152): mét
+        // factory concurrent op eigen contexten, zonder factory (tests, EF
+        // InMemory) één voor één op de scoped context. Eén uitvallend kanaal
+        // levert een leeg kanaal plus een marker in de trace — nooit een 500.
         var qLower = $"{string.Join("\n", turns.Select(t => t.Question))}\n{question}"
             .ToLowerInvariant();
-        var mentionsCard = await CardsNamedIn(qLower).AnyAsync(ct);
-        var type = QuestionRouter.Classify(question, mentionsCard);
+        var agenticMode = AgenticGate.ParseMode(Environment.GetEnvironmentVariable("ASK_AGENTIC"));
+
+        var mentionsTask = await StartDbChannelAsync("naam-match", false,
+            ctx => CardsNamedIn(ctx, qLower).AnyAsync(ct), ct);
 
         // Agentic-gate-invoer (#107, review): trigger (a) is een
         // interactievráág, dus alleen kaartnamen in de HUIDIGE vraag tellen —
@@ -189,38 +202,40 @@ public class AskService(
         // Gededupliceerd op langste naam (Domain), omdat de substring-match
         // "Jinx" ook binnen "Jinx, Loose Cannon" raakt. Alleen berekend als
         // de flag aan staat: het off-pad doet géén extra query.
-        var agenticMode = AgenticGate.ParseMode(Environment.GetEnvironmentVariable("ASK_AGENTIC"));
-        var gateCardMentions = 0;
-        if (agenticMode != AgenticMode.Off)
-            gateCardMentions = AgenticGate.CountDistinctMentions(
-                await CardsNamedIn(question.ToLowerInvariant())
-                    .Select(c => c.Name).Distinct().ToListAsync(ct));
+        var gateTask = agenticMode == AgenticMode.Off
+            ? Task.FromResult(new ChannelResult<List<string>>([], null))
+            : await StartDbChannelAsync("agentic-gate", new List<string>(),
+                ctx => CardsNamedIn(ctx, question.ToLowerInvariant())
+                    .Select(c => c.Name).Distinct().ToListAsync(ct), ct);
 
         // 0c. Full-text op de rúwe tekst, alvast tijdens de rewrite. De
         // afweging (#152): FTS zocht sinds #66 op de genormaliseerde Engelse
         // zoekzin — de bronnen zijn Engels, dus die matcht wezenlijk beter
-        // dan een Nederlandse ruwe vraag. Daarom hieronder: levert de rewrite
+        // dan een Nederlandse ruwe vraag. Daarom verderop: levert de rewrite
         // een ándere zoektekst op, dan draait de FTS opnieuw op die tekst en
         // telt alléén die lijst mee in de RRF-fusie — de resultaten blijven
         // zo byte-voor-byte gelijk aan vóór de overlap. De vroege ruwe run is
         // alleen "verspild" als de rewrite iets wezenlijks veranderde, en
         // kostte dan tóch geen wandkloktijd (hij liep onder de rewrite).
-        var rawTextHits = await FullTextChunksAsync(retrievalText, ct);
+        var rawFtsTask = await StartChannelAsync<List<(long Id, string SourceId)>>(
+            "fts", [], () => FullTextChunksAsync(retrievalText, ct), ct);
+
+        // De router heeft de naam-match nodig; daarna kan de banlijst
+        // (alleen Legaliteit) alsnog onder de rewrite starten.
+        var mentionsResult = await mentionsTask;
+        var mentionsCard = mentionsResult.Value;
+        var type = QuestionRouter.Classify(question, mentionsCard);
 
         // 0d. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend
         // blok — rewrite-onafhankelijk, dus ook alvast tijdens de rewrite.
-        var banBlock = "";
-        if (type == QuestionType.Legaliteit)
-        {
-            var bans = await db.BanEntries
-                .OrderBy(b => b.Name)
-                .Take(40)
-                .Select(b => $"- {b.Name} ({b.Kind})")
-                .ToListAsync(ct);
-            banBlock = bans.Count == 0
-                ? "\n\nBANLIJST (gezaghebbend): momenteel leeg — er zijn geen bans bekend."
-                : "\n\nBANLIJST (gezaghebbend, actueel):\n" + string.Join("\n", bans);
-        }
+        var bansTask = type != QuestionType.Legaliteit
+            ? Task.FromResult(new ChannelResult<List<string>>([], null))
+            : await StartDbChannelAsync("banlijst", new List<string>(),
+                ctx => ctx.BanEntries.AsNoTracking()
+                    .OrderBy(b => b.Name)
+                    .Take(40)
+                    .Select(b => $"- {b.Name} ({b.Kind})")
+                    .ToListAsync(ct), ct);
 
         // Token-teller per vraag (#121): opgeteld over álle rb-ai-calls die
         // deze vraag kost (rewrite + antwoord; bij agentic de hele run).
@@ -293,24 +308,84 @@ public class AskService(
             }
         }
         var qv = queryVectors.Length > 0 ? queryVectors[0] : null;
-        var vectorLists = new List<List<(long Id, string SourceId)>>();
+
+        // 1b. Alle resterende kanalen starten hier (#152) en landen op vaste
+        // slots: mét factory draaien ze concurrent, de fusie en de
+        // prompt-opbouw hieronder blijven sequentieel en deterministisch.
+        var vectorTasks = new List<Task<ChannelResult<List<(long Id, string SourceId)>>>>();
         foreach (var vec in queryVectors)
-        {
-            var hits = await db.RuleChunks
-                .Where(c => c.Embedding != null)
-                .OrderBy(c => c.Embedding!.CosineDistance(vec))
-                .Take(TopK * 2)
-                .Select(c => new { c.Id, c.SourceId })
-                .ToListAsync(ct);
-            vectorLists.Add([.. hits.Select(h => (h.Id, h.SourceId))]);
-        }
+            vectorTasks.Add(await StartDbChannelAsync<List<(long Id, string SourceId)>>(
+                "regels-vector", [], ctx => RuleChunkHitsAsync(ctx, vec, ct), ct));
 
         // 2. Full-text-kanaal — eigen (virtual) methode, zie FullTextChunksAsync.
         // Gaf de rewrite een wezenlijk andere zoektekst, dan hier de her-run
         // (zie de afweging bij 0c); anders telt de vroege ruwe run.
-        var textHits = searchText == retrievalText
-            ? rawTextHits
-            : await FullTextChunksAsync(searchText, ct);
+        var ftsRerunTask = searchText == retrievalText
+            ? null
+            : await StartChannelAsync<List<(long Id, string SourceId)>>(
+                "fts", [], () => FullTextChunksAsync(searchText, ct), ct);
+
+        // 3b/4/5/5b/5c als kanalen; de blokken schuiven verderop ongewijzigd
+        // in de vaste prompt-volgorde (kennispiramide #51).
+        var primerTask = await StartDbChannelAsync(
+            "primer", (Titles: new List<string>(), Block: "", Relevant: false),
+            ctx => PrimerChannelAsync(ctx, qv, ct), ct);
+        var cardContextTask = await StartDbChannelAsync(
+            "kaartcontext", new CardContextResult("", [], [], false),
+            ctx => CardContextAsync(ctx, question, qLower, qv, type, rewrite, ct), ct);
+        var rulingsTask = await StartDbChannelAsync(
+            "rulings", new List<string>(),
+            ctx => RulingsChannelAsync(ctx, qv, ct), ct);
+        var claimsTask = await StartDbChannelAsync(
+            "claims", (Block: "", Refs: new List<string>(), Claims: new List<AskClaim>()),
+            ctx => ClaimsChannelAsync(ctx, qv, type, ct), ct);
+        var misconceptionsTask = await StartChannelAsync(
+            "misvattingen",
+            (Block: "", Refs: new List<string>(), Items: new List<AskMisconception>()),
+            () => MisconceptionChannelAsync(qv, ct), ct);
+
+        // Alle slots innen — óók als de fusie hieronder leeg blijkt: geen
+        // zwevende taken, en de degradatie-markers zijn compleet.
+        var rawFtsResult = await rawFtsTask;
+        var ftsResult = ftsRerunTask is null ? rawFtsResult : await ftsRerunTask;
+        var textHits = ftsResult.Value;
+        var vectorLists = new List<List<(long Id, string SourceId)>>();
+        var vectorFailed = false;
+        foreach (var vectorTask in vectorTasks)
+        {
+            var r = await vectorTask;
+            vectorLists.Add(r.Value);
+            vectorFailed |= r.Failure is not null;
+        }
+        var gateResult = await gateTask;
+        var gateCardMentions = agenticMode == AgenticMode.Off
+            ? 0
+            : AgenticGate.CountDistinctMentions(gateResult.Value);
+        var bansResult = await bansTask;
+        var primerResult = await primerTask;
+        var cardContextResult = await cardContextTask;
+        var rulingsResult = await rulingsTask;
+        var claimsResult = await claimsTask;
+        var misconceptionResult = await misconceptionsTask;
+
+        // Degradatie-markers (#152) in vaste kanaalvolgorde — de reden staat
+        // in de logs, de trace toont wélke kanalen leeg bleven.
+        var failedChannels = new List<string>();
+        void NoteFailure(string? failure)
+        {
+            if (failure is not null && !failedChannels.Contains(failure))
+                failedChannels.Add(failure);
+        }
+        NoteFailure(mentionsResult.Failure);
+        NoteFailure(gateResult.Failure);
+        if (vectorFailed) NoteFailure("regels-vector");
+        NoteFailure(ftsResult.Failure);
+        NoteFailure(bansResult.Failure);
+        NoteFailure(primerResult.Failure);
+        NoteFailure(rulingsResult.Failure);
+        NoteFailure(cardContextResult.Failure);
+        NoteFailure(claimsResult.Failure);
+        NoteFailure(misconceptionResult.Failure);
 
         // 3. RRF-fusie (gedeelde Domain-helper, #44), met bron-bias per
         // vraagtype: toernooivragen tillen Tournament Rules-chunks op,
@@ -342,6 +417,8 @@ public class AskService(
                 [], [], type.ToString(), Ok: false);
         }
 
+        // Citatie-hydratie op de scoped context: alle kanalen zijn hierboven
+        // geïnd, dus er draait niets meer concurrent op deze context.
         var chunks = await db.RuleChunks
             .Where(c => topIds.Contains(c.Id))
             .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
@@ -382,149 +459,34 @@ public class AskService(
         var context = string.Join("\n\n", ordered.Select((c, i) =>
             $"[{i + 1}] ({c.Name}, trust {c.TrustTier}{(c.SectionCode is null ? "" : $", §{c.SectionCode}")})\n{c.Text}"));
 
-        // 3b. Spelbegrip-primer (kennislaag 1, #49): goedgekeurde concept-docs
-        // die semantisch bij de vraag passen — geeft het model de flow van het
-        // spel, niet alleen losse §'s. Puur vector-gedreven, dus zonder
-        // query-vector (embedding-uitval, #100) vervalt dit kanaal.
-        var primerTitles = new List<string>();
-        var primerBlock = "";
-        var primerRelevant = false;
-        if (qv is not null)
-        {
-            // Distance gaat mee voor het lege-retrieval-signaal (#107): de
-            // top-3 zelf is een kale nearest-neighbour (altijd gevuld zodra
-            // er één approved doc bestaat) en zegt dus niets over relevantie.
-            var primerDocs = await db.KnowledgeDocs.AsNoTracking()
-                .Where(k => k.Kind == "primer" && k.Status == "approved" && k.Embedding != null)
-                .OrderBy(k => k.Embedding!.CosineDistance(qv))
-                .Take(3)
-                .Select(k => new { k.Title, k.Body, Distance = k.Embedding!.CosineDistance(qv) })
-                .ToListAsync(ct);
-            primerTitles = [.. primerDocs.Select(p => p.Title)];
-            // Zelfde afstandsplafond als de claims-retrieval (#51): daarboven
-            // is een buur wel "dichtstbijzijnd" maar niet aantoonbaar relevant.
-            primerRelevant = primerDocs.Any(p => p.Distance <= ClaimRetrieval.MaxDistance);
-            if (primerDocs.Count > 0)
-                primerBlock =
-                    "\n\nSPELBEGRIP (achtergrond, gedistilleerd uit de officiële regels; " +
-                    "de regels zelf blijven normatief):\n" +
-                    string.Join("\n\n", primerDocs.Select(p => $"[{p.Title}]\n{p.Body}"));
-        }
-
-        // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
-        // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
-        // regels het keyword niet expliciet definiëren. Lijstvragen (#67)
-        // krijgen daarnaast een lexicaal kanaal op kaarttekst met ruimere limiet.
-        var cardContext = await CardContextAsync(question, qLower, qv, type, rewrite, ct);
+        // 3b–5c. De kanaal-resultaten van hierboven schuiven hier in hun
+        // vaste slots; de blok-volgorde in de prompt is en blijft de
+        // kennispiramide van #51.
+        var (primerTitles, primerBlock, primerRelevant) = primerResult.Value;
+        var cardContext = cardContextResult.Value;
         var cardBlock = cardContext.Block;
 
-        // 4b. De banlijst voor legaliteitsvragen is al opgehaald (0d, tijdens
-        // de rewrite); het blok schuift hier ongewijzigd de prompt-volgorde in.
+        // Banlijst (0d): een lege líjst is echte data ("geen bans bekend"),
+        // maar een uitgevallen kanaal niet — dan géén blok in plaats van een
+        // gezaghebbende bewering die we niet konden controleren.
+        var banBlock = type != QuestionType.Legaliteit || bansResult.Failure is not null
+            ? ""
+            : bansResult.Value.Count == 0
+                ? "\n\nBANLIJST (gezaghebbend): momenteel leeg — er zijn geen bans bekend."
+                : "\n\nBANLIJST (gezaghebbend, actueel):\n" + string.Join("\n", bansResult.Value);
 
-        // 5. Geverifieerde rulings (self-learning override-laag) — semantisch
-        // gematcht op de vraag; zonder embedding (van de rulings óf van de
-        // vraag zelf, #100) vallen we terug op de recentste.
-        var rulings = new List<string>();
-        if (qv is not null)
-            rulings = await db.Corrections
-                .Where(c => c.Status == "verified" && c.Embedding != null)
-                .OrderBy(c => c.Embedding!.CosineDistance(qv))
-                .Take(3)
-                .Select(c => c.Text)
-                .ToListAsync(ct);
-        if (rulings.Count == 0)
-            rulings = await db.Corrections
-                .Where(c => c.Status == "verified")
-                .OrderByDescending(c => c.VerifiedAt)
-                .Take(3)
-                .Select(c => c.Text)
-                .ToListAsync(ct);
+        var rulings = rulingsResult.Value;
         var rulingBlock = rulings.Count == 0
             ? ""
             : "\n\nGEVERIFIEERDE RULINGS (gezaghebbend):\n" +
               string.Join("\n", rulings.Select(r => $"- {r}"));
 
-        // 5b. Community-claims (kennislaag 2, #51): door de beheerder
-        // geaccepteerde claims, semantisch bij de vraag — een eigen, expliciet
-        // gelabeld kanaal, strikt gescheiden van de officiële lagen. Het
-        // router-gewicht bepaalt hoeveel er meegaan (ruling: weinig;
-        // lijst-/meta-vraag: meer). De afstand wordt bewust in-memory gecapt
-        // (bewezen vertaalbaar patroon, zie ClaimMiningService). Puur
-        // vector-gedreven, dus zonder query-vector (#100) vervalt dit kanaal.
-        var claimsBlock = "";
-        var claimTraceRefs = new List<string>();
-        var askClaims = new List<AskClaim>();
-        if (qv is not null)
-        {
-            var claimHits = await db.Claims.AsNoTracking()
-                .Where(c => c.Status == "accepted" && c.Embedding != null)
-                .OrderBy(c => c.Embedding!.CosineDistance(qv))
-                .Take(ClaimRetrieval.TakeFor(type))
-                .Select(c => new
-                {
-                    c.Id, c.TopicType, c.TopicRef, c.Statement,
-                    c.Corroboration, c.TrustScore, c.OfficialStatus,
-                    Distance = c.Embedding!.CosineDistance(qv),
-                })
-                .ToListAsync(ct);
-            var retrievedClaims = claimHits
-                .Where(c => c.Distance <= ClaimRetrieval.MaxDistance)
-                .ToList();
-            claimsBlock = ClaimRetrieval.PromptBlock([.. retrievedClaims.Select(c =>
-                new RetrievedClaim(c.TopicType, c.TopicRef, c.Statement,
-                    c.Corroboration, c.TrustScore, c.OfficialStatus))]);
-            claimTraceRefs = [.. retrievedClaims.Select(c => $"{c.TopicType}:{c.TopicRef}")];
-
-            // Bronnen per claim voor het uitklapbare "Community-consensus"-blok in
-            // het antwoord (#51) — registernaam erbij voor leesbaarheid.
-            if (retrievedClaims.Count > 0)
-            {
-                var claimIds = retrievedClaims.Select(c => c.Id).ToList();
-                var claimSources = await db.ClaimSources.AsNoTracking()
-                    .Where(s => claimIds.Contains(s.ClaimId))
-                    .Join(db.Sources, cs => cs.SourceId, s => s.Id,
-                        (cs, s) => new { cs.ClaimId, s.Name, cs.Url })
-                    .ToListAsync(ct);
-                askClaims.AddRange(retrievedClaims.Select(c => new AskClaim(
-                    c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
-                    c.TrustScore, c.OfficialStatus,
-                    [.. claimSources.Where(s => s.ClaimId == c.Id)
-                        .Select(s => new AskClaimSource(s.Name, s.Url))])));
-            }
-        }
-
-        // 5c. Misvattingen-kanaal (#125): rejected/superseded claims mét
-        // weerlegging (StatusReason; de verwerp-notities van #124 komen hier
-        // later bij) zijn negatieve kennis — "zo zit het dus níet". Zelfde
-        // afstands-plafond als 5b, eigen cap en eigen label; de poort
-        // (ClaimRetrieval.SelectMisconceptions) is puur en getest, de query
-        // een virtual voorselectie (test-seam, zie MisconceptionCandidatesAsync).
-        var misconceptions = ClaimRetrieval.SelectMisconceptions(
-            await MisconceptionCandidatesAsync(qv, ct));
-        var misconceptionBlock = ClaimRetrieval.MisconceptionBlock(
-            [.. misconceptions.Select(m => new RetrievedMisconception(
-                m.TopicType, m.TopicRef, m.Statement, m.StatusReason!))]);
+        var (claimsBlock, claimTraceRefs, askClaims) = claimsResult.Value;
+        var (misconceptionBlock, misconceptionRefs, askMisconceptions) =
+            misconceptionResult.Value;
         // Trace: zelfde kennislagen-veld als de claims, herkenbaar aan het
         // "misvatting:"-prefix — bewust geen eigen kolom/migratie.
-        claimTraceRefs.AddRange(misconceptions.Select(m =>
-            $"misvatting:{m.TopicType}:{m.TopicRef}"));
-        var askMisconceptions = new List<AskMisconception>();
-        if (misconceptions.Count > 0)
-        {
-            // Beide bewijzen voor het misvatting-blok in de UI: het
-            // community-citaat (bron + quote) én de officiële weerlegging.
-            var misconceptionIds = misconceptions.Select(m => m.Id).ToList();
-            var misconceptionSources = await db.ClaimSources.AsNoTracking()
-                .Where(s => misconceptionIds.Contains(s.ClaimId))
-                .Join(db.Sources, cs => cs.SourceId, s => s.Id,
-                    (cs, s) => new { cs.ClaimId, s.Name, cs.Url, cs.QuoteExcerpt })
-                .ToListAsync(ct);
-            askMisconceptions.AddRange(misconceptions.Select(m => new AskMisconception(
-                m.TopicType, m.TopicRef, m.Statement, m.StatusReason!,
-                ClaimRetrieval.RebuttalSection(m.StatusReason!),
-                [.. misconceptionSources.Where(s => s.ClaimId == m.Id)
-                    .Select(s => new AskMisconceptionSource(s.Name, s.Url, s.QuoteExcerpt))])));
-        }
+        claimTraceRefs.AddRange(misconceptionRefs);
 
         // Alle retrieval-kanalen (incl. citatie-hydratie) zijn nu klaar (#152).
         retrievalMs = sw.ElapsedMilliseconds - retrievalStart;
@@ -710,11 +672,14 @@ public class AskService(
                 SourceBias = sourceBias,
                 MentionsCard = mentionsCard,
                 MechanicMatches = string.Join(", ", cardContext.Mechanics),
-                // Degradatie-kanttekening (#100): de beheerder moet in de
-                // trace kunnen zien dat een antwoord zonder vector-kanalen
-                // tot stand kwam (bewust zonder migratie — geen eigen kolom).
+                // Degradatie-kanttekeningen (#100/#152): de beheerder moet in
+                // de trace kunnen zien dat een antwoord zonder vector-kanalen
+                // of met uitgevallen kanalen tot stand kwam (bewust zonder
+                // migratie — geen eigen kolom; de reden staat in de logs).
                 Sections = (qv is null
                         ? "[embedding-uitval: vector-kanalen overgeslagen] " : "")
+                    + (failedChannels.Count > 0
+                        ? $"[kanaal-uitval: {string.Join(", ", failedChannels)}] " : "")
                     + string.Join(", ", citations
                         .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
                 ContextCards = string.Join(", ", cardContext.CardNames),
@@ -822,6 +787,73 @@ public class AskService(
         a is null ? b : b is null ? a
             : new AiUsage(a.InputTokens + b.InputTokens, a.OutputTokens + b.OutputTokens);
 
+    /// <summary>Uitkomst van één retrieval-kanaal (#152): het resultaat plus —
+    /// bij uitval — de kanaalnaam voor de degradatie-marker in de trace.
+    /// Kanalen gooien nooit (behalve echte client-annulering): één haperend
+    /// kanaal betekent dat kanaal leeg, nooit een 500.</summary>
+    private sealed record ChannelResult<T>(T Value, string? Failure);
+
+    /// <summary>Eén lees-kanaal met eigen context (#152): mét factory een
+    /// verse context per kanaal (zo kunnen kanalen concurrent draaien —
+    /// DbContext is niet thread-safe), zonder factory de scoped context.</summary>
+    private async Task<T> WithChannelDbAsync<T>(
+        Func<RbRulesDbContext, Task<T>> query, CancellationToken ct)
+    {
+        if (dbFactory is null) return await query(db);
+        await using var ctx = await dbFactory.CreateDbContextAsync(ct);
+        return await query(ctx);
+    }
+
+    /// <summary>Kanaal-degradatie (#152): uitval van één kanaal levert de
+    /// fallback plus de kanaalnaam (voor de trace-marker); details staan in
+    /// de logs. Echte client-annulering bubbelt wél door.</summary>
+    private async Task<ChannelResult<T>> ChannelAsync<T>(
+        string name, T fallback, Func<Task<T>> run, CancellationToken ct)
+    {
+        try
+        {
+            return new(await run(), null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "retrieval-kanaal '{Kanaal}' uitgevallen — kanaal leeg, de vraag draait door",
+                name);
+            return new(fallback, name);
+        }
+    }
+
+    /// <summary>Kanaal dat zelf een context nodig heeft: combinatie van
+    /// <see cref="ChannelAsync{T}"/> en <see cref="WithChannelDbAsync{T}"/>.</summary>
+    private Task<ChannelResult<T>> DbChannelAsync<T>(
+        string name, T fallback, Func<RbRulesDbContext, Task<T>> query, CancellationToken ct) =>
+        ChannelAsync(name, fallback, () => WithChannelDbAsync(query, ct), ct);
+
+    /// <summary>Start één retrieval-kanaal (#152): mét factory draait het
+    /// kanaal écht concurrent (de taak loopt door terwijl de aanroeper de
+    /// volgende start); zonder factory draait het hier inline af — zonder
+    /// eigen contexten is er geen veilig parallellisme, en de tests op EF
+    /// InMemory delen één context. De aanroeper await't de teruggegeven taak
+    /// op het vaste slot; de volgorde van resultaten is in beide standen
+    /// identiek.</summary>
+    private async Task<Task<ChannelResult<T>>> StartChannelAsync<T>(
+        string name, T fallback, Func<Task<T>> run, CancellationToken ct)
+    {
+        var task = ChannelAsync(name, fallback, run, ct);
+        if (dbFactory is null) await task;
+        return task;
+    }
+
+    /// <summary>Start-variant voor kanalen die alleen een context nodig
+    /// hebben.</summary>
+    private Task<Task<ChannelResult<T>>> StartDbChannelAsync<T>(
+        string name, T fallback, Func<RbRulesDbContext, Task<T>> query, CancellationToken ct) =>
+        StartChannelAsync(name, fallback, () => WithChannelDbAsync(query, ct), ct);
+
     /// <summary>De query-rewrite-call (#66) als taak, zodat hij kan overlappen
     /// met de rewrite-onafhankelijke kanalen (#152). Uitval of onzin-output is
     /// het bestaande degradatiepad: Rewrite null, zoeken met de rauwe tekst.
@@ -861,24 +893,181 @@ public class AskService(
         }
     }
 
-    /// <summary>Full-text-kanaal (Engels — de bronnen zijn Engels; de rewrite
-    /// levert een Engelse zoekzin, dus die matcht hier beter dan NL). Virtual
-    /// als test-seam (#100): de tsvector-functies vertalen alleen naar
-    /// Postgres, dus de degradatie-regressietest op EF InMemory vervangt dit
-    /// kanaal door een simpele tekst-match.</summary>
-    protected virtual async Task<List<(long Id, string SourceId)>> FullTextChunksAsync(
-        string searchText, CancellationToken ct)
+    /// <summary>Regels-vector-kanaal: nearest-neighbour per query-embedding —
+    /// één ranked list per query voor de RRF-fusie (#152: per query een eigen
+    /// kanaal, dus concurrent zodra er een factory is).</summary>
+    private static async Task<List<(long Id, string SourceId)>> RuleChunkHitsAsync(
+        RbRulesDbContext ctx, Vector vec, CancellationToken ct)
     {
-        var hits = await db.RuleChunks
-            .Where(c => EF.Functions.ToTsVector("english", c.Text)
-                .Matches(EF.Functions.PlainToTsQuery("english", searchText)))
-            .OrderByDescending(c => EF.Functions.ToTsVector("english", c.Text)
-                .Rank(EF.Functions.PlainToTsQuery("english", searchText)))
+        var hits = await ctx.RuleChunks.AsNoTracking()
+            .Where(c => c.Embedding != null)
+            .OrderBy(c => c.Embedding!.CosineDistance(vec))
             .Take(TopK * 2)
             .Select(c => new { c.Id, c.SourceId })
             .ToListAsync(ct);
         return [.. hits.Select(h => (h.Id, h.SourceId))];
     }
+
+    /// <summary>Spelbegrip-primer (kennislaag 1, #49): goedgekeurde
+    /// concept-docs die semantisch bij de vraag passen — geeft het model de
+    /// flow van het spel, niet alleen losse §'s. Puur vector-gedreven, dus
+    /// zonder query-vector (embedding-uitval, #100) vervalt dit kanaal.</summary>
+    private static async Task<(List<string> Titles, string Block, bool Relevant)>
+        PrimerChannelAsync(RbRulesDbContext ctx, Vector? qv, CancellationToken ct)
+    {
+        if (qv is null) return ([], "", false);
+        // Distance gaat mee voor het lege-retrieval-signaal (#107): de
+        // top-3 zelf is een kale nearest-neighbour (altijd gevuld zodra
+        // er één approved doc bestaat) en zegt dus niets over relevantie.
+        var primerDocs = await ctx.KnowledgeDocs.AsNoTracking()
+            .Where(k => k.Kind == "primer" && k.Status == "approved" && k.Embedding != null)
+            .OrderBy(k => k.Embedding!.CosineDistance(qv))
+            .Take(3)
+            .Select(k => new { k.Title, k.Body, Distance = k.Embedding!.CosineDistance(qv) })
+            .ToListAsync(ct);
+        // Zelfde afstandsplafond als de claims-retrieval (#51): daarboven
+        // is een buur wel "dichtstbijzijnd" maar niet aantoonbaar relevant.
+        var relevant = primerDocs.Any(p => p.Distance <= ClaimRetrieval.MaxDistance);
+        var block = primerDocs.Count == 0
+            ? ""
+            : "\n\nSPELBEGRIP (achtergrond, gedistilleerd uit de officiële regels; " +
+              "de regels zelf blijven normatief):\n" +
+              string.Join("\n\n", primerDocs.Select(p => $"[{p.Title}]\n{p.Body}"));
+        return ([.. primerDocs.Select(p => p.Title)], block, relevant);
+    }
+
+    /// <summary>Geverifieerde rulings (self-learning override-laag) —
+    /// semantisch gematcht op de vraag; zonder embedding (van de rulings óf
+    /// van de vraag zelf, #100) vallen we terug op de recentste.</summary>
+    private static async Task<List<string>> RulingsChannelAsync(
+        RbRulesDbContext ctx, Vector? qv, CancellationToken ct)
+    {
+        var rulings = new List<string>();
+        if (qv is not null)
+            rulings = await ctx.Corrections.AsNoTracking()
+                .Where(c => c.Status == "verified" && c.Embedding != null)
+                .OrderBy(c => c.Embedding!.CosineDistance(qv))
+                .Take(3)
+                .Select(c => c.Text)
+                .ToListAsync(ct);
+        if (rulings.Count == 0)
+            rulings = await ctx.Corrections.AsNoTracking()
+                .Where(c => c.Status == "verified")
+                .OrderByDescending(c => c.VerifiedAt)
+                .Take(3)
+                .Select(c => c.Text)
+                .ToListAsync(ct);
+        return rulings;
+    }
+
+    /// <summary>Community-claims (kennislaag 2, #51): door de beheerder
+    /// geaccepteerde claims, semantisch bij de vraag — een eigen, expliciet
+    /// gelabeld kanaal, strikt gescheiden van de officiële lagen. Het
+    /// router-gewicht bepaalt hoeveel er meegaan (ruling: weinig;
+    /// lijst-/meta-vraag: meer). De afstand wordt bewust in-memory gecapt
+    /// (bewezen vertaalbaar patroon, zie ClaimMiningService). Puur
+    /// vector-gedreven, dus zonder query-vector (#100) vervalt dit kanaal.</summary>
+    private static async Task<(string Block, List<string> Refs, List<AskClaim> Claims)>
+        ClaimsChannelAsync(RbRulesDbContext ctx, Vector? qv, QuestionType type, CancellationToken ct)
+    {
+        if (qv is null) return ("", [], []);
+        var claimHits = await ctx.Claims.AsNoTracking()
+            .Where(c => c.Status == "accepted" && c.Embedding != null)
+            .OrderBy(c => c.Embedding!.CosineDistance(qv))
+            .Take(ClaimRetrieval.TakeFor(type))
+            .Select(c => new
+            {
+                c.Id, c.TopicType, c.TopicRef, c.Statement,
+                c.Corroboration, c.TrustScore, c.OfficialStatus,
+                Distance = c.Embedding!.CosineDistance(qv),
+            })
+            .ToListAsync(ct);
+        var retrievedClaims = claimHits
+            .Where(c => c.Distance <= ClaimRetrieval.MaxDistance)
+            .ToList();
+        var block = ClaimRetrieval.PromptBlock([.. retrievedClaims.Select(c =>
+            new RetrievedClaim(c.TopicType, c.TopicRef, c.Statement,
+                c.Corroboration, c.TrustScore, c.OfficialStatus))]);
+        List<string> refs = [.. retrievedClaims.Select(c => $"{c.TopicType}:{c.TopicRef}")];
+
+        // Bronnen per claim voor het uitklapbare "Community-consensus"-blok in
+        // het antwoord (#51) — registernaam erbij voor leesbaarheid.
+        var askClaims = new List<AskClaim>();
+        if (retrievedClaims.Count > 0)
+        {
+            var claimIds = retrievedClaims.Select(c => c.Id).ToList();
+            var claimSources = await ctx.ClaimSources.AsNoTracking()
+                .Where(s => claimIds.Contains(s.ClaimId))
+                .Join(ctx.Sources, cs => cs.SourceId, s => s.Id,
+                    (cs, s) => new { cs.ClaimId, s.Name, cs.Url })
+                .ToListAsync(ct);
+            askClaims.AddRange(retrievedClaims.Select(c => new AskClaim(
+                c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
+                c.TrustScore, c.OfficialStatus,
+                [.. claimSources.Where(s => s.ClaimId == c.Id)
+                    .Select(s => new AskClaimSource(s.Name, s.Url))])));
+        }
+        return (block, refs, askClaims);
+    }
+
+    /// <summary>Misvattingen-kanaal (#125): rejected/superseded claims mét
+    /// weerlegging (StatusReason; de verwerp-notities van #124 komen hier
+    /// later bij) zijn negatieve kennis — "zo zit het dus níet". Zelfde
+    /// afstands-plafond als 5b, eigen cap en eigen label; de poort
+    /// (ClaimRetrieval.SelectMisconceptions) is puur en getest, de query een
+    /// virtual voorselectie (test-seam, zie MisconceptionCandidatesAsync) die
+    /// zijn eigen kanaal-context beheert.</summary>
+    private async Task<(string Block, List<string> Refs, List<AskMisconception> Items)>
+        MisconceptionChannelAsync(Vector? qv, CancellationToken ct)
+    {
+        var misconceptions = ClaimRetrieval.SelectMisconceptions(
+            await MisconceptionCandidatesAsync(qv, ct));
+        var block = ClaimRetrieval.MisconceptionBlock(
+            [.. misconceptions.Select(m => new RetrievedMisconception(
+                m.TopicType, m.TopicRef, m.Statement, m.StatusReason!))]);
+        List<string> refs = [.. misconceptions.Select(m =>
+            $"misvatting:{m.TopicType}:{m.TopicRef}")];
+        var items = new List<AskMisconception>();
+        if (misconceptions.Count > 0)
+        {
+            // Beide bewijzen voor het misvatting-blok in de UI: het
+            // community-citaat (bron + quote) én de officiële weerlegging.
+            var misconceptionIds = misconceptions.Select(m => m.Id).ToList();
+            var misconceptionSources = await WithChannelDbAsync(ctx =>
+                ctx.ClaimSources.AsNoTracking()
+                    .Where(s => misconceptionIds.Contains(s.ClaimId))
+                    .Join(ctx.Sources, cs => cs.SourceId, s => s.Id,
+                        (cs, s) => new { cs.ClaimId, s.Name, cs.Url, cs.QuoteExcerpt })
+                    .ToListAsync(ct), ct);
+            items.AddRange(misconceptions.Select(m => new AskMisconception(
+                m.TopicType, m.TopicRef, m.Statement, m.StatusReason!,
+                ClaimRetrieval.RebuttalSection(m.StatusReason!),
+                [.. misconceptionSources.Where(s => s.ClaimId == m.Id)
+                    .Select(s => new AskMisconceptionSource(s.Name, s.Url, s.QuoteExcerpt))])));
+        }
+        return (block, refs, items);
+    }
+
+    /// <summary>Full-text-kanaal (Engels — de bronnen zijn Engels; de rewrite
+    /// levert een Engelse zoekzin, dus die matcht hier beter dan NL). Virtual
+    /// als test-seam (#100): de tsvector-functies vertalen alleen naar
+    /// Postgres, dus de degradatie-regressietest op EF InMemory vervangt dit
+    /// kanaal door een simpele tekst-match. Beheert zijn eigen kanaal-context
+    /// (#152): met factory een verse context, anders de scoped.</summary>
+    protected virtual Task<List<(long Id, string SourceId)>> FullTextChunksAsync(
+        string searchText, CancellationToken ct) =>
+        WithChannelDbAsync(async ctx =>
+        {
+            var hits = await ctx.RuleChunks.AsNoTracking()
+                .Where(c => EF.Functions.ToTsVector("english", c.Text)
+                    .Matches(EF.Functions.PlainToTsQuery("english", searchText)))
+                .OrderByDescending(c => EF.Functions.ToTsVector("english", c.Text)
+                    .Rank(EF.Functions.PlainToTsQuery("english", searchText)))
+                .Take(TopK * 2)
+                .Select(c => new { c.Id, c.SourceId })
+                .ToListAsync(ct);
+            return hits.Select(h => (h.Id, h.SourceId)).ToList();
+        }, ct);
 
     /// <summary>Nearest-neighbour-voorselectie voor het misvattingen-kanaal
     /// (#125): rejected/superseded claims mét weerlegging, op afstand van de
@@ -886,33 +1075,40 @@ public class AskService(
     /// ClaimRetrieval.SelectMisconceptions — puur en getest; die draait ook
     /// over wat deze query aanlevert. Virtual als test-seam: CosineDistance
     /// vertaalt alleen naar Postgres (zelfde reden als FullTextChunksAsync).
-    /// Zonder query-vector (embedding-uitval, #100) vervalt het kanaal.</summary>
-    protected virtual async Task<List<MisconceptionCandidate>> MisconceptionCandidatesAsync(
+    /// Beheert zijn eigen kanaal-context (#152). Zonder query-vector
+    /// (embedding-uitval, #100) vervalt het kanaal.</summary>
+    protected virtual Task<List<MisconceptionCandidate>> MisconceptionCandidatesAsync(
         Vector? qv, CancellationToken ct)
     {
-        if (qv is null) return [];
-        var rows = await db.Claims.AsNoTracking()
-            .Where(c => (c.Status == "rejected" || c.Status == "superseded")
-                && c.StatusReason != null && c.StatusReason != ""
-                && c.Embedding != null)
-            .OrderBy(c => c.Embedding!.CosineDistance(qv))
-            .Take(ClaimRetrieval.MisconceptionCap)
-            .Select(c => new
-            {
-                c.Id, c.TopicType, c.TopicRef, c.Statement, c.Status, c.StatusReason,
-                Distance = c.Embedding!.CosineDistance(qv),
-            })
-            .ToListAsync(ct);
-        return [.. rows.Select(r => new MisconceptionCandidate(
-            r.Id, r.TopicType, r.TopicRef, r.Statement, r.Status, r.StatusReason, r.Distance))];
+        if (qv is null) return Task.FromResult(new List<MisconceptionCandidate>());
+        return WithChannelDbAsync(async ctx =>
+        {
+            var rows = await ctx.Claims.AsNoTracking()
+                .Where(c => (c.Status == "rejected" || c.Status == "superseded")
+                    && c.StatusReason != null && c.StatusReason != ""
+                    && c.Embedding != null)
+                .OrderBy(c => c.Embedding!.CosineDistance(qv))
+                .Take(ClaimRetrieval.MisconceptionCap)
+                .Select(c => new
+                {
+                    c.Id, c.TopicType, c.TopicRef, c.Statement, c.Status, c.StatusReason,
+                    Distance = c.Embedding!.CosineDistance(qv),
+                })
+                .ToListAsync(ct);
+            return rows.Select(r => new MisconceptionCandidate(
+                    r.Id, r.TopicType, r.TopicRef, r.Statement, r.Status, r.StatusReason,
+                    r.Distance))
+                .ToList();
+        }, ct);
     }
 
     /// <summary>Canonieke kaarten waarvan de naam letterlijk in de (lowercase)
     /// tekst voorkomt — naam-match in SQL (#43), en het predicaat op één plek
     /// (#44: stond drie keer in deze service). Namen korter dan 4 tekens
-    /// matchen niet ("Ax" zou overal in triggeren).</summary>
-    private IQueryable<Card> CardsNamedIn(string lowerText) =>
-        db.Cards.AsNoTracking()
+    /// matchen niet ("Ax" zou overal in triggeren). Neemt de kanaal-context
+    /// (#152): de aanroepende kanalen draaien elk op hun eigen context.</summary>
+    private static IQueryable<Card> CardsNamedIn(RbRulesDbContext ctx, string lowerText) =>
+        ctx.Cards.AsNoTracking()
             .Where(c => c.VariantOf == null && c.Name.Length >= 4 &&
                         lowerText.Contains(c.Name.ToLower()));
 
@@ -957,11 +1153,13 @@ public class AskService(
         }
     }
 
+    /// <summary>Betrokken kaarten ná het antwoord — draait sequentieel op de
+    /// scoped context (alle kanalen zijn dan al geïnd).</summary>
     private async Task<List<AskCard>> MatchCardsAsync(string lowerText, CancellationToken ct)
     {
         // Ban-status per variantgroep (#44); zonder embedding-vectoren —
         // de kaart-uitklap toont feiten (#43).
-        var cards = await CardsNamedIn(lowerText)
+        var cards = await CardsNamedIn(db, lowerText)
             .Take(6)
             .WithoutEmbedding()
             .ToListAsync(ct);
@@ -970,7 +1168,7 @@ public class AskService(
         var banned = await BanLookup.BannedCanonicalIdsAsync(db, ct);
         // Set-legaliteit (#68): de kaartwidget labelt kaarten uit een nog
         // niet verschenen set als "nog niet legaal".
-        var setDates = await SetDatesAsync(ct);
+        var setDates = await SetDatesAsync(db, ct);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         return [.. cards.Select(c =>
         {
@@ -985,8 +1183,9 @@ public class AskService(
 
     /// <summary>Releasedatum per set (handvol rijen) — voor de legaliteits-
     /// status in kaartfeiten en kaart-widgets (#22/#68).</summary>
-    private Task<Dictionary<string, DateOnly?>> SetDatesAsync(CancellationToken ct) =>
-        db.CardSets.AsNoTracking().ToDictionaryAsync(s => s.SetId, s => s.PublishedOn, ct);
+    private static Task<Dictionary<string, DateOnly?>> SetDatesAsync(
+        RbRulesDbContext ctx, CancellationToken ct) =>
+        ctx.CardSets.AsNoTracking().ToDictionaryAsync(s => s.SetId, s => s.PublishedOn, ct);
 
     /// <summary>LexicalEvidence (#107): had minstens één níet-semantisch
     /// kanaal (kaartnaam, mechaniek-keyword of lexicale tekst-match) een hit?
@@ -1009,14 +1208,14 @@ public class AskService(
     /// afkap-melding richting de prompt ("eerste N van M"). Zonder
     /// query-vector (embedding-uitval, #100) vervalt alleen het semantische
     /// kanaal — naam, mechaniek en lexicaal blijven werken.</summary>
-    private async Task<CardContextResult> CardContextAsync(
-        string question, string qLower, Vector? qv, QuestionType type,
-        QueryRewrite? rewrite, CancellationToken ct)
+    private static async Task<CardContextResult> CardContextAsync(
+        RbRulesDbContext ctx, string question, string qLower, Vector? qv,
+        QuestionType type, QueryRewrite? rewrite, CancellationToken ct)
     {
         var isList = type == QuestionType.Lijst;
 
         // 1. Exacte naam-matches, in SQL (#43).
-        var nameHits = await CardsNamedIn(qLower)
+        var nameHits = await CardsNamedIn(ctx, qLower)
             .Take(3)
             .Select(c => c.RiftboundId)
             .ToListAsync(ct);
@@ -1026,7 +1225,7 @@ public class AskService(
         var mechanicCorpus = rewrite is null
             ? question
             : $"{question}\n{rewrite.NormalizedQuestion}\n{string.Join('\n', rewrite.SearchQueries)}";
-        var allMechanics = (await db.Cards
+        var allMechanics = (await ctx.Cards.AsNoTracking()
                 .Where(c => c.Mechanics != null && c.VariantOf == null)
                 .Select(c => c.Mechanics!)
                 .ToListAsync(ct))
@@ -1043,9 +1242,9 @@ public class AskService(
         var mechanicCardIds = new List<string>();
         foreach (var m in matchedMechanics)
         {
-            var count = await db.Cards.CountAsync(
+            var count = await ctx.Cards.CountAsync(
                 c => c.VariantOf == null && c.Mechanics != null && c.Mechanics.Contains(m), ct);
-            var examples = await db.Cards
+            var examples = await ctx.Cards.AsNoTracking()
                 .Where(c => c.VariantOf == null && c.Mechanics != null && c.Mechanics.Contains(m))
                 .OrderBy(c => c.RiftboundId)
                 .Take(isList ? ListCardLimit : 4)
@@ -1066,7 +1265,7 @@ public class AskService(
             foreach (var term in rewrite.LexicalTerms)
             {
                 var pattern = "%" + EscapeLike(term) + "%";
-                var idsForTerm = await db.Cards
+                var idsForTerm = await ctx.Cards.AsNoTracking()
                     .Where(c => c.VariantOf == null && c.TextPlain != null &&
                                 EF.Functions.ILike(c.TextPlain!, pattern, "\\"))
                     .Select(c => c.RiftboundId)
@@ -1085,7 +1284,7 @@ public class AskService(
         // Zonder query-vector (#100) vervalt dit kanaal.
         var semanticIds = new List<string>();
         if (qv is not null)
-            semanticIds = await db.Cards
+            semanticIds = await ctx.Cards.AsNoTracking()
                 .Where(c => c.Embedding != null && c.VariantOf == null)
                 .OrderBy(c => c.Embedding!.CosineDistance(qv))
                 .Take(isList ? 12 : 4)
@@ -1113,12 +1312,12 @@ public class AskService(
                     $"{lexicalIds.Count} gevonden kaarten zijn.");
         }
 
-        var cards = await FetchPromptCardsAsync(ids, ct);
-        var banned = await BanLookup.BannedCanonicalIdsAsync(db, ct);
+        var cards = await FetchPromptCardsAsync(ctx, ids, ct);
+        var banned = await BanLookup.BannedCanonicalIdsAsync(ctx, ct);
 
         // Set-legaliteit (#68): kaarten uit een nog niet verschenen set krijgen
         // een expliciet "NOG NIET LEGAAL"-feit mee als bewijs voor het model.
-        var setDates = await SetDatesAsync(ct);
+        var setDates = await SetDatesAsync(ctx, ct);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         var cardsById = cards.ToDictionary(c => c.RiftboundId);
@@ -1149,9 +1348,10 @@ public class AskService(
 
     /// <summary>Kaarten voor de prompt, geprojecteerd zónder embedding —
     /// 1024 floats × tot 40 kaarten hoort niet over de lijn (#67).</summary>
-    private async Task<List<Card>> FetchPromptCardsAsync(List<string> ids, CancellationToken ct)
+    private static async Task<List<Card>> FetchPromptCardsAsync(
+        RbRulesDbContext ctx, List<string> ids, CancellationToken ct)
     {
-        var rows = await db.Cards.AsNoTracking()
+        var rows = await ctx.Cards.AsNoTracking()
             .Where(c => ids.Contains(c.RiftboundId))
             .Select(c => new
             {

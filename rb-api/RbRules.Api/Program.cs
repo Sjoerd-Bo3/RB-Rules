@@ -13,7 +13,13 @@ var connectionString = builder.Configuration.GetConnectionString("Postgres")
     ?? Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? "Host=localhost;Database=rbrules;Username=rbrules;Password=rbrules";
 
-builder.Services.AddDbContext<RbRulesDbContext>(o => o
+// AddDbContextFactory registreert beide koppelvlakken (#152): de singleton
+// IDbContextFactory<RbRulesDbContext> waarmee AskService zijn retrieval-
+// kanalen elk op een eigen context concurrent draait (DbContext is niet
+// thread-safe), én RbRulesDbContext zelf als scoped service — migraties bij
+// opstart en alle bestaande services blijven dus ongewijzigd op de scoped
+// context werken.
+builder.Services.AddDbContextFactory<RbRulesDbContext>(o => o
     .UseNpgsql(connectionString, npgsql => npgsql.UseVector())
     .UseSnakeCaseNamingConvention());
 
