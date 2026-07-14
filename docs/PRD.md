@@ -145,6 +145,28 @@ apart in §6.
   zijn "waar besloten"-bronverwijzing (URL of vrije citatie, #166), ook in het
   kaart-dossier en de reviewqueue.
   *Route* `/rulings` · *endpoint* `/api/rulings`.
+- **FAQ-/clarificatie-concept-extractie** (#177) — een FAQ-/clarificatie-
+  artikel (bv. de Unleashed Rules FAQ) wordt door de gewone scan-pipeline
+  geknipt en geëmbed als vaste-lengte-slabs die meerdere losse
+  verduidelijkingen mengen; één embedding over zo'n slab slaat de betekenis
+  plat, dus een gerichte vraag ("Legion = finalize an item on the chain")
+  haalt het chunk niet boven. Herkenning via een naam-/URL-heuristiek
+  (`ClarificationSources.IsMatch`, geen migratie nodig — Source draagt Url/
+  Name al) op officiële (TrustTier 1) bronnen; job "clarify" destilleert er
+  via rb-ai discrete concepten uit (onderwerp + gefocuste verduidelijking +
+  evt. §-verwijzing + citaat) en slaat elk direct op als geverifieerde ruling
+  met een eigen, gefocuste embedding (alleen de verduidelijking, niet de hele
+  slab) — zo komt het item wél boven bij een gerichte vraag, in `/ask`,
+  `/rulings` en (bij een kaart-onderwerp) het kaartdossier. Werkt met
+  terugwerkende kracht: geen tijdvenster op de bronselectie, dus ook
+  al-geïngeste FAQ-artikelen van vóór deze feature worden bij de eerste run
+  meegenomen. Idempotent op documentniveau (`Document.ClarifiedAt`, #92/#93-
+  patroon) én per item (exacte bron+onderwerp+tekst-toets); de eerste scan
+  van zo'n bron krijgt ook meteen een sjabloon-`Change` (type
+  "clarification") zodat de aankomst zelf al in de wijzigingen-feed
+  verschijnt (er is dan nog geen vorige versie om te diffen). *Job* `clarify`
+  (handmatig of nachtelijk via `ScanScheduler`) · *endpoint*
+  `/api/admin/jobs/clarify`.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed
   en gekoppeld aan kaarten. *Endpoint* `/api/bans`.
 - **Bron-feeds** (#167) — index-pagina's (playriftbound.com/en-us/news/…) die
@@ -359,6 +381,12 @@ apart in §6.
   bron-trust, corroboratie (aantal onafhankelijke bronnen) en een officiële
   toets; geaccepteerde claims doen mee als eigen "Community-consensus"-kanaal in
   `/ask`.
+- **FAQ-/clarificatie-concept-extractie** (#177, zie ook §4.1) — anders dan de
+  claims-pipeline is de bron hier per definitie officieel: elk geëxtraheerd
+  concept wordt direct een `verified` ruling (geen corroboratie/officiële-
+  toets nodig), met onderwerp-anker (mechanic/rule_section/card/concept) en
+  een gefocuste embedding zodat de losse verduidelijking — niet de hele
+  FAQ-slab — semantisch vindbaar is.
 - **Evolutie-raamwerk** — set-release-keten, groeiend mechaniek-vocabulaire
   (keyword-kandidaten → reviewqueue → re-mine) en een kennis-gaten-rapport dat
   meet waar de bank aantoonbaar niets weet.
@@ -397,13 +425,20 @@ apart in §6.
   review-notitie-promotie (#124); pas na beheerder-goedkeuring (het bestaande
   verify-pad) telt het mee. Anoniem wordt bij dit pad geweigerd (401) — geen
   invoer zonder identiteit. Dit is de anti-vergiftigingsgrens uit
-  docs/KNOWLEDGE.md in code.
+  docs/KNOWLEDGE.md in code. Sinds #177 bestaat er een derde, niet-menselijke
+  route: `ClarificationMiningService` schrijft ook rechtstreeks `verified`,
+  maar uitsluitend voor concepten uit een bron die het bronnenregister zelf al
+  als TrustTier 1 (officieel) classificeert — geen extra menselijke stap, net
+  zoals `BanErrataSyncService` bans/errata al zonder reviewstap uit trust-1
+  bronnen structureert. De poort blijft dus het bronnenregister (wie een bron
+  trust 1 mag maken is wél een beheerdersbeslissing), niet een nieuwe
+  uitzondering op de anti-vergiftigingsgrens.
 
 ### 4.5 Beheer (`/admin`)
 
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
   (scan, feeds, cards, embed, mine, rules, bans, graph, primer, interactions,
-  scout, classify, claims, relations, setrelease, decks, benchmark,
+  scout, classify, claims, clarify, relations, setrelease, decks, benchmark,
   benchmarksweep) draaien via `JobRunner` met live-voortgang en run_log.
   *Route* `/admin` · *endpoints* `/api/admin/jobs/{name}`,
   `/api/admin/status`, `/api/admin/logs`.
