@@ -13,6 +13,11 @@ export interface Section {
 	parents: { code: string; text: string }[];
 	prev: string | null;
 	next: string | null;
+	/** Temporele precedentie (#168): "laatst bijgewerkt" (een echte
+	 *  content-wijziging) of anders "geldig sinds" (publicatiedatum) —
+	 *  beide null als de bron geen van beide draagt. */
+	sourcePublishedAt: string | null;
+	sourceUpdatedAt: string | null;
 }
 
 // Sectie-dossier (#127): de levende geschiedenis van een regel.

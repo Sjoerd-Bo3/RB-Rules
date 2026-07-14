@@ -259,6 +259,12 @@ public class IngestService(
                     Meaning = cls?.Meaning,
                     Diff = diff,
                 });
+                // Temporele precedentie (#168): dit is het beste signaal dat
+                // we hebben voor "wanneer is de bron zelf gewijzigd" — de
+                // officiële pagina publiceert zelf geen aparte update-datum,
+                // dus het detectiemoment is de benadering (zelfde aanname als
+                // Change.DetectedAt elders in deze pipeline).
+                src.UpdatedAt = DateTimeOffset.UtcNow;
             }
 
             src.LastHash = hash;

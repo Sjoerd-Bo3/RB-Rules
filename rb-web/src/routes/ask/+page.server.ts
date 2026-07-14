@@ -96,6 +96,11 @@ interface Citation {
 	pdfUrl: string | null;
 	page: number | null;
 	parents: { code: string; text: string }[] | null;
+	/** Temporele precedentie (#168): "laatst bijgewerkt" (een echte
+	 *  content-wijziging) of anders "geldig sinds" (publicatiedatum) —
+	 *  beide null als de bron geen van beide draagt. */
+	publishedAt: string | null;
+	updatedAt: string | null;
 }
 export interface AskCard {
 	riftboundId: string;

@@ -24,6 +24,12 @@
 	interface ErratumItem {
 		id: number; cardName: string; cardRiftboundId: string | null;
 		newText: string; sourceUrl: string; detectedAt: string;
+		/** Temporele precedentie (#168): vanaf wanneer deze tekst gold. */
+		effectiveFrom: string | null;
+		/** Supersede-signaal (#168): gevuld als een andere errata-rij over
+		 *  dezelfde kaart een hogere precedentie heeft — kandidaat-signaal,
+		 *  puur berekend, niets is verwijderd of overschreven. */
+		supersededByErratumId: number | null;
 	}
 	interface InteractionItem {
 		id: number; kind: string; explanation: string; cardAId: string; cardAName: string;
@@ -511,8 +517,16 @@
 					<p class="item-head">
 						{#if e.cardRiftboundId}<a href="/cards/{e.cardRiftboundId}"><strong>{e.cardName}</strong></a>
 						{:else}<strong>{e.cardName}</strong>{/if}
-						<span class="meta">{fmtDate(e.detectedAt)} · <a href={e.sourceUrl}>bron</a></span>
+						<span class="meta">
+							{#if e.effectiveFrom}geldig sinds {fmtDate(e.effectiveFrom)} ·{/if}
+							waargenomen {fmtDate(e.detectedAt)} · <a href={e.sourceUrl}>bron</a>
+						</span>
 					</p>
+					{#if e.supersededByErratumId}
+						<p class="superseded-note">
+							Kandidaat-supersede — mogelijk vervangen door een recentere errata-bron (#{e.supersededByErratumId}); beide blijven zichtbaar, geen automatische wijziging.
+						</p>
+					{/if}
 					<p class="pre">{e.newText}</p>
 				</div>
 			{/each}
@@ -1421,6 +1435,8 @@
 	.item-head { margin: 0 0 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 	.item-head a { color: inherit; }
 	.pre { margin: 0; white-space: pre-wrap; line-height: 1.55; }
+	/* Supersede-kandidaat (#168): signaal, geen alarm — kleur + tekst. */
+	.superseded-note { margin: 0 0 8px; color: var(--warn); font-size: 0.85rem; }
 	/* flex-wrap: op 390px zakt de actiekolom (met notitieveld, #124) onder de
 	   tekst — nooit horizontale overflow. */
 	.corr { display: flex; gap: 14px; flex-wrap: wrap; }

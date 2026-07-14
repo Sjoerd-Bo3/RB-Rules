@@ -8,6 +8,14 @@
 		return parts.map((_, i) => parts.slice(0, i + 1).join('.'));
 	});
 
+	// Temporele precedentie (#168): "laatst bijgewerkt" weegt zwaarder dan
+	// "geldig sinds" — beide null ⇒ geen label (de bron droeg geen van beide).
+	const dateLabel = $derived.by(() => {
+		if (s.sourceUpdatedAt) return `laatst bijgewerkt ${new Date(s.sourceUpdatedAt).toLocaleDateString('nl-NL')}`;
+		if (s.sourcePublishedAt) return `geldig sinds ${new Date(s.sourcePublishedAt).toLocaleDateString('nl-NL')}`;
+		return null;
+	});
+
 	let copied = $state(false);
 	async function copyLink() {
 		try {
@@ -36,6 +44,7 @@
 	</nav>
 
 	<h1>§ {s.code} <span class="src">{s.sourceName}</span></h1>
+	{#if dateLabel}<p class="meta small">{dateLabel}</p>{/if}
 
 	{#if s.parents.length}
 		<!-- Bovenliggende regels als context boven de subregel -->

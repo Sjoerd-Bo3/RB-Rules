@@ -168,6 +168,10 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
                         // match, zelfde pad als de Rules Hub-ontdekking).
                         Parser = "html", Cadence = "weekly", Enabled = true,
                         FeedId = feed.Id,
+                        // Temporele precedentie (#168): de feed levert de
+                        // publicatiedatum van het artikel zelf mee — geen gok,
+                        // een ontbrekende <time>-tag (RiotNewsFeed) laat dit null.
+                        PublishedAt = article.Date,
                     });
                     newSources++;
                 }

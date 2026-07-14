@@ -444,6 +444,15 @@
 	// Community-consensus (#51): alleen http(s)-bronlinks renderen als link.
 	const isHttp = (url: string) => /^https?:\/\//.test(url);
 
+	// Temporele precedentie (#168): "laatst bijgewerkt" (een echte
+	// content-wijziging) weegt zwaarder dan "geldig sinds" (publicatiedatum) —
+	// beide null ⇒ geen label (de bron droeg geen van beide datums).
+	function citationDateLabel(c: { publishedAt: string | null; updatedAt: string | null }): string | null {
+		if (c.updatedAt) return `laatst bijgewerkt ${new Date(c.updatedAt).toLocaleDateString('nl-NL')}`;
+		if (c.publishedAt) return `geldig sinds ${new Date(c.publishedAt).toLocaleDateString('nl-NL')}`;
+		return null;
+	}
+
 	const TYPE_LABELS: Record<string, string> = {
 		Ruling: 'Ruling',
 		Definitie: 'Uitleg',
@@ -622,11 +631,12 @@
 				<h2>Geciteerde regelsecties</h2>
 				{#each form.citations as c (c.n)}
 					{@const essence = citationEssence(c.text)}
+					{@const dateLabel = citationDateLabel(c)}
 					<details class="cite">
 						<summary>
 							<span class="cite-n">[{c.n}]</span>
 							{#if c.section}<strong>§ {c.section}</strong>{/if}
-							<span class="meta">{c.sourceName} · trust {c.trust}</span>
+							<span class="meta">{c.sourceName} · trust {c.trust}{dateLabel ? ` · ${dateLabel}` : ''}</span>
 							{#if essence}<span class="cite-essence">{essence}</span>{/if}
 						</summary>
 						{#if c.parents?.length}
