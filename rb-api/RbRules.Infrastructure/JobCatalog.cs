@@ -25,6 +25,13 @@ public static class JobCatalog
             // een haperende stap (Ollama/LLM even weg) stopt de rest niet.
             new("all", RunAllAsync),
             new("scan", ScanAsync),
+            // Bron-feeds (#167): losse, snelle trigger die alleen de feed-
+            // crawl draait (geen volledige bron-scan) — handig om net
+            // toegevoegde feeds meteen te verifiëren. De reguliere "scan"
+            // hierboven (en dus ook "all") draait de feed-crawl sowieso al
+            // als eerste stap (IngestService.ScanAsync); dit is puur de
+            // korte, geïsoleerde variant.
+            new("feeds", FeedsAsync),
             new("cards", CardsAsync),
             new("embed", EmbedAsync),
             new("mine", MineAsync),
@@ -142,6 +149,16 @@ public static class JobCatalog
             // push is best-effort
         }
         return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
+    }
+
+    private static async Task<string> FeedsAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        // Handmatige/losse trigger: forceer alle enabled feeds ongeacht
+        // cadence (zelfde onlyDue:false-keuze als de "Bronnen scannen"-actie).
+        var r = await sp.GetRequiredService<FeedCrawlService>().RunAsync(
+            onlyDue: false, progress: report, ct: ct);
+        return r.Message;
     }
 
     private static async Task<string> CardsAsync(

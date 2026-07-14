@@ -43,6 +43,10 @@ builder.Services.AddHttpClient<RbAiClient>(c =>
 // IngestService vóór de call (UrlGuard.Check).
 builder.Services.AddHttpClient<IngestService>(c => c.Timeout = TimeSpan.FromSeconds(60))
     .ConfigurePrimaryHttpMessageHandler(SafeExternalHttp.CreateHandler);
+// Bron-feeds (#167): index-pagina's zijn externe invoer, net als de bronnen
+// zelf — zelfde SSRF-gehardde fetch-laag.
+builder.Services.AddHttpClient<FeedCrawlService>(c => c.Timeout = TimeSpan.FromSeconds(60))
+    .ConfigurePrimaryHttpMessageHandler(SafeExternalHttp.CreateHandler);
 // Deck-ingest (#15): praat alleen met piltoverarchive.com (sitemap + publieke
 // deck-pagina's, nooit hun /api/) — zelfde SSRF-gehardde fetch-laag.
 builder.Services.AddHttpClient<DeckIngestService>(c => c.Timeout = TimeSpan.FromSeconds(60))
@@ -230,6 +234,12 @@ if (!app.Environment.IsEnvironment("Testing"))
     var existingBq = await db.BenchmarkQuestions.Select(q => q.ExternalKey).ToHashSetAsync();
     foreach (var q in BenchmarkSeed.Defaults.Where(q => !existingBq.Contains(q.ExternalKey)))
         db.BenchmarkQuestions.Add(q);
+    await db.SaveChangesAsync();
+
+    // Bron-feeds (#167): zelfde seed-alleen-ontbrekende-semantiek.
+    var existingFeeds = await db.SourceFeeds.Select(f => f.Id).ToHashSetAsync();
+    foreach (var feed in SourceFeedSeed.Defaults.Where(f => !existingFeeds.Contains(f.Id)))
+        db.SourceFeeds.Add(feed);
     await db.SaveChangesAsync();
 
     try
