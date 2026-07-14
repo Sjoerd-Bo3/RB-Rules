@@ -63,6 +63,8 @@ builder.Services.AddScoped<AskService>();
 // genormaliseerde vraag. Zonder registratie zou AskService's optionele
 // parameter gewoon null blijven en caching uit staan (patroon dbFactory).
 builder.Services.AddSingleton<RewriteCache>();
+// Eigen ask-geschiedenis (#157): user_id resp. ip_hash van RequestUserContext.
+builder.Services.AddScoped<AskHistoryService>();
 builder.Services.AddScoped<RuleSearchService>();
 builder.Services.AddScoped<PrimerService>();
 builder.Services.AddScoped<BanErrataSyncService>();

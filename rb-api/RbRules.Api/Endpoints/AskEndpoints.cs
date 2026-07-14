@@ -43,6 +43,15 @@ public static class AskEndpoints
                 "application/x-ndjson");
         }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
 
+        // ── Eigen ask-geschiedenis (#157): laatste 20 eigen vragen — de
+        // filter zet zowel User als IpHash op RequestUserContext (ook
+        // anoniem), dus geen route-parameter nodig — en dus geen enumeratie
+        // van andermans historie mogelijk.
+        app.MapGet("/api/ask/history", async (
+            AskHistoryService history, RequestUserContext userContext, CancellationToken ct) =>
+            Results.Ok(await history.RecentAsync(userContext.User?.Id, userContext.IpHash, ct)))
+            .AddEndpointFilter<UserQuotaFilter>();
+
         // Echte duurstatistiek (laatste 100 geslaagde vragen) voor de wachtindicatie.
         app.MapGet("/api/ask/stats", async (RbRulesDbContext db) =>
         {
