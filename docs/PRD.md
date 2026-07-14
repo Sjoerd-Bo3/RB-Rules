@@ -381,8 +381,11 @@ apart in §6.
   hervatting via het run_log-grootboek; her-fetch alleen bij een nieuwere
   sitemap-lastmod. Kaartregels koppelen via de variantgroepering aan onze
   canonieke kaarten (onbekend = zichtbaar signaal); elk deck draagt zijn
-  bron-URL als attributie met deep-link terug. *Route*
-  `/admin/overview/decks` · *endpoint* `/api/admin/overview/decks`.
+  bron-URL als attributie met deep-link terug. Draait ook elke 3 uur
+  automatisch via de scheduler (#15 fase 3, spoor C) — de eenmalige backfill
+  en de daaropvolgende verse/gewijzigde decks komen zo zonder handmatige
+  trigger binnen. *Route* `/admin/overview/decks` · *endpoint*
+  `/api/admin/overview/decks`.
 - **Aanklikbare status-tegels** — elke teller opent een overzichtspagina.
   *Route* `/admin/overview/[kind]` · *endpoints* `/api/admin/overview/{cards,
   rulechunks, bans, errata, interactions, changes, claims, proposals, relations,
@@ -417,9 +420,12 @@ apart in §6.
   de vraag-traces dragen dezelfde attributie als badge ("agentic (gate)" /
   "agentic (gebruiker)"). Quota per account (vragen/foto's/Grondig) zijn in
   het gebruikersoverzicht per rij bij te stellen.
-- **Periodieke zelfverrijking** — relatie-mining nachtelijk en de
-  bronnen-scout wekelijks in de scheduler-tick, met job-gate,
-  run_log-vensters en degradatiepaden (#122).
+- **Periodieke zelfverrijking** — relatie-mining nachtelijk, de
+  bronnen-scout wekelijks en de Piltover-decks-verversing elke 3 uur (#15
+  fase 3, spoor C: de eenmalige ~10k-deck-backfill loopt zo in enkele
+  dagen leeg, daarna houdt dezelfde cadans verse/gewijzigde decks
+  bijgewerkt) in de scheduler-tick, met job-gate, run_log-vensters en
+  degradatiepaden (#122).
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
   er ook als signaalregel op (#171, `SourceDossierCompleteness`), met
@@ -555,14 +561,17 @@ openstaande PR.
   die de stand en volgorde bijhouden (geen productfeature).
 
 **Decks (Piltover-first)**
-- **#15** *(herscoped 2026-07-13; spoor 2 — deck-model + PA-ingest — in-flight
-  op deze branch)* Géén eigen deckbuilder: we spiegelen Piltover Archive met
-  attributie en deep-links terug. Sporen: (1) deck-codes — gemerged (PR
-  #146: C#-port van RiftboundDeckCodes, Apache 2.0, Domain-laag; UI volgt in
-  spoor 3), (2) deck-model + robots-compliant ingest via de PA-sitemap, (3)
-  meta-laag & UI (deck-browser, legaliteitscheck, "populair in N% van recente
-  decks", archetype-signalen als kennispiramide-laag 3). Onderzoek in
-  `docs/ENGINE.md` §5.
+- **#15** *(herscoped 2026-07-13; fase 1+2 live, fase 3 golf 1 in uitvoering)*
+  Géén eigen deckbuilder: we spiegelen Piltover Archive met attributie en
+  deep-links terug. Fase 1 — deck-codes (PR #146: C#-port van
+  RiftboundDeckCodes, Apache 2.0, Domain-laag). Fase 2 — deck-model +
+  robots-compliant PA-ingest (PR #148); backfill van ~10k decks droppelt
+  binnen, nu automatisch via de scheduler (spoor C, elke 3 uur). Fase 3,
+  golf 1 (parallelle sporen): (A) deck-browser + legaliteitscheck, (B)
+  "populair in N% van recente decks" op de kaartpagina, (C) periodieke
+  decks-verversing in de scheduler-tick — deze PR. Golf 2 (ná golf 1): (D)
+  co-occurrence/archetype-signalen als kennispiramide-laag 3 in /ask.
+  Onderzoek in `docs/ENGINE.md` §5.
 
 ---
 
