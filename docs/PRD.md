@@ -432,6 +432,14 @@ apart in §6.
   `ABOUT`-resolutie als Claim (naar Card/Mechanic/RuleSection/Concept) en een
   `SUPPORTED_BY`-edge naar de bron — de brein-API en de graph-verkenner tonen
   een ruling voortaan bij haar onderwerp, niet alleen via semantisch zoeken.
+- **Afgeleide kennis in het Engels** (#187) — de mining-prompts (claims,
+  primer, relatie-`explanation`), de relatie-kind-labels en de
+  claim-toets-redenering (`OfficialCheck`/`ClaimJudge` → de weerleg-/
+  misvattingstekst op `Claim.StatusReason` die `/ask` gebruikt, #125)
+  extraheren/synthetiseren in het Engels, dicht bij de officiële bewoording —
+  geen vertaalstap; UI en `/ask`-antwoorden blijven Nederlands. Een
+  wipe-en-regenereer-job (`regenerateknowledge`, zie §4.5) gooit de bestaande
+  Nederlandse afgeleide laag schoon weg i.p.v. in-place te vertalen.
 - **Graph-verkenner** — interactieve kaart↔mechaniek↔regel-visualisatie.
   *Route* `/graph` · *endpoint* `/api/graph/neighbors`.
 - **Self-learning** — negatieve/positieve feedback → reviewqueue →
@@ -462,9 +470,25 @@ apart in §6.
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
   (scan, feeds, cards, embed, mine, rules, bans, graph, primer, interactions,
   scout, classify, claims, clarify, relations, setrelease, decks, benchmark,
-  benchmarksweep) draaien via `JobRunner` met live-voortgang en run_log.
-  *Route* `/admin` · *endpoints* `/api/admin/jobs/{name}`,
-  `/api/admin/status`, `/api/admin/logs`.
+  benchmarksweep, regenerateknowledge) draaien via `JobRunner` met
+  live-voortgang en run_log. *Route* `/admin` · *endpoints*
+  `/api/admin/jobs/{name}`, `/api/admin/status`, `/api/admin/logs`.
+- **Kennis regenereren (Engels)** (#187) — eigen, zwaar gewaarschuwd
+  admin-paneel (confirm-stap, geen kale "Start"-knop): job
+  `regenerateknowledge` verwijdert de volledige LLM-afgeleide kennislaag
+  (`claim` + embeddings/bewijs, `correction` — ALLE rijen, ook door mensen
+  ingevoerde, `knowledge_doc` met kind="primer", `relation`) en reset de
+  mining-markers (`Document.ClaimsMinedAt`/`ClarifiedAt`) zodat brondocumenten
+  bij de volgende mine/clarify-run opnieuw worden opgepakt. Raakt NOOIT de
+  bron-/mensenwerk-tabellen (`source`, `document`, `rule_chunk`, `card`,
+  `errata`, `ban_entry`, `deck`/`deck_card`) — bewezen met een test die exact
+  die tabellen seedt en na de wipe ongewijzigd telt
+  (`KnowledgeRegenerationServiceTests`). Draait in één transactie, logt
+  aantallen naar run_log, en genereert bewust NIETS automatisch opnieuw — de
+  beheerder start daarna zelf primer → claims → clarify → relations. Bewust
+  géén stap in "Alles bijwerken" en géén automatische trigger: uitsluitend een
+  expliciete, eenmalige beheerdersactie na de deploy die de mining-prompts
+  naar het Engels omzette. *Endpoint* `/api/admin/jobs/regenerateknowledge`.
 - **Bron-feeds beheer** (#167) — feeds zelf toevoegen/bewerken/aan-uitzetten/
   verwijderen, met per feed het aantal ontdekte bronnen en de laatste vangst;
   elke bron toont zijn herkomstfeed (klikbaar terug). *Route*

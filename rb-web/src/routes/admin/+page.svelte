@@ -51,7 +51,15 @@
 		{ name: 'decks', label: 'Decks binnenhalen', hint: 'publieke decks van Piltover Archive via de sitemap (robots-compliant, met bronvermelding); throttled en gecapt per run — een volgende run gaat verder waar het grootboek gebleven is; draait ook elke 3 uur automatisch' },
 		{ name: 'benchmark', label: 'Judge-benchmark draaien', hint: 'de vaste scheidsrechter-vragenset één keer door de /ask-pipeline (standaardmodel); geïsoleerd van de kennisbank — geen trace, metric of relatie-terugkoppeling' },
 		{ name: 'benchmarksweep', label: 'Model-sweep draaien', hint: 'dezelfde vragenset door élk beschikbaar model (AI_BENCHMARK_MODELS), elk 2× — voor een eerlijke score/tijd-vergelijking en een consistentie-check; kostbaar (N modellen × 2 × vragen ask-aanroepen), geschatte omvang verschijnt in het log zodra de job start' },
-		{ name: 'feeds', label: 'Bron-feeds afspeuren', hint: 'nieuwe artikelen op de Riot-nieuwspagina\'s ontdekken; vertrouwde feeds zetten direct een bron, andere een voorstel — draait ook als eerste stap van "Bronnen scannen"' }
+		{ name: 'feeds', label: 'Bron-feeds afspeuren', hint: 'nieuwe artikelen op de Riot-nieuwspagina\'s ontdekken; vertrouwde feeds zetten direct een bron, andere een voorstel — draait ook als eerste stap van "Bronnen scannen"' },
+		// Wipe-mechanisme voor de LLM-afgeleide kennislaag (#187): in JOBS voor
+		// het label/laatste-run-opzoekwerk hierboven, maar expliciet uit de
+		// gewone jobs-grid gefilterd (zie hieronder) — eigen, gewaarschuwd
+		// paneel met een confirm()-stap, geen kale "Start"-knop.
+		{
+			name: 'regenerateknowledge', label: 'Kennis regenereren (Engels)',
+			hint: 'verwijdert ALLE claims, primer-docs, correcties en relaties (de afgeleide/gemínede laag) en reset de mining-markers; genereert daarna NIETS automatisch — draai zelf primer → claims → clarify → relations, in die volgorde'
+		}
 	];
 
 	interface Correction {
@@ -403,7 +411,7 @@
 			</button>
 		</form>
 		<div class="jobs">
-			{#each JOBS.filter((j) => j.name !== 'all') as j (j.name)}
+			{#each JOBS.filter((j) => j.name !== 'all' && j.name !== 'regenerateknowledge') as j (j.name)}
 				<form method="POST" action="?/job" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }} class="job panel">
 					<input type="hidden" name="name" value={j.name} />
 					<div class="job-info">
@@ -417,6 +425,38 @@
 				</form>
 			{/each}
 		</div>
+
+		<!-- Wipe-mechanisme voor de LLM-afgeleide kennislaag (#187): eigen,
+		     zwaar gewaarschuwd paneel — geen kale "Start"-knop zoals de andere
+		     jobs. Onomkeerbaar (verwijdert claims/primer/correcties/relaties),
+		     dus een expliciete confirm()-stap vóór de form daadwerkelijk post. -->
+		<h2>Gevarenzone</h2>
+		<form
+			method="POST" action="?/job"
+			use:enhance={({ cancel }) => {
+				if (!confirm('Dit verwijdert ALLE claims, primer-docs, correcties en relaties (de afgeleide/gemínede kennislaag) definitief en genereert niets automatisch opnieuw. Alleen doen ná een deploy die de mining-prompts naar het Engels heeft omgezet, en niet terwijl er nog een job draait. Doorgaan?')) {
+					cancel();
+					return;
+				}
+				return async ({ update }) => { await update(); await invalidateAll(); };
+			}}
+			class="job panel danger"
+		>
+			<input type="hidden" name="name" value="regenerateknowledge" />
+			<div class="job-info">
+				<strong>Kennis regenereren (Engels)</strong>
+				<span class="hint">
+					Onomkeerbaar: verwijdert alle claims, primer-docs, correcties en relaties, en reset de
+					mining-markers zodat brondocumenten opnieuw gemined worden. Genereert daarna NIETS
+					automatisch — start zelf, in volgorde: Primer genereren → Claims minen →
+					FAQ-concepten minen → Relaties minen.
+				</span>
+				{#if lastRunLabel('regenerateknowledge')}<span class="hint">{lastRunLabel('regenerateknowledge')}</span>{/if}
+			</div>
+			<button disabled={running !== null} class="danger-button">
+				{running?.name === 'regenerateknowledge' ? 'Bezig' : 'Verwijder en her-mine'}
+			</button>
+		</form>
 
 		<!-- Reviewqueue (self-learning) -->
 		{#if openCorrections.length}
@@ -819,6 +859,9 @@
 	.job { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
 	.job-info { flex: 1; display: flex; flex-direction: column; }
 	.job-info .hint { color: var(--muted); font-size: 0.78rem; }
+	/* Gevarenzone (#187): status via kleur + tekst, geen emoji's. */
+	.job.danger { border-color: var(--err); background: var(--err-soft); }
+	.danger-button { background: var(--err); color: var(--accent-ink); }
 	.primer-body { white-space: pre-wrap; margin: 8px 0 2px; line-height: 1.6; }
 	.trace { padding: 10px 14px; margin-bottom: 6px; }
 	.trace summary { cursor: pointer; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }

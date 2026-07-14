@@ -24,11 +24,29 @@ public static partial class RelationMiner
 
     /// <summary>Basis-vocabulaire van relatie-kinds (issue #116); groeit via
     /// geaccepteerde RelationKinds (patroon MechanicMiner.SeedVocabulary).
-    /// Alles genormaliseerd (kleine letters).</summary>
+    /// Alles genormaliseerd (kleine letters).
+    ///
+    /// #187: afgeleide kennis (ook de relatie-kinds) in de brontaal (Engels).
+    /// De vier oude NL-labels (<c>versterkt</c>, <c>wordt beperkt door</c>,
+    /// <c>vereist</c>, <c>verduidelijkt</c>) blijven als <b>legacy</b> achteraan
+    /// staan i.p.v. vervangen te worden. Motivatie: de wipe (#187,
+    /// <see cref="KnowledgeRegenerationService"/>) verwijdert wél álle
+    /// <c>Relation</c>-rijen maar RAAKT de <c>RelationKind</c>-reviewstate NIET
+    /// (dat is beheerder-gereviewde taxonomie, geen mining-output) — precies de
+    /// situatie waarvoor "toevoegen + oude als legacy" de veilige keuze is:
+    /// tussen deploy en de productie-wipe kan nog een <c>Relation</c> met een
+    /// NL-kind bestaan, en die blijft zo geldig en projecteerbaar
+    /// (<see cref="RelationProjection"/>) i.p.v. stil uit de graph te vallen.
+    /// De Engelse varianten staan vooraan en zijn de voorkeur in de prompt
+    /// ("Gebruik bij voorkeur: {KINDS}"), dus geregenereerde relaties gebruiken
+    /// Engelse kinds; de NL-legacy sterft vanzelf uit zodra de laag opnieuw is
+    /// gemined.</summary>
     public static readonly string[] SeedKinds =
     [
-        "counters", "enables", "versterkt", "wordt beperkt door",
-        "vereist", "verduidelijkt",
+        "counters", "enables", "strengthens", "is limited by",
+        "requires", "clarifies",
+        // Legacy (pre-#187) NL-labels — zie de summary hierboven.
+        "versterkt", "wordt beperkt door", "vereist", "verduidelijkt",
     ];
 
     public const string ExtractionSystemPrompt = """
@@ -42,8 +60,9 @@ public static partial class RelationMiner
         - kind: de relatiesoort, kort en herbruikbaar, kleine letters.
           Gebruik bij voorkeur: {KINDS}. Alleen als geen daarvan past mag je
           één nieuw, generiek kind introduceren.
-        - explanation: 1-2 zinnen Nederlands (Engelse speltermen onvertaald)
-          die de relatie onderbouwen vanuit de meegegeven context
+        - explanation: 1-2 zinnen in het Engels (#187: afgeleide kennis in de
+          brontaal, dicht bij de officiële bewoording) die de relatie
+          onderbouwen vanuit de meegegeven context
         - alleen relaties die de context aantoonbaar onderbouwt; geen open
           deuren die de graph al kent (een kaart heeft zijn eigen mechaniek,
           een concept legt zijn eigen secties al uit)

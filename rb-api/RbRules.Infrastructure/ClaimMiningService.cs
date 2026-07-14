@@ -417,7 +417,9 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
         }
 
         return verdict.Verdict == "contradicted"
-            ? ("contradicted", verdict.Reason ?? "de officiële regels spreken deze claim tegen", null)
+            // #187: fallback-reden Engels — dit is de weerleg-/misvattingstekst
+            // die als StatusReason in /ask meegaat (#125), dus afgeleide kennis.
+            ? ("contradicted", verdict.Reason ?? "the official rules contradict this claim", null)
             : (verdict.Verdict, null, null);
     }
 
@@ -458,7 +460,8 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
             if (officialStatus == "contradicted")
             {
                 claim.Status = claim.Status == "accepted" ? "superseded" : "rejected";
-                claim.StatusReason = reason ?? "de officiële regels spreken deze claim tegen";
+                // #187: zie CheckOfficialAsync — Engelse fallback-reden.
+                claim.StatusReason = reason ?? "the official rules contradict this claim";
                 weerlegd++;
             }
             await db.SaveChangesAsync(ct);

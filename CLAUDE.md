@@ -52,7 +52,10 @@ zelfverrijking · platform: PWA + web-push, accounts (magic-link + passkeys)
 met quota en rate-limiting.
 
 ## Werkafspraken met Sjoerd (belangrijk!)
-1. **Nederlands** antwoorden; Engelse speltermen onvertaald.
+1. **Nederlands** antwoorden; Engelse speltermen onvertaald. Geldt voor UI en
+   /ask-antwoorden — **afgeleide/gesynthetiseerde kennis (claims, primer,
+   relatie-uitleg) wordt sinds #187 in de brontaal (Engels) opgeslagen**, dicht
+   bij de officiële bewoording (docs/CONVENTIONS.md).
 2. **Geen emoji's in de UI** — serieus, strak design via de tokens in
    app.css. Status = kleur + tekst.
 3. **Nieuwe wensen tussendoor → eerst een GitHub-issue**, niet direct

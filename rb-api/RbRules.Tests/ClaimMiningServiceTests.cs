@@ -21,13 +21,13 @@ public class ClaimMiningServiceTests
     private const string SourceId = "community-gids";
 
     private const string OneClaimAnswer =
-        """{"claims": [{"topicType": "concept", "topicRef": "mulligan", "statement": "Je mag één keer je starthand omruilen.", "quote": "one mulligan"}]}""";
+        """{"claims": [{"topicType": "concept", "topicRef": "mulligan", "statement": "You may swap your starting hand once.", "quote": "one mulligan"}]}""";
 
     private const string TwoClaimsAnswer =
         """
         {"claims": [
-          {"topicType": "concept", "topicRef": "mulligan", "statement": "Je mag één keer je starthand omruilen."},
-          {"topicType": "concept", "topicRef": "scoren", "statement": "Je scoort door een battlefield te houden."}
+          {"topicType": "concept", "topicRef": "mulligan", "statement": "You may swap your starting hand once."},
+          {"topicType": "concept", "topicRef": "scoring", "statement": "You score by holding a battlefield."}
         ]}
         """;
 
@@ -64,7 +64,7 @@ public class ClaimMiningServiceTests
         using var db = NewDb();
         var doc = await SeedCommunityDocAsync(db);
         var svc = new ClaimMiningService(
-            db, Ai(() => "Ik zie hier geen bruikbare\nclaims, sorry!"), Embeddings(ok: true));
+            db, Ai(() => "I don't see any usable\nclaims, sorry!"), Embeddings(ok: true));
 
         var r = await svc.RunAsync();
 
@@ -73,7 +73,7 @@ public class ClaimMiningServiceTests
         var error = await db.RunLogs.SingleAsync(l => l.Kind == "claims" && l.Status == "error");
         Assert.Contains("LLM-antwoord onbruikbaar", error.Detail);
         // Platgeslagen (geen newlines) en herkenbaar afgekapt meegelogd.
-        Assert.Contains("Respons (afgekapt): Ik zie hier geen bruikbare claims, sorry!", error.Detail);
+        Assert.Contains("Respons (afgekapt): I don't see any usable claims, sorry!", error.Detail);
     }
 
     [Fact]
@@ -240,8 +240,8 @@ public class ClaimMiningServiceTests
         });
         foreach (var (topicRef, statement) in new[]
         {
-            ("mulligan", "Je mag één keer je starthand omruilen."),
-            ("scoren", "Je scoort door een battlefield te houden."),
+            ("mulligan", "You may swap your starting hand once."),
+            ("scoring", "You score by holding a battlefield."),
         })
         {
             var claim = new Claim
