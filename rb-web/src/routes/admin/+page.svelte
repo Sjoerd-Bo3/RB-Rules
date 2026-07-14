@@ -57,6 +57,8 @@
 	interface Correction {
 		id: number; scope: string; ref: string; text: string;
 		question: string | null; status: string; createdAt: string;
+		// #177: reden dat een clarify-item ter review staat (citaat niet in bron / onderwerp niet herkend).
+		statusReason: string | null;
 	}
 
 	interface AskTrace {
@@ -424,6 +426,9 @@
 					<div class="correction-body">
 						{#if c.question}<p class="q">{c.question}</p>{/if}
 						<p class="t">{c.text}</p>
+						{#if c.statusReason}
+							<p class="meta"><span class="badge warn-b">ter review</span> {c.statusReason}</p>
+						{/if}
 						<p class="meta">
 							{c.ref === 'down' ? 'Gemeld als onjuist' : c.ref === 'up' ? 'Bevestigd als juist' : c.ref}
 							· {new Date(c.createdAt).toLocaleString('nl-NL')}
@@ -433,6 +438,10 @@
 						<form method="POST" action="?/verifyCorrection" use:enhance>
 							<input type="hidden" name="id" value={c.id} />
 							<button title="Maakt dit een gezaghebbende ruling voor toekomstige antwoorden">Verifieer</button>
+						</form>
+						<form method="POST" action="?/rejectCorrection" use:enhance>
+							<input type="hidden" name="id" value={c.id} />
+							<button class="ghost small" title="Wijst dit af; een volgende mining-run maakt het niet opnieuw aan">Verwerp</button>
 						</form>
 						<form method="POST" action="?/deleteCorrection" use:enhance>
 							<input type="hidden" name="id" value={c.id} />

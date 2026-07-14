@@ -142,7 +142,17 @@ public class Correction
     /// bij in-chat-rulings, optioneel voor oudere/andere ontstaanswegen van
     /// een Correction. Sanitize gebeurt bij weergave, niet bij opslag.</summary>
     public string? SourceRef { get; set; }
-    public string Status { get; set; } = "unverified";  // unverified|verified
+    // unverified | verified | rejected. "rejected" (#177 hybride poort) is een
+    // tombstone: een beheerder-afwijzing van een pending clarify-item die de
+    // mining respecteert (zie ClarificationMiningService — een rejected rij op
+    // hetzelfde concept wordt nooit heropend). De self-learning-feedback en de
+    // chat-/review-rulings gebruiken alleen unverified/verified.
+    public string Status { get; set; } = "unverified";
+    /// <summary>Reden dat een item (nog) niet verified is (#177 hybride poort):
+    /// bv. "citaat niet terug te vinden in de bron" of "onderwerp niet
+    /// herkend". Voedt de reviewqueue zodat de beheerder ziet waaróm iets ter
+    /// review staat; null voor handmatig/verified aangemaakte correcties.</summary>
+    public string? StatusReason { get; set; }
     public Vector? Embedding { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? VerifiedAt { get; set; }

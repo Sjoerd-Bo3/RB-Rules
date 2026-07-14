@@ -3,7 +3,8 @@ using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
 
-public record ClarificationMineResult(int Documents, int NewItems, int Failed, string Message);
+public record ClarificationMineResult(
+    int Documents, int Verified, int Pending, int Updated, int Failed, string Message);
 
 /// <summary>#177: FAQ-/clarificatie-artikelen (bv. de Unleashed Rules FAQ)
 /// worden door de scan-pipeline geknipt en geëmbed als vaste-lengte-slabs die
@@ -17,13 +18,20 @@ public record ClarificationMineResult(int Documents, int NewItems, int Failed, s
 /// verduidelijking zelf, niet de hele slab) en een onderwerp-anker
 /// (Scope/Ref — mechanic:Legion, rule_section:§, card:naam, concept:…).
 ///
-/// Anders dan de claims-pipeline is de bron hier per definitie officieel (de
-/// aanroeper selecteert alleen TrustTier == 1 én <see
-/// cref="ClarificationSources.IsMatch"/>): elk item wordt dus meteen
-/// <c>verified</c> + geëmbed, geen kandidaat-claim die eerst corroboratie of
-/// een officiële toets nodig heeft (#166-autoriteitsmodel — een officiële FAQ
-/// ís de officiële regel, net als <see cref="BanErrataSyncService"/> bans/
-/// errata al zonder reviewstap uit trust-1 bronnen structureert).
+/// De bron is per definitie officieel (de aanroeper selecteert alleen
+/// TrustTier == 1 en <see cref="ClarificationSources.IsMatch"/>), maar
+/// auto-verified voor LLM-geparafraseerde tekst is te los (autoriteits-review,
+/// #177). Daarom een <b>hybride poort</b>: een concept wordt alleen
+/// <c>verified</c> als het BEIDE checks doorstaat -- (1) grounded: het citaat
+/// komt echt in de brontekst voor (<see cref="ClarificationGrounding"/>,
+/// vangt een gehallucineerd citaat) en (2) anchored: het onderwerp resolvet
+/// naar een bestaande knoop (<see cref="ClaimTopicMapper"/>: kaartnaam,
+/// mechaniek-vocabulaire, section-code of primer-concept -- vangt een
+/// verzonnen/fout anker dat anders stil aan een kaartpagina zou koppelen).
+/// Anders ⇒ <c>unverified</c> met een <see cref="Correction.StatusReason"/>
+/// ⇒ de bestaande corrections-reviewqueue in, waar de beheerder corrigeert/
+/// goedkeurt/afwijst. Een afgewezen (<c>rejected</c>) concept blijft afgewezen:
+/// de dedupe heropent een rejected tombstone nooit.
 ///
 /// Idempotent op twee niveaus (#92/#93-patroon): <see
 /// cref="Document.ClarifiedAt"/> slaat een document pas over als een eerdere
@@ -101,8 +109,18 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             .Where(s => ClarificationSources.IsMatch(s.Id, s.Url, s.Name))
             .ToList();
 
+        // Anker-resolver voor de hybride poort (#177): dezelfde bronnen als de
+        // graph-projectie (GraphSyncService) — kaartnamen (incl. varianten →
+        // canoniek), het mechaniek-vocabulaire (seed + geaccepteerde keywords,
+        // dus "Legion" resolvet ook zonder gemínede kaart), bestaande §-codes
+        // en primer-concepten. Eén keer per run gebouwd; puur en getest
+        // (ClaimTopicMapper). Onbekend onderwerp ⇒ null ⇒ niet anchored ⇒ review.
+        var anchors = await BuildAnchorsAsync(ct);
+
         var docs = 0;
-        var newItems = 0;
+        var verified = 0;
+        var pending = 0;
+        var updated = 0;
         var failed = 0;
         var processed = 0;
         var budgetHit = false;
@@ -118,7 +136,8 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
 
             docs++;
             var extractionComplete = true;
-            var srcNew = 0;
+            var srcVerified = 0;
+            var srcPending = 0;
             var itemFailures = new List<string>();
 
             var segments = Segment(doc.Content);
@@ -126,7 +145,7 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             {
                 if (budgetHit) { extractionComplete = false; break; }
                 progress?.Invoke(
-                    $"{src.Id}: deel {si + 1}/{segments.Count} extraheren ({newItems} nieuw)");
+                    $"{src.Id}: deel {si + 1}/{segments.Count} extraheren ({verified} geverifieerd, {pending} ter review)");
 
                 var raw = await AskSafeAsync(
                     ClarificationMiner.BuildPrompt(src.Name, segments[si]),
@@ -165,9 +184,19 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
                         break;
                     }
                     processed++;
-                    var (isNewItem, failure) = await StoreAsync(src, ec, ct);
-                    if (failure is not null) { failed++; itemFailures.Add(failure); }
-                    else if (isNewItem) { newItems++; srcNew++; }
+                    var (outcome, failure) = await StoreAsync(src, ec, doc.Content, anchors, ct);
+                    switch (outcome)
+                    {
+                        case ClarifyOutcome.NewVerified: verified++; srcVerified++; break;
+                        case ClarifyOutcome.NewPending: pending++; srcPending++; break;
+                        case ClarifyOutcome.Updated: updated++; break;
+                        case ClarifyOutcome.Failed:
+                            failed++;
+                            itemFailures.Add(failure ?? "onbekende fout");
+                            break;
+                        // RejectedKept/Skipped: bewust geen teller — de menselijke
+                        // afwijzing/al-bekend-status is gerespecteerd, geen ruis.
+                    }
                 }
             }
 
@@ -192,38 +221,84 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             {
                 Kind = LedgerKind, Ref = src.Id,
                 Status = documentDone ? "ok" : "info",
-                Detail = $"{srcNew} nieuwe verduidelijking(en)"
+                Detail = $"{srcVerified} geverifieerd, {srcPending} ter review"
                          + (documentDone ? "" : " (deels — document blijft staan voor een volgende run)"),
             });
             await db.SaveChangesAsync(ct);
         }
 
         var message =
-            $"{docs} document(en) verwerkt: {newItems} nieuwe verduidelijking(en), {failed} mislukt"
+            $"{docs} document(en) verwerkt: {verified} geverifieerd, {pending} ter review, "
+            + $"{updated} bijgewerkt, {failed} mislukt"
             + (failed > 0 ? " (redenen in run_log)" : "")
             + (budgetHit ? $" — cap van {maxItems} bereikt, rest volgt bij de volgende run" : "");
-        return new(docs, newItems, failed, message);
+        return new(docs, verified, pending, updated, failed, message);
     }
 
-    /// <summary>Eén concept opslaan als geverifieerde ruling, met dedupe op
-    /// conceptniveau. De sleutel is (Provenance=bron, Scope, Ref) — het citaat
-    /// telt bewust NIET mee — plus semantische nabijheid: binnen die al
-    /// gefilterde verzameling geldt een genormaliseerd-gelijke óf embedding-
-    /// nabije verduidelijking als "dezelfde, anders verwoord" en wordt de
-    /// bestaande ruling bijgewerkt (tekst/citaat/embedding vernieuwd) in plaats
-    /// van gedupliceerd. Zo is een her-mine (na retry OF na een cosmetische
-    /// bronwijziging met een nieuwe Document-rij) idempotent op conceptniveau.
-    /// Degradeert bij Ollama-uitval naar de genormaliseerde exacte-tekst-toets:
-    /// een re-run dupliceert dan nog steeds niet, maar een écht nieuw concept
-    /// wacht op een run met werkende embeddings (nooit een verified ruling
-    /// zonder embedding, #100).</summary>
-    private async Task<(bool IsNew, string? Failure)> StoreAsync(
-        Source src, ExtractedClarification ec, CancellationToken ct)
+    private enum ClarifyOutcome { NewVerified, NewPending, Updated, RejectedKept, Skipped, Failed }
+
+    /// <summary>Bouwt de anker-resolver uit dezelfde bronnen als de
+    /// graph-projectie (GraphSyncService): alle printings (varianten →
+    /// canoniek), het volledige mechaniek-vocabulaire (seed + geaccepteerde
+    /// keywords ∪ gemínede kaartmechanieken), bestaande §-codes en
+    /// primer-concepten. Puur resultaat (ClaimTopicMapper); onbekend onderwerp
+    /// resolvet naar null.</summary>
+    private async Task<ClaimTopicMapper> BuildAnchorsAsync(CancellationToken ct)
+    {
+        var cards = await db.Cards.AsNoTracking()
+            .Select(c => new { c.RiftboundId, c.Name, c.VariantOf })
+            .ToListAsync(ct);
+        var accepted = await db.MechanicKeywords.AsNoTracking()
+            .Where(k => k.Status == "accepted").Select(k => k.Term).ToListAsync(ct);
+        var minedMechanics = (await db.Cards.AsNoTracking()
+                .Where(c => c.Mechanics != null).Select(c => c.Mechanics!).ToListAsync(ct))
+            .SelectMany(m => m);
+        var sections = await db.RuleChunks.AsNoTracking()
+            .Where(r => r.SectionCode != null && r.SectionCode != "")
+            .Select(r => new { r.SourceId, Code = r.SectionCode! })
+            .Distinct().ToListAsync(ct);
+        var concepts = (await db.KnowledgeDocs.AsNoTracking()
+                .Where(k => k.Kind == "primer")
+                .Select(k => new { k.Topic, k.Title })
+                .ToListAsync(ct))
+            .GroupBy(k => k.Topic).Select(g => g.First());
+
+        return ClaimTopicMapper.Create(
+            cards.Select(c => (c.RiftboundId, c.Name, c.VariantOf)),
+            MechanicMiner.Vocabulary(accepted).Concat(minedMechanics),
+            sections.Select(s => (s.SourceId, s.Code)),
+            concepts.Select(k => (k.Topic, k.Title)));
+    }
+
+    /// <summary>Eén concept opslaan met de hybride poort (#177) én dedupe op
+    /// conceptniveau. Poort: grounded (citaat in de bron) EN anchored
+    /// (onderwerp resolvet) ⇒ verified; anders unverified met StatusReason
+    /// (de reviewqueue in). Dedupe-sleutel: (Provenance=bron, Scope, Ref) --
+    /// het citaat telt bewust NIET mee -- plus semantische nabijheid: een
+    /// genormaliseerd-gelijke óf embedding-nabije verduidelijking geldt als
+    /// dezelfde en wordt bijgewerkt (nooit gedegradeerd; een rejected tombstone
+    /// wordt nooit heropend) in plaats van gedupliceerd. Zo is een her-mine (na
+    /// retry OF na een cosmetische bronwijziging met een nieuwe Document-rij)
+    /// idempotent op conceptniveau. Degradeert bij Ollama-uitval naar de
+    /// genormaliseerde exacte-tekst-toets: een re-run dupliceert dan nog steeds
+    /// niet, maar een écht nieuw concept wacht op een run met werkende
+    /// embeddings (nooit een ruling zonder embedding, #100).</summary>
+    private async Task<(ClarifyOutcome Outcome, string? Failure)> StoreAsync(
+        Source src, ExtractedClarification ec, string docContent,
+        ClaimTopicMapper anchors, CancellationToken ct)
     {
         var scope = ScopeFor(ec.TopicType);
         var topicRef = ec.TopicRef.Trim();
         var provenance = $"{ProvenancePrefix}{src.Id}";
         var normClarification = ClaimMiner.NormalizeStatement(ec.Clarification);
+
+        // Hybride poort (#177): grounded (citaat écht in de bron) EN anchored
+        // (onderwerp resolvet naar een bestaande knoop) ⇒ verified; anders
+        // pending met reden, de reviewqueue in.
+        var grounded = ClarificationGrounding.IsGrounded(ec.Quote, docContent);
+        var anchored = anchors.Resolve(ec.TopicType, topicRef) is not null;
+        var verifies = grounded && anchored;
+        var reason = verifies ? null : GateReason(grounded, anchored, ec);
 
         // Dedupe-scope: alle clarify-rulings van déze bron voor ditzelfde
         // onderwerp (Scope, Ref). Klein per (bron, onderwerp), dus tracked
@@ -242,7 +317,9 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             // Gefocuste embedding (issue #177): alleen onderwerp + verduide-
             // lijking (zonder citaat), niet de hele slab — zo haalt een
             // gerichte vraag dit item wél boven, en is de embedding meteen de
-            // dedupe-maat (quote buiten de sleutel).
+            // dedupe-maat (quote buiten de sleutel). Ook een pending item krijgt
+            // een embedding: dat lekt niet in /ask (retrieval filtert op
+            // Status=verified) maar houdt de dedupe over runs heen robuust.
             vec = await embeddings.EmbedOneAsync($"{topicRef}\n{ec.Clarification.Trim()}", ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -252,7 +329,7 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             // een her-run niet dupliceert; is het concept écht nieuw, dan telt
             // het als faal (document blijft staan voor een volgende run).
             var known = siblings.Any(c => ClaimMiner.NormalizeStatement(ClarificationOf(c.Text)) == normClarification);
-            return known ? (false, null) : (false, $"embedding mislukt (Ollama): {ex.Message}");
+            return known ? (ClarifyOutcome.Skipped, null) : (ClarifyOutcome.Failed, $"embedding mislukt (Ollama): {ex.Message}");
         }
 
         // Match: genormaliseerd-gelijk (snelle, deterministische weg) of
@@ -263,17 +340,33 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
 
         if (match is not null)
         {
+            // Afgewezen blijft afgewezen (#177): een beheerder-afwijzing
+            // (rejected tombstone) mag een volgende run niet heropenen.
+            if (match.Status == "rejected") return (ClarifyOutcome.RejectedKept, null);
+
             // Bijwerken i.p.v. dupliceren: de nieuwste formulering + citaat +
-            // embedding winnen. VerifiedAt blijft staan — een verversing is
-            // geen nieuwe verificatie en mag de /rulings-recencyvolgorde niet
-            // elke nacht omgooien.
+            // embedding winnen. Nooit degraderen: een al geverifieerde ruling
+            // blijft verified, ook als een flaky her-extractie de poort niet
+            // haalt; een pending item upgradet zodra een latere run grounded +
+            // anchored is.
             match.Text = BuildText(ec);
             match.Question = QuestionLabelFor(ec);
             match.SourceRef = src.Url;
             match.Embedding = vec;
-            match.Status = "verified";
+            if (match.Status == "verified" || verifies)
+            {
+                match.Status = "verified";
+                match.StatusReason = null;
+                match.VerifiedAt ??= DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                match.Status = "unverified";
+                match.StatusReason = reason;
+                match.VerifiedAt = null;
+            }
             await db.SaveChangesAsync(ct);
-            return (false, null);
+            return (ClarifyOutcome.Updated, null);
         }
 
         db.Corrections.Add(new Correction
@@ -284,14 +377,28 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             Question = QuestionLabelFor(ec),
             SourceRef = src.Url,
             Provenance = provenance,
-            // Officiële bron ⇒ direct verified (#166-autoriteitsmodel): geen
-            // corroboratie/officiële-toets nodig zoals bij community-claims.
-            Status = "verified",
-            VerifiedAt = DateTimeOffset.UtcNow,
+            Status = verifies ? "verified" : "unverified",
+            StatusReason = reason,
+            VerifiedAt = verifies ? DateTimeOffset.UtcNow : null,
             Embedding = vec,
         });
         await db.SaveChangesAsync(ct);
-        return (true, null);
+        return (verifies ? ClarifyOutcome.NewVerified : ClarifyOutcome.NewPending, null);
+    }
+
+    /// <summary>Leesbare reden dat de hybride poort een item pending laat, voor
+    /// de reviewqueue (StatusReason). Combineert beide faalredenen als beide
+    /// falen.</summary>
+    private static string GateReason(bool grounded, bool anchored, ExtractedClarification ec)
+    {
+        var parts = new List<string>();
+        if (!grounded)
+            parts.Add(string.IsNullOrWhiteSpace(ec.Quote)
+                ? "geen citaat om te verifiëren"
+                : "citaat niet terug te vinden in de bron");
+        if (!anchored)
+            parts.Add($"onderwerp '{ec.TopicRef.Trim()}' ({ec.TopicType}) niet herkend");
+        return string.Join("; ", parts);
     }
 
     /// <summary>Dichtstbijzijnde sibling binnen de poort (cosine-afstand), of

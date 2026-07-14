@@ -11,38 +11,46 @@ using RbRules.Infrastructure;
 namespace RbRules.Tests;
 
 /// <summary>Regressietests voor de FAQ-/clarificatie-concept-extractie
-/// (#177): losse verduidelijkingen worden direct geverifieerde rulings (de
-/// bron is per definitie officieel), met een gefocuste embedding en
-/// idempotentie op documentniveau (ClarifiedAt, #92/#93-patroon). De
-/// concept-niveau-dedupe (parafrase-herkenning via de embedding-poort) staat
-/// apart in ClarificationMiningDedupeTests, met een bag-of-words-embedding-
-/// stub. Zelfde testinfra-patroon als ClaimMiningServiceTests: echte
-/// RbAiClient/EmbeddingService op gestubde HTTP-handlers, EF InMemory (vector
-/// als tekst-conversie).</summary>
+/// (#177). Sinds de autoriteits-review geldt een hybride poort: een concept
+/// wordt alleen verified als het grounded is (citaat komt in de brontekst
+/// voor) EN anchored (onderwerp resolvet — mechaniek "Legion" zit in het
+/// seed-vocabulaire), anders unverified met reden (de reviewqueue in). De
+/// seed-content bevat het Legion-citaat, zodat de Legion-fixture verified
+/// wordt (Sjoerds doel: vindbaar); een concept zonder citaat (Reflection
+/// tokens) belandt terecht ter review. De concept-niveau-dedupe en de
+/// grounding/anchor-varianten staan apart in ClarificationMiningDedupeTests
+/// resp. ClarificationGateTests. Zelfde testinfra als ClaimMiningServiceTests:
+/// echte RbAiClient/EmbeddingService op gestubde HTTP-handlers, EF InMemory.</summary>
 public class ClarificationMiningServiceTests
 {
     private const string SourceId = "playriftbound-com-unleashed-rules-faq-and-clarifications";
     private const string SourceUrl =
         "https://playriftbound.com/en-us/news/rules-and-releases/unleashed-rules-faq-and-clarifications/";
 
+    // Het citaat van het Legion-concept staat letterlijk in de seed-content
+    // (SeedFaqDocAsync) ⇒ grounded; mechaniek "Legion" ⇒ anchored ⇒ verified.
+    private const string LegionQuote = "Legion means you finalize an item on the chain";
+
     // Realistische, ingekorte fixture: één multi-concept-alinea zoals de
     // echte FAQ (Reflection tokens + Arcane Shift + Legion in dezelfde slab).
+    // Legion draagt een gegrond citaat (verified); Reflection tokens heeft
+    // geen citaat ⇒ terecht ter review (pending).
     private const string TwoConceptsAnswer =
-        """
+        $$"""
         {"clarifications": [
           {"topicType": "mechanic", "topicRef": "Legion", "sectionRef": "402.3",
            "clarification": "Legion betekent dat je een item op de chain finalizet.",
-           "quote": "Legion means you finalize an item on the chain"},
+           "quote": "{{LegionQuote}}"},
           {"topicType": "concept", "topicRef": "Reflection tokens",
            "clarification": "Reflection tokens tellen niet mee voor het handlimiet."}
         ]}
         """;
 
     private const string OneConceptAnswer =
-        """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent dat je een item op de chain finalizet."}]}""";
+        $$"""{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent dat je een item op de chain finalizet.", "quote": "{{LegionQuote}}"}]}""";
 
     [Fact]
-    public async Task RunAsync_GeslaagdeExtractie_MarkeertDocument_EnSlaatVerifiedRulingOp()
+    public async Task RunAsync_GeslaagdeExtractie_MarkeertDocument_GrondedAnchoredVerified_RestTerReview()
     {
         using var db = NewDb();
         var doc = await SeedFaqDocAsync(db);
@@ -51,13 +59,15 @@ public class ClarificationMiningServiceTests
         var r = await svc.RunAsync();
 
         Assert.Equal(1, r.Documents);
-        Assert.Equal(2, r.NewItems);
+        Assert.Equal(1, r.Verified); // Legion: grounded + anchored
+        Assert.Equal(1, r.Pending);  // Reflection tokens: geen citaat ⇒ ter review
         Assert.Equal(0, r.Failed);
-        Assert.NotNull(doc.ClarifiedAt);
+        Assert.NotNull(doc.ClarifiedAt); // pending is een geldige uitkomst, document is verwerkt
 
         var legion = await db.Corrections.SingleAsync(c => c.Ref == "Legion");
         Assert.Equal("mechanic", legion.Scope);
         Assert.Equal("verified", legion.Status);
+        Assert.Null(legion.StatusReason);
         Assert.NotNull(legion.VerifiedAt);
         Assert.NotNull(legion.Embedding);
         Assert.Equal(SourceUrl, legion.SourceRef);
@@ -68,6 +78,9 @@ public class ClarificationMiningServiceTests
 
         var concept = await db.Corrections.SingleAsync(c => c.Ref == "Reflection tokens");
         Assert.Equal("concept", concept.Scope);
+        Assert.Equal("unverified", concept.Status);
+        Assert.Contains("geen citaat", concept.StatusReason); // reden zichtbaar in de reviewqueue
+        Assert.Null(concept.VerifiedAt);
         Assert.Equal("Reflection tokens", concept.Question); // geen sectionRef ⇒ kaal label
     }
 
@@ -99,9 +112,9 @@ public class ClarificationMiningServiceTests
         var first = await svc.RunAsync();
         var second = await svc.RunAsync();
 
-        Assert.Equal(2, first.NewItems);
+        Assert.Equal(1, first.Verified);
+        Assert.Equal(1, first.Pending);
         Assert.Equal(0, second.Documents);
-        Assert.Equal(0, second.NewItems);
         Assert.Equal(2, await db.Corrections.CountAsync());
     }
 
@@ -119,8 +132,12 @@ public class ClarificationMiningServiceTests
         var first = await svc.RunAsync();
         var second = await svc.RunAsync(force: true);
 
-        Assert.Equal(2, first.NewItems);
-        Assert.Equal(0, second.NewItems); // zelfde concepten al bekend — bijgewerkt, niet gedupliceerd
+        Assert.Equal(1, first.Verified);
+        Assert.Equal(1, first.Pending);
+        // zelfde concepten al bekend — bijgewerkt, niet gedupliceerd
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        Assert.Equal(2, second.Updated);
         Assert.Equal(2, await db.Corrections.CountAsync());
     }
 
@@ -140,9 +157,11 @@ public class ClarificationMiningServiceTests
         var r = await svc.RunAsync();
 
         Assert.Equal(1, r.Documents);
-        Assert.Equal(1, r.NewItems);
+        Assert.Equal(1, r.Verified); // grounded (citaat in seed-content) + anchored (mechaniek Legion)
         Assert.NotNull(doc.ClarifiedAt);
-        Assert.Equal("Legion", (await db.Corrections.SingleAsync()).Ref);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("Legion", ruling.Ref);
+        Assert.Equal("verified", ruling.Status);
     }
 
     [Fact]
@@ -206,7 +225,8 @@ public class ClarificationMiningServiceTests
         var r = await svc.RunAsync();
 
         Assert.Equal(1, r.Failed);
-        Assert.Equal(0, r.NewItems);
+        Assert.Equal(0, r.Verified);
+        Assert.Equal(0, r.Pending);
         Assert.Contains("redenen in run_log", r.Message);
         Assert.Null(doc.ClarifiedAt);
         var error = await db.RunLogs.SingleAsync(l => l.Kind == "clarify" && l.Status == "error");
@@ -273,15 +293,115 @@ public class ClarificationMiningServiceTests
 
         var r = await svc.RunAsync(maxItems: 1);
 
-        Assert.Equal(1, r.NewItems);
+        Assert.Equal(1, r.Verified); // alleen Legion verwerkt (verified), dan cap
         Assert.Contains("cap van 1 bereikt", r.Message);
         Assert.Null(doc.ClarifiedAt);
 
         var again = await svc.RunAsync();
         Assert.Equal(1, again.Documents);
-        Assert.Equal(1, again.NewItems); // het eerste item is al bekend, alleen het tweede is nieuw
+        Assert.Equal(1, again.Updated); // Legion is al bekend — bijgewerkt
+        Assert.Equal(1, again.Pending); // Reflection tokens is nieuw (ter review)
         Assert.NotNull(doc.ClarifiedAt);
         Assert.Equal(2, await db.Corrections.CountAsync());
+    }
+
+    // --- hybride poort: grounding + anchoring (#177) --------------------
+
+    [Fact]
+    public async Task Gate_CitaatNietInBron_Unverified_MetReden_NietInAskRetrieval()
+    {
+        using var db = NewDb();
+        // Content bevat het opgegeven citaat NIET ⇒ niet grounded (vangt een
+        // gehallucineerd citaat, de kernzorg uit de autoriteits-review).
+        var doc = await SeedFaqDocAsync(db, content: "Een FAQ zonder het betreffende citaat.");
+        var answer = """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen.", "quote": "dit citaat komt niet in de bron voor"}]}""";
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Verified);
+        Assert.Equal(1, r.Pending);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("unverified", ruling.Status);
+        Assert.Contains("citaat niet terug te vinden in de bron", ruling.StatusReason);
+        Assert.Null(ruling.VerifiedAt);
+        // Niet in /ask-retrieval: AskService/BrainService/RulingsService filteren
+        // allemaal op Status=="verified" — een pending item met embedding lekt dus niet.
+        Assert.Equal(0, await db.Corrections.CountAsync(c => c.Status == "verified"));
+    }
+
+    [Fact]
+    public async Task Gate_OnbekendAnker_Unverified_MetReden()
+    {
+        using var db = NewDb();
+        // Grounded (citaat in content), maar het onderwerp resolvet niet: geen
+        // kaart met deze naam bestaat ⇒ niet anchored ⇒ review (lost de MEDIUM
+        // anker-bevinding op: geen stille koppeling aan een kaartpagina).
+        var quote = "this quote is present in the source";
+        var doc = await SeedFaqDocAsync(db, content: $"FAQ. {quote}. Meer tekst.");
+        var answer = $$"""{"clarifications": [{"topicType": "card", "topicRef": "Onbestaande Kaart", "clarification": "Iets over een kaart.", "quote": "{{quote}}"}]}""";
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Verified);
+        Assert.Equal(1, r.Pending);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("unverified", ruling.Status);
+        Assert.Contains("niet herkend", ruling.StatusReason);
+        Assert.Contains("Onbestaande Kaart", ruling.StatusReason);
+    }
+
+    [Fact]
+    public async Task Gate_AfgewezenItem_BijHerRun_BlijftRejected_NietHeropend()
+    {
+        // Requirement 4: een beheerder-afwijzing (rejected tombstone) mag een
+        // volgende mining-run niet heropenen — de menselijke afwijzing houdt stand.
+        using var db = NewDb();
+        var doc = await SeedFaqDocAsync(db);
+        // Een eerdere run maakte deze ruling; de beheerder wees hem af (rejected).
+        db.Corrections.Add(new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = "Legion betekent dat je een item op de chain finalizet.",
+            Provenance = $"clarify-mining:{SourceId}", SourceRef = SourceUrl,
+            Status = "rejected", Embedding = new Vector(Enumerable.Repeat(0.1f, EmbeddingConfig.Dimensions).ToArray()),
+        });
+        await db.SaveChangesAsync();
+        var svc = new ClarificationMiningService(db, Ai(() => OneConceptAnswer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Verified);
+        Assert.Equal(0, r.Pending);
+        var ruling = await db.Corrections.SingleAsync(); // geen tweede rij
+        Assert.Equal("rejected", ruling.Status); // niet heropend
+    }
+
+    [Fact]
+    public async Task Gate_GoedgekeurdItem_BijHerRun_BlijftVerified_GeenDuplicaat()
+    {
+        // Een pending item dat de beheerder goedkeurde (verified) mag een
+        // volgende run niet degraderen of dupliceren — no-demote + dedupe.
+        using var db = NewDb();
+        var doc = await SeedFaqDocAsync(db);
+        db.Corrections.Add(new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = "Legion betekent dat je een item op de chain finalizet.",
+            Provenance = $"clarify-mining:{SourceId}", SourceRef = SourceUrl,
+            Status = "verified", VerifiedAt = DateTimeOffset.UtcNow.AddDays(-1),
+            Embedding = new Vector(Enumerable.Repeat(0.1f, EmbeddingConfig.Dimensions).ToArray()),
+        });
+        await db.SaveChangesAsync();
+        var svc = new ClarificationMiningService(db, Ai(() => OneConceptAnswer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Verified);
+        Assert.Equal(1, r.Updated);
+        var ruling = await db.Corrections.SingleAsync(); // geen duplicaat
+        Assert.Equal("verified", ruling.Status);
     }
 
     // --- testinfra (zelfde patroon als ClaimMiningServiceTests) ----------
@@ -334,7 +454,7 @@ public class ClarificationMiningServiceTests
     };
 
     private static async Task<Document> SeedFaqDocAsync(
-        RbRulesDbContext db, DateTimeOffset? retrievedAt = null)
+        RbRulesDbContext db, DateTimeOffset? retrievedAt = null, string? content = null)
     {
         db.Sources.Add(new Source
         {
@@ -344,7 +464,12 @@ public class ClarificationMiningServiceTests
         var doc = new Document
         {
             SourceId = SourceId,
-            Content = "Uitleg over Legion, Reflection tokens en Arcane Shift.",
+            // Standaard bevat de content het Legion-citaat letterlijk ⇒ dat
+            // concept is grounded; gate-tests geven eigen content mee.
+            Content = content
+                ?? "In deze FAQ verduidelijken we enkele mechanieken. "
+                   + $"{LegionQuote}, dus het is het moment van finaliseren. "
+                   + "Reflection tokens en Arcane Shift komen ook aan bod.",
             ContentHash = "hash",
         };
         if (retrievedAt is { } at) doc.RetrievedAt = at;

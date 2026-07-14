@@ -154,24 +154,33 @@ apart in §6.
   (`ClarificationSources.IsMatch`, geen migratie nodig — Source draagt Url/
   Name al) op officiële (TrustTier 1) bronnen; job "clarify" destilleert er
   via rb-ai discrete concepten uit (onderwerp + gefocuste verduidelijking +
-  evt. §-verwijzing + citaat) en slaat elk direct op als geverifieerde ruling
-  met een eigen, gefocuste embedding (alleen de verduidelijking, niet de hele
-  slab) — zo komt het item wél boven bij een gerichte vraag, in `/ask`,
-  `/rulings` en (bij een kaart-onderwerp) het kaartdossier. Werkt met
-  terugwerkende kracht: geen tijdvenster op de bronselectie, dus ook
-  al-geïngeste FAQ-artikelen van vóór deze feature worden bij de eerste run
-  meegenomen. Idempotent op documentniveau (`Document.ClarifiedAt`, #92/#93-
-  patroon) én op conceptniveau: een her-mine dedupliceert een verduidelijking
-  op (bron, Scope, Ref) + semantische nabijheid (embedding-poort, quote buiten
-  de sleutel) en werkt de bestaande ruling bij i.p.v. een tweede te stapelen —
-  ook als de LLM bij een retry/cosmetische bronwijziging een parafrase
-  teruggeeft (embedding-uitval degradeert naar een genormaliseerde
-  exacte-tekst-toets). De eerste scan van zo'n bron krijgt ook meteen een
-  sjabloon-`Change` (type
+  evt. §-verwijzing + citaat) en slaat elk op als ruling met een eigen,
+  gefocuste embedding (alleen de verduidelijking, niet de hele slab) — zo komt
+  het item wél boven bij een gerichte vraag, in `/ask`, `/rulings` en (bij een
+  kaart-onderwerp) het kaartdossier. **Hybride autoriteitspoort** (autoriteits-
+  review): auto-verified voor LLM-geparafraseerde tekst is te los, dus een
+  concept wordt alleen direct `verified` als het én *grounded* is (het citaat
+  komt écht in de brontekst voor — vangt een gehallucineerd citaat) én
+  *anchored* (het onderwerp resolvet naar een bestaande knoop: kaartnaam,
+  mechaniek-vocabulaire, §-code of primer-concept — vangt een verzonnen/fout
+  anker dat anders stil aan een kaartpagina zou koppelen). Anders gaat het als
+  `unverified` met een reden (`Correction.StatusReason`) de bestaande
+  corrections-reviewqueue in, waar de beheerder het corrigeert, goedkeurt
+  (`/verify`) of afwijst (`/reject` — een `rejected` tombstone die een
+  volgende run respecteert, nooit heropent). Werkt met terugwerkende kracht:
+  geen tijdvenster op de bronselectie, dus ook al-geïngeste FAQ-artikelen van
+  vóór deze feature worden bij de eerste run meegenomen. Idempotent op
+  documentniveau (`Document.ClarifiedAt`, #92/#93-patroon) én op conceptniveau:
+  een her-mine dedupliceert een verduidelijking op (bron, Scope, Ref) +
+  semantische nabijheid (embedding-poort, quote buiten de sleutel) en werkt de
+  bestaande ruling bij (nooit degraderend) i.p.v. een tweede te stapelen — ook
+  als de LLM bij een retry/cosmetische bronwijziging een parafrase teruggeeft
+  (embedding-uitval degradeert naar een genormaliseerde exacte-tekst-toets).
+  De eerste scan van zo'n bron krijgt ook meteen een sjabloon-`Change` (type
   "clarification") zodat de aankomst zelf al in de wijzigingen-feed
   verschijnt (er is dan nog geen vorige versie om te diffen). *Job* `clarify`
-  (handmatig of nachtelijk via `ScanScheduler`) · *endpoint*
-  `/api/admin/jobs/clarify`.
+  (handmatig of nachtelijk via `ScanScheduler`) · *endpoints*
+  `/api/admin/jobs/clarify`, `/api/admin/corrections/{id}/reject`.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed
   en gekoppeld aan kaarten. *Endpoint* `/api/bans`.
 - **Bron-feeds** (#167) — index-pagina's (playriftbound.com/en-us/news/…) die
@@ -387,11 +396,12 @@ apart in §6.
   toets; geaccepteerde claims doen mee als eigen "Community-consensus"-kanaal in
   `/ask`.
 - **FAQ-/clarificatie-concept-extractie** (#177, zie ook §4.1) — anders dan de
-  claims-pipeline is de bron hier per definitie officieel: elk geëxtraheerd
-  concept wordt direct een `verified` ruling (geen corroboratie/officiële-
-  toets nodig), met onderwerp-anker (mechanic/rule_section/card/concept) en
-  een gefocuste embedding zodat de losse verduidelijking — niet de hele
-  FAQ-slab — semantisch vindbaar is.
+  claims-pipeline is de bron hier per definitie officieel, maar niet elk
+  geëxtraheerd concept wordt blind `verified`: een hybride poort eist grounding
+  (citaat in de bron) én een resolvend onderwerp-anker
+  (mechanic/rule_section/card/concept). Alleen dan direct `verified` met een
+  gefocuste embedding zodat de losse verduidelijking — niet de hele FAQ-slab —
+  semantisch vindbaar is; anders `unverified` met reden, de reviewqueue in.
 - **Evolutie-raamwerk** — set-release-keten, groeiend mechaniek-vocabulaire
   (keyword-kandidaten → reviewqueue → re-mine) en een kennis-gaten-rapport dat
   meet waar de bank aantoonbaar niets weet.
@@ -432,12 +442,14 @@ apart in §6.
   invoer zonder identiteit. Dit is de anti-vergiftigingsgrens uit
   docs/KNOWLEDGE.md in code. Sinds #177 bestaat er een derde, niet-menselijke
   route: `ClarificationMiningService` schrijft ook rechtstreeks `verified`,
-  maar uitsluitend voor concepten uit een bron die het bronnenregister zelf al
-  als TrustTier 1 (officieel) classificeert — geen extra menselijke stap, net
-  zoals `BanErrataSyncService` bans/errata al zonder reviewstap uit trust-1
-  bronnen structureert. De poort blijft dus het bronnenregister (wie een bron
-  trust 1 mag maken is wél een beheerdersbeslissing), niet een nieuwe
-  uitzondering op de anti-vergiftigingsgrens.
+  maar uitsluitend voor concepten uit een TrustTier-1-bron **die bovendien de
+  hybride poort halen** (grounding: citaat écht in de bron; anchoring:
+  onderwerp resolvet) — een LLM-parafrase zonder bewijs of met een verzonnen
+  anker haalt de poort niet en gaat `unverified` de reviewqueue in (met reden),
+  precies zoals een gebruikersvoorstel. De trust-1-poort blijft dus een
+  beheerdersbeslissing (wie een bron official maakt) én de grounding/anchor-
+  poort houdt de LLM eerlijk; het is geen blanket-uitzondering op de
+  anti-vergiftigingsgrens.
 
 ### 4.5 Beheer (`/admin`)
 

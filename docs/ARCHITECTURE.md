@@ -232,10 +232,11 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   illegaal-met-reden (nog niet legale set of geband) / onvolledig bij
   niet-gekoppelde kaarten of een set zonder bekende releasedatum),
   `ClarificationMining` (#177: `ClarificationSources.IsMatch`, naam-/URL-
-  heuristiek die een FAQ-/clarificatie-bron herkent — geen migratie, en
-  `ClarificationMiner`, prompt+parser voor de concept-extractie, zelfde
-  patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering: het
-  `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
+  heuristiek die een FAQ-/clarificatie-bron herkent; `ClarificationMiner`,
+  prompt+parser voor de concept-extractie; en `ClarificationGrounding`, de
+  citaat-in-brontekst-check van de hybride autoriteitspoort — puur en getest,
+  zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
+  het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
@@ -249,12 +250,16 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`
   (Neo4j), `BrainService`, `MechanicMiningService`, `ClaimMiningService`,
   `ClarificationMiningService` (#177, job "clarify" — concept-extractie uit
-  officiële FAQ-/clarificatie-artikelen naar direct-verified `Correction`s met
-  eigen gefocuste embedding en onderwerp-anker; dedupliceert per concept op
-  (bron, Scope, Ref) + embedding-nabijheid — een parafrase bij een her-mine
-  werkt de bestaande ruling bij i.p.v. te stapelen, zelfde poort-patroon als
-  `ClaimMiningService`; backfilt bestaande bronnen vanzelf, geen tijdvenster op
-  de bronselectie),
+  officiële FAQ-/clarificatie-artikelen naar `Correction`s met eigen gefocuste
+  embedding en onderwerp-anker. Hybride autoriteitspoort: alleen `verified` als
+  het concept grounded is (`ClarificationGrounding`: citaat in `Document.
+  Content`) én anchored (`ClaimTopicMapper.Resolve` op kaartnaam/mechaniek-
+  vocabulaire/§-code/primer-concept) — anders `unverified` + `StatusReason` de
+  reviewqueue in; een `rejected` tombstone wordt nooit heropend. Dedupliceert
+  per concept op (bron, Scope, Ref) + embedding-nabijheid — een parafrase bij
+  een her-mine werkt de bestaande ruling bij (nooit degraderend) i.p.v. te
+  stapelen, zelfde poort-patroon als `ClaimMiningService`; backfilt bestaande
+  bronnen vanzelf, geen tijdvenster op de bronselectie),
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
@@ -575,13 +580,22 @@ kan rb-api eerder starten dan Postgres klaar is.
   SourceRef` — URL door `UrlGuard`, of vrije citatie) is verplicht: een ruling
   zonder herkomst wordt geweigerd. Sinds #177 is er een derde, niet-menselijke
   schrijfroute: `ClarificationMiningService` zet `verified` zonder
-  beheerdersactie, maar alléén voor concepten uit een bron die het
-  bronnenregister zelf al als `TrustTier == 1` classificeert — de poort
-  verschuift dus naar "wie mag een bron trust 1 maken" (een bestaande
-  beheerdersbeslissing, `SourceScoutService`/feed-`AutoApprove`/handmatig
-  toevoegen), niet naar een nieuwe uitzondering op de anti-vergiftigingsgrens.
-  Hetzelfde patroon als `BanErrataSyncService` (bans/errata uit trust-1
-  bronnen, ook zonder reviewstap).
+  beheerdersactie, maar alléén voor concepten uit een `TrustTier == 1`-bron
+  **die bovendien de hybride poort halen** — grounded (`ClarificationGrounding`:
+  citaat écht in `Document.Content`; vangt een gehallucineerd citaat) én
+  anchored (`ClaimTopicMapper.Resolve`: het onderwerp bestaat als kaart/
+  mechaniek/§/primer-concept; vangt een verzonnen/fout anker dat anders stil
+  aan een kaartpagina zou koppelen — de MEDIUM anker-bevinding). Haalt een
+  concept de poort niet, dan gaat het `unverified` + `StatusReason` de
+  reviewqueue in (`/corrections`), waar de beheerder verifieert (`/verify`) of
+  afwijst (`/reject` — een `rejected`-tombstone die een volgende mining-run
+  respecteert i.p.v. te heropenen; `Correction.StatusReason`, migratie
+  `20260714195640_ClarificationAuthorityGate`). De poort is dus dubbel: het
+  bronnenregister (wie een bron trust 1 maakt — een bestaande
+  beheerdersbeslissing) én grounding+anchoring per concept; geen blanket-
+  uitzondering op de anti-vergiftigingsgrens. Alleen voor een bron die al
+  official is én een concept dat zowel bewijs (citaat) als een echt anker
+  heeft, geldt hetzelfde direct-verified-patroon als `BanErrataSyncService`.
 - **Concept-uitgelijnd chunken vs vaste-lengte-chunken slaat de vector plat**
   (#177) — de Core Rules-PDF wordt per §-sectie geknipt (`RuleChunkPipeline`):
   elk chunk is al één concept, dus de embedding erover is scherp. Een

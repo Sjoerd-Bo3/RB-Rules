@@ -77,6 +77,18 @@ export const actions: Actions = {
 			return fail(502, { error: e instanceof Error ? e.message : String(e) });
 		}
 	},
+	rejectCorrection: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			// Zacht afwijzen (#177): rejected tombstone i.p.v. verwijderen, zodat
+			// een volgende clarify-mining-run het item niet opnieuw aanmaakt.
+			await adminApi(`/api/admin/corrections/${form.get('id')}/reject`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
 	deleteCorrection: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
 		const form = await request.formData();

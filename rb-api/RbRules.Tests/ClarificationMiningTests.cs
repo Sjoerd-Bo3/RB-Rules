@@ -22,6 +22,48 @@ public class ClarificationSourcesTests
         Assert.True(ClarificationSources.IsMatch("id", "https://example.com/UNLEASHED-FAQ", null));
 }
 
+public class ClarificationGroundingTests
+{
+    private const string Content =
+        "In deze FAQ verduidelijken we mechanieken. Legion means you finalize an "
+        + "item on the chain. Reflection tokens tellen niet mee voor het handlimiet.";
+
+    [Fact]
+    public void IsGrounded_QuoteInSource_True() =>
+        Assert.True(ClarificationGrounding.IsGrounded(
+            "Legion means you finalize an item on the chain", Content));
+
+    [Fact]
+    public void IsGrounded_WhitespaceAndCaseTolerant() =>
+        // Extra witruimte en andere casing mogen een echt citaat niet laten mislukken.
+        Assert.True(ClarificationGrounding.IsGrounded(
+            "  LEGION means   you finalize an item  on the chain ", Content));
+
+    [Fact]
+    public void IsGrounded_CurlyQuotesAndDashNormalized()
+    {
+        var content = "De regel luidt: “finalize an item”—op de chain.";
+        Assert.True(ClarificationGrounding.IsGrounded("\"finalize an item\"-op de chain", content));
+    }
+
+    [Fact]
+    public void IsGrounded_FabricatedQuote_False() =>
+        // De kernzorg: een verzonnen citaat dat niet in de bron staat wordt geweigerd.
+        Assert.False(ClarificationGrounding.IsGrounded(
+            "Legion lets you draw three extra cards", Content));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsGrounded_MissingQuote_False(string? quote) =>
+        Assert.False(ClarificationGrounding.IsGrounded(quote, Content));
+
+    [Fact]
+    public void IsGrounded_EmptyContent_False() =>
+        Assert.False(ClarificationGrounding.IsGrounded("iets", ""));
+}
+
 public class ClarificationMinerTests
 {
     // Realistische fixture (#177): één multi-concept-alinea zoals de echte

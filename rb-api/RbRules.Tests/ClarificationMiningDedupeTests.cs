@@ -26,10 +26,15 @@ public class ClarificationMiningDedupeTests
     private const string SourceUrl =
         "https://playriftbound.com/en-us/news/rules-and-releases/unleashed-rules-faq-and-clarifications/";
 
+    // Het citaat staat in de seed-content (SeedFaqDocAsync) ⇒ grounded; en
+    // mechaniek "Legion" resolvet ⇒ anchored ⇒ verified. Zo testen deze cases
+    // de dedupe op échte (verified) rulings, de realistische situatie.
+    private const string GroundedQuote = "Legion means you finalize an item on the chain";
+
     // Origineel en parafrase delen bijna alle woorden (alleen het laatste
     // werkwoord verschilt) ⇒ lage cosine-afstand ⇒ dezelfde verduidelijking.
     private static string Original(string clar) =>
-        $$"""{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "{{clar}}"}]}""";
+        $$"""{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "{{clar}}", "quote": "{{GroundedQuote}}"}]}""";
 
     private const string LegionA = "Legion betekent dat je een item op de chain finalizet";
     private const string LegionParaphrase = "Legion betekent dat je een item op de chain afrondt";
@@ -47,14 +52,16 @@ public class ClarificationMiningDedupeTests
         var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
 
         var first = await svc.RunAsync();
-        Assert.Equal(1, first.NewItems);
+        Assert.Equal(1, first.Verified);
 
         // Tweede run (force, want doc is al ClarifiedAt): de LLM herformuleert
         // exact hetzelfde concept — geen nieuwe rij, de bestaande wordt bijgewerkt.
         answer = Original(LegionParaphrase);
         var second = await svc.RunAsync(force: true);
 
-        Assert.Equal(0, second.NewItems);
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        Assert.Equal(1, second.Updated);
         var ruling = Assert.Single(await db.Corrections.ToListAsync());
         Assert.Contains("afrondt", ruling.Text); // bijgewerkt naar de nieuwste formulering
         Assert.DoesNotContain("finalizet", ruling.Text);
@@ -73,11 +80,14 @@ public class ClarificationMiningDedupeTests
         var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
 
         var first = await svc.RunAsync();
-        Assert.Equal(1, first.NewItems);
+        Assert.Equal(1, first.Verified);
         Assert.NotNull(doc1.ClarifiedAt);
 
         // Nieuwe Document-versie van dezelfde bron (nieuwste RetrievedAt,
         // ClarifiedAt=null) — de service pakt de laatste, dus geen force nodig.
+        // Bewust zónder het citaat: de her-mine haalt de grounding niet, maar
+        // de dedupe herkent het concept en de bestaande verified ruling wordt
+        // NIET gedegradeerd (no-demote).
         db.Documents.Add(new Document
         {
             SourceId = SourceId, Content = "Herziene tekst met dezelfde Legion-uitleg.",
@@ -89,8 +99,10 @@ public class ClarificationMiningDedupeTests
         var second = await svc.RunAsync();
 
         Assert.Equal(1, second.Documents);
-        Assert.Equal(0, second.NewItems);
-        Assert.Single(await db.Corrections.ToListAsync()); // geen duplicaat
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        var ruling = Assert.Single(await db.Corrections.ToListAsync()); // geen duplicaat
+        Assert.Equal("verified", ruling.Status); // niet gedegradeerd door de niet-gegronde her-mine
     }
 
     [Fact]
@@ -107,7 +119,8 @@ public class ClarificationMiningDedupeTests
         answer = """{"clarifications": [{"topicType": "concept", "topicRef": "Reflection tokens", "clarification": "Reflection tokens tellen niet mee voor het handlimiet."}]}""";
         var second = await svc.RunAsync(force: true);
 
-        Assert.Equal(1, second.NewItems);
+        // Reflection tokens: geen citaat + geen primer-anker ⇒ nieuw ter review.
+        Assert.Equal(1, second.Pending);
         Assert.Equal(2, await db.Corrections.CountAsync());
     }
 
@@ -126,7 +139,7 @@ public class ClarificationMiningDedupeTests
         answer = Original(LegionDifferent);
         var second = await svc.RunAsync(force: true);
 
-        Assert.Equal(1, second.NewItems);
+        Assert.Equal(1, second.Verified); // grounded + anchored, maar verre embedding ⇒ eigen rij
         var rulings = await db.Corrections.Where(c => c.Ref == "Legion").ToListAsync();
         Assert.Equal(2, rulings.Count); // twee losse Legion-verduidelijkingen
     }
@@ -138,14 +151,16 @@ public class ClarificationMiningDedupeTests
         // met een ander citaat werkt de bestaande rij bij, geen duplicaat.
         using var db = NewDb();
         await SeedFaqDocAsync(db);
-        var answer = """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen op de chain.", "quote": "you finalize on the chain"}]}""";
+        var answer = $$"""{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen op de chain.", "quote": "{{GroundedQuote}}"}]}""";
         var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
 
         await svc.RunAsync();
         answer = """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen op de chain.", "quote": "een compleet ander citaat uit de bron"}]}""";
         var second = await svc.RunAsync(force: true);
 
-        Assert.Equal(0, second.NewItems);
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        Assert.Equal(1, second.Updated);
         var ruling = Assert.Single(await db.Corrections.ToListAsync());
         Assert.Contains("een compleet ander citaat", ruling.Text); // citaat bijgewerkt
     }
@@ -169,7 +184,8 @@ public class ClarificationMiningDedupeTests
         var svc2 = new ClarificationMiningService(db, Ai(() => answer), DownEmbeddings());
         var second = await svc2.RunAsync(force: true);
 
-        Assert.Equal(0, second.NewItems);
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
         Assert.Equal(0, second.Failed);
         var ruling = Assert.Single(await db.Corrections.ToListAsync());
         Assert.NotNull(ruling.Embedding); // niet overschreven met null
@@ -261,7 +277,10 @@ public class ClarificationMiningDedupeTests
         });
         var doc = new Document
         {
-            SourceId = SourceId, Content = "Uitleg over Legion.", ContentHash = "hash1",
+            SourceId = SourceId,
+            // Bevat het grounded citaat letterlijk ⇒ de Legion-concepten verifiëren.
+            Content = $"Uitleg over Legion. {GroundedQuote}. Reflection tokens komen ook aan bod.",
+            ContentHash = "hash1",
         };
         if (retrievedAt is { } at) doc.RetrievedAt = at;
         db.Documents.Add(doc);

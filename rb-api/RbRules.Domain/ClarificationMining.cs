@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace RbRules.Domain;
@@ -27,6 +28,61 @@ public static class ClarificationSources
     private static bool HasKeyword(string? text) =>
         !string.IsNullOrWhiteSpace(text)
         && Keywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>Citaat-grondigheidscheck voor de hybride autoriteitspoort (#177,
+/// review-uitkomst): een auto-verified FAQ-ruling mag alleen door als het
+/// <see cref="ExtractedClarification.Quote"/> écht in de brontekst voorkomt —
+/// dat vangt een gehallucineerd/verzonnen citaat (de kernzorg uit de
+/// autoriteits-review). De vergelijking is tolerant genormaliseerd
+/// (kleine letters, samengevouwen witruimte, gangbare typografische
+/// aanhalings-/streepjesvarianten teruggebracht) zodat een echt citaat niet
+/// op opmaakruis struikelt, maar een verzonnen citaat nog steeds wegvalt.
+/// Leeg/afwezig citaat ⇒ niet grounded (geen bewijs = geen automatische
+/// verificatie). Puur en getest.</summary>
+public static class ClarificationGrounding
+{
+    public static bool IsGrounded(string? quote, string? content)
+    {
+        if (string.IsNullOrWhiteSpace(quote) || string.IsNullOrWhiteSpace(content))
+            return false;
+        var needle = Normalize(quote);
+        return needle.Length > 0 && Normalize(content).Contains(needle, StringComparison.Ordinal);
+    }
+
+    /// <summary>Kleine letters, witruimte samengevouwen tot één spatie,
+    /// typografische varianten (curly quotes, en/em-dash, nbsp) terug naar hun
+    /// ASCII-vorm — genoeg om opmaakverschillen tussen LLM-citaat en brontekst
+    /// te overbruggen zonder de inhoud te veranderen.</summary>
+    private static string Normalize(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        var prevSpace = false;
+        foreach (var raw in s)
+        {
+            var c = Canonical(raw);
+            if (char.IsWhiteSpace(c))
+            {
+                if (!prevSpace && sb.Length > 0) sb.Append(' ');
+                prevSpace = true;
+            }
+            else
+            {
+                sb.Append(char.ToLowerInvariant(c));
+                prevSpace = false;
+            }
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    private static char Canonical(char c) => c switch
+    {
+        '\u2018' or '\u2019' or '\u02BC' or '\u2032' => '\'', // curly apostrofs, prime
+        '\u201C' or '\u201D' or '\u2033' => '"',              // curly double quotes, double prime
+        '\u2013' or '\u2014' or '\u2212' => '-',               // en-dash, em-dash, minus
+        '\u00A0' or '\u202F' or '\u2009' => ' ',               // nbsp, narrow nbsp, thin space
+        _ => c,
+    };
 }
 
 /// <summary>Eén uit een FAQ-/clarificatie-artikel gedestilleerd concept
