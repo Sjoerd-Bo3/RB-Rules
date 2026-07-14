@@ -236,9 +236,11 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   clarifications; patch-notes zijn een apart `IsPatchNotesSignal`-predicaat en
   doen niet mee in de clarify-pijplijn; `ClarificationMiner`, prompt+parser
   voor de concept-extractie (output in het Engels, #186); `ClarificationGrounding`,
-  de citaat-in-brontekst-check; en `ClarificationInformativeness.IsMetaOnly`
+  de citaat-in-brontekst-check; `ClarificationInformativeness.IsMetaOnly`
   (#185), de derde poort-toets die een kale aankondigingszin zonder regelinhoud
-  weert — puur en getest, zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
+  weert; en `ReviewNoteAnchor` (#184), een pure regex-parser die een
+  anker-correctie uit een beheerder-opmerking haalt (bv. "mechanic:Recall")
+  — puur en getest, zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
   het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
@@ -266,7 +268,17 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   per concept op (bron, Scope, Ref) + embedding-nabijheid — een parafrase bij
   een her-mine werkt de bestaande ruling bij (nooit degraderend) i.p.v. te
   stapelen, zelfde poort-patroon als `ClaimMiningService`; backfilt bestaande
-  bronnen vanzelf, geen tijdvenster op de bronselectie),
+  bronnen vanzelf, geen tijdvenster op de bronselectie; de anker-resolver-
+  opbouw zelf staat gedeeld in `AnchorResolverFactory`),
+  `CorrectionReevaluationService` (#184, her-evaluatie van één `Correction`
+  op een beheerder-opmerking: draait dezelfde hybride poort opnieuw voor dat
+  ene item — roept `ClarificationGrounding`/`ClaimTopicMapper.Resolve`/
+  `ClarificationInformativeness` aan zonder hun logica te wijzigen; een
+  `ReviewNoteAnchor`-anker in de opmerking overschrijft Scope/Ref bij
+  resolutie; alleen van toepassing op clarify-mining-`Correction`s (Provenance
+  `clarify-mining:{sourceId}`, de enige ontstaanswijze met brontekst om tegen
+  te gronden); een `rejected`- of al `verified`-item degradeert/heropent
+  nooit, alleen de opmerking wordt dan bewaard),
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `KnowledgeRegenerationService` (#187, job "regenerateknowledge" — wipet de
   LLM-afgeleide kennislaag (claim, correction, knowledge_doc kind=primer,
@@ -315,7 +327,10 @@ pending, #166), `/api/auth/*`
 (magic-link + passkeys), `/api/changes|sources|bans|sets/upcoming`,
 `/api/push/*`, `/api/admin/*` (o.a. vraag-traces: `/asktraces` als slanke
 lijst, `/asktraces/{id}` met het volledige gesprek — antwoord + eerdere
-beurten, #143; bron-dossier: `/sources/{id}/dossier`, #171).
+beurten, #143; bron-dossier: `/sources/{id}/dossier`, #171; correcties:
+`/corrections` — projectie via `AdminOverviewService.CorrectionsAsync`, incl.
+bron-naam en `UrlGuard`-gesaniteerde link, #184 — `/corrections/{id}/verify|
+reject|reevaluate`).
 
 ### rb-ai — belangrijkste modules
 
@@ -614,6 +629,22 @@ kan rb-api eerder starten dan Postgres klaar is.
   uitzondering op de anti-vergiftigingsgrens. Alleen voor een bron die al
   official is én een concept dat zowel bewijs (citaat) als een echt anker
   heeft, geldt hetzelfde direct-verified-patroon als `BanErrataSyncService`.
+  Sinds #184 bestaat een vierde route, nog steeds machine-gecontroleerd: de
+  beheerder laat een `unverified` clarify-item op een opmerking
+  (`Correction.ReviewNote`, migratie `20260714224820_CorrectionReviewNote`)
+  her-evalueren (`POST /corrections/{id}/reevaluate` →
+  `CorrectionReevaluationService`) — dezelfde hybride poort draait opnieuw
+  voor dat ene item, met optioneel een anker-correctie uit de opmerking
+  (`ReviewNoteAnchor`, bv. "mechanic:Recall") die een fout-aangeankerd of
+  onherkend onderwerp overschrijft. Geen directe Status-override door de
+  beheerder: de poort blijft de scheidsrechter, alleen het onderwerp/de
+  invoer verandert. Een gezette `ReviewNote` reist mee door een volgende
+  normale her-mine — `ClarificationMiningService.StoreAsync` laat Status/
+  StatusReason dan ongemoeid in plaats van de menselijke beoordeling stil
+  terug te draaien (naast de al bestaande never-downgrade- en
+  rejected-tombstone-regels); een `rejected`- of al `verified`-item
+  degradeert/heropent via `/reevaluate` zelf ook nooit, alleen de opmerking
+  wordt dan bewaard.
 - **Concept-uitgelijnd chunken vs vaste-lengte-chunken slaat de vector plat**
   (#177) — de Core Rules-PDF wordt per §-sectie geknipt (`RuleChunkPipeline`):
   elk chunk is al één concept, dus de embedding erover is scherp. Een

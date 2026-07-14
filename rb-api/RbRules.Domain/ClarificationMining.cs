@@ -189,6 +189,41 @@ public static class ClarificationInformativeness
 public record ExtractedClarification(
     string TopicType, string TopicRef, string Clarification, string? SectionRef, string? Quote);
 
+/// <summary>Anker-correctie in een beheerder-opmerking (#184): een reviewqueue-
+/// item kan fout aangeankerd zijn (verkeerd of onherkend onderwerp) terwijl de
+/// verduidelijking zelf prima klopt. In plaats van de hele extractie opnieuw te
+/// laten draaien, mag de beheerder het anker expliciet corrigeren door de
+/// opmerking op een eigen regel af te sluiten met "<c>type:onderwerp</c>", bv.
+/// "mechanic:Recall", "card:Taric, the Shield of Valoran" of "section:402.3" —
+/// <see cref="RbRules.Infrastructure.CorrectionReevaluationService"/> gebruikt
+/// dit anker in plaats van het oorspronkelijke Scope/Ref bij de her-evaluatie.
+/// Puur/regex-based (geen I/O); staat er geen anker-regel in, dan is er niets
+/// te overschrijven (null) en her-evalueert de her-evaluatie met het
+/// bestaande onderwerp. Bij meerdere ankerregels in dezelfde opmerking wint de
+/// laatste (de meest recente correctie).</summary>
+public static class ReviewNoteAnchor
+{
+    // Ankerregel op zichzelf: "type:onderwerp", optioneel afgesloten met een
+    // punt. RegexOptions.Multiline zodat ^/$ per regel matchen (de opmerking
+    // mag toelichting bevatten vóór de ankerregel); de alternatie beperkt
+    // topicType meteen tot de vier bekende waarden (ClaimTopicMapper.Resolve).
+    private static readonly Regex Pattern = new(
+        @"^\s*(card|mechanic|section|concept)\s*:\s*(.+?)\s*\.?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
+
+    public static (string TopicType, string TopicRef)? TryParse(string? note)
+    {
+        if (string.IsNullOrWhiteSpace(note)) return null;
+
+        Match? last = null;
+        foreach (Match m in Pattern.Matches(note))
+            if (m.Groups[2].Value.Trim().Length > 0) last = m;
+        if (last is null) return null;
+
+        return (last.Groups[1].Value.ToLowerInvariant(), last.Groups[2].Value.Trim());
+    }
+}
+
 /// <summary>Prompt + parser voor concept-extractie uit FAQ-/clarificatie-
 /// artikelen (#177), zelfde patroon als <see cref="ClaimMiner"/>: de LLM-call
 /// zelf loopt via rb-ai, dit deel is puur en getest. Anders dan de

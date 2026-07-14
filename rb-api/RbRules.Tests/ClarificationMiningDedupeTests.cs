@@ -191,6 +191,82 @@ public class ClarificationMiningDedupeTests
         Assert.NotNull(ruling.Embedding); // niet overschreven met null
     }
 
+    [Fact]
+    public async Task ReMine_BestaandeReviewNote_StatusEnRedenBlijvenStaan_NietStilTeruggedraaid()
+    {
+        // #184: een beheerder-opmerking is een menselijk oordeel — de
+        // volgende her-mine (handmatig of nachtelijk) mag Status/StatusReason
+        // niet stilzwijgend overschrijven, ook niet als de herformulering nu
+        // wél door de gate zou komen. De brontekst (Text/Embedding) mag wel
+        // verversen, dat is onschadelijk.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = Original(LegionA); // grounded + anchored ⇒ zou normaliter verifiëren
+        var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
+        await svc.RunAsync();
+
+        var existing = await db.Corrections.SingleAsync();
+        existing.Status = "unverified";
+        existing.StatusReason = "handmatig teruggezet — nader onderzoek nodig";
+        existing.ReviewNote = "twijfel of dit wel Legion is, graag nakijken";
+        await db.SaveChangesAsync();
+
+        answer = Original(LegionParaphrase);
+        var second = await svc.RunAsync(force: true);
+
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(1, second.Updated);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("unverified", ruling.Status); // niet stiekem geverifieerd
+        Assert.Equal("handmatig teruggezet — nader onderzoek nodig", ruling.StatusReason); // niet overschreven
+        Assert.Equal("twijfel of dit wel Legion is, graag nakijken", ruling.ReviewNote); // blijft staan
+        Assert.Contains("afrondt", ruling.Text); // brontekst mag wel verversen
+    }
+
+    [Fact]
+    public async Task ReMine_NaAnkerCorrectie_VindtVerplaatstItemTerug_GeenSpookduplicaat()
+    {
+        // #184-review: een beheerder-anker-correctie verplaatst een item naar
+        // een ánder (Scope, Ref). Een her-mine die het oorspronkelijke (foute)
+        // anker opnieuw extraheert vindt het in zijn eigen bucket niet meer
+        // terug — zonder de cross-bucket-redding zou dat een spookduplicaat
+        // opleveren én de sticky-guard omzeilen. Met de redding wordt het
+        // verplaatste ReviewNote-item teruggevonden en bijgewerkt, geen dubbel.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        // Mine met een fout anker (typo "Legon", geen vocabulaire-hit ⇒ niet
+        // anchored ⇒ pending in de (concept, Legon)-bucket).
+        var misAnchored =
+            $$"""{"clarifications": [{"topicType": "concept", "topicRef": "Legon", "clarification": "{{LegionA}}", "quote": "{{GroundedQuote}}"}]}""";
+        var svc = new ClarificationMiningService(db, Ai(() => misAnchored), BagOfWordsEmbeddings());
+        await svc.RunAsync();
+
+        // Simuleer de anker-correctie zoals CorrectionReevaluationService 'm doet:
+        // verplaats naar (mechanic, Legion), verified, met een ReviewNote.
+        var item = await db.Corrections.SingleAsync();
+        item.Scope = "mechanic";
+        item.Ref = "Legion";
+        item.Status = "verified";
+        item.VerifiedAt = DateTimeOffset.UtcNow;
+        item.StatusReason = null;
+        item.ReviewNote = "anker gecorrigeerd naar mechanic:Legion";
+        await db.SaveChangesAsync();
+
+        // Her-mine: de bron is ongewijzigd, dus de LLM extraheert wéér het
+        // foute anker (concept/Legon).
+        var second = await svc.RunAsync(force: true);
+
+        Assert.Equal(1, await db.Corrections.CountAsync()); // geen spookduplicaat
+        Assert.Equal(1, second.Updated);
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("mechanic", ruling.Scope);   // anker blijft gecorrigeerd
+        Assert.Equal("Legion", ruling.Ref);
+        Assert.Equal("verified", ruling.Status);   // status niet teruggedraaid
+        Assert.Equal("anker gecorrigeerd naar mechanic:Legion", ruling.ReviewNote);
+    }
+
     // --- testinfra -------------------------------------------------------
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)

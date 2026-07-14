@@ -210,16 +210,59 @@ async function promoteNote(
 	}
 }
 
-// Correcties houden hun verifieer/verwijder-actie ook in het overzicht.
+// Correcties (#177, bron/opmerking/her-evaluatie #184): verifiëren/verwerpen
+// nemen — net als claims/relaties — een optionele beheerder-opmerking mee;
+// "opnieuw evalueren" bewaart de opmerking en triggert de deterministische
+// her-toets van de hybride poort voor dit ene item (rb-api: /reevaluate).
 export const actions: Actions = {
 	verifyCorrection: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
 		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const note = String(form.get('note') ?? '').trim();
 		try {
-			await adminApi(`/api/admin/corrections/${form.get('id')}/verify`, { method: 'POST' });
+			await adminApi(`/api/admin/corrections/${id}/verify`, {
+				method: 'POST',
+				body: JSON.stringify({ note: note || null })
+			});
 			return { ok: true };
 		} catch (e) {
-			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	rejectCorrection: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const note = String(form.get('note') ?? '').trim();
+		try {
+			await adminApi(`/api/admin/corrections/${id}/reject`, {
+				method: 'POST',
+				body: JSON.stringify({ note: note || null })
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	// Opmerking → her-evaluatie (#184): de opmerking wordt traceerbaar bewaard
+	// op de Correction en triggert meteen een her-toets van de hybride poort
+	// (grounded/anchored/informative) voor dit ene item — een anker-correctie
+	// in de opmerking (bv. "mechanic:Recall") kan een fout-aangeankerd item
+	// alsnog naar verified tillen.
+	reevaluateCorrection: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const note = String(form.get('note') ?? '').trim();
+		try {
+			const r = await adminApi<{ outcome: string; reason: string | null }>(
+				`/api/admin/corrections/${id}/reevaluate`,
+				{ method: 'POST', body: JSON.stringify({ note: note || null }) }
+			);
+			return { ok: true, reevaluated: true, outcome: r.outcome, reason: r.reason, id };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
 		}
 	},
 	deleteCorrection: async ({ request, cookies }) => {

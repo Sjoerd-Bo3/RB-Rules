@@ -750,24 +750,14 @@ public static class AdminEndpoints
             await overview.AskTraceAsync(id) is { } t
                 ? Results.Ok(t) : Results.NotFound());
 
-        // Projectie zonder Embedding — 1024 floats per rij horen niet in JSON.
-        admin.MapGet("/corrections", async (RbRulesDbContext db) =>
-            await db.Corrections.AsNoTracking()
-                .OrderByDescending(c => c.CreatedAt)
-                .Take(200)
-                .Select(c => new
-                {
-                    c.Id, c.Scope, c.Ref, c.Text, c.Question,
-                    // SourceRef (#166): "waar besloten" — bewijs bij het reviewen
-                    // van een in-chat-ruling-voorstel.
-                    // StatusReason (#177): waaróm een clarify-item nog ter review
-                    // staat (citaat niet in bron / onderwerp niet herkend).
-                    c.Provenance, c.SourceRef, c.Status, c.StatusReason, c.CreatedAt, c.VerifiedAt,
-                })
-                .ToListAsync());
+        // Projectie zonder Embedding (1024 floats per rij horen niet in JSON) mét
+        // bron-naam + gesaniteerde link en beheerder-opmerking (#184) — logica in
+        // AdminOverviewService.CorrectionsAsync (endpoints dun, docs/CONVENTIONS.md).
+        admin.MapGet("/corrections", async (AdminOverviewService overview) =>
+            await overview.CorrectionsAsync());
 
         admin.MapPost("/corrections/{id:long}/verify", async (
-            long id, RbRulesDbContext db, EmbeddingService embeddings) =>
+            long id, ReviewDecision? body, RbRulesDbContext db, EmbeddingService embeddings) =>
         {
             var c = await db.Corrections.FindAsync(id);
             if (c is null) return Results.NotFound();
@@ -775,6 +765,8 @@ public static class AdminEndpoints
             // #177: een goedgekeurd clarify-item heeft geen openstaande reden meer.
             c.StatusReason = null;
             c.VerifiedAt = DateTimeOffset.UtcNow;
+            // #184: een opmerking bij het verifiëren blijft traceerbaar bewaard.
+            if (!string.IsNullOrWhiteSpace(body?.Note)) c.ReviewNote = body.Note.Trim();
             try
             {
                 // Embedding op vraag+correctie zodat /ask de ruling semantisch vindt.
@@ -791,16 +783,32 @@ public static class AdminEndpoints
         // Zacht afwijzen (#177): een pending clarify-item als rejected markeren
         // in plaats van verwijderen. De tombstone laat de mining de afwijzing
         // respecteren — een volgende run heropent hetzelfde concept niet. Voor
-        // definitief opruimen bestaat DELETE nog.
-        admin.MapPost("/corrections/{id:long}/reject", async (long id, RbRulesDbContext db) =>
+        // definitief opruimen bestaat DELETE nog. Een opmerking (#184) is dan de
+        // zichtbare reden bij het item — zelfde patroon als claims/relaties.
+        admin.MapPost("/corrections/{id:long}/reject", async (
+            long id, ReviewDecision? body, RbRulesDbContext db) =>
         {
             var c = await db.Corrections.FindAsync(id);
             if (c is null) return Results.NotFound();
             c.Status = "rejected";
             c.VerifiedAt = null;
+            if (!string.IsNullOrWhiteSpace(body?.Note)) c.ReviewNote = body.Note.Trim();
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
+
+        // Her-evaluatie op een opmerking (#184): draait de hybride poort
+        // (grounded/anchored/informative, #177/#185) opnieuw voor dit ene item —
+        // de opmerking kan een anker-correctie bevatten (bv. "mechanic:Recall")
+        // die een fout-aangeankerd onderwerp corrigeert. Logica in
+        // CorrectionReevaluationService (endpoints dun).
+        admin.MapPost("/corrections/{id:long}/reevaluate", async (
+                long id, ReviewDecision? body, CorrectionReevaluationService reeval) =>
+            await reeval.ReevaluateAsync(id, body?.Note) switch
+            {
+                { Outcome: ReevaluateOutcome.NotFound } => Results.NotFound(),
+                var r => Results.Ok(new { ok = true, outcome = r.Outcome.ToString(), r.Reason }),
+            });
 
         admin.MapDelete("/corrections/{id:long}", async (long id, RbRulesDbContext db) =>
         {

@@ -96,6 +96,9 @@ builder.Services.AddScoped<AgenticRelationService>();
 builder.Services.AddScoped<KnowledgeRegenerationService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<ReviewNoteService>();
+// Her-evaluatie van één Correction op een beheerder-opmerking (#184): draait
+// de hybride poort (#177/#185) opnieuw, met een optionele anker-correctie.
+builder.Services.AddScoped<CorrectionReevaluationService>();
 // In-chat rulings vanuit /ask (#166): autoriteit bepaalt verified vs pending.
 builder.Services.AddScoped<ChatRulingService>();
 builder.Services.AddScoped<SetReleaseService>();
