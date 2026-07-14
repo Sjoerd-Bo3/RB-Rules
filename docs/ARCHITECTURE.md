@@ -236,12 +236,23 @@ passkeys), `/api/changes|sources|bans|sets/upcoming`, `/api/push/*`,
 
 ### rb-ai — belangrijkste modules
 
-- `src/server.ts` — minimale `node:http`-server met `/health`, `/ask` en
-  `/ask/stream` (NDJSON-streaming); koppelt de client-verbinding aan een
-  `AbortController` zodat een weggelopen client de Claude-call afbreekt.
-- `src/ai.ts` — `askClaude` met vier taaktypes en de per-taak-modellen; de
-  server-side prompt-addenda `RESEARCH_CONTRACT` en `AGENT_ADDENDUM`; de
-  in-process brein-MCP-server (`createBrainMcpServer`).
+- `src/server.ts` — minimale `node:http`-server met `/health` (incl.
+  capaciteits- en pooltellers), `/ask`, `/ask/stream` (NDJSON-streaming) en
+  `/prewarm` (#154, altijd direct 202); koppelt de client-verbinding aan een
+  `AbortController` zodat een weggelopen client de Claude-call afbreekt, en
+  vertaalt de capaciteitsgrens (#155) naar een 429 met machine-leesbare code.
+- `src/ai.ts` — `askClaude` met vier taaktypes en de per-taak-modellen; één
+  optiebron `buildQueryOptions` voor koud én warm (contract-getest tegen
+  drift); de server-side prompt-addenda `RESEARCH_CONTRACT` en
+  `AGENT_ADDENDUM`; de in-process brein-MCP-server (`createBrainMcpServer`).
+- `src/warmpool.ts` — signaal-gedreven warme-sessie-pool (#154): houdt na een
+  `/prewarm`-signaal maximaal één voorverwarmde cheap-SDK-sessie klaar
+  (subprocess boot alvast, API-call pas bij de vraag; één sessie = één call,
+  nooit hergebruik over vragen heen), met TTL, dode-sessie-degradatie naar
+  koud en kill-switch `AI_WARM_POOL=0`.
+- `src/concurrency.ts` — globale semaphore op gelijktijdige SDK-sessies
+  (#155): `AI_MAX_CONCURRENCY` (default 3), agentic weegt 2, korte wachtrij
+  (30 s) en daarna een nette 429 die rb-api als bestaand degradatiepad ziet.
 - `src/brain-tools.ts` — de zes brein-tooldefinities + fetch-laag naar rb-api
   (`RB_API_URL`), met tool-call-cap.
 - `src/relations.ts` — afsplitsen van relatievoorstellen uit het agent-antwoord
@@ -478,12 +489,33 @@ kan rb-api eerder starten dan Postgres klaar is.
   brein-stappen vast; JobRunner toont live voortgang (`docs/CONVENTIONS.md`,
   `AdminEndpoints`).
 - **Rate-limiting & quota** (#42) — policies `llm` (per client-IP of
-  sessietoken), `auth` en `webauthn` in `Program.cs`; per-account-dagquota via
-  `UserQuotaFilter`. Het dure agent-pad heeft een eigen rem (#153): zelf
-  geforceerde Grondig-vragen tellen tegen `DailyAgenticQuota` (default 5/dag,
-  per account instelbaar in het beheer); gate-escalaties tellen niet mee. Het
-  kostenoverzicht splitst het agentic-pad op wie escaleerde ("agentic (gate)"
-  vs "agentic (gebruiker)", `AdminOverviewService.UsersAsync`).
+  sessietoken), `auth`, `webauthn` en `prewarm` in `Program.cs`;
+  per-account-dagquota via `UserQuotaFilter`. Het dure agent-pad heeft een
+  eigen rem (#153): zelf geforceerde Grondig-vragen tellen tegen
+  `DailyAgenticQuota` (default 5/dag, per account instelbaar in het beheer);
+  gate-escalaties tellen niet mee. Het kostenoverzicht splitst het
+  agentic-pad op wie escaleerde ("agentic (gate)" vs "agentic (gebruiker)",
+  `AdminOverviewService.UsersAsync`).
+- **Capaciteit & latency van de AI-keten** (#154/#155) — de beschermings-
+  stapel is gelaagd: per-IP/token-rate-limit (`llm`) → dagquota per account
+  (`UserQuotaFilter`) → globale sessie-cap in rb-ai (`AI_MAX_CONCURRENCY`,
+  default 3; agentic weegt 2; wachtrij max 30 s, daarna 429 → bestaand
+  degradatiepad in `RbAiClient`) → de VM zelf (8 GB; een idle SDK-subprocess
+  kost orde-grootte honderden MB's RSS — exacte cijfers volgen uit productie-
+  metingen, niet uit deze PR). Latency: de /ask-paginalaad stuurt een
+  fire-and-forget prewarm-signaal (rb-web load → `/api/ask/prewarm` →
+  rb-ai `/prewarm`) waarop de warme pool één cheap-sessie voorboot; de
+  query-rewrite-call (statisch systeemprompt) claimt die en haalt zo de
+  SDK-subprocess-boot van het kritieke pad — lokaal geverifieerd (zonder
+  geldige token) dat `query()` met streaming input het CLI-subprocess start
+  en idle laat wachten totdat de eerste user-message binnenkomt, zonder dat
+  er vóór dat moment een model-call plaatsvindt; de exacte boot-duur (orde
+  seconden) en of idle echt 0 tokens kost, bevestigt zich pas met de
+  fase-instrumentatie van #152 (aiMs) op de productie-VM — dit issue bewijst
+  zich met cijfers of gaat terug (issue #154). De sessie-opties liggen bij de
+  SDK vast op `query()`-moment, dus warm werkt alleen bij byte-gelijke opties
+  — de antwoord-call (systeemprompt per vraagtype) blijft koud. Warm bestaat
+  alleen rond activiteit (TTL 10 min, signaal-gedreven).
 - **Best-effort achtergrondwerk** — `JobCatalog` registreert jobs als één
   switch-vrije catalogus; `RunAllAsync` ("Alles bijwerken") draait elke stap
   best-effort in volgorde.
