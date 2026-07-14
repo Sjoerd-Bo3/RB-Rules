@@ -81,6 +81,18 @@ Endpoint-regels:
 
 ## AI-gebruik (rb-ai / prompts)
 
+- **Afgeleide/gesynthetiseerde kennis wordt in de brontaal (Engels) opgeslagen**
+  (#187) — claims (`ClaimMiner`), de primer (`PrimerService`) en
+  relatie-`explanation`s (`RelationMiner`, `rb-ai`'s `AGENT_ADDENDUM`)
+  extraheren/synthetiseren in het Engels, dicht bij de officiële bewoording:
+  geen vertaalstap, dus geen vertaalverlies, en consistente semantiek met de
+  Engelse kaart-/regelbronnen zelf. **UI en /ask-antwoorden blijven
+  Nederlands** — dat scheidt `AskService.BasePrompt` af, dat blijft
+  ongewijzigd. (`ClarificationMiner`/`ClarificationMiningService` volgen
+  hetzelfde patroon, #185.) Een bestaande Nederlandse afgeleide laag wordt
+  niet in-place vertaald maar weggegooid en schoon herbouwd — zie
+  `KnowledgeRegenerationService` (expliciete, destructieve admin-actie, nooit
+  automatisch; raakt nooit de bron-/mensenwerk-tabellen).
 - Alle LLM-verkeer via de rb-ai-sidecar (abonnement); rb-api kent geen
   API-keys. De sidecar is alleen intern bereikbaar.
 - LLM-uitval is een verwacht pad: `RbAiClient` geeft `null` terug en de

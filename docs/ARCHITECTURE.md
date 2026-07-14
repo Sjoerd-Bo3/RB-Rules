@@ -261,6 +261,11 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   stapelen, zelfde poort-patroon als `ClaimMiningService`; backfilt bestaande
   bronnen vanzelf, geen tijdvenster op de bronselectie),
   `RelationMiningService`, `InteractionService`, `PrimerService`,
+  `KnowledgeRegenerationService` (#187, job "regenerateknowledge" — wipet de
+  LLM-afgeleide kennislaag (claim, correction, knowledge_doc kind=primer,
+  relation) en reset de mining-markers zodat her-mining met de Engelse
+  prompts schoon opnieuw opbouwt; nooit de bron-/mensenwerk-tabellen, geen
+  automatische her-generatie erna, expliciete admin-actie),
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
   op `AskService` met `AskOptions.Benchmark = true`, #158; sinds #174 ook
@@ -638,6 +643,40 @@ kan rb-api eerder starten dan Postgres klaar is.
   expliciete structuur-eisen; server-side addenda (`RESEARCH_CONTRACT`,
   `AGENT_ADDENDUM`) zijn niet door de aanroeper te omzeilen
   (`AskService.BasePrompt`, `QuestionRouter.StructureFor`, `rb-ai/src/ai.ts`).
+- **Afgeleide kennis in de brontaal (Engels)** (#187) — een dwarsdoorsnijdend
+  onderscheid tussen twee talen in dezelfde codebase: UI en `/ask`-antwoorden
+  blijven Nederlands (`AskService.BasePrompt`), maar wat het LLM zelf
+  extraheert/synthetiseert — `ClaimMiner.ExtractionSystemPrompt`,
+  `PrimerService`'s systeemprompt, `RelationMiner`'s `explanation`-instructie
+  en rb-ai's `AGENT_ADDENDUM` (dezelfde relatie-`explanation`, via de
+  agentic-terugkoppeling, #120) — levert voortaan Engels, dicht bij de
+  officiële bewoording: geen vertaalstap tussen brontekst en opgeslagen
+  kennis, dus geen vertaalverlies of -drift, en de embeddings van bron en
+  afgeleide laag liggen in dezelfde taalruimte (bge-m3 is weliswaar
+  meertalig, maar eentalige consistentie is scherper dan cross-lingual
+  matching). `ClarificationMiner`/`ClarificationMiningService` volgen
+  hetzelfde patroon (#185, parallel spoor) — bewust niet in dit issue
+  aangeraakt. Een bestaande Nederlandse afgeleide laag wordt niet in-place
+  vertaald (een tweede LLM-stap over al opgeslagen tekst, met eigen
+  hallucinatie-risico) maar via `KnowledgeRegenerationService.WipeAsync`
+  schoongeveegd en met de nieuwe prompts herbouwd: één transactie verwijdert
+  `claim` (cascadeert naar `claim_source`), ALLE `correction`-rijen
+  (issue-comment 2026-07-14: ook de weinige door mensen ingevoerde/
+  geverifieerde — Nederlands en zeldzaam, expliciet opgegeven voor een schone
+  start), `knowledge_doc` met kind="primer" en `relation`, en reset
+  `Document.ClaimsMinedAt`/`ClarifiedAt` (anders blijft de laag na de wipe
+  permanent leeg — die markers overleven de wipe, want `Document` zelf is
+  bron, geen afgeleide laag; `KnowledgeDoc.RelationsMinedAt` heeft geen reset
+  nodig, de primer-rijen zelf zijn weg). Nooit aangeraakt: `source`/
+  `document`/`rule_chunk`, `card`, `errata`, `ban_entry`, `deck`/`deck_card`
+  (bron of feitelijke data, al Engels) — bewezen met een test die exact die
+  tabellen seedt en na de wipe ongewijzigd telt. De job
+  (`JobCatalog`: `regenerateknowledge`) zit bewust NIET in `RunAllAsync`
+  ("Alles bijwerken" bevat primer/claims/clarify/relations toch al niet) en
+  chaint bewust GEEN automatische her-generatie — een expliciete,
+  destructieve beheerdersactie (eigen gewaarschuwd paneel met confirm-stap in
+  rb-web) die de coördinator zelf ná de deploy uitvoert, waarna de
+  bestaande primer/claims/clarify/relations-jobs los getriggerd worden.
 - **Sanitize vóór `{@html}`** — tekst wordt ge-escaped vóór markdown-parse/
   icoon-injectie; link-URL's zijn gewhitelist (`rb-web/src/lib/markdown.ts`,
   `rbtokens.ts`, `docs/CONVENTIONS.md`).

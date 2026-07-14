@@ -48,9 +48,10 @@ antwoordformat scheidt "Regelbasis" (laag 0) van "Community-consensus"
   runes/energy, showdowns & combat, prioriteit en reacties, zones en
   kaartstromen, winnen/scoren, elk kern-keyword praktisch uitgelegd.
 - **Generatie**: LLM destilleert ze uit de volledige regelindex (per concept:
-  relevante §'s → samenvatting mét §-verwijzingen). Opslag als
-  `knowledge_doc` met kind="primer", embeddings, en een review-status
-  (dezelfde verify-flow als corrections — de beheerder keurt ze).
+  relevante §'s → samenvatting mét §-verwijzingen, Engels — #187: afgeleide
+  kennis in de brontaal). Opslag als `knowledge_doc` met kind="primer",
+  embeddings, en een review-status (dezelfde verify-flow als corrections —
+  de beheerder keurt ze).
 - **Gebruik**: een gecomprimeerde primer (~1.500 tokens) gaat áltijd mee als
   achtergrondblok in /ask; daarnaast doen primer-docs mee in retrieval.
 - **Onderhoud**: bij een regelwijziging (change met severity high/medium)
@@ -62,7 +63,8 @@ Datamodel:
 
 ```
 claim: id, topic_type (card|mechanic|section|concept), topic_ref,
-       statement (geparafraseerd, NL), first_seen, last_seen,
+       statement (geparafraseerd, Engels — #187: afgeleide kennis in de
+       brontaal, dicht bij de officiële bewoording), first_seen, last_seen,
        corroboration (aantal onafhankelijke bronnen),
        trust_score (gewogen: bron-trust × corroboratie),
        status (unreviewed|accepted|rejected|superseded), embedding
