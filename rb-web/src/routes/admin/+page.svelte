@@ -48,7 +48,8 @@
 		{ name: 'relations', label: 'Relaties minen', hint: 'LLM ontdekt relaties tussen de kennislagen (concepten, mechanieken, secties, kaarten, claims); voorstellen en nieuwe kind-labels komen in de reviewqueue — nooit rechtstreeks de graph in; draait ook elke nacht automatisch' },
 		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten komen als voorstel in de reviewqueue, nooit automatisch in het register; draait ook wekelijks automatisch' },
 		{ name: 'decks', label: 'Decks binnenhalen', hint: 'publieke decks van Piltover Archive via de sitemap (robots-compliant, met bronvermelding); throttled en gecapt per run — een volgende run gaat verder waar het grootboek gebleven is; draait ook elke 3 uur automatisch' },
-		{ name: 'benchmark', label: 'Judge-benchmark draaien', hint: 'de vaste scheidsrechter-vragenset door de /ask-pipeline; geïsoleerd van de kennisbank — geen trace, metric of relatie-terugkoppeling' },
+		{ name: 'benchmark', label: 'Judge-benchmark draaien', hint: 'de vaste scheidsrechter-vragenset één keer door de /ask-pipeline (standaardmodel); geïsoleerd van de kennisbank — geen trace, metric of relatie-terugkoppeling' },
+		{ name: 'benchmarksweep', label: 'Model-sweep draaien', hint: 'dezelfde vragenset door élk beschikbaar model (AI_BENCHMARK_MODELS), elk 2× — voor een eerlijke score/tijd-vergelijking en een consistentie-check; kostbaar (N modellen × 2 × vragen ask-aanroepen), geschatte omvang verschijnt in het log zodra de job start' },
 		{ name: 'feeds', label: 'Bron-feeds afspeuren', hint: 'nieuwe artikelen op de Riot-nieuwspagina\'s ontdekken; vertrouwde feeds zetten direct een bron, andere een voorstel — draait ook als eerste stap van "Bronnen scannen"' }
 	];
 

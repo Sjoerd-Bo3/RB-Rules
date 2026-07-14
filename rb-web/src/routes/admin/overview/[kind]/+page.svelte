@@ -166,7 +166,28 @@
 		durationMs: number; inputTokens: number | null; outputTokens: number | null;
 	}
 	interface BenchmarkRunDetail { run: BenchmarkRunItem; results: BenchmarkResultItem[]; }
-	interface BenchmarkOverview { runs: BenchmarkRunItem[]; selected: BenchmarkRunDetail | null; }
+
+	// Model-sweep (#174): elk model 2 runs naast elkaar + consistentie, en de
+	// sweep-historie (verloop van modelkwaliteit/-snelheid over tijd).
+	interface BenchmarkSweepRunItem {
+		runId: number; runIndex: number; scorePercent: number | null;
+		keyedCount: number; correctCount: number; questionCount: number;
+		totalDurationMs: number; avgDurationMs: number;
+		totalInputTokens: number; totalOutputTokens: number;
+	}
+	interface BenchmarkSweepModelItem {
+		model: string; runs: BenchmarkSweepRunItem[]; consistent: boolean | null;
+	}
+	interface BenchmarkSweepSummary {
+		sweepId: number; startedAt: string; modelCount: number; questionCount: number;
+	}
+	interface BenchmarkSweepDetail {
+		sweepId: number; startedAt: string; models: BenchmarkSweepModelItem[];
+	}
+	interface BenchmarkOverview {
+		runs: BenchmarkRunItem[]; selected: BenchmarkRunDetail | null;
+		sweeps: BenchmarkSweepSummary[]; selectedSweep: BenchmarkSweepDetail | null;
+	}
 
 	const TITLES: Record<string, { title: string; sub: string }> = {
 		kaarten: { title: 'Kaarten', sub: 'alle kaarten in de database, doorklikbaar naar de kaartpagina' },
@@ -246,6 +267,30 @@
 	const coverage = $derived(data.kind === 'setdekking' ? (data.data as SetCoverageOverview | null) : null);
 	const users = $derived(data.kind === 'gebruikers' ? (data.data as UserOverview | null) : null);
 	const benchmark = $derived(data.kind === 'benchmark' ? (data.data as BenchmarkOverview | null) : null);
+
+	// Model-sweep (#174): "modellen gerangschikt op score en op snelheid" —
+	// client-side sorteren, geen extra rb-api-vorm nodig. Score/snelheid per
+	// model = het gemiddelde over de 2 runs (mist een run z'n score nog geen
+	// sleutel, dan telt alleen de wel-gescoorde run mee).
+	let sweepSort = $state<'score' | 'speed'>('score');
+	function sweepAvgScore(m: BenchmarkSweepModelItem): number | null {
+		const scores = m.runs.map((r) => r.scorePercent).filter((s): s is number => s !== null);
+		return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+	}
+	function sweepAvgSpeedMs(m: BenchmarkSweepModelItem): number {
+		const speeds = m.runs.map((r) => r.avgDurationMs).filter((s) => s > 0);
+		return speeds.length ? speeds.reduce((a, b) => a + b, 0) / speeds.length : Infinity;
+	}
+	const sweepModelsSorted = $derived.by(() => {
+		const models = benchmark?.selectedSweep?.models ?? [];
+		const sorted = [...models];
+		if (sweepSort === 'score') {
+			sorted.sort((a, b) => (sweepAvgScore(b) ?? -1) - (sweepAvgScore(a) ?? -1));
+		} else {
+			sorted.sort((a, b) => sweepAvgSpeedMs(a) - sweepAvgSpeedMs(b));
+		}
+		return sorted;
+	});
 	const feeds = $derived(data.kind === 'feeds' ? ((data.data ?? []) as FeedItem[]) : []);
 	// Welke feed in bewerk-modus staat; zelfde reset-bij-route-wissel-patroon
 	// als primer se `editing` hierboven, maar op string-id (feed-id's zijn geen getallen).
@@ -1129,6 +1174,84 @@
 			{/if}
 		{/if}
 
+		<!-- Model-sweep (#174): elk model 2 runs naast elkaar — score, gemiddelde
+		     tijd per vraag en consistentie (scoren de 2 runs gelijk?) —
+		     gerangschikt op score of snelheid, plus de sweep-historie (verloop
+		     van modelkwaliteit/-snelheid over tijd). Zelfde isolatie-garantie
+		     als de single-run-benchmark hierboven (AskOptions.Benchmark). -->
+		{#if benchmark && benchmark.sweeps.length > 0}
+			<h2 class="gap-h">Model-sweep <span class="meta">(elk model 2×, score/tijd/consistentie)</span></h2>
+			{#if !benchmark.selectedSweep}
+				<p class="meta">Nog geen sweep-detail — kies een sweep hieronder.</p>
+			{:else}
+				<div class="sweep-toolbar">
+					<span class="meta">Gestart: {fmtDate(benchmark.selectedSweep.startedAt)}</span>
+					<div class="chips">
+						<button type="button" class="chip" class:active={sweepSort === 'score'} onclick={() => (sweepSort = 'score')}>
+							Op score
+						</button>
+						<button type="button" class="chip" class:active={sweepSort === 'speed'} onclick={() => (sweepSort = 'speed')}>
+							Op snelheid
+						</button>
+					</div>
+				</div>
+				<div class="table-wrap">
+					<table>
+						<thead>
+							<tr>
+								<th>Model</th><th>Run 1 — score</th><th>Run 1 — gem. tijd</th>
+								<th>Run 2 — score</th><th>Run 2 — gem. tijd</th><th>Consistent</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each sweepModelsSorted as m (m.model)}
+								{@const r1 = m.runs.find((r) => r.runIndex === 1)}
+								{@const r2 = m.runs.find((r) => r.runIndex === 2)}
+								<tr>
+									<td><strong>{m.model}</strong></td>
+									<td class="meta">{r1 && r1.scorePercent !== null ? `${r1.scorePercent}%` : '—'}</td>
+									<td class="meta nowrap">{r1 && r1.avgDurationMs > 0 ? `${(r1.avgDurationMs / 1000).toFixed(1)}s` : '—'}</td>
+									<td class="meta">{r2 && r2.scorePercent !== null ? `${r2.scorePercent}%` : '—'}</td>
+									<td class="meta nowrap">{r2 && r2.avgDurationMs > 0 ? `${(r2.avgDurationMs / 1000).toFixed(1)}s` : '—'}</td>
+									<td>
+										{#if m.consistent === null}
+											<span class="badge mute">n.v.t.</span>
+										{:else if m.consistent}
+											<span class="badge ok-b">gelijk</span>
+										{:else}
+											<span class="badge warn-b">afwijkend</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+
+			{#if benchmark.sweeps.length > 1}
+				<h3 class="gap-h">Sweep-historie <span class="meta">(verloop van modelkwaliteit/-snelheid over tijd)</span></h3>
+				<div class="table-wrap">
+					<table>
+						<thead><tr><th>Gestart</th><th>Modellen</th><th>Vragen</th></tr></thead>
+						<tbody>
+							{#each benchmark.sweeps as s (s.sweepId)}
+								<tr>
+									<td>
+										<a href="?sweep={s.sweepId}" aria-current={benchmark.selectedSweep?.sweepId === s.sweepId ? 'page' : undefined}>
+											{fmtDate(s.startedAt)}
+										</a>
+									</td>
+									<td class="meta">{s.modelCount}</td>
+									<td class="meta">{s.questionCount}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		{/if}
+
 		<!-- Kennis-gaten-rapport (#52) -->
 		{#if gaps}
 			<h2 class="gap-h">Dekking</h2>
@@ -1418,6 +1541,11 @@
 		color: var(--muted); text-decoration: none; font-size: 0.85rem;
 	}
 	.chip.active { border-color: var(--accent); color: var(--accent); }
+	/* Model-sweep-sorteerknoppen (#174): zelfde chip-vorm als de filter-chips
+	   elders, maar op een <button> (client-side sortering, geen URL-param) —
+	   de generieke button-regel hierboven zet anders een accent-achtergrond. */
+	button.chip { background: transparent; font-weight: 400; }
+	.sweep-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
 	.table-wrap { overflow-x: auto; }
 	table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
 	/* Pad-totalen (#121): compacte samenvatting boven de accounttabel. */

@@ -114,11 +114,14 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/users?${qs}`) };
 			}
 			case 'benchmark': {
-				// Los "run"-nummer (geen page/filter): welke run getoond wordt.
-				// Zonder parameter kiest rb-api de meest recente.
+				// Losse "run"- en "sweep"-nummers (geen page/filter): welke
+				// single-run resp. welke model-sweep (#174) getoond wordt.
+				// Zonder parameter kiest rb-api steeds de meest recente.
 				const qs = new URLSearchParams();
 				const run = url.searchParams.get('run');
 				if (run) qs.set('run', run);
+				const sweep = url.searchParams.get('sweep');
+				if (sweep) qs.set('sweep', sweep);
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/benchmark?${qs}`) };
 			}
 			case 'feeds':
