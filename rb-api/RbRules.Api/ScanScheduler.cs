@@ -7,7 +7,8 @@ namespace RbRules.Api;
 /// <summary>In-app scheduler (audit-fix: geen handmatige crontab meer).
 /// Elk uur: scan bronnen die volgens hun cadence aan de beurt zijn.
 /// Elke week: kaart-sync (nieuwe sets/errata). Periodieke zelfverrijking
-/// (#122): relatie-mining nachtelijk en de bronnen-scout wekelijks, als
+/// (#122): relatie-mining nachtelijk, de bronnen-scout wekelijks en de
+/// Piltover-decks-verversing (#15 fase 3, spoor C) elke paar uur, als
 /// gewone JobRunner-jobs op het run_log-grootboek.</summary>
 public class ScanScheduler(
     IServiceScopeFactory scopeFactory, JobRunner jobs, ILogger<ScanScheduler> logger)
@@ -28,6 +29,17 @@ public class ScanScheduler(
     // Bronnenjacht (#63/#122): wekelijks — elke run kost een research-call
     // van minuten, en het bronnenlandschap verandert niet sneller dan dat.
     private static readonly TimeSpan ScoutInterval = TimeSpan.FromDays(7);
+    // Piltover-decks (#15 fase 3, spoor C): DeckIngestService cap't op 400
+    // pagina's/run en throttlet ~1,5s/request (netiquette, #148) — een run
+    // duurt daardoor tot ~10 minuten. De sitemap meldt ~10.186 decks, dus de
+    // eenmalige backfill vraagt ~26 runs; bij een venster van 3 uur is die
+    // in ruim 3 dagen binnen zonder PA te bestoken (elke andere periodieke
+    // job hierboven is dagelijks of wekelijks — decks is de enige met een
+    // grote eenmalige achterstand). Ná de backfill kost een run bijna niets
+    // meer: het run_log-grootboek + de sitemap-lastmod-check laten alleen
+    // nieuwe of gewijzigde decks nog door, dus vers spul komt met dezelfde
+    // 3-uurscadans vanzelf binnen — geen handmatige job meer nodig.
+    private static readonly TimeSpan DecksInterval = TimeSpan.FromHours(3);
     private DateTimeOffset _lastCardSync = DateTimeOffset.MinValue;
     private DateTimeOffset _lastClaimsMine = DateTimeOffset.MinValue;
 
@@ -170,16 +182,21 @@ public class ScanScheduler(
                     logger.LogWarning(ex, "Mining/graph-sync overgeslagen (rb-ai/Neo4j onbereikbaar?)");
                 }
 
-                // Periodieke zelfverrijking (#122): relatie-mining nachtelijk,
-                // de bronnen-scout wekelijks. Beide draaien als gewone
-                // JobRunner-job — dezelfde éénjob-gate als handmatige jobs
-                // (nooit twee tegelijk), dezelfde live-voortgang in beheer en
-                // dezelfde degradatiepaden in de services zelf. Het run_log-
-                // grootboek (kind "job", door JobRunner geschreven bij elke
-                // afronding) bepaalt het venster: een handmatige run gisteren
-                // of een container-herstart veroorzaakt geen dubbele run.
+                // Periodieke zelfverrijking (#122, #15 fase 3 spoor C):
+                // relatie-mining nachtelijk, de bronnen-scout wekelijks en de
+                // Piltover-decks-verversing elke 3 uur. Alle drie draaien als
+                // gewone JobRunner-job — dezelfde éénjob-gate als handmatige
+                // jobs (nooit twee tegelijk), dezelfde live-voortgang in
+                // beheer en dezelfde degradatiepaden in de services zelf.
+                // Het run_log-grootboek (kind "job", door JobRunner
+                // geschreven bij elke afronding) bepaalt het venster: een
+                // handmatige run gisteren of een container-herstart
+                // veroorzaakt geen dubbele run. "decks" hergebruikt
+                // DeckIngestService ongewijzigd (sitemap → pagina's → opslag,
+                // #148) en hervat de backfill vanzelf waar het grootboek bleef.
                 await TryStartPeriodicJobAsync(scope.ServiceProvider, "relations", RelationsMineInterval, ct);
                 await TryStartPeriodicJobAsync(scope.ServiceProvider, "scout", ScoutInterval, ct);
+                await TryStartPeriodicJobAsync(scope.ServiceProvider, "decks", DecksInterval, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
