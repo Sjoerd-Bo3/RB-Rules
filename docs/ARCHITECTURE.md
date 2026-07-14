@@ -430,7 +430,12 @@ opgeslagen. De `ScanScheduler` (BackgroundService) draait elk uur een scan van
 de bronnen die aan de beurt zijn (cadence), stuurt web-push bij high-severity,
 her-indexeert regels en bans bij nieuwe/gewijzigde documenten, checkt de
 set-release-keten, en draait dagelijks kaart-sync + embeddings, nachtelijk
-claims- en relatie-mining en wekelijks de bronnen-scout.
+claims- en relatie-mining, wekelijks de bronnen-scout en elke 3 uur de
+Piltover-decks-verversing (#15 fase 3, spoor C: hergebruikt de bestaande
+"decks"-job/`DeckIngestService` ongewijzigd via hetzelfde
+`TryStartPeriodicJobAsync`-patroon als relaties/scout — de ~10k-deck-backfill
+loopt zo binnen enkele dagen leeg via het run_log-grootboek, waarna hetzelfde
+venster alleen nog nieuwe/gewijzigde decks ophaalt).
 
 ### 6.3 De graph-sync
 

@@ -120,6 +120,29 @@ public class SchedulingTests
         Assert.False(Scheduling.IsWindowDue(TimeSpan.FromDays(7), Now.AddDays(-6), Now));
         Assert.True(Scheduling.IsWindowDue(TimeSpan.FromDays(7), Now.AddDays(-7), Now));
     }
+
+    [Fact]
+    public void Window_DrieUursvensterVoorDecks()
+    {
+        // Piltover-decks (#15 fase 3, spoor C): de ~10k-deck-backfill
+        // verdeelt zich over vele runs à 400 pagina's; een venster van 3 uur
+        // triggert de volgende run niet vaker dan dat, ook al draait de tick
+        // zelf elk uur.
+        Assert.False(Scheduling.IsWindowDue(TimeSpan.FromHours(3), Now.AddHours(-2), Now));
+        Assert.True(Scheduling.IsWindowDue(TimeSpan.FromHours(3), Now.AddHours(-3), Now));
+    }
+
+    [Fact]
+    public void Window_MargeGeldtOokVoorHetDecksvenster()
+    {
+        // Zelfde 30-min-marge als de andere periodieke jobs: voorkomt dat de
+        // uurlijkse tick het 3-uursvenster net mist en de decks-run zo een
+        // tick verder opschuift.
+        Assert.True(Scheduling.IsWindowDue(
+            TimeSpan.FromHours(3), Now.AddHours(-2).AddMinutes(-40), Now));
+        Assert.False(Scheduling.IsWindowDue(
+            TimeSpan.FromHours(3), Now.AddHours(-2).AddMinutes(-25), Now));
+    }
 }
 
 public class ClassifierTests

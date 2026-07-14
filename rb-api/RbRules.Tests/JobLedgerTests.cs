@@ -64,6 +64,28 @@ public class JobLedgerTests
         Assert.Equal(t0, scan.At);
     }
 
+    [Fact]
+    public async Task LastRunAsync_DecksJob_LeestDeJobRunnerAfrondingUitHetGrootboek()
+    {
+        // Piltover-decks (#15 fase 3, spoor C): de scheduler moet zijn
+        // 3-uursvenster op precies dezelfde kind="job"/ref="decks"-regel
+        // kunnen bepalen als handmatige "decks"-runs al schrijven (#148,
+        // JobRunner.TryStart) — geen apart grootboek voor de periodieke
+        // trigger.
+        using var db = NewDb();
+        var lastDeckRun = DateTimeOffset.UtcNow.AddHours(-4);
+        db.RunLogs.Add(new RunLog { Kind = "job", Ref = "decks", Status = "ok", CreatedAt = lastDeckRun });
+        // Eigen logregels van DeckIngestService (kind "deckingest") zijn geen
+        // jobafronding en mogen het venster niet vullen.
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "deckingest", Ref = "deck:abc", Status = "ok", CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        Assert.Equal(lastDeckRun, await new JobLedger(db).LastRunAsync("decks"));
+    }
+
     private static RbRulesDbContext NewDb() => new InMemoryDbContext(
         new DbContextOptionsBuilder<RbRulesDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
