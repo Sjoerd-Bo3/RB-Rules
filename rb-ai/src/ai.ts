@@ -171,12 +171,18 @@ export function buildQueryOptions(input: {
   includePartialMessages: boolean;
   controller: AbortController;
   onBrainStep?: (step: string) => void;
+  /** Model-sweep (#174): expliciete modeloverride voor deze call — alleen
+   * gebruikt door benchmarkruns (AskOptions.Model in rb-api). Onbekend
+   * volgt de gewone SDK-degradatie (query() geeft een fout terug, gevangen
+   * door de aanroeper — geen aparte validatie hier); zonder override
+   * ongewijzigd gedrag (MODEL[task]). */
+  model?: string;
 }): Options {
-  const { task, systemPrompt, includePartialMessages, controller, onBrainStep } = input;
+  const { task, systemPrompt, includePartialMessages, controller, onBrainStep, model } = input;
   const research = task === "research";
   const agentic = task === "agentic";
   return {
-    model: MODEL[task],
+    model: model ?? MODEL[task],
     maxTurns: research ? RESEARCH_MAX_TURNS : agentic ? AGENTIC_MAX_TURNS : 1,
     // Basis-toolset (built-ins): leeg voor cheap/hard/agentic (agentic krijgt
     // zijn tools via de MCP-server hieronder), alleen de web-tools voor
@@ -328,7 +334,10 @@ export async function collectAnswer(
  * Warme pool (#154): een cheap-call waarvan de sessie-opties byte-gelijk
  * zijn aan een voorverwarmde sessie krijgt die sessie (subprocess-boot al
  * betaald); in alle andere gevallen — en bij een dood gebleken warme sessie
- * — start hij transparant koud. Eén sessie = één call, nooit hergebruik. */
+ * — start hij transparant koud. Eén sessie = één call, nooit hergebruik.
+ * Een `model`-override (#174) slaat de warme pool altijd over — de
+ * voorverwarmde sessie is altijd op MODEL.cheap gebootstrapt, dus een claim
+ * zou de override stilzwijgend negeren; zie de guard hieronder. */
 export async function askClaude(opts: {
   prompt: string;
   system?: string;
@@ -340,8 +349,12 @@ export async function askClaude(opts: {
    * terug zodat rb-api ze in AskTrace.BrainSteps kan vastleggen. */
   onBrainStep?: (step: string) => void;
   signal?: AbortSignal;
+  /** Model-sweep (#174): expliciete modeloverride voor déze call — alleen
+   * gezet door een benchmarkrun (rb-api's AskOptions.Model reist hier
+   * ongewijzigd doorheen). Undefined = het bestaande gedrag (MODEL[task]). */
+  model?: string;
 }): Promise<AskAnswer> {
-  const { prompt, system, task = "cheap", images = [], onDelta, onBrainStep, signal } = opts;
+  const { prompt, system, task = "cheap", images = [], onDelta, onBrainStep, signal, model } = opts;
   const research = task === "research";
   const agentic = task === "agentic";
 
@@ -386,7 +399,7 @@ export async function askClaude(opts: {
       maxWaitMs: AI_QUEUE_WAIT_MS,
     });
 
-    if (task === "cheap" && warmPool.isEnabled()) {
+    if (task === "cheap" && !model && warmPool.isEnabled()) {
       const sig: WarmSignature = { systemPrompt, includePartialMessages };
       warmPool.observe(sig);
       const claimed = controller.signal.aborted ? null : warmPool.claim(sig);
@@ -419,6 +432,7 @@ export async function askClaude(opts: {
       includePartialMessages,
       controller,
       onBrainStep,
+      model,
     });
     const arg = {
       prompt: images.length > 0 ? userMessage(prompt, images) : prompt,

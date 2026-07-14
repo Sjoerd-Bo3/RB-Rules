@@ -107,6 +107,30 @@ test("lege systemPrompt (undefined) zet het veld niet — signatuur-semantiek", 
   assert.equal("includePartialMessages" in o, false);
 });
 
+// ── Model-sweep (#174): expliciete modeloverride op elke taak ──────────────
+// De benchmark-sweep vraagt "zelfde retrieval + prompt, ander model" — de
+// override moet dus MODEL[task] vervangen voor elk taaktype, niet alleen
+// "cheap", en zonder override blijft het bestaande MODEL[task]-gedrag intact.
+
+test("model-override vervangt MODEL[task] op elk taaktype (#174)", () => {
+  const controller = new AbortController();
+  for (const task of ["cheap", "hard", "research", "agentic"] as const) {
+    const o = buildQueryOptions({
+      task,
+      includePartialMessages: false,
+      controller,
+      model: "claude-sonnet-5",
+    });
+    assert.equal(o.model, "claude-sonnet-5", `task=${task}`);
+  }
+});
+
+test("zonder model-override blijft MODEL[task] ongewijzigd (#174)", () => {
+  const controller = new AbortController();
+  const o = buildQueryOptions({ task: "hard", includePartialMessages: false, controller });
+  assert.equal(o.model, "claude-opus-4-8");
+});
+
 // ── buildUserMessage: het bericht dat de warme pool bij de claim pusht ─────
 
 test("buildUserMessage: zelfde content-vorm als het koude streaming-input-pad", () => {
@@ -223,5 +247,22 @@ test("prewarm-boot raakt de concurrency-cap niet aan: precies één acquire-call
     bootFnBody,
     /aiSemaphore/,
     "de warme-boot-functie mag de semaphore nooit aanraken (#154/#155-ontwerpgrens)",
+  );
+});
+
+// ── Model-override slaat de warme pool over (#174) ─────────────────────────
+// De voorverwarmde sessie is altijd op MODEL.cheap gebootstrapt
+// (bootWarmCheapSession roept buildQueryOptions({task:"cheap"}) zonder
+// model aan) — een cheap-call MET override die alsnog een warme claim pakt
+// zou de override stilzwijgend negeren. Zelfde bedradings-toets als
+// hierboven: geen SDK-subprocess nodig, alleen bewijs dat de guard er staat.
+test("model-override slaat de warme-pool-claim over (#174, bedrading)", () => {
+  const src = readFileSync(fileURLToPath(new URL("./ai.ts", import.meta.url)), "utf8");
+  const claimGuard = src.match(/if \(task === "cheap"[^)]*warmPool\.isEnabled\(\)\)/);
+  assert.ok(claimGuard, "de warme-pool-claimguard moet op task===\"cheap\" && warmPool.isEnabled() checken");
+  assert.match(
+    claimGuard![0],
+    /!model/,
+    "de guard moet een model-override uitsluiten van de warme-pool-claim",
   );
 });

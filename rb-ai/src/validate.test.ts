@@ -68,3 +68,24 @@ test("afbeeldingen: max 2, alleen toegestane mediaTypes en maat", () => {
   const kapot = parseAskRequest({ prompt: "v", images: ["geen object"] });
   assert.equal(kapot.ok, false);
 });
+
+// Model-sweep (#174): puur doorgeefluik — geen allowlist, alleen een
+// niet-lege string gaat mee; zonder override blijft het veld afwezig (het
+// bestaande gedrag, MODEL[task] in ai.ts).
+test("model: alleen niet-lege string gaat mee, anders afwezig (#174)", () => {
+  const met = parseAskRequest({ prompt: "v", model: "claude-opus-4-8" });
+  assert.equal(met.ok, true);
+  if (met.ok) assert.equal(met.request.model, "claude-opus-4-8");
+
+  const zonder = parseAskRequest({ prompt: "v" });
+  assert.equal(zonder.ok, true);
+  if (zonder.ok) assert.equal(zonder.request.model, undefined);
+
+  const leeg = parseAskRequest({ prompt: "v", model: "   " });
+  assert.equal(leeg.ok, true);
+  if (leeg.ok) assert.equal(leeg.request.model, undefined);
+
+  const getrimd = parseAskRequest({ prompt: "v", model: "  claude-sonnet-5  " });
+  assert.equal(getrimd.ok, true);
+  if (getrimd.ok) assert.equal(getrimd.request.model, "claude-sonnet-5");
+});
