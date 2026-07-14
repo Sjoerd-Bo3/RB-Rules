@@ -174,6 +174,28 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         }
     }
 
+    /// <summary>Voorverwarmsignaal (#154): meldt rb-ai dat de /ask-pagina
+    /// geladen is zodat de warme-sessie-pool alvast een SDK-subprocess kan
+    /// booten. Volledig stil bij uitval — dit mag nooit iets breken — en
+    /// intern op 2s gekapt: rb-ai antwoordt direct met een 202 (de boot
+    /// loopt daar op de achtergrond), dus langer wachten heeft geen zin.</summary>
+    public async Task PrewarmAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(2));
+            using var res = await http.PostAsync("/prewarm", content: null, cts.Token);
+            // Statuscode bewust niet gecheckt: elk antwoord is goed genoeg.
+        }
+        catch (Exception ex)
+        {
+            // Ook annulering slikken: een afgebroken paginalaad mag geen
+            // exception het request-pad in duwen — prewarm is best-effort.
+            logger.LogDebug(ex, "rb-ai /prewarm niet bereikbaar (stil genegeerd)");
+        }
+    }
+
     /// <summary>Fout-body van rb-ai lezen is best-effort: geen (geldige)
     /// JSON betekent alleen géén steps — de fout zelf is al gelogd.</summary>
     private static async Task<AskResponse?> TryReadBodyAsync(
