@@ -100,6 +100,9 @@ builder.Services.AddScoped<RulingsService>();
 builder.Services.AddScoped<UserAccountService>();
 builder.Services.AddScoped<PasskeyService>();
 builder.Services.AddScoped<RequestUserContext>();
+// Grondig-quotum TOCTOU-reservering (#153): proces-breed, dus singleton —
+// zie AgenticInFlightTracker (single-instance-aanname).
+builder.Services.AddSingleton<AgenticInFlightTracker>();
 builder.Services.AddSingleton<MailService>();
 builder.Services.AddSingleton<JobRunner>();
 builder.Services.AddSingleton<PushService>();

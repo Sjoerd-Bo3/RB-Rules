@@ -306,10 +306,10 @@ sequenceDiagram
     end
     A->>A: alle kanaalslots innen; RRF-fusie (bron-bias per vraagtype)
     A->>A: prompt-piramide (officieel > primer > community)
-    alt agentic-gate (Ruling met 2+ kaarten, of lege retrieval)
+    alt agentic-escalatie (gate: Ruling met 2+ kaarten / lege retrieval — of gebruiker: Grondig binnen dagtegoed)
         A->>AI: task=agentic (brein-tools)
         AI-->>A: antwoord + brein-stappen (of vangnet)
-    else single-pass
+    else single-pass (ook bij gebruikerskeuze Snel)
         A->>AI: task=cheap (of hard bij foto)
         AI-->>A: antwoord (evt. streamend)
     end
@@ -352,10 +352,21 @@ Kernpunten (`AskService.cs`):
    antwoord komt woord-voor-woord via NDJSON (`/api/ask/stream` →
    `RbAiClient.AskStreamAsync`).
 7. **Agentic escalatie** (#107, `docs/BRAIN.md` §2.4): pas ná de retrieval
-   beslist `AgenticGate.ShouldEscalate` of de vraag mag door-redeneren over het
+   beslist `AgenticGate.Decide` of de vraag mag door-redeneren over het
    brein (flag `ASK_AGENTIC` = off/auto/force). Faalt de agent → **vangnet**:
    de klassieke single-pass draait alsnog. De agent kan ontdekte verbanden als
    relatievoorstel achterlaten (#120, `AgenticRelationService`).
+   De **aanpak-keuze** (#153) voedt dezelfde beslissing: een ingelogde vrager
+   kiest per vraag Auto (gate beslist), Snel (nooit escaleren) of Grondig
+   (agent forceren). Server-authoritatief: het `approach`-request-veld wordt
+   alleen gehonoreerd voor een geauthenticeerde gebruiker
+   (`RequestUserContext`), de flag blijft de meester (off ⇒ Grondig bestaat
+   niet), foto's blijven op het vision-pad en Grondig kost een eigen
+   dagquotum (`AppUser.DailyAgenticQuota`; teller = metric-rijen met
+   `EscalatedBy = "user"`). Niet-gehonoreerde keuzes vallen terug op Auto met
+   een reden in de respons-metadata (`Approach`/`ApproachReason`) — de UI
+   toont daarop de "quota op — automatisch beantwoord"-melding; op het
+   streamingpad reist de terugmelding al in het meta-frame mee.
 8. **Degradatie** (#100): valt de embedding uit (Ollama weg / model niet
    gepulld), dan vervallen alle vector-kanalen en draait de vraag door op FTS +
    naam/mechaniek/lexicaal — nooit een kale 500. Valt rb-ai uit, dan geeft
@@ -468,7 +479,11 @@ kan rb-api eerder starten dan Postgres klaar is.
   `AdminEndpoints`).
 - **Rate-limiting & quota** (#42) — policies `llm` (per client-IP of
   sessietoken), `auth` en `webauthn` in `Program.cs`; per-account-dagquota via
-  `UserQuotaFilter`.
+  `UserQuotaFilter`. Het dure agent-pad heeft een eigen rem (#153): zelf
+  geforceerde Grondig-vragen tellen tegen `DailyAgenticQuota` (default 5/dag,
+  per account instelbaar in het beheer); gate-escalaties tellen niet mee. Het
+  kostenoverzicht splitst het agentic-pad op wie escaleerde ("agentic (gate)"
+  vs "agentic (gebruiker)", `AdminOverviewService.UsersAsync`).
 - **Best-effort achtergrondwerk** — `JobCatalog` registreert jobs als één
   switch-vrije catalogus; `RunAllAsync` ("Alles bijwerken") draait elke stap
   best-effort in volgorde.

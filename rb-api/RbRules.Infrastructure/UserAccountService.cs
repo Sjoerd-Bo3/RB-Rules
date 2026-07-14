@@ -10,12 +10,16 @@ namespace RbRules.Infrastructure;
 public class RequestUserContext
 {
     public AppUser? User { get; set; }
+    /// <summary>Verbruik van vandaag zoals de quota-filter het al telde
+    /// (#153) — zo kan de aanpak-beslissing in AskService het Grondig-quotum
+    /// toetsen zonder een tweede telling. Null = anoniem of geen vraag-route.</summary>
+    public UsageToday? Usage { get; set; }
 }
 
 public record LoginRequestResult(
     bool Sent, string? Error, bool Unavailable = false, string? DevLink = null);
 public record LoginVerifyResult(string SessionToken, string Email, DateTimeOffset ExpiresAt);
-public record UsageToday(int Questions, int Photos);
+public record UsageToday(int Questions, int Photos, int AgenticForced = 0);
 
 /// <summary>Accounts met magic-link-login (#42): e-mail → eenmalige link →
 /// sessie. Wachtwoorden bestaan hier bewust niet; de database bewaart alleen
@@ -142,15 +146,22 @@ public class UserAccountService(RbRulesDbContext db, MailService mail, ILogger<U
 
     /// <summary>Gebruik van vandaag (UTC-dag) uit ask_metric — de teller
     /// waartegen de quota-filter handhaaft. Mislukte vragen tellen mee:
-    /// simpel, en conservatief als abuse-rem.</summary>
+    /// simpel, en conservatief als abuse-rem. AgenticForced (#153) telt
+    /// alleen door de gebruiker geforceerde agentic-pogingen (EscalatedBy
+    /// "user") — gate-escalaties raken het Grondig-quotum niet.</summary>
     public async Task<UsageToday> UsageTodayAsync(long userId, CancellationToken ct = default)
     {
         var since = new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero);
         var counts = await db.AskMetrics.AsNoTracking()
             .Where(m => m.UserId == userId && m.CreatedAt >= since)
             .GroupBy(m => 1)
-            .Select(g => new { Questions = g.Count(), Photos = g.Count(m => m.HadImage) })
+            .Select(g => new
+            {
+                Questions = g.Count(),
+                Photos = g.Count(m => m.HadImage),
+                AgenticForced = g.Count(m => m.EscalatedBy == "user"),
+            })
             .FirstOrDefaultAsync(ct);
-        return new(counts?.Questions ?? 0, counts?.Photos ?? 0);
+        return new(counts?.Questions ?? 0, counts?.Photos ?? 0, counts?.AgenticForced ?? 0);
     }
 }

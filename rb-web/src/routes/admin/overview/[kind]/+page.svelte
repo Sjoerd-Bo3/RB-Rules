@@ -116,6 +116,7 @@
 	}
 	interface UserItem {
 		id: number; email: string; blocked: boolean; dailyQuota: number; dailyPhotoQuota: number;
+		dailyAgenticQuota: number;
 		createdAt: string; lastLoginAt: string | null;
 		questions: number; photos: number; cheap: number; hard: number;
 		failed: number; avgDurationMs: number;
@@ -1069,6 +1070,8 @@
 										<input type="hidden" name="id" value={u.id} />
 										<label>vragen <input type="number" name="dailyQuota" value={u.dailyQuota} min="0" max="10000" /></label>
 										<label>foto's <input type="number" name="dailyPhotoQuota" value={u.dailyPhotoQuota} min="0" max="10000" /></label>
+										<!-- #153: zelf geforceerde Grondig-vragen per dag -->
+										<label>grondig <input type="number" name="dailyAgenticQuota" value={u.dailyAgenticQuota} min="0" max="10000" /></label>
 										<button class="small">Opslaan</button>
 									</form>
 									{#if form?.error && formDocId === u.id}<p class="warn">{form.error}</p>{/if}

@@ -10,8 +10,11 @@ export interface AccountInfo {
 	blocked: boolean;
 	dailyQuota: number;
 	dailyPhotoQuota: number;
+	/** Grondig-dagquotum (#153): zelf geforceerde agentic-vragen per dag. */
+	dailyAgenticQuota: number;
 	questionsToday: number;
 	photosToday: number;
+	agenticToday: number;
 	createdAt: string;
 }
 

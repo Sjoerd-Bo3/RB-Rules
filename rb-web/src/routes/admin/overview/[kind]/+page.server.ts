@@ -358,6 +358,12 @@ export const actions: Actions = {
 			if (!Number.isInteger(q) || q < 0) return fail(400, { error: 'Foto-quotum moet een getal van 0 of hoger zijn', id });
 			patch.dailyPhotoQuota = q;
 		}
+		// #153: Grondig-dagquotum (zelf geforceerde agentic-vragen).
+		if (form.has('dailyAgenticQuota')) {
+			const q = Number(form.get('dailyAgenticQuota'));
+			if (!Number.isInteger(q) || q < 0) return fail(400, { error: 'Grondig-quotum moet een getal van 0 of hoger zijn', id });
+			patch.dailyAgenticQuota = q;
+		}
 		try {
 			await adminApi(`/api/admin/users/${id}`, {
 				method: 'PATCH',
