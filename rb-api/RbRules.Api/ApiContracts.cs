@@ -8,8 +8,12 @@ public record SourcePatch(
 /// <summary>Beheerder-bewerking van een kennisdoc (#70).</summary>
 public record KnowledgePatch(string? Title, string? Body);
 
+/// <summary>Approach (#153): "auto"|"fast"|"thorough" — alleen gehonoreerd
+/// voor een geauthenticeerde vrager (anders genegeerd); onbekende waarden
+/// vallen op auto terug. De server-flag blijft de meester.</summary>
 public record AskRequest(
-    string Question, List<AskImageDto>? Images = null, List<AskTurnDto>? History = null);
+    string Question, List<AskImageDto>? Images = null, List<AskTurnDto>? History = null,
+    string? Approach = null);
 
 /// <summary>Eerdere ronde in een doorvraag-gesprek (#41).</summary>
 public record AskTurnDto(string Question, string Answer);
@@ -40,8 +44,10 @@ public record PasskeyRegisterVerifyDto(string? Token, AuthenticatorAttestationRa
 
 public record PasskeyLoginVerifyDto(string? Token, AuthenticatorAssertionRawResponse? Response);
 
-/// <summary>Beheerder-bewerking van een account (#42): blokkeren en quota.</summary>
-public record UserPatch(bool? Blocked, int? DailyQuota, int? DailyPhotoQuota);
+/// <summary>Beheerder-bewerking van een account (#42): blokkeren en quota
+/// (incl. het Grondig-dagquotum, #153).</summary>
+public record UserPatch(
+    bool? Blocked, int? DailyQuota, int? DailyPhotoQuota, int? DailyAgenticQuota = null);
 
 /// <summary>Review-beslissing op een claim/relatie (#124): optionele
 /// beheerder-notitie bij bevestigen, verwerpen of notitie-promotie.</summary>

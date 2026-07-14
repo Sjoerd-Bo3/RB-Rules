@@ -280,7 +280,7 @@ public class AskServiceAgenticTests
             InteractionQuestion, images: null, history: null,
             onMeta: _ => Task.CompletedTask,
             onDelta: d => { deltas.Append(d); return Task.CompletedTask; },
-            cts.Token));
+            ct: cts.Token));
 
         // Geen exception, geen vangnet (nieuwe kosten zonder luisteraar) —
         // wél volledige registratie: metric én trace bestaan.

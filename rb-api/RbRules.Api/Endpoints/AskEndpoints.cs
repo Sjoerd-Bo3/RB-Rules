@@ -17,9 +17,12 @@ public static class AskEndpoints
         {
             if (ValidateAsk(req, out var images, out var history) is { } bad) return bad;
             // De duurmeting voor de "gemiddeld ±Xs"-indicatie zit in AskService.
+            // Approach (#153): parse valt veilig op Auto terug; of de keuze
+            // gehonoreerd wordt beslist AskService (alleen ingelogd).
             var result = await ask.AskAsync(
                 req.Question.Trim(), images.Count > 0 ? images : null,
-                history.Count > 0 ? history : null);
+                history.Count > 0 ? history : null,
+                AgenticGate.ParseApproach(req.Approach));
             return Results.Ok(result);
         }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
 
@@ -34,7 +37,9 @@ public static class AskEndpoints
         {
             if (ValidateAsk(req, out var images, out var history) is { } bad) return bad;
             return Results.Stream(
-                body => StreamAskAsync(ask, req.Question.Trim(), images, history, http, body),
+                body => StreamAskAsync(
+                    ask, req.Question.Trim(), images, history,
+                    AgenticGate.ParseApproach(req.Approach), http, body),
                 "application/x-ndjson");
         }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
 
@@ -157,7 +162,7 @@ public static class AskEndpoints
     /// de metric-afronding in AskService gebruikt bewust geen request-token.</summary>
     private static async Task StreamAskAsync(
         AskService ask, string question, List<RbAiClient.AiImage> images,
-        List<AskTurn> history, HttpContext http, Stream body)
+        List<AskTurn> history, AskApproach approach, HttpContext http, Stream body)
     {
         await using var writer = new StreamWriter(body);
         async Task WriteFrameAsync(object frame)
@@ -174,9 +179,12 @@ public static class AskEndpoints
                 {
                     type = "meta", questionType = m.QuestionType,
                     citations = m.Citations, claims = m.Claims,
+                    // #153: aanpak-terugmelding vóór het antwoord — een
+                    // quota-terugval hoort niet te wachten op het slotframe.
+                    approach = m.Approach, approachReason = m.ApproachReason,
                 }),
                 onDelta: text => WriteFrameAsync(new { type = "delta", text }),
-                http.RequestAborted);
+                approach, http.RequestAborted);
             await WriteFrameAsync(new { type = "final", result });
         }
         catch (OperationCanceledException)

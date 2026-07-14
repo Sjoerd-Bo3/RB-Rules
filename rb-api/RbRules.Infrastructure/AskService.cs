@@ -46,7 +46,12 @@ public record AskResult(
     string Answer, IReadOnlyList<Citation> Citations,
     IReadOnlyList<AskCard> Cards, string QuestionType,
     bool Ok = true, IReadOnlyList<AskClaim>? Claims = null,
-    IReadOnlyList<AskMisconception>? Misconceptions = null);
+    IReadOnlyList<AskMisconception>? Misconceptions = null,
+    // Aanpak-terugmelding (#153): welke aanpak het wérd ("auto"|"fast"|
+    // "thorough") en — als de gebruikerskeuze niet gehonoreerd is — waarom
+    // (AgenticGate.Reason*). De UI toont daarop de nette melding
+    // ("quota op — automatisch beantwoord").
+    string? Approach = null, string? ApproachReason = null);
 
 /// <summary>Vroege metadata voor het streamingpad (#31): vraagtype, citaties
 /// en community-claims staan al vast vóór de LLM-call — de UI kan daarmee de
@@ -55,7 +60,11 @@ public record AskResult(
 /// tegen het volledige antwoord gematcht).</summary>
 public record AskStreamMeta(
     string QuestionType, IReadOnlyList<Citation> Citations,
-    IReadOnlyList<AskClaim>? Claims);
+    IReadOnlyList<AskClaim>? Claims,
+    // Aanpak-terugmelding (#153), al vóór het antwoord: bij een agentic run
+    // zit tussen meta en de eerste delta een lange stille wachtfase — de UI
+    // kan een quota-terugval dus het best meteen melden.
+    string? Approach = null, string? ApproachReason = null);
 
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
@@ -139,8 +148,9 @@ public class AskService(
     public Task<AskResult> AskAsync(
         string question, IReadOnlyList<RbAiClient.AiImage>? images = null,
         IReadOnlyList<AskTurn>? history = null,
+        AskApproach approach = AskApproach.Auto,
         CancellationToken ct = default) =>
-        AskCoreAsync(question, images, history, onMeta: null, onDelta: null, ct);
+        AskCoreAsync(question, images, history, approach, onMeta: null, onDelta: null, ct);
 
     /// <summary>Streamende variant (#31): identieke retrieval en afronding als
     /// <see cref="AskAsync"/> (één pass), maar het antwoord komt via
@@ -151,12 +161,13 @@ public class AskService(
         string question, IReadOnlyList<RbAiClient.AiImage>? images,
         IReadOnlyList<AskTurn>? history,
         Func<AskStreamMeta, Task> onMeta, Func<string, Task> onDelta,
+        AskApproach approach = AskApproach.Auto,
         CancellationToken ct = default) =>
-        AskCoreAsync(question, images, history, onMeta, onDelta, ct);
+        AskCoreAsync(question, images, history, approach, onMeta, onDelta, ct);
 
     private async Task<AskResult> AskCoreAsync(
         string question, IReadOnlyList<RbAiClient.AiImage>? images,
-        IReadOnlyList<AskTurn>? history,
+        IReadOnlyList<AskTurn>? history, AskApproach approach,
         Func<AskStreamMeta, Task>? onMeta, Func<string, Task>? onDelta,
         CancellationToken ct)
     {
@@ -206,8 +217,13 @@ public class AskService(
         // anders blijft na één interactievraag élke follow-up escaleren.
         // Gededupliceerd op langste naam (Domain), omdat de substring-match
         // "Jinx" ook binnen "Jinx, Loose Cannon" raakt. Alleen berekend als
-        // de flag aan staat: het off-pad doet géén extra query.
-        var gateTask = agenticMode == AgenticMode.Off
+        // de flag aan staat: het off-pad doet géén extra query — en het
+        // Fast-pad (#153) evenmin, want dat escaleert per definitie niet.
+        // Aanpak-keuze (#153), server-authoritatief: alleen een ingelogde
+        // vrager (gezet door de quota-filter) mag de gate sturen — anoniem
+        // wordt het veld genegeerd en blijft alles Auto.
+        var requestedApproach = userContext.User is null ? AskApproach.Auto : approach;
+        var gateTask = agenticMode == AgenticMode.Off || requestedApproach == AskApproach.Fast
             ? Task.FromResult(new ChannelResult<List<string>>([], null))
             : await StartDbChannelAsync("agentic-gate", new List<string>(),
                 ctx => CardsNamedIn(ctx, question.ToLowerInvariant())
@@ -363,7 +379,8 @@ public class AskService(
             vectorFailed |= r.Failure is not null;
         }
         var gateResult = await gateTask;
-        var gateCardMentions = agenticMode == AgenticMode.Off
+        // Off- én Fast-pad (#153) doen geen gate-query: gateResult is dan leeg.
+        var gateCardMentions = agenticMode == AgenticMode.Off || requestedApproach == AskApproach.Fast
             ? 0
             : AgenticGate.CountDistinctMentions(gateResult.Value);
         var bansResult = await bansTask;
@@ -504,20 +521,6 @@ public class AskService(
                   $"Vraag: {t.Question}\nAntwoord: {(t.Answer.Length > MaxHistoryAnswerChars ? t.Answer[..MaxHistoryAnswerChars] + "…" : t.Answer)}"));
         var questionLabel = turns.Count == 0 ? "Vraag" : "Vervolgvraag";
 
-        // Streaming (#31): citaties/claims/vraagtype staan nu vast — vroeg
-        // naar de UI zodat die alvast kan renderen terwijl het antwoord komt.
-        if (onMeta is not null)
-            await onMeta(new AskStreamMeta(type.ToString(), citations, askClaims));
-
-        // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
-        // Blok-volgorde = de kennispiramide van #51: officieel (fragmenten,
-        // rulings, kaartfeiten, banlijst) > primer > community-interpretatie >
-        // misvattingen (#125, negatieve kennis — onderaan, kleurt nooit het oordeel).
-        var prompt =
-            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{misconceptionBlock}{historyBlock}\n\n{questionLabel}: {question}";
-        var system = $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}";
-        var task = images is { Count: > 0 } ? "hard" : "cheap";
-
         // Agentic-gate (#107, docs/BRAIN.md §2.4): pas ná de retrieval
         // beslissen of deze vraag mag door-redeneren over het brein.
         //
@@ -541,9 +544,40 @@ public class AskService(
             && textHits.Count == 0
             && !cardContext.LexicalEvidence
             && !primerRelevant;
-        var agentic = AgenticGate.ShouldEscalate(
-            type, gateCardMentions, emptyRetrieval, agenticMode,
-            hasImage: images is { Count: > 0 });
+        // Grondig-quotum (#153): de stand komt uit de telling die de
+        // quota-filter dit request al deed (RequestUserContext.Usage) — geen
+        // tweede query. Alleen relevant voor een gehonoreerd Thorough; de
+        // volgorde in Decide legt flag/foto-terugval boven de quota-reden.
+        var quotaAvailable = requestedApproach == AskApproach.Thorough
+            && userContext.User is { } quotaUser
+            && (userContext.Usage?.AgenticForced ?? 0) < quotaUser.DailyAgenticQuota;
+        var decision = AgenticGate.Decide(
+            requestedApproach, agenticMode, type, gateCardMentions, emptyRetrieval,
+            hasImage: images is { Count: > 0 }, quotaAvailable);
+        var agentic = decision.Escalate;
+        // Attributie voor metric/trace (#153): wie dwong de escalatie af.
+        // "user"-rijen zijn tegelijk de teller van het Grondig-dagquotum.
+        var escalatedBy = decision.Escalate
+            ? (decision.DecidedBy == AskDecider.User ? "user" : "gate")
+            : null;
+        var approachUsed = AgenticGate.EffectiveApproach(decision, requestedApproach);
+
+        // Streaming (#31): citaties/claims/vraagtype staan nu vast — vroeg
+        // naar de UI zodat die alvast kan renderen terwijl het antwoord komt.
+        // De aanpak-terugmelding (#153) gaat mee: een quota-terugval hoort
+        // niet pas ná de lange agentic-wachtfase zichtbaar te worden.
+        if (onMeta is not null)
+            await onMeta(new AskStreamMeta(type.ToString(), citations, askClaims,
+                approachUsed, decision.FallbackReason));
+
+        // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
+        // Blok-volgorde = de kennispiramide van #51: officieel (fragmenten,
+        // rulings, kaartfeiten, banlijst) > primer > community-interpretatie >
+        // misvattingen (#125, negatieve kennis — onderaan, kleurt nooit het oordeel).
+        var prompt =
+            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{misconceptionBlock}{historyBlock}\n\n{questionLabel}: {question}";
+        var system = $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}";
+        var task = images is { Count: > 0 } ? "hard" : "cheap";
 
         // Bij escalatie vervángt de agentic call de finale LLM-call, mét
         // dezelfde contextblokken als startpunt (§2.4: de agent hoeft niet te
@@ -639,7 +673,10 @@ public class AskService(
         // de token-teller (#121) voedt het kostenoverzicht in het beheer.
         await RecordMetricAsync(
             sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null,
-            agentic: agentAnswered, model: usedModel, usage: usage);
+            agentic: agentAnswered, model: usedModel, usage: usage,
+            // #153: attributie op de póging (ook bij vangnet/abort) — de
+            // kosten zijn dan al gemaakt, dus het quotum telt de rij mee.
+            escalatedBy: escalatedBy);
 
         // Agentic-terugkoppeling (#120): door de agent ontdekte verbanden als
         // relatievoorstel achterlaten — het brein verrijkt zichzelf al
@@ -699,6 +736,9 @@ public class AskService(
                 // marker in BrainSteps — dezelfde controleerbaarheid als de
                 // denkstappen.
                 Agentic = agentAnswered,
+                // #153: wie de escalatie afdwong (gate/gebruiker) — de badge
+                // in de beheer-traces; null als er niet geëscaleerd is.
+                EscalatedBy = escalatedBy,
                 BrainSteps = brainSteps,
                 // Het volledige gesprek (#143): het definitieve antwoord —
                 // op de streamingroute is dat het slotframe uit
@@ -732,7 +772,8 @@ public class AskService(
 
         return new(answer, citations, cards, type.ToString(),
             Ok: aiAnswer is not null, Claims: askClaims,
-            Misconceptions: askMisconceptions);
+            Misconceptions: askMisconceptions,
+            Approach: approachUsed, ApproachReason: decision.FallbackReason);
     }
 
     /// <summary>Consumeert de rb-ai-stream: deltas door naar de UI, het
@@ -1134,7 +1175,8 @@ public class AskService(
     /// statistiek houden.</summary>
     private async Task RecordMetricAsync(
         long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images,
-        bool ok, bool agentic = false, string? model = null, AiUsage? usage = null)
+        bool ok, bool agentic = false, string? model = null, AiUsage? usage = null,
+        string? escalatedBy = null)
     {
         try
         {
@@ -1151,6 +1193,9 @@ public class AskService(
                 Model = model ?? (images is { Count: > 0 } ? "hard" : "cheap"),
                 // #107: duurstatistiek toont het agentic-pad apart.
                 Agentic = agentic,
+                // #153: attributie gate/gebruiker — "user"-rijen zijn de
+                // teller van het Grondig-dagquotum (UsageTodayAsync).
+                EscalatedBy = escalatedBy,
                 // #121: echte token-tellingen (som over alle calls van deze
                 // vraag); null = geen usage ontvangen, onbekend ≠ 0.
                 InputTokens = usage?.InputTokens,

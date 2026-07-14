@@ -44,8 +44,12 @@ public class UserQuotaFilter : IEndpointFilter
                     : StatusCodes.Status429TooManyRequests);
 
         // Voor de duur van dit request bekend — AskService stempelt hiermee
-        // ask_metric/ask_trace op het account.
-        http.RequestServices.GetRequiredService<RequestUserContext>().User = user;
+        // ask_metric/ask_trace op het account. Het al getelde verbruik gaat
+        // mee (#153): de aanpak-beslissing toetst daarop het Grondig-quotum
+        // zonder een tweede telling.
+        var requestUser = http.RequestServices.GetRequiredService<RequestUserContext>();
+        requestUser.User = user;
+        requestUser.Usage = ask is null ? null : usage;
         return await next(context);
     }
 }
