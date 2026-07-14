@@ -376,8 +376,21 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         // ClaimMiningService.CheckOfficialAsync).
         var refLower = topicRef.ToLowerInvariant();
         var siblings = await db.Corrections
-            .Where(c => c.Provenance == provenance && c.Scope == scope
-                        && c.Ref.ToLower() == refLower)
+            .Where(c => c.Provenance == provenance
+                        && ((c.Scope == scope && c.Ref.ToLower() == refLower)
+                            // Cross-bucket-redding (#184-review): een beheerder-
+                            // opmerking kan dit item via een anker-correctie naar
+                            // een ánder (Scope, Ref) hebben verplaatst. Zonder de
+                            // ReviewNote-items van deze bron erbij zou een her-mine
+                            // die het oorspronkelijke (foute) anker opnieuw
+                            // extraheert het verplaatste item niet vinden en een
+                            // spookduplicaat aanmaken (de sticky-guard vuurt dan
+                            // nooit). Ze meenemen laat de tekst-/embedding-dedupe
+                            // hieronder het verplaatste item alsnog terugvinden; de
+                            // embedding-poort (DedupeGateDistance) voorkomt dat een
+                            // écht ander concept van dezelfde bron er per ongeluk
+                            // in smelt.
+                            || c.ReviewNote != null))
             .ToListAsync(ct);
 
         Pgvector.Vector vec;
@@ -418,22 +431,26 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             // blijft verified, ook als een flaky her-extractie de poort niet
             // haalt; een pending item upgradet zodra een latere run grounded +
             // anchored is.
+            // Beheerder-opmerking (#184) maakt dit item beheerder-eigendom: een
+            // volgende her-mine mag de status én het anker (Scope/Ref + het
+            // Question-label) die de beheerder achterliet niet stilzwijgend
+            // terugdraaien — óók niet als een anker-correctie dit item naar een
+            // ander (Scope, Ref) verplaatste (de cross-bucket-redding hierboven
+            // vindt het juist dáárom terug). Alleen de bron-afgeleide
+            // tekst/citaat/embedding verversen met de nieuwste extractie.
+            if (!string.IsNullOrWhiteSpace(match.ReviewNote))
+            {
+                match.Text = BuildText(ec);
+                match.SourceRef = src.Url;
+                match.Embedding = vec;
+                await db.SaveChangesAsync(ct);
+                return (ClarifyOutcome.Updated, null);
+            }
+
             match.Text = BuildText(ec);
             match.Question = QuestionLabelFor(ec);
             match.SourceRef = src.Url;
             match.Embedding = vec;
-
-            // Beheerder-opmerking (#184) is een menselijk oordeel over de
-            // status van dit item (gezet via de reject-/her-evaluatie-actie)
-            // — een volgende her-mine mag dat niet stilzwijgend terugdraaien.
-            // Status/StatusReason blijven staan zoals de beheerder ze
-            // achterliet; alleen de brontekst hierboven ververst met de
-            // nieuwste extractie.
-            if (!string.IsNullOrWhiteSpace(match.ReviewNote))
-            {
-                await db.SaveChangesAsync(ct);
-                return (ClarifyOutcome.Updated, null);
-            }
 
             if (match.Status == "verified" || verifies)
             {
