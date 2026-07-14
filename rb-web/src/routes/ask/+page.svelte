@@ -3,6 +3,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import RbText from '$lib/RbText.svelte';
 	import AnswerView from '$lib/AnswerView.svelte';
+	import AskHistoryPanel from '$lib/AskHistoryPanel.svelte';
 	import { citationEssence, splitSettled } from '$lib/answerFormat';
 	import { quotaMessage } from '$lib/quota';
 	import { APPROACH_OPTIONS, approachNotice, type Approach } from '$lib/approach';
@@ -461,6 +462,10 @@
 			<button type="button" class="chip" onclick={() => (question = ex)}>{ex}</button>
 		{/each}
 	</div>
+
+	<!-- Eigen ask-geschiedenis (#157): dicht standaard, laadt al mee met de
+	     pagina (+page.server.ts) — geen extra client-fetch nodig. -->
+	<AskHistoryPanel items={data.askHistory} loggedIn={data.loggedIn} />
 
 	<form
 		method="POST"
