@@ -57,7 +57,7 @@
 		communityClaims: string | null; verifiedRulings: number;
 		model: string | null; hadImage: boolean; durationMs: number;
 		phaseTimings: string | null;
-		agentic: boolean; brainSteps: string | null;
+		agentic: boolean; escalatedBy: string | null; brainSteps: string | null;
 		ok: boolean; createdAt: string;
 	}
 
@@ -459,7 +459,8 @@
 				<details class="trace panel" ontoggle={(e) => { if (e.currentTarget.open) loadTraceDetail(t.id); }}>
 					<summary>
 						<span class="badge {t.ok ? 'ok-b' : 'err'}">{t.questionType ?? '?'}</span>
-						{#if t.agentic}<span class="badge warn-b">agentic</span>{/if}
+						<!-- #153: wie escaleerde — de gate of de gebruiker zelf -->
+						{#if t.agentic}<span class="badge warn-b">agentic ({t.escalatedBy === 'user' ? 'gebruiker' : 'gate'})</span>{/if}
 						<span class="trace-q">{t.question}</span>
 						<span class="meta">{(t.durationMs / 1000).toFixed(1)}s{t.hadImage ? ' · foto' : ''} · {new Date(t.createdAt).toLocaleTimeString('nl-NL')}</span>
 					</summary>

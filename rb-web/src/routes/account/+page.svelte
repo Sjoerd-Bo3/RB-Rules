@@ -17,6 +17,10 @@
 	const photoLeft = $derived(
 		account ? Math.max(0, account.dailyPhotoQuota - account.photosToday) : 0
 	);
+	// Grondig-dagquotum (#153): zelf geforceerde agentic-vragen op /ask.
+	const agenticLeft = $derived(
+		account ? Math.max(0, account.dailyAgenticQuota - account.agenticToday) : 0
+	);
 
 	// Passkeys (#109) hebben client-side JS nodig (navigator.credentials);
 	// zonder ondersteuning blijft de magic-link-flow het werkende pad.
@@ -193,6 +197,10 @@
 			<p>
 				<strong>{account.photosToday}</strong> van {account.dailyPhotoQuota} foto-vragen gebruikt
 				<span class="meta">({photoLeft} over)</span>
+			</p>
+			<p>
+				<strong>{account.agenticToday}</strong> van {account.dailyAgenticQuota} Grondig-vragen gebruikt
+				<span class="meta">({agenticLeft} over)</span>
 			</p>
 			<p class="meta">
 				De teller staat elke dag (UTC) weer op nul. Ingelogd geldt je eigen dagquotum in
