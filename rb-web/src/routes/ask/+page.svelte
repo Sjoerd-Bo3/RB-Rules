@@ -12,9 +12,16 @@
 
 	// Echte duurstatistiek (mediaan/p90 van de laatste vragen) i.p.v. schatting.
 	const stats = $derived(data.stats);
+	// Fase-verdeling (#152): retrieval (zoeken, overlapt de herformulering) vs.
+	// de AI-generatie — zodat de wachtende gebruiker ziet waar de tijd zit.
+	const phaseText = $derived(
+		stats.phases
+			? ` Daarvan is ±${Math.round(stats.phases.retrievalMs / 1000)}s zoeken en ±${Math.round(stats.phases.aiMs / 1000)}s antwoord formuleren.`
+			: ''
+	);
 	const waitText = $derived(
 		stats.count > 0 && stats.medianMs
-			? `Meestal ±${Math.round(stats.medianMs / 1000)}s, uitschieters tot ~${Math.round((stats.p90Ms ?? stats.medianMs) / 1000)}s — gemeten over de laatste ${stats.count} ${stats.count === 1 ? 'vraag' : 'vragen'}.`
+			? `Meestal ±${Math.round(stats.medianMs / 1000)}s, uitschieters tot ~${Math.round((stats.p90Ms ?? stats.medianMs) / 1000)}s — gemeten over de laatste ${stats.count} ${stats.count === 1 ? 'vraag' : 'vragen'}.${phaseText}`
 			: 'Eerste metingen lopen nog — dit kan even duren.'
 	);
 	let question = $state('');

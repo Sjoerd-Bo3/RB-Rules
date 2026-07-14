@@ -274,10 +274,13 @@ Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 
 ## 6. Runtimezicht
 
-### 6.1 De /ask-flow (single-pass, met agentic escalatie)
+### 6.1 De /ask-flow (parallelle retrieval, met agentic escalatie)
 
-`AskService.AskCoreAsync` is één retrieval-pass + één afrondende LLM-call, met
-een optionele agentic escalatie:
+`AskService.AskCoreAsync` is één retrieval-fase + één afrondende LLM-call, met
+een optionele agentic escalatie. Sinds #152 is de retrieval-fase geen
+seriële ketting meer maar overlappende kanalen op vaste slots — zelfde input
+geeft byte-voor-byte dezelfde prompt, ongeacht de volgorde waarin de kanalen
+concurrent landen:
 
 ```mermaid
 sequenceDiagram
@@ -287,12 +290,21 @@ sequenceDiagram
     participant O as Ollama
     participant DB as Postgres
     W->>A: POST /api/ask
-    A->>A: history + QuestionRouter.Classify
-    A->>AI: query-rewrite (cheap)
-    A->>O: embed zoekzin + extra queries
-    A->>DB: vector-kanaal (RuleChunks) + FTS
-    A->>A: RRF-fusie (bron-bias per vraagtype)
-    A->>DB: primer + rulings + kaartcontext + bans + claims
+    A->>A: history + rewrite-cache-lookup (LRU, #152)
+    par rewrite overlapt met de rewrite-onafhankelijke kanalen
+        A->>AI: query-rewrite (cheap, overgeslagen bij cache-hit)
+    and
+        A->>O: embed de rúwe vraag
+        A->>DB: naam-match + FTS (ruwe tekst) + banlijst — elk op eigen DbContext (IDbContextFactory)
+    end
+    A->>A: QuestionRouter.Classify
+    A->>O: batch-embed resterende zoekqueries (alleen wat nog ontbreekt)
+    par onafhankelijke lees-kanalen, elk op een eigen context
+        A->>DB: vector-kanaal (RuleChunks, per query)
+        A->>DB: FTS-her-run (alleen als de rewrite iets wezenlijks veranderde)
+        A->>DB: primer + rulings + kaartcontext + claims + misvattingen
+    end
+    A->>A: alle kanaalslots innen; RRF-fusie (bron-bias per vraagtype)
     A->>A: prompt-piramide (officieel > primer > community)
     alt agentic-gate (Ruling met 2+ kaarten, of lege retrieval)
         A->>AI: task=agentic (brein-tools)
@@ -301,30 +313,50 @@ sequenceDiagram
         A->>AI: task=cheap (of hard bij foto)
         AI-->>A: antwoord (evt. streamend)
     end
-    A->>DB: AskMetric + AskTrace (best-effort)
+    A->>DB: AskMetric + AskTrace (incl. PhaseTimings + kanaal-uitval-markers, best-effort)
     A-->>W: antwoord + citaties + kaarten + claims
 ```
 
 Kernpunten (`AskService.cs`):
 
-1. **Query-rewrite** (#66): één cheap-call normaliseert de vraag, levert
-   zoekqueries en lexicale termen. Uitval = verwacht pad → rauwe vraag.
-2. **Multi-channel retrieval**: vector (pgvector per query), full-text
+1. **Query-rewrite met overlap en cache** (#66, #152): de rewrite-call start
+   als taak tegelijk met het embedden van de ruwe vraag en de
+   rewrite-onafhankelijke kanalen (naam-match, FTS op de ruwe tekst,
+   banlijst) — de volledige rewrite-latentie valt zo van het kritieke pad.
+   Een kleine procesbrede **LRU-cache** (`RewriteCache`, sleutel = de
+   genormaliseerde vraag) slaat de rewrite-call helemaal over bij een
+   herhaalde/gelijksoortige vraag; een null-uitkomst (uitval/onzin-output)
+   wordt nooit gecacht. Uitval blijft het bestaande pad → rauwe vraag.
+2. **Parallelle retrieval-kanalen** (#152): de onafhankelijke lees-kanalen
+   (vector per query, FTS, primer, rulings, kaartcontext, banlijst, claims,
+   misvattingen) draaien concurrent, elk op een eigen `RbRulesDbContext` uit
+   `IDbContextFactory` (een DbContext is niet thread-safe). Zonder factory
+   (unit-tests op EF InMemory) draaien dezelfde kanalen sequentieel op de
+   scoped context — functioneel identiek, alleen niet concurrent. Elk kanaal
+   levert aan een vast slot; faalt één kanaal, dan is het resultaat een leeg
+   kanaal plus een marker in `AskTrace.Sections` (`kanaal-uitval: ...`) —
+   nooit een 500, en de overige kanalen zijn onaangeraakt.
+3. **Multi-channel retrieval**: vector (pgvector per query), full-text
    (Postgres FTS), gefuseerd met **RRF** (`RrfFusion`, Domain) plus bron-bias
    per vraagtype; daarnaast primer (top-3 approved), geverifieerde rulings,
    kaartcontext (naam/mechaniek/lexicaal/semantisch), banlijst en
    community-claims (`ClaimRetrieval.TakeFor`, afstandsplafond).
-3. **Prompt-piramide**: blokken staan in vaste volgorde officieel > primer >
+4. **Prompt-piramide**: blokken staan in vaste volgorde officieel > primer >
    community, elk expliciet gelabeld (`docs/KNOWLEDGE.md`).
-4. **Streaming** (#31): citaties/claims/vraagtype gaan vooraf via `onMeta`; het
+5. **Per-fase-instrumentatie** (#152): wandkloktijd van rewrite/embed/
+   retrieval/AI als compacte JSON op `AskTrace.PhaseTimings` (`AskPhases`,
+   Domain) — zichtbaar in de beheer-trace-uitklap en als gemiddelde
+   fase-verdeling op `/api/ask/stats`. De fasen overlappen (parallelle
+   pipeline), dus de som is bewust niet gelijk aan de totale duur.
+6. **Streaming** (#31): citaties/claims/vraagtype gaan vooraf via `onMeta`; het
    antwoord komt woord-voor-woord via NDJSON (`/api/ask/stream` →
    `RbAiClient.AskStreamAsync`).
-5. **Agentic escalatie** (#107, `docs/BRAIN.md` §2.4): pas ná de retrieval
+7. **Agentic escalatie** (#107, `docs/BRAIN.md` §2.4): pas ná de retrieval
    beslist `AgenticGate.ShouldEscalate` of de vraag mag door-redeneren over het
    brein (flag `ASK_AGENTIC` = off/auto/force). Faalt de agent → **vangnet**:
    de klassieke single-pass draait alsnog. De agent kan ontdekte verbanden als
    relatievoorstel achterlaten (#120, `AgenticRelationService`).
-6. **Degradatie** (#100): valt de embedding uit (Ollama weg / model niet
+8. **Degradatie** (#100): valt de embedding uit (Ollama weg / model niet
    gepulld), dan vervallen alle vector-kanalen en draait de vraag door op FTS +
    naam/mechaniek/lexicaal — nooit een kale 500. Valt rb-ai uit, dan geeft
    `RbAiClient` null en toont `AskService` `UnavailableAnswer`.
@@ -525,6 +557,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Q8 | Community-claim spreekt officiële § tegen | Claim wordt niet als kennis gepresenteerd; officieel wint altijd; weerlegde claims alleen via `contradictions`, gelabeld | `AskService.BasePrompt`, `GraphSyncService` (scope) |
 | Q9 | VM-reboot, Postgres nog niet klaar | rb-api retriet de migratie kort en begrensd; anders faalt de start hard en vangt de deploy-verify het | `Program.cs`, `docker-compose.yml` healthcheck |
 | Q10 | Regressie in domeinlogica | Elke productie-bug krijgt eerst een regressietest; CI is de poort (test-gate vóór publish) | `docs/CONVENTIONS.md`, `RbRules.Tests/`, `v2-ci.yml` |
+| Q11 | Eén parallel retrieval-kanaal van `/ask` gooit (bv. de misvattingen-query faalt) | Dat kanaal levert leeg + een marker in de trace (`kanaal-uitval: ...`); de overige kanalen en het antwoord blijven ongemoeid, nooit een 500. Sequentieel (zonder factory) vs. parallel (met factory) leveren byte-voor-byte dezelfde prompt | `AskService` (#152), `AskServiceParallelRetrievalTests` |
 
 ---
 

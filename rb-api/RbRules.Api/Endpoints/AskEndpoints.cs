@@ -49,12 +49,35 @@ public static class AskEndpoints
                 .ToListAsync();
             if (recent.Count == 0) return Results.Ok(new { Count = 0 });
             var sorted = recent.OrderBy(x => x).ToList();
+            // Fase-verdeling (#152): gemiddelde rewrite/embed/retrieval/AI
+            // over de recentste geslaagde traces mét timings — de traces zijn
+            // de enige plek waar de verdeling staat (metric kent alleen het
+            // totaal). Parse is tolerant (AskPhases.Parse); geen timings =
+            // gewoon geen phases-blok, de basisstatistiek blijft werken.
+            var phaseRows = await db.AskTraces.AsNoTracking()
+                .Where(t => t.Ok && t.PhaseTimings != null)
+                .OrderByDescending(t => t.CreatedAt)
+                .Take(50)
+                .Select(t => t.PhaseTimings!)
+                .ToListAsync();
+            var parsed = phaseRows
+                .Select(AskPhases.Parse)
+                .OfType<AskPhases>()
+                .ToList();
             return Results.Ok(new
             {
                 Count = recent.Count,
                 AvgMs = (int)recent.Average(),
                 MedianMs = sorted[sorted.Count / 2],
                 P90Ms = sorted[(int)(sorted.Count * 0.9)],
+                Phases = parsed.Count == 0 ? null : new
+                {
+                    Count = parsed.Count,
+                    RewriteMs = (int)parsed.Average(p => p.RewriteMs),
+                    EmbedMs = (int)parsed.Average(p => p.EmbedMs),
+                    RetrievalMs = (int)parsed.Average(p => p.RetrievalMs),
+                    AiMs = (int)parsed.Average(p => p.AiMs),
+                },
             });
         });
 

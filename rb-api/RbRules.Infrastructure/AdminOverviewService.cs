@@ -102,8 +102,8 @@ public record AskTraceListItem(
     string? SourceBias, bool MentionsCard, string? MechanicMatches,
     string? Sections, string? ContextCards, string? PrimerDocs,
     string? CommunityClaims, int VerifiedRulings, string? Model, bool HadImage,
-    int DurationMs, bool Agentic, string? BrainSteps, bool Ok,
-    DateTimeOffset CreatedAt);
+    int DurationMs, string? PhaseTimings, bool Agentic, string? BrainSteps,
+    bool Ok, DateTimeOffset CreatedAt);
 public record AskTraceTurn(string Question, string Answer);
 /// <summary>Trace-detail (#143): het definitieve antwoord en de eerdere
 /// beurten van het gesprek — de metadata zit al in de lijst.</summary>
@@ -561,8 +561,8 @@ public class AdminOverviewService(RbRulesDbContext db)
                 t.Id, t.Question, t.QuestionType, t.RewrittenQuery, t.SourceBias,
                 t.MentionsCard, t.MechanicMatches, t.Sections, t.ContextCards,
                 t.PrimerDocs, t.CommunityClaims, t.VerifiedRulings, t.Model,
-                t.HadImage, t.DurationMs, t.Agentic, t.BrainSteps, t.Ok,
-                t.CreatedAt))
+                t.HadImage, t.DurationMs, t.PhaseTimings, t.Agentic,
+                t.BrainSteps, t.Ok, t.CreatedAt))
             .ToListAsync();
 
     /// <summary>Het gesprek achter één trace (#143): het definitieve antwoord

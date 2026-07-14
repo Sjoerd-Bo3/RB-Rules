@@ -17,6 +17,15 @@ export interface AskStats {
 	avgMs?: number;
 	medianMs?: number;
 	p90Ms?: number;
+	/** Fase-verdeling (#152): gemiddelde per fase over de recentste traces
+	 *  mét timings; null/afwezig zolang er nog geen gemeten vragen zijn. */
+	phases?: {
+		count: number;
+		rewriteMs: number;
+		embedMs: number;
+		retrievalMs: number;
+		aiMs: number;
+	} | null;
 }
 
 export const load: PageServerLoad = async () => {

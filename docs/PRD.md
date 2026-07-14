@@ -203,7 +203,18 @@ apart in §6.
   (duim omhoog/omlaag, die de self-learning-loop voedt). *Endpoint*
   `/api/corrections`.
 - **Echte duurstatistiek** — antwoordduur wordt gemeten (`ask_metric`) en
-  getoond (count/gemiddelde/mediaan/P90). *Endpoint* `/api/ask/stats`.
+  getoond (count/gemiddelde/mediaan/P90), sinds #152 uitgesplitst naar
+  gemiddelde fase-verdeling (rewrite/embed/retrieval/AI) — de wachtindicatie
+  op `/ask` toont waar de tijd zit. *Endpoint* `/api/ask/stats`.
+- **Snellere retrieval** (#152) — de query-rewrite blokkeert de pipeline niet
+  meer (draait parallel met de rewrite-onafhankelijke kanalen), de
+  onafhankelijke retrieval-kanalen (vector, FTS, primer, rulings,
+  kaartcontext, banlijst, claims, misvattingen) draaien concurrent op een
+  eigen databasecontext per kanaal, en een kleine LRU-cache slaat de
+  rewrite-call over bij een herhaalde/gelijksoortige vraag. Uitval van één
+  kanaal blijft altijd gedegradeerd (leeg kanaal + trace-marker), nooit een
+  500; de uitkomst (antwoord, citaties, prompt) blijft byte-voor-byte gelijk
+  aan de oude seriële pipeline.
 
 ### 4.4 Kennisbank / het brein
 
@@ -406,7 +417,10 @@ openstaande PR.
 - **Antwoordduur & tokens** (`ask_metric`, `/api/ask/stats`): count,
   gemiddelde, mediaan en P90 over de recente vragen — de latency die de
   gebruiker voelt — plus sinds #121 echte input/output-tokens per vraag, pad
-  en account.
+  en account; sinds #152 ook de gemiddelde fase-verdeling
+  (rewrite/embed/retrieval/AI) over de recentste traces mét timings, zodat
+  duidelijk is wáár in de pipeline de tijd zit in plaats van alleen het
+  totaal.
 - **Feedback-/reviewdoorstroom**: denk-feedback op `/ask` → reviewqueue →
   geverifieerde correcties; het aantal geaccepteerde vs. openstaande claims,
   relaties en mechaniek-kandidaten in de overzichten is de gezondheidsmeter van

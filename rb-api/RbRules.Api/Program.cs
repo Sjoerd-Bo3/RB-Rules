@@ -13,7 +13,13 @@ var connectionString = builder.Configuration.GetConnectionString("Postgres")
     ?? Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? "Host=localhost;Database=rbrules;Username=rbrules;Password=rbrules";
 
-builder.Services.AddDbContext<RbRulesDbContext>(o => o
+// AddDbContextFactory registreert beide koppelvlakken (#152): de singleton
+// IDbContextFactory<RbRulesDbContext> waarmee AskService zijn retrieval-
+// kanalen elk op een eigen context concurrent draait (DbContext is niet
+// thread-safe), én RbRulesDbContext zelf als scoped service — migraties bij
+// opstart en alle bestaande services blijven dus ongewijzigd op de scoped
+// context werken.
+builder.Services.AddDbContextFactory<RbRulesDbContext>(o => o
     .UseNpgsql(connectionString, npgsql => npgsql.UseVector())
     .UseSnakeCaseNamingConvention());
 
@@ -52,6 +58,11 @@ builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
+// Rewrite-cache (#152): singleton — moet de levensduur van het proces
+// overspannen (AskService zelf is scoped, per request), klein en LRU op de
+// genormaliseerde vraag. Zonder registratie zou AskService's optionele
+// parameter gewoon null blijven en caching uit staan (patroon dbFactory).
+builder.Services.AddSingleton<RewriteCache>();
 builder.Services.AddScoped<RuleSearchService>();
 builder.Services.AddScoped<PrimerService>();
 builder.Services.AddScoped<BanErrataSyncService>();
