@@ -190,6 +190,18 @@ jobs:
           echo "::error::na ~20 min draait er nog steeds een admin-job — deploy afgebroken om de job niet te onderbreken. Herstart deze run zodra de job klaar is (of deploy via workflow_dispatch)."
           exit 1
 
+      - name: Ruim oude images op vóór de pull (#164)
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          # SHA-pinning (#86) stapelt per merge drie nieuwe images; zonder
+          # opruimen loopt de 61GB root-disk vol (#164: de deploy faalde op
+          # 'no space left on device' bij de pull). Vóór de pull ruimen we alle
+          # images op die GEEN draaiende container gebruikt — de live versie is
+          # daarbij beschermd, dus dit is veilig ook als het net misging — plus
+          # de build-cache. Rollback pullt zo nodig opnieuw uit GHCR (de bron).
+          # Best-effort: een opruimfout mag de deploy nooit breken.
+          $SSHCMD "docker image prune -af || true; docker builder prune -af || true; echo '--- schijf na opruimen:'; df -h / | tail -1"
+
       - name: Pull & (re)start stack
         if: steps.check.outputs.enabled == 'true'
         run: |
