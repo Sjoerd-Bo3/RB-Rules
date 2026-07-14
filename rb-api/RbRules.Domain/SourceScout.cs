@@ -206,6 +206,30 @@ public static class SourceScout
     /// trailing-slash-ongevoelig, maar verder de URL zoals opgegeven.</summary>
     public static string NormalizeUrl(string url) => url.Trim().TrimEnd('/');
 
+    /// <summary>Striktere vergelijkingsvorm dan <see cref="NormalizeUrl"/>,
+    /// alléén voor near-duplicaat-detectie tussen bronnen (#175): naast
+    /// case en trailing-slash vallen ook het schema (http/https) en een
+    /// www.-subdomein weg. Twee bronnen die hierop gelijk zijn maar een
+    /// verschillende <see cref="NormalizeUrl"/>-vorm hebben, verwijzen naar
+    /// dezelfde pagina in een andere URL-vorm. Twee bronnen met een
+    /// LETTERLIJK gelijke URL (zoals de Rules Hub-PDF/HTML-drieling in
+    /// SourceSeed, die bewust dezelfde ontdek-pagina delen met elk een eigen
+    /// Parser) leveren hier ook dezelfde uitkomst op, maar zijn geen
+    /// near-duplicaat — dat onderscheid maakt de aanroeper (alleen groepen
+    /// zonder onderling letterlijk gelijke URL's tellen als near-duplicaat),
+    /// niet deze functie.</summary>
+    public static string StrongNormalizeUrl(string url)
+    {
+        var trimmed = url.Trim();
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            return trimmed.TrimEnd('/').ToLowerInvariant();
+
+        var host = uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase)
+            ? uri.Host[4..] : uri.Host;
+        var path = uri.AbsolutePath.TrimEnd('/');
+        return $"{host}{path}{uri.Query}".ToLowerInvariant();
+    }
+
     private static string? GetString(JsonElement obj, string key) =>
         obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString()?.Trim()

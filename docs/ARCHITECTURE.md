@@ -232,7 +232,12 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
-  van `IngestService.ScanAsync`), `RuleChunkPipeline`, `CardSyncService`,
+  van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
+  herontdekt artikel dat al een `Source` zonder `FeedId` is, krijgt die
+  `FeedId` zonder curatie te raken — en `MergeNearDuplicateSourcesAsync`,
+  een near-duplicaat-samenvoeging vooraf in elke run die bronnen in
+  afwijkende URL-vorm samenvoegt met referentie-omhangen, #144-patroon),
+  `RuleChunkPipeline`, `CardSyncService`,
   `CardEmbeddingPipeline`, `EmbeddingService` (Ollama), `AskService`,
   `AskHistoryService` (eigen ask-geschiedenis op user_id/ip_hash, #157),
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`

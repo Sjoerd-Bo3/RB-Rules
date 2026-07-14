@@ -85,8 +85,12 @@ public class FeedCrawlServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_ArticleAlreadyRegisteredAsSource_IsSkipped()
+    public async Task RunAsync_ArticleAlreadyRegisteredAsSource_AdoptsFeedIdWithoutChangingCuration()
     {
+        // Herkomst-adoptie (#175): een bestaande (handmatige) bron zonder
+        // FeedId die de feed opnieuw ontdekt, adopteert de feed stil als
+        // herkomst — geen tweede rij, en Enabled/TrustTier/Rank blijven
+        // exact zoals ze zijn (curatie is heilig).
         using var db = NewDb();
         db.Sources.Add(new Source
         {
@@ -103,7 +107,126 @@ public class FeedCrawlServiceTests
         var r = await svc.RunAsync(onlyDue: false);
 
         Assert.Equal(0, r.NewSources);
-        Assert.Single(await db.Sources.ToListAsync()); // geen tweede rij
+        Assert.Equal(1, r.AdoptedSources);
+        var src = Assert.Single(await db.Sources.ToListAsync()); // geen tweede rij
+        Assert.Equal("f1", src.FeedId);
+        Assert.Equal((short)1, src.TrustTier);
+        Assert.Equal(100, src.Rank);
+        Assert.True(src.Enabled);
+        var log = await db.RunLogs.SingleAsync(l => l.Kind == "feeds" && l.Ref == "f1");
+        Assert.Contains("1 bestaande bron(nen) geadopteerd", log.Detail);
+    }
+
+    [Fact]
+    public async Task RunAsync_AdoptsFeedId_DisabledLowTrustSourceStaysDisabledAndLowTrust()
+    {
+        // Curatie-behoud: een handmatig uitgezette, laag-vertrouwde bron mag
+        // door adoptie nooit ingeschakeld of omhoog getrust worden.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "uitgezet", Name = "Uitgezet", Url = $"{Base}x", Type = "community",
+            TrustTier = 3, Rank = 10, Parser = "html", Cadence = "weekly", Enabled = false,
+        });
+        db.SourceFeeds.Add(new SourceFeed
+        {
+            Id = "f1", Name = "Feed", Url = Base, AutoApprove = true, Cadence = "daily",
+        });
+        await db.SaveChangesAsync();
+        var (svc, _) = Service(db, (Base, Ok(Card($"{Base}x", "Artikel"))));
+
+        await svc.RunAsync(onlyDue: false);
+
+        var src = await db.Sources.SingleAsync();
+        Assert.Equal("f1", src.FeedId);
+        Assert.False(src.Enabled);
+        Assert.Equal((short)3, src.TrustTier);
+        Assert.Equal(10, src.Rank);
+    }
+
+    [Fact]
+    public async Task RunAsync_AdoptsFeedId_EvenOnNonAutoApproveFeed()
+    {
+        // Adoptie is pure herkomst-toekenning, geen nieuwe beoordeling — dus
+        // onafhankelijk van de AutoApprove-gate die alleen voor NIEUWE
+        // artikelen geldt.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "bestaand", Name = "Bestaand", Url = $"{Base}x", Type = "community",
+            TrustTier = 3, Rank = 40, Parser = "html", Cadence = "weekly",
+        });
+        db.SourceFeeds.Add(new SourceFeed
+        {
+            Id = "f1", Name = "Minder vertrouwde feed", Url = Base, AutoApprove = false, Cadence = "daily",
+        });
+        await db.SaveChangesAsync();
+        var (svc, _) = Service(db, (Base, Ok(Card($"{Base}x", "Artikel"))));
+
+        var r = await svc.RunAsync(onlyDue: false);
+
+        Assert.Equal(0, r.NewProposals);
+        Assert.Equal(1, r.AdoptedSources);
+        Assert.Equal("f1", (await db.Sources.SingleAsync()).FeedId);
+        Assert.Empty(await db.SourceProposals.ToListAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_AdoptsFeedId_MultipleSourceRowsSharingSameUrlAllAdopt()
+    {
+        // Meerdere Source-rijen kunnen bewust dezelfde URL delen (zoals de
+        // Rules Hub-PDF/HTML-drieling in SourceSeed, elk met een eigen
+        // Parser) — herkomst geldt voor elke rij die naar die URL wijst.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "pdf-variant", Name = "PDF", Url = $"{Base}x", Type = "official",
+            TrustTier = 1, Rank = 110, Parser = "pdf", Cadence = "daily",
+        });
+        db.Sources.Add(new Source
+        {
+            Id = "html-variant", Name = "HTML", Url = $"{Base}x", Type = "official",
+            TrustTier = 1, Rank = 100, Parser = "html", Cadence = "daily",
+        });
+        db.SourceFeeds.Add(new SourceFeed
+        {
+            Id = "f1", Name = "Feed", Url = Base, AutoApprove = true, Cadence = "daily",
+        });
+        await db.SaveChangesAsync();
+        var (svc, _) = Service(db, (Base, Ok(Card($"{Base}x", "Artikel"))));
+
+        var r = await svc.RunAsync(onlyDue: false);
+
+        Assert.Equal(2, r.AdoptedSources);
+        Assert.Equal(2, await db.Sources.CountAsync());
+        Assert.All(await db.Sources.ToListAsync(), s => Assert.Equal("f1", s.FeedId));
+    }
+
+    [Fact]
+    public async Task RunAsync_AdoptsFeedId_SecondRunAdoptsNothingMore()
+    {
+        // Idempotentie: eenmaal geadopteerd, blijft FeedId gezet — een
+        // volgende crawl telt geen adopties meer.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "bestaand", Name = "Bestaand", Url = $"{Base}x", Type = "official",
+            TrustTier = 1, Rank = 100, Parser = "html", Cadence = "weekly",
+        });
+        db.SourceFeeds.Add(new SourceFeed
+        {
+            Id = "f1", Name = "Feed", Url = Base, AutoApprove = true, Cadence = "daily",
+        });
+        await db.SaveChangesAsync();
+        var (svc, handler) = Service(db, (Base, Ok(Card($"{Base}x", "Artikel"))));
+
+        var first = await svc.RunAsync(onlyDue: false);
+        handler.Routes[Base] = Ok(Card($"{Base}x", "Artikel")); // zelfde artikel opnieuw
+        var second = await svc.RunAsync(onlyDue: false);
+
+        Assert.Equal(1, first.AdoptedSources);
+        Assert.Equal(0, second.AdoptedSources);
+        Assert.Equal("f1", (await db.Sources.SingleAsync()).FeedId);
     }
 
     [Fact]

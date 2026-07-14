@@ -4,7 +4,8 @@ using RbRules.Domain;
 namespace RbRules.Infrastructure;
 
 public record FeedCrawlResult(
-    int FeedsChecked, int ArticlesSeen, int NewSources, int NewProposals, string Message);
+    int FeedsChecked, int ArticlesSeen, int NewSources, int NewProposals,
+    int AdoptedSources, int MergedDuplicates, string Message);
 
 /// <summary>Bron-feeds (#167): index-pagina's periodiek afspeuren op nieuwe
 /// artikel-URL's en die — per feed — direct als <see cref="Source"/>
@@ -42,7 +43,18 @@ public record FeedCrawlResult(
 /// cref="IngestService.ScanAsync"/> dat voor bronnen doet — de geplande
 /// uurlijkse tick (<c>onlyDue: true</c>) hamert dus niet elk uur op
 /// playriftbound.com; een handmatige "Bronnen scannen" of de losse
-/// "feeds"-job (<c>onlyDue: false</c>) forceert alle enabled feeds.</summary>
+/// "feeds"-job (<c>onlyDue: false</c>) forceert alle enabled feeds.
+///
+/// Herkomst-adoptie (#175): een artikel-URL die al een bestaande <see
+/// cref="Source"/> is met <see cref="Source.FeedId"/> == null (handmatig/
+/// legacy toegevoegd, maar in werkelijkheid een afstammeling van déze feed)
+/// wordt niet meer stilzwijgend overgeslagen — de bron adopteert de feed als
+/// herkomst. Curatie (Enabled/TrustTier/Rank) blijft daarbij exact zoals ze
+/// is: adoptie is pure herkomst-correctie, geen nieuwe beoordeling. Near-
+/// duplicaat-bronnen (dezelfde pagina in een andere URL-vorm — trailing
+/// slash, http/https, www — die vóór deze fix als aparte rijen bestonden)
+/// worden aan het begin van elke run samengevoegd (<see
+/// cref="MergeNearDuplicateSourcesAsync"/>); beide stappen zijn idempotent.</summary>
 public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
 {
     public const string LedgerKind = "feeds";
@@ -58,6 +70,13 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
     public async Task<FeedCrawlResult> RunAsync(
         bool onlyDue, Action<string>? progress = null, CancellationToken ct = default)
     {
+        // Near-duplicaat-samenvoeging (#175) vóóraf: onafhankelijk van welke
+        // feeds aan de beurt zijn — het is een opschoning van het volledige
+        // bronnenregister, geen per-feed-stap — en zo ziet de rest van deze
+        // run (known/adoptable hieronder) meteen de opgeschoonde stand.
+        progress?.Invoke("near-duplicaat-bronnen samenvoegen");
+        var mergedDuplicates = await MergeNearDuplicateSourcesAsync(ct);
+
         var now = DateTimeOffset.UtcNow;
         var allFeeds = await db.SourceFeeds.Where(f => f.Enabled).OrderBy(f => f.Id).ToListAsync(ct);
         var feeds = onlyDue
@@ -65,7 +84,11 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
             : allFeeds;
 
         if (feeds.Count == 0)
-            return new(0, 0, 0, 0, "geen feeds aan de beurt");
+        {
+            var idleMessage = "geen feeds aan de beurt" + (mergedDuplicates > 0
+                ? $", {mergedDuplicates} near-duplicaat-bron(nen) samengevoegd" : "");
+            return new(0, 0, 0, 0, 0, mergedDuplicates, idleMessage);
+        }
 
         // Eén "known"-set voor de hele run (net als SourceScoutService): de
         // drie hoofdfeeds overlappen deels (de rules-hub-carrousel toont
@@ -78,31 +101,45 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var knownIds = (await db.Sources.AsNoTracking().Select(s => s.Id).ToListAsync(ct))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Adoptie-kandidaten (#175): getrackte Sources zonder FeedId, opgezocht
+        // op genormaliseerde URL — meerdere rijen kunnen bewust dezelfde URL
+        // delen (Rules Hub-PDF/HTML-drieling), dus een Lookup i.p.v. Dictionary.
+        var adoptable = (await db.Sources.Where(s => s.FeedId == null).ToListAsync(ct))
+            .ToLookup(s => RiotNewsFeed.NormalizeUrl(s.Url), StringComparer.OrdinalIgnoreCase);
 
         var articlesSeen = 0;
         var newSources = 0;
         var newProposals = 0;
+        var adoptedSources = 0;
         for (var i = 0; i < feeds.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
             var feed = feeds[i];
             progress?.Invoke($"feed {i + 1}/{feeds.Count}: {feed.Name} afspeuren");
-            var (seen, sources, proposals) = await CrawlOneAsync(feed, known, knownIds, ct);
+            var (seen, sources, proposals, adopted) =
+                await CrawlOneAsync(feed, known, knownIds, adoptable, ct);
             articlesSeen += seen;
             newSources += sources;
             newProposals += proposals;
+            adoptedSources += adopted;
         }
 
         var message = $"{feeds.Count} feed(s) afgespeurd, {articlesSeen} artikelen gezien, "
-            + $"{newSources} nieuwe bron(nen), {newProposals} nieuw(e) voorstel(len)";
-        return new(feeds.Count, articlesSeen, newSources, newProposals, message);
+            + $"{newSources} nieuwe bron(nen), {newProposals} nieuw(e) voorstel(len)"
+            + (adoptedSources > 0
+                ? $", {adoptedSources} bestaande bron(nen) geadopteerd (herkomst)" : "")
+            + (mergedDuplicates > 0
+                ? $", {mergedDuplicates} near-duplicaat-bron(nen) samengevoegd" : "");
+        return new(feeds.Count, articlesSeen, newSources, newProposals,
+            adoptedSources, mergedDuplicates, message);
     }
 
     /// <summary>Eén feed, volledig gecontaineerd: elke terugkeer (guard-
     /// weigering, HTTP-fout, uitzondering) logt naar run_log en levert
-    /// (0, 0, 0) op — de aanroeper telt gewoon door met de volgende feed.</summary>
-    private async Task<(int Seen, int NewSources, int NewProposals)> CrawlOneAsync(
-        SourceFeed feed, HashSet<string> known, HashSet<string> knownIds, CancellationToken ct)
+    /// (0, 0, 0, 0) op — de aanroeper telt gewoon door met de volgende feed.</summary>
+    private async Task<(int Seen, int NewSources, int NewProposals, int Adopted)> CrawlOneAsync(
+        SourceFeed feed, HashSet<string> known, HashSet<string> knownIds,
+        ILookup<string, Source> adoptable, CancellationToken ct)
     {
         try
         {
@@ -111,7 +148,7 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
             if (UrlGuard.Check(feed.Url) is { Allowed: false } g)
             {
                 await LogErrorAsync(feed.Id, $"URL geweigerd (SSRF-guard): {g.Reason}", ct);
-                return (0, 0, 0);
+                return (0, 0, 0, 0);
             }
 
             using var req = new HttpRequestMessage(HttpMethod.Get, feed.Url);
@@ -121,7 +158,7 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
             if (!res.IsSuccessStatusCode)
             {
                 await LogErrorAsync(feed.Id, $"HTTP {(int)res.StatusCode}", ct);
-                return (0, 0, 0);
+                return (0, 0, 0, 0);
             }
 
             var html = await res.Content.ReadAsStringAsync(ct);
@@ -131,7 +168,7 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
                 // Ongewijzigd sinds de vorige run ⇒ gegarandeerd geen nieuwe
                 // artikelen (zie klasse-doc) — LastChecked telt wél mee.
                 await db.SaveChangesAsync(ct);
-                return (0, 0, 0);
+                return (0, 0, 0, 0);
             }
 
             var articles = RiotNewsFeed.ParseArticles(html, new Uri(feed.Url), feed.CategoryFilter);
@@ -142,9 +179,18 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
             var feedOfficial = OfficialDomains.IsOfficialUrl(feed.Url);
             var newSources = 0;
             var newProposals = 0;
+            var adopted = 0;
             foreach (var article in articles)
             {
-                if (!known.Add(article.Url)) continue; // al bron, al voorstel, of eerder deze run
+                if (!known.Add(article.Url))
+                {
+                    // Al bron, al voorstel, of eerder deze run — maar een
+                    // bestaande Source zonder FeedId die toevallig dezelfde
+                    // (genormaliseerde) URL draagt, stamt in werkelijkheid van
+                    // déze feed (#175): adopteer stil, curatie blijft ongemoeid.
+                    adopted += AdoptExistingSources(article.Url, feed.Id, adoptable);
+                    continue;
+                }
 
                 // Ook per artikel-URL (naast de feed-URL zelf): een feed-
                 // pagina is externe invoer, een gemanipuleerde/onverwachte
@@ -203,20 +249,45 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
             {
                 Kind = LedgerKind, Ref = feed.Id, Status = "ok",
                 Detail = $"{articles.Count} artikelen gezien, {newSources + newProposals} nieuw "
-                         + $"({newSources} bron, {newProposals} voorstel)",
+                         + $"({newSources} bron, {newProposals} voorstel)"
+                         + (adopted > 0
+                             ? $", {adopted} bestaande bron(nen) geadopteerd (herkomst)" : ""),
             });
             await db.SaveChangesAsync(ct);
-            return (articles.Count, newSources, newProposals);
+            return (articles.Count, newSources, newProposals, adopted);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Eén giftige feed mag de rest van de run niet meeslepen (#15-
             // patroon): getrackte entiteiten van deze poging weg vóór de
-            // volgende SaveChanges.
+            // volgende SaveChanges — óók een adoptie die deze poging
+            // (nog niet opgeslagen) deed.
             db.ChangeTracker.Clear();
             await LogErrorAsync(feed.Id, ex.Message, ct);
-            return (0, 0, 0);
+            return (0, 0, 0, 0);
         }
+    }
+
+    /// <summary>Herkomst-adoptie (#175, stil): zet <see cref="Source.FeedId"/>
+    /// op elke bestaande Source zonder herkomst die dezelfde (genormaliseerde)
+    /// URL draagt als dit net "opnieuw ontdekte" artikel. Curatie (Enabled/
+    /// TrustTier/Rank) blijft ongemoeid — dit is geen nieuwe beoordeling, puur
+    /// een correctie van waar de bron vandaan blijkt te komen. Meerdere Source-
+    /// rijen kunnen bewust dezelfde URL delen (Rules Hub-PDF/HTML-drieling in
+    /// SourceSeed, elk met een eigen Parser); die adopteren dan allemaal, want
+    /// de herkomst-vraag geldt voor elke rij die naar die URL wijst. Idempotent:
+    /// een Source met FeedId al gezet komt niet meer door het filter.</summary>
+    private static int AdoptExistingSources(
+        string articleUrl, string feedId, ILookup<string, Source> adoptable)
+    {
+        var norm = RiotNewsFeed.NormalizeUrl(articleUrl);
+        var adopted = 0;
+        foreach (var candidate in adoptable[norm].Where(s => s.FeedId is null))
+        {
+            candidate.FeedId = feedId;
+            adopted++;
+        }
+        return adopted;
     }
 
     private async Task LogErrorAsync(string feedId, string detail, CancellationToken ct)
@@ -237,5 +308,128 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
         for (var n = 2; knownIds.Contains(id); n++) id = $"{baseId}-{n}";
         knownIds.Add(id);
         return id;
+    }
+
+    /// <summary>Near-duplicaat-samenvoeging (#175): bronnen die vóór deze fix
+    /// als aparte rijen bestonden, maar wier URL alléén in VORM verschilt
+    /// (trailing slash, http/https, www) — <see
+    /// cref="SourceScout.StrongNormalizeUrl"/> vangt die vormen samen. Twee (of
+    /// meer) rijen met een LETTERLIJK gelijke URL (zoals de Rules Hub-PDF/HTML-
+    /// drieling in SourceSeed, die bewust dezelfde ontdek-pagina delen met elk
+    /// een eigen Parser) zijn GEEN near-duplicaat: zo'n groep telt alleen mee
+    /// als elke rij een eigen (zwak-genormaliseerde) URL-vorm heeft — anders
+    /// zou deze stap per ongeluk een bewust-gedeelde bron opeten. Winnaar: de
+    /// rij mét FeedId (herkomst al vastgesteld), anders de hoogste Rank (meest
+    /// gecureerd), anders de laagste Id (stabiele, deterministische
+    /// tie-breaker — Source kent geen CreatedAt-kolom). Referenties hangen mee
+    /// om (#144-patroon): Document/Change/RuleChunk/ClaimSource op SourceId,
+    /// Conflict op SourceAId/SourceBId/WinnerSourceId (anders cascadeert een
+    /// verwijderde bron die weg, #45-stijl audit-fix), BanEntry/Erratum/
+    /// Correction op de URL-vorm (SourceUrl/SourceRef, #171-patroon). Eigen
+    /// transactie (net als CardSyncService.RepairSourceFormsAsync): meerdere
+    /// tabellen wijzigen mee, of alles landt of niets. Idempotent: na de
+    /// eerste merge blijft nog maar één rij per groep over.</summary>
+    public async Task<int> MergeNearDuplicateSourcesAsync(CancellationToken ct = default)
+    {
+        var sources = await db.Sources.ToListAsync(ct); // getrackt: FeedId/verwijderen wijzigt mee
+        var groups = sources
+            .GroupBy(s => SourceScout.StrongNormalizeUrl(s.Url))
+            .Where(g => g.Count() > 1)
+            .Where(g => g.Select(s => SourceScout.NormalizeUrl(s.Url))
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() == g.Count())
+            .ToList();
+        if (groups.Count == 0) return 0;
+
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var merged = 0;
+        foreach (var group in groups)
+        {
+            var winner = group
+                .OrderByDescending(s => s.FeedId is not null)
+                .ThenByDescending(s => s.Rank)
+                .ThenBy(s => s.Id, StringComparer.Ordinal)
+                .First();
+            var losers = group.Where(s => s.Id != winner.Id).ToList();
+            var winnerClaimIds = (await db.ClaimSources
+                .Where(cs => cs.SourceId == winner.Id).Select(cs => cs.ClaimId).ToListAsync(ct))
+                .ToHashSet();
+            foreach (var loser in losers)
+            {
+                await RepointSourceReferencesAsync(loser, winner, winnerClaimIds, ct);
+                db.Sources.Remove(loser);
+                merged++;
+            }
+        }
+
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = LedgerKind, Ref = null, Status = "ok",
+            Detail = $"{merged} near-duplicaat-bron(nen) samengevoegd op URL-vorm (#175)",
+        });
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return merged;
+    }
+
+    private async Task RepointSourceReferencesAsync(
+        Source loser, Source winner, HashSet<long> winnerClaimIds, CancellationToken ct)
+    {
+        var loserId = loser.Id;
+        var winnerId = winner.Id;
+
+        // ── SourceId-koppelvorm ─────────────────────────────────────────
+        foreach (var d in await db.Documents.Where(x => x.SourceId == loserId).ToListAsync(ct))
+            d.SourceId = winnerId;
+        foreach (var c in await db.Changes.Where(x => x.SourceId == loserId).ToListAsync(ct))
+            c.SourceId = winnerId;
+        foreach (var rc in await db.RuleChunks.Where(x => x.SourceId == loserId).ToListAsync(ct))
+            rc.SourceId = winnerId;
+
+        // ClaimSource: (ClaimId, SourceId) is uniek — een botsing betekent dat
+        // de winnaar dezelfde claim al draagt (corroboratie telt al mee via de
+        // winnaar); de dubbele rij vervalt dan i.p.v. de index te schenden
+        // (zelfde #144-patroon als de kaart-interactie-samenvoeging).
+        foreach (var cs in await db.ClaimSources.Where(x => x.SourceId == loserId).ToListAsync(ct))
+        {
+            if (!winnerClaimIds.Add(cs.ClaimId))
+            {
+                db.ClaimSources.Remove(cs);
+                continue;
+            }
+            cs.SourceId = winnerId;
+            cs.Url = winner.Url;
+        }
+
+        // Conflict: geen unieke index op de Source-velden, gewoon omhangen —
+        // zonder dit zou de FK-cascade (SourceAId) de rij stilzwijgend
+        // verwijderen zodra de bron straks weg is.
+        foreach (var cf in await db.Conflicts
+            .Where(x => x.SourceAId == loserId || x.SourceBId == loserId || x.WinnerSourceId == loserId)
+            .ToListAsync(ct))
+        {
+            if (cf.SourceAId == loserId) cf.SourceAId = winnerId;
+            if (cf.SourceBId == loserId) cf.SourceBId = winnerId;
+            if (cf.WinnerSourceId == loserId) cf.WinnerSourceId = winnerId;
+        }
+
+        // ── SourceUrl-koppelvorm (#171-patroon) ─────────────────────────
+        var loserUrls = UrlCandidates(loser.Url);
+        foreach (var ban in await db.BanEntries.Where(x => loserUrls.Contains(x.SourceUrl)).ToListAsync(ct))
+            ban.SourceUrl = winner.Url;
+        foreach (var erratum in await db.Errata.Where(x => loserUrls.Contains(x.SourceUrl)).ToListAsync(ct))
+            erratum.SourceUrl = winner.Url;
+        foreach (var correction in await db.Corrections
+            .Where(x => x.SourceRef != null && loserUrls.Contains(x.SourceRef)).ToListAsync(ct))
+            correction.SourceRef = winner.Url;
+    }
+
+    /// <summary>Genormaliseerde varianten van een bron-URL om tegen SourceUrl/
+    /// SourceRef te matchen — zelfde constructie als
+    /// SourceDossierService.UrlCandidates (#171): letterlijke kandidaten vóór
+    /// de query, dan een vertaalbare <c>Contains</c> op een gesloten lijst.</summary>
+    private static HashSet<string> UrlCandidates(string url)
+    {
+        var normalized = SourceScout.NormalizeUrl(url);
+        return [url, normalized, normalized + "/"];
     }
 }
