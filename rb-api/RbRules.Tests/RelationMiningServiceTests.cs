@@ -21,9 +21,9 @@ public class RelationMiningServiceTests
     private const string GoodAnswer = """
         {"relations": [
           {"from": "mechanic:Deflect", "to": "section:core-rules-pdf/7.4",
-           "kind": "wordt beperkt door", "explanation": "Deflect werkt alleen op combat-schade (§7.4)."},
+           "kind": "wordt beperkt door", "explanation": "Deflect only applies to combat damage (§7.4)."},
           {"from": "concept:combat", "to": "mechanic:Deflect",
-           "kind": "ontgrendelt", "explanation": "Combat maakt Deflect relevant."}
+           "kind": "ontgrendelt", "explanation": "Combat makes Deflect relevant."}
         ]}
         """;
 
@@ -105,7 +105,7 @@ public class RelationMiningServiceTests
         using var db = NewDb();
         var doc = await SeedConceptWorldAsync(db);
         var svc = new RelationMiningService(
-            db, Ai(() => "Ik zie hier geen relaties,\nsorry!"));
+            db, Ai(() => "I don't see any relations here,\nsorry!"));
 
         var r = await svc.RunAsync();
 
@@ -115,7 +115,7 @@ public class RelationMiningServiceTests
             l => l.Kind == "relations" && l.Status == "error");
         Assert.Contains("LLM-antwoord onbruikbaar", error.Detail);
         // Platgeslagen en herkenbaar afgekapt meegelogd (#93/PR #87-patroon).
-        Assert.Contains("Respons (afgekapt): Ik zie hier geen relaties, sorry!", error.Detail);
+        Assert.Contains("Respons (afgekapt): I don't see any relations here, sorry!", error.Detail);
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public class RelationMiningServiceTests
         var doc = await SeedConceptWorldAsync(db);
         var svc = new RelationMiningService(db, Ai(() => """
             {"relations": [{"from": "mechanic:Verzonnen", "to": "card:nep-001",
-             "kind": "counters", "explanation": "hallucinatie"}]}
+             "kind": "counters", "explanation": "hallucination"}]}
             """));
 
         var r = await svc.RunAsync();
@@ -215,7 +215,7 @@ public class RelationMiningServiceTests
         var doc = new KnowledgeDoc
         {
             Kind = "primer", Topic = "combat", Title = "Combat",
-            Body = "Combat draait om schade; Deflect vermindert die. Shen is het schoolvoorbeeld.",
+            Body = "Combat is about damage; Deflect reduces it. Shen is the textbook example.",
             SectionRefs = "7.4", Status = "approved",
         };
         db.KnowledgeDocs.Add(doc);

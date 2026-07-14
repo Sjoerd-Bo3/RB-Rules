@@ -32,25 +32,30 @@ public static partial class ClaimMiner
     private static readonly HashSet<string> TopicTypes =
         ["card", "mechanic", "section", "concept"];
 
+    // #187: afgeleide/gesynthetiseerde kennis wordt in de brontaal (Engels)
+    // opgeslagen, dicht bij de officiële bewoording — geen vertaalstap, dus
+    // geen vertaalverlies en consistente semantiek met de Engelse kaart-/
+    // regelbronnen zelf (docs/CONVENTIONS.md). UI en /ask-antwoorden blijven
+    // Nederlands (AskService.BasePrompt regelt dat apart).
     public const string ExtractionSystemPrompt = """
-        Je bent de claims-extractor van een kennisbank over Riftbound, het
-        League of Legends trading card game van Riot Games. Je krijgt tekst
-        van een community-bron. Destilleer er claims uit: uitspraken over hoe
-        regels, kaart-interacties, mechanieken of conventies in de praktijk
-        werken. Antwoord UITSLUITEND met JSON:
+        You are the claims extractor for a knowledge base about Riftbound,
+        Riot Games' League of Legends trading card game. You receive text
+        from a community source. Distill claims from it: statements about
+        how rules, card interactions, mechanics, or conventions work in
+        practice. Respond ONLY with JSON:
         {"claims": [{"topicType": "...", "topicRef": "...", "statement": "...", "quote": "..."}]}
         - topicType ∈ card | mechanic | section | concept
-        - topicRef: het onderwerp — de kaartnaam, mechaniek-naam, het
-          §-nummer of een kort concept (bijv. "mulligan")
-        - statement: de bewering, GEPARAFRASEERD in het Nederlands (Engelse
-          speltermen onvertaald), 1-2 zinnen, op zichzelf leesbaar
-        - quote: kort letterlijk citaat uit de brontekst als bewijs
-          (maximaal ~25 woorden)
-        - Alleen uitspraken over regels/interacties/conventies; geen
-          meningen, geen verkooppraat, geen kale kaartstatistieken
-        - Maximaal 25 claims; liever 8 sterke dan 25 zwakke
-        - Niets bruikbaars? Antwoord {"claims": []}
-        Geen tekst buiten de JSON.
+        - topicRef: the subject — the card name, mechanic name, the §
+          number, or a short concept (e.g. "mulligan")
+        - statement: the claim, PARAPHRASED in English, close to the
+          official wording, 1-2 sentences, readable on its own
+        - quote: a short literal quote from the source text as evidence
+          (at most ~25 words)
+        - Only statements about rules/interactions/conventions; no
+          opinions, no marketing copy, no bare card statistics
+        - At most 25 claims; prefer 8 strong ones over 25 weak ones
+        - Nothing usable? Reply {"claims": []}
+        No text outside the JSON.
         """;
 
     public static string BuildExtractionPrompt(string sourceName, string documentText) =>

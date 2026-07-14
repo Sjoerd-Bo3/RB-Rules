@@ -10,10 +10,10 @@ public class ClaimMinerTests
         var raw = """
             {"claims": [
               {"topicType": "mechanic", "topicRef": "Deflect",
-               "statement": "Deflect verhoogt de kosten van vijandelijke spells die de unit als doel kiezen.",
+               "statement": "Deflect increases the cost of enemy spells that target this unit.",
                "quote": "Deflect makes your opponent pay more to target this unit."},
               {"topicType": "concept", "topicRef": "mulligan",
-               "statement": "Bij de mulligan mag je één keer je volledige starthand omruilen.",
+               "statement": "During the mulligan you may swap your entire starting hand once.",
                "quote": "you may shuffle your hand back once"}
             ]}
             """;
@@ -22,7 +22,7 @@ public class ClaimMinerTests
         Assert.Equal(2, r.Count);
         Assert.Equal("mechanic", r[0].TopicType);
         Assert.Equal("Deflect", r[0].TopicRef);
-        Assert.StartsWith("Deflect verhoogt", r[0].Statement);
+        Assert.StartsWith("Deflect increases", r[0].Statement);
         Assert.Equal("you may shuffle your hand back once", r[1].Quote);
     }
 
@@ -30,9 +30,9 @@ public class ClaimMinerTests
     public void ParseClaims_TextAroundJson_IsTolerated()
     {
         var raw = """
-            Hier zijn de claims:
-            {"claims": [{"topicType": "card", "topicRef": "Viktor", "statement": "Viktor's effect werkt ook tijdens de showdown."}]}
-            Dat was alles.
+            Here are the claims:
+            {"claims": [{"topicType": "card", "topicRef": "Viktor", "statement": "Viktor's effect also works during the showdown."}]}
+            That's all.
             """;
         var r = ClaimMiner.ParseClaims(raw);
         Assert.NotNull(r);
@@ -43,7 +43,7 @@ public class ClaimMinerTests
 
     [Theory]
     [InlineData("")]
-    [InlineData("Ik zie geen bruikbare claims in deze tekst.")]
+    [InlineData("I don't see any usable claims in this text.")]
     [InlineData("{kapotte json}")]
     [InlineData("""{"iets_anders": true}""")]
     public void ParseClaims_GarbageOutput_ReturnsNull(string raw) =>
@@ -58,7 +58,7 @@ public class ClaimMinerTests
         // geregeld in een ```json-fence.
         var raw = """
             ```json
-            {"claims": [{"topicType": "mechanic", "topicRef": "Deflect", "statement": "Deflect verhoogt de kosten van gerichte spells."}]}
+            {"claims": [{"topicType": "mechanic", "topicRef": "Deflect", "statement": "Deflect increases the cost of targeted spells."}]}
             ```
             """;
         var r = ClaimMiner.ParseClaims(raw);
@@ -73,8 +73,8 @@ public class ClaimMinerTests
         // de JSON met een "[1]"-bronmarker liet de oude first/last-index-
         // extractie een kapot array-blok kiezen in plaats van het JSON-object.
         var raw = """
-            Uit de gids [1] destilleer ik deze claims:
-            {"claims": [{"topicType": "concept", "topicRef": "mulligan", "statement": "Je mag één keer je starthand omruilen."}]}
+            From the guide [1] I distill these claims:
+            {"claims": [{"topicType": "concept", "topicRef": "mulligan", "statement": "You may swap your starting hand once."}]}
             """;
         var r = ClaimMiner.ParseClaims(raw);
         Assert.NotNull(r);
@@ -88,14 +88,14 @@ public class ClaimMinerTests
         // JSON (het research-contract van rb-ai; ook cheap-antwoorden sluiten
         // soms zo af). De haakjes daarin mogen de extractie niet breken.
         var raw = """
-            {"claims": [{"topicType": "concept", "topicRef": "scoren", "statement": "Je scoort door een battlefield te houden."}]}
+            {"claims": [{"topicType": "concept", "topicRef": "scoring", "statement": "You score by holding a battlefield."}]}
 
-            Bronnen:
-            [1] https://example.com/gids (geraadpleegd 2026-07-11)
+            Sources:
+            [1] https://example.com/guide (accessed 2026-07-11)
             """;
         var r = ClaimMiner.ParseClaims(raw);
         Assert.NotNull(r);
-        Assert.Equal("scoren", Assert.Single(r).TopicRef);
+        Assert.Equal("scoring", Assert.Single(r).TopicRef);
     }
 
     [Fact]
@@ -104,8 +104,8 @@ public class ClaimMinerTests
         // Een eerder {}-blok zonder claims-property (of onparseerbaar) mag de
         // echte JSON verderop niet verdringen: kandidaten worden doorlopen.
         var raw = """
-            Denkstap: {eerst kijken naar de mechanics}.
-            {"claims": [{"topicType": "card", "topicRef": "Viktor", "statement": "Viktor's effect werkt tijdens de showdown."}]}
+            Thinking: {first look at the mechanics}.
+            {"claims": [{"topicType": "card", "topicRef": "Viktor", "statement": "Viktor's effect works during the showdown."}]}
             """;
         var r = ClaimMiner.ParseClaims(raw);
         Assert.NotNull(r);
@@ -118,10 +118,10 @@ public class ClaimMinerTests
         // is onbruikbaar — géén geldige lege lijst (die zou het document als
         // "gemined" markeren, #92/#93).
         Assert.Null(ClaimMiner.ParseClaims("""
-            Ik vond geen claims.
+            I found no claims.
 
-            Bronnen:
-            [1] https://example.com/gids
+            Sources:
+            [1] https://example.com/guide
             """));
 
     [Fact]
@@ -136,7 +136,7 @@ public class ClaimMinerTests
     public void ParseClaims_BareArray_IsTolerated()
     {
         var r = ClaimMiner.ParseClaims(
-            """[{"topicType": "concept", "topicRef": "scoren", "statement": "Je scoort een punt door een battlefield te houden."}]""");
+            """[{"topicType": "concept", "topicRef": "scoring", "statement": "You score a point by holding a battlefield."}]""");
         Assert.NotNull(r);
         Assert.Single(r);
     }
@@ -149,14 +149,14 @@ public class ClaimMinerTests
     {
         var typeJson = type is null ? "" : $""" "topicType": "{type}", """;
         var r = ClaimMiner.ParseClaims(
-            $$"""{"claims": [{{{typeJson}} "topicRef": "x", "statement": "een bewering"}]}""");
+            $$"""{"claims": [{{{typeJson}} "topicRef": "x", "statement": "a claim"}]}""");
         Assert.NotNull(r);
         Assert.Equal(expected, Assert.Single(r).TopicType);
     }
 
     [Theory]
     [InlineData("""{"topicType": "card", "topicRef": "Viktor"}""")]        // geen statement
-    [InlineData("""{"topicType": "card", "statement": "een bewering"}""")] // geen topicRef
+    [InlineData("""{"topicType": "card", "statement": "a claim"}""")]      // geen topicRef
     [InlineData("""{"topicType": "card", "topicRef": " ", "statement": "x"}""")]
     public void ParseClaims_ItemsWithoutStatementOrTopic_AreDropped(string item)
     {
@@ -170,8 +170,8 @@ public class ClaimMinerTests
     {
         var raw = """
             {"claims": [
-              {"topicType": "concept", "topicRef": "mulligan", "statement": "Je mag één keer mulliganen."},
-              {"topicType": "concept", "topicRef": "mulligan", "statement": "  je mag één  keer mulliganen  "}
+              {"topicType": "concept", "topicRef": "mulligan", "statement": "You may mulligan once."},
+              {"topicType": "concept", "topicRef": "mulligan", "statement": "  you may  mulligan once  "}
             ]}
             """;
         var r = ClaimMiner.ParseClaims(raw);
@@ -183,7 +183,7 @@ public class ClaimMinerTests
     public void ParseClaims_CapsAtMaxClaims()
     {
         var items = string.Join(",", Enumerable.Range(1, 40).Select(i =>
-            $$"""{"topicType": "concept", "topicRef": "t{{i}}", "statement": "bewering nummer {{i}}"}"""));
+            $$"""{"topicType": "concept", "topicRef": "t{{i}}", "statement": "claim number {{i}}"}"""));
         var r = ClaimMiner.ParseClaims($$"""{"claims": [{{items}}]}""");
         Assert.NotNull(r);
         Assert.Equal(ClaimMiner.MaxClaims, r.Count);
@@ -206,22 +206,22 @@ public class ClaimMinerTests
     public void ParseClaims_NonObjectItems_AreSkipped()
     {
         var r = ClaimMiner.ParseClaims(
-            """{"claims": ["kale string", 42, {"topicType": "concept", "topicRef": "x", "statement": "geldig"}]}""");
+            """{"claims": ["bare string", 42, {"topicType": "concept", "topicRef": "x", "statement": "valid"}]}""");
         Assert.NotNull(r);
-        Assert.Equal("geldig", Assert.Single(r).Statement);
+        Assert.Equal("valid", Assert.Single(r).Statement);
     }
 
     [Theory]
-    [InlineData("Je mag één keer mulliganen.", "  je  mag één keer\nmulliganen ")]
-    [InlineData("Deflect werkt tegen spells!", "deflect werkt tegen spells")]
+    [InlineData("You may mulligan once.", "  you  may mulligan\nonce ")]
+    [InlineData("Deflect works against spells!", "deflect works against spells")]
     public void NormalizeStatement_MatchesEquivalentPhrasing(string a, string b) =>
         Assert.Equal(ClaimMiner.NormalizeStatement(a), ClaimMiner.NormalizeStatement(b));
 
     [Fact]
     public void NormalizeStatement_DifferentClaims_StayDifferent() =>
         Assert.NotEqual(
-            ClaimMiner.NormalizeStatement("Je mag één keer mulliganen."),
-            ClaimMiner.NormalizeStatement("Je mag twee keer mulliganen."));
+            ClaimMiner.NormalizeStatement("You may mulligan once."),
+            ClaimMiner.NormalizeStatement("You may mulligan twice."));
 }
 
 public class ClaimJudgeTests

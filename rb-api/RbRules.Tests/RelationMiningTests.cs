@@ -17,12 +17,12 @@ public class RelationMiningTests
     public void ParseRelations_LeestObjectVorm_EnCanonicaliseertRefs()
     {
         var raw = """
-            Hier zijn de relaties [1]:
+            Here are the relations [1]:
             {"relations": [
               {"from": "mechanic:deflect", "to": "SECTION:core-rules-pdf/7.4",
-               "kind": "Wordt beperkt door", "explanation": "Deflect vermindert alleen combat-schade."},
+               "kind": "Wordt beperkt door", "explanation": "Deflect only reduces combat damage."},
               {"from": "mechanic:Tank", "to": "concept:combat",
-               "kind": "versterkt", "explanation": "Tank stuurt de blokkade in combat."}
+               "kind": "versterkt", "explanation": "Tank directs the block in combat."}
             ]}
             """;
 
@@ -34,7 +34,7 @@ public class RelationMiningTests
         // is genormaliseerd naar kleine letters.
         Assert.Equal(new ExtractedRelation(
             "mechanic:Deflect", "section:core-rules-pdf/7.4",
-            "wordt beperkt door", "Deflect vermindert alleen combat-schade."), parsed[0]);
+            "wordt beperkt door", "Deflect only reduces combat damage."), parsed[0]);
         Assert.Equal("versterkt", parsed[1].Kind);
     }
 
@@ -46,7 +46,7 @@ public class RelationMiningTests
             {"relations": [
               {"from": "mechanic:Verzonnen", "to": "mechanic:Deflect", "kind": "counters", "explanation": "x"},
               {"from": "mechanic:Deflect", "to": "card:niet-bestaand", "kind": "counters", "explanation": "x"},
-              {"from": "mechanic:Deflect", "to": "mechanic:Tank", "kind": "counters", "explanation": "Deflect ontkracht Tank-schade."}
+              {"from": "mechanic:Deflect", "to": "mechanic:Tank", "kind": "counters", "explanation": "Deflect negates Tank damage."}
             ]}
             """;
 
@@ -112,9 +112,9 @@ public class RelationMiningTests
     {
         // null ⇒ de service logt de rauwe respons in run_log (#93) en laat
         // het anker ongemarkeerd staan.
-        Assert.Null(RelationMiner.ParseRelations("Ik zie geen relaties, sorry!", Offered));
+        Assert.Null(RelationMiner.ParseRelations("I don't see any relations, sorry!", Offered));
         // "[1]" in prose is géén item-lijst (scout-les #87, gedeeld in LlmJson).
-        Assert.Null(RelationMiner.ParseRelations("Zie bron [1] voor context.", Offered));
+        Assert.Null(RelationMiner.ParseRelations("See source [1] for context.", Offered));
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class RelationMiningTests
         // eerst de kandidaten op om ze tegen het brein te toetsen, ook de
         // verzonnen refs (die moeten juist geteld en geweerd worden).
         var raw = """
-            Voorstellen:
+            Proposals:
             {"relations": [
               {"from": "mechanic:Deflect", "to": "concept:combat", "kind": "verduidelijkt", "explanation": "x"},
               {"from": "MECHANIC:deflect", "to": "card:verzonnen-999", "kind": "counters", "explanation": "x"},
@@ -154,7 +154,7 @@ public class RelationMiningTests
     public void CandidateRefs_OnbruikbareOutput_GeeftNull_EnLegeOogstIsGeldig()
     {
         // Zelfde betekenis als ParseRelations: null ⇒ run_log-diagnose.
-        Assert.Null(RelationMiner.CandidateRefs("Ik zie geen relaties, sorry!"));
+        Assert.Null(RelationMiner.CandidateRefs("I don't see any relations, sorry!"));
         Assert.Empty(RelationMiner.CandidateRefs("""{"relations": []}""")!);
     }
 

@@ -42,8 +42,9 @@ public static partial class RelationMiner
         - kind: de relatiesoort, kort en herbruikbaar, kleine letters.
           Gebruik bij voorkeur: {KINDS}. Alleen als geen daarvan past mag je
           één nieuw, generiek kind introduceren.
-        - explanation: 1-2 zinnen Nederlands (Engelse speltermen onvertaald)
-          die de relatie onderbouwen vanuit de meegegeven context
+        - explanation: 1-2 zinnen in het Engels (#187: afgeleide kennis in de
+          brontaal, dicht bij de officiële bewoording) die de relatie
+          onderbouwen vanuit de meegegeven context
         - alleen relaties die de context aantoonbaar onderbouwt; geen open
           deuren die de graph al kent (een kaart heeft zijn eigen mechaniek,
           een concept legt zijn eigen secties al uit)

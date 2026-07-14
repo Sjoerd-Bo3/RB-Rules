@@ -14,17 +14,22 @@ public class PrimerService(RbRulesDbContext db, EmbeddingService embeddings, RbA
 {
     private const int ChunksPerTopic = 10;
 
+    // #187: afgeleide/gesynthetiseerde kennis wordt in de brontaal (Engels)
+    // opgeslagen, dicht bij de officiële bewoording (docs/CONVENTIONS.md). De
+    // UI en /ask-antwoorden blijven Nederlands — dat scheidt AskService.
+    // BasePrompt af, deze primer-tekst is context, geen eindantwoord.
     private const string SystemPrompt = """
-        Je schrijft een beknopt spelbegrip-document voor Riftbound TCG-spelers,
-        gebaseerd op de meegegeven officiële regelsecties. Eisen:
-        - 200 tot 350 woorden, Nederlands, Engelse speltermen onvertaald
-        - Leg de FLOW uit (wat gebeurt er wanneer, en waarom), niet alleen
-          losse feiten; noem de meest voorkomende misvatting als die er is
-        - Verwijs inline naar secties als (§123.4) waar je iets op baseert
-        - Geen inleiding of afsluiting, geen markdown-koppen — alleen lopende
-          tekst in korte alinea's
-        - Baseer je uitsluitend op de meegegeven secties; wat er niet in
-          staat, beweer je niet
+        You write a concise game-understanding document for Riftbound TCG
+        players, based on the official rule sections provided. Requirements:
+        - 200 to 350 words, in English, close to the official wording
+        - Explain the FLOW (what happens when, and why), not just isolated
+          facts; mention the most common misconception if there is one
+        - Reference sections inline as (§123.4) where you base something on
+          them
+        - No introduction or closing remarks, no markdown headers — just
+          running text in short paragraphs
+        - Base yourself exclusively on the given sections; don't claim
+          anything that isn't in them
         """;
 
     public async Task<PrimerResult> GenerateAsync(
