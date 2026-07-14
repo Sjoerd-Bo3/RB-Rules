@@ -7,7 +7,7 @@ namespace RbRules.Infrastructure;
 public record GraphSyncResult(
     int Cards, int Domains, int Tags, int Mechanics,
     int Sections, int Concepts, int Claims, int Sources, int Errata, int Changes,
-    int Relations);
+    int Relations, int Rulings);
 
 /// <summary>Neo4j-sync met batched UNWIND (audit-fix: de PoP deed ~4 queries
 /// per kaart; dit zijn er een handvol totaal). Tag ≠ Mechanic: facties/tribes
@@ -19,7 +19,9 @@ public record GraphSyncResult(
 /// (+SUPERSEDES) en Change (+AFFECTS); elke knoop draagt een ref-property
 /// volgens de BrainRef-conventie (§2.1). Sinds #116 ook de dynamische
 /// LLM-relaties als RELATES_TO {kind, trust, explanation, status} — via de
-/// reviewpoort (RelationProjection), nooit rechtstreeks.</summary>
+/// reviewpoort (RelationProjection), nooit rechtstreeks. Sinds #191 ook
+/// geverifieerde rulings als Ruling (+ABOUT/SUPPORTED_BY, alleen
+/// status=verified) — hetzelfde Claim-patroon, via RulingTopicMapper.</summary>
 public class GraphSyncService(RbRulesDbContext db, IDriver driver)
 {
     public async Task<GraphSyncResult> SyncAsync(CancellationToken ct = default)
@@ -47,7 +49,7 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
 
         var sources = await db.Sources.AsNoTracking()
             .OrderByDescending(s => s.Rank)
-            .Select(s => new { s.Id, s.Name, s.TrustTier, s.Rank })
+            .Select(s => new { s.Id, s.Name, s.TrustTier, s.Rank, s.Url })
             .ToListAsync(ct);
 
         // Sectie-knopen: één per (bron, §-code); de chunk-splitsing (zelfde
@@ -96,6 +98,18 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
 
         var changes = await db.Changes.AsNoTracking()
             .Select(c => new { c.Id, c.ChangeType, c.Severity, c.DetectedAt, c.Summary, c.Meaning, c.Diff })
+            .ToListAsync(ct);
+
+        // Rulings (#191): alleen verified — unverified/rejected zijn geen
+        // kennis en blijven Postgres-only, zelfde kennislagen-discipline als
+        // de accepted/unreviewed-scope hierboven voor Claim.
+        var rulings = await db.Corrections.AsNoTracking()
+            .Where(c => c.Status == "verified")
+            .Select(c => new
+            {
+                c.Id, c.Scope, c.Ref, c.Text, c.Question, c.Provenance,
+                c.SourceRef, c.VerifiedAt,
+            })
             .ToListAsync(ct);
 
         // Dynamische relaties (#116): LLM-relaties gaan nooit rechtstreeks de
@@ -247,6 +261,64 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             ["source"] = BrainRef.Source(s.SourceId).Format(),
         }).ToList();
 
+        var rulingRows = rulings.Select(r => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Ruling(r.Id).Format(),
+            ["text"] = r.Text,
+            ["question"] = r.Question,
+            ["kind"] = RulingKind.FromProvenance(r.Provenance),
+            ["verifiedAt"] = r.VerifiedAt?.UtcDateTime.ToString("o"),
+        }).ToList();
+
+        // ABOUT: zelfde resolutie als Claim, via RulingTopicMapper (Scope →
+        // gedeeld topic-vocabulaire → ClaimTopicMapper.Resolve). Scope
+        // "answer" (chat-ruling zonder anker) en de review-notitie-
+        // promotiescopes "claim"/"relation" resolven nooit ⇒ knoop zonder
+        // ABOUT-edge, per ontwerp (zelfde gedrag als een niet-matchende claim).
+        var rulingAboutCard = new List<object>();
+        var rulingAboutMechanic = new List<object>();
+        var rulingAboutSection = new List<object>();
+        var rulingAboutConcept = new List<object>();
+        foreach (var r in rulings)
+        {
+            if (RulingTopicMapper.Resolve(topicMapper, r.Scope, r.Ref) is not { } target) continue;
+            var pair = (object)new Dictionary<string, object?>
+            {
+                ["ruling"] = BrainRef.Ruling(r.Id).Format(),
+                ["target"] = target.Kind is BrainRefKind.Card or BrainRefKind.Mechanic
+                    ? target.Key : target.Format(),
+            };
+            (target.Kind switch
+            {
+                BrainRefKind.Card => rulingAboutCard,
+                BrainRefKind.Mechanic => rulingAboutMechanic,
+                BrainRefKind.Section => rulingAboutSection,
+                _ => rulingAboutConcept,
+            }).Add(pair);
+        }
+
+        // SUPPORTED_BY: SourceRef (#166, de "waar besloten"-URL/citatie) →
+        // Source, via dezelfde genormaliseerde URL-kandidaten als het
+        // bron-dossier (#171, SourceScout.UrlCandidates). sources staat al op
+        // Rank aflopend (zie hierboven) — TryAdd laat bij een gedeelde URL
+        // (#175) dus de hoogst gerankte bron winnen. Geen match (vrije
+        // citatie zonder URL, of onbekende bron) ⇒ knoop zonder edge.
+        var sourceIdByUrl = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var s in sources)
+            foreach (var candidate in SourceScout.UrlCandidates(s.Url))
+                sourceIdByUrl.TryAdd(candidate, s.Id);
+        var rulingSupportedByPairs = new List<object>();
+        foreach (var r in rulings)
+        {
+            if (r.SourceRef is null || !sourceIdByUrl.TryGetValue(r.SourceRef, out var sourceId))
+                continue;
+            rulingSupportedByPairs.Add(new Dictionary<string, object?>
+            {
+                ["ruling"] = BrainRef.Ruling(r.Id).Format(),
+                ["source"] = BrainRef.Source(sourceId).Format(),
+            });
+        }
+
         var erratumRows = errata.Select(e => (object)new Dictionary<string, object?>
         {
             ["ref"] = BrainRef.Erratum(e.Id).Format(),
@@ -364,7 +436,7 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         await tx.RunAsync(
             """
             MATCH (n) WHERE n:RuleSection OR n:Concept OR n:Claim
-              OR n:Source OR n:Erratum OR n:Change
+              OR n:Source OR n:Erratum OR n:Change OR n:Ruling
             DETACH DELETE n
             """);
 
@@ -417,6 +489,18 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         await RunEdgesAsync(tx, "MATCH (cl:Claim {ref: p.claim}) MATCH (s:Source {ref: p.source}) MERGE (cl)-[:SUPPORTED_BY]->(s)", supportedByPairs);
 
         await RunRowsAsync(tx,
+            """
+            CREATE (rl:Ruling {ref: row.ref, text: row.text, question: row.question,
+                               kind: row.kind, verifiedAt: row.verifiedAt})
+            """,
+            rulingRows);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (t:Card {id: p.target}) MERGE (rl)-[:ABOUT]->(t)", rulingAboutCard);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (t:Mechanic {name: p.target}) MERGE (rl)-[:ABOUT]->(t)", rulingAboutMechanic);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (t:RuleSection {ref: p.target}) MERGE (rl)-[:ABOUT]->(t)", rulingAboutSection);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (t:Concept {ref: p.target}) MERGE (rl)-[:ABOUT]->(t)", rulingAboutConcept);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (s:Source {ref: p.source}) MERGE (rl)-[:SUPPORTED_BY]->(s)", rulingSupportedByPairs);
+
+        await RunRowsAsync(tx,
             "CREATE (e:Erratum {ref: row.ref, cardName: row.cardName})",
             erratumRows);
         await RunEdgesAsync(tx, "MATCH (e:Erratum {ref: p.erratum}) MATCH (c:Card {id: p.cardId}) MERGE (e)-[:SUPERSEDES]->(c)", supersedesPairs);
@@ -462,7 +546,8 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             sourceRows.Count,
             erratumRows.Count,
             changeRows.Count,
-            relationRows.Count);
+            relationRows.Count,
+            rulingRows.Count);
     }
 
     private static async Task RunPairsAsync(

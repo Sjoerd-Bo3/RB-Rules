@@ -344,6 +344,8 @@ public class KnowledgeGapsService(RbRulesDbContext db, BrainGraphService graph)
             ["Source"] = await db.Sources.CountAsync(ct),
             ["Erratum"] = await db.Errata.CountAsync(ct),
             ["Change"] = await db.Changes.CountAsync(ct),
+            // Ruling (#191): alleen verified corrections worden geprojecteerd.
+            ["Ruling"] = await db.Corrections.CountAsync(c => c.Status == "verified", ct),
         };
 
         return new(true, null, GraphDrift.Compare(postgres, graphCounts));

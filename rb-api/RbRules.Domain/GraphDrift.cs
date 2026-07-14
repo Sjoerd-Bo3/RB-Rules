@@ -17,7 +17,7 @@ public static class GraphDrift
     public static readonly string[] Labels =
     [
         "Card", "Set", "Domain", "Tag", "Mechanic",
-        "RuleSection", "Concept", "Claim", "Source", "Erratum", "Change",
+        "RuleSection", "Concept", "Claim", "Source", "Erratum", "Change", "Ruling",
     ];
 
     /// <summary>Vergelijkt de verwachte aantallen (Postgres, dezelfde

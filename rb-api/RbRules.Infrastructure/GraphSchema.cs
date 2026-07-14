@@ -29,6 +29,9 @@ public static class GraphSchema
         "CREATE CONSTRAINT source_ref IF NOT EXISTS FOR (s:Source) REQUIRE s.ref IS UNIQUE",
         "CREATE CONSTRAINT erratum_ref IF NOT EXISTS FOR (e:Erratum) REQUIRE e.ref IS UNIQUE",
         "CREATE CONSTRAINT change_ref IF NOT EXISTS FOR (ch:Change) REQUIRE ch.ref IS UNIQUE",
+
+        // Geverifieerde rulings (#191): zelfde ref-sleutel-afspraak.
+        "CREATE CONSTRAINT ruling_ref IF NOT EXISTS FOR (rl:Ruling) REQUIRE rl.ref IS UNIQUE",
     ];
 
     public static async Task EnsureAsync(IDriver driver, CancellationToken ct = default)

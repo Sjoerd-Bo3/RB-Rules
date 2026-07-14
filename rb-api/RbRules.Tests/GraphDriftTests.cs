@@ -76,4 +76,22 @@ public class GraphDriftTests
 
         Assert.Equal(GraphDrift.Labels, entries.Select(e => e.Label));
     }
+
+    [Fact]
+    public void Labels_IncludesRuling()
+        // #191: rulings tellen mee in de Postgres-vs-Neo4j-drift, net als de
+        // andere kennislaag-knooptypes.
+        => Assert.Contains("Ruling", GraphDrift.Labels);
+
+    [Fact]
+    public void Compare_RulingDrift_MeasuredLikeAnyOtherLabel()
+    {
+        var entries = GraphDrift.Compare(
+            Counts(("Ruling", 12)), Counts(("Ruling", 9)));
+
+        var ruling = entries.Single(e => e.Label == "Ruling");
+        Assert.Equal(12, ruling.Postgres);
+        Assert.Equal(9, ruling.Graph);
+        Assert.Equal(-3, ruling.Delta);
+    }
 }

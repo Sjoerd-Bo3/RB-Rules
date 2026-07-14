@@ -2,6 +2,37 @@ using System.Globalization;
 
 namespace RbRules.Domain;
 
+/// <summary>Correction.Provenance → een korte, stabiele "kind" voor de
+/// graph-projectie (#191): de :Ruling-knoop draagt dit als property zodat
+/// een tool/UI clarify-gemined en in-chat-rulings uit elkaar kan houden
+/// zonder het rauwe Provenance-formaat ("clarify-mining:{sourceId}",
+/// "chat-ruling:admin"/"chat-ruling:user") te hoeven kennen. Puur — geen I/O.</summary>
+public static class RulingKind
+{
+    public static string FromProvenance(string? provenance) => provenance switch
+    {
+        null => "other",
+        _ when provenance.StartsWith("clarify-mining:", StringComparison.Ordinal) => "clarify",
+        _ when provenance.StartsWith("chat-ruling:", StringComparison.Ordinal) => "chat",
+        "review-notitie" => "review-note",
+        _ => "other",
+    };
+}
+
+/// <summary>Correction (geverifieerde ruling) → ABOUT-doel voor de
+/// graph-projectie (#191): dezelfde resolutie als Claim (ClaimTopicMapper),
+/// via het gedeelde topic-vocabulaire (RulingsTopics) zodat Scope
+/// "rule_section" eerst "section" wordt vóór de lookup. Scope "answer"
+/// (chat-ruling zonder anker) en de review-notitie-promotiescopes
+/// "claim"/"relation" hebben geen aanwijsbaar doel → null, dus geen
+/// ABOUT-edge — precies het bestaande Claim-gedrag voor niet-resolvende
+/// topics.</summary>
+public static class RulingTopicMapper
+{
+    public static BrainRef? Resolve(ClaimTopicMapper mapper, string? scope, string? reference) =>
+        mapper.Resolve(RulingsTopics.FromCorrectionScope(scope), reference);
+}
+
 /// <summary>Onderwerp-vocabulaire voor de publieke rulings-databank (#127):
 /// geverifieerde rulings (Correction.Scope: card|rule_section|answer) en
 /// community-claims (Claim.TopicType: card|mechanic|section|concept) spreken
