@@ -78,6 +78,7 @@ builder.Services.AddScoped<ChangeClassificationService>();
 builder.Services.AddScoped<SourceScoutService>();
 builder.Services.AddScoped<CardResolver>();
 builder.Services.AddScoped<CardDetailService>();
+builder.Services.AddScoped<SourceDossierService>();
 builder.Services.AddScoped<CardSimilarityService>();
 builder.Services.AddScoped<SimilarityExplainService>();
 builder.Services.AddScoped<RuleBrowserService>();

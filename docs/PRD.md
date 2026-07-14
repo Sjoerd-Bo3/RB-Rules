@@ -163,6 +163,29 @@ apart in §6.
   Zelf uitbreidbaar in het beheer.
   *Route* `/admin/overview/feeds` · *endpoints*
   `GET/POST/PATCH/DELETE /api/admin/feeds`, `/api/admin/overview/feeds`.
+- **Bron-dossier** (#171, spiegelbeeld van #167) — per bron in één oogopslag
+  wat die aan het systeem heeft toegevoegd en of dat compleet verwerkt is.
+  Herkomst (bovenstroom): welke bron-feed het artikel ontdekte, of
+  "handmatig". Opbrengst (benedenstroom), met aantal + korte lijst per soort:
+  documenten en regelsecties (`SourceId`), changes/wijzigingen (`SourceId`),
+  bans/errata/geverifieerde rulings (`SourceUrl`, genormaliseerd tegen
+  `Source.Url`) en community-claims (via `ClaimSource`, directe FK). Ver-
+  werkingsstatus uit het run_log-grootboek: de laatste scan (wanneer,
+  uitkomst) plus vervolgstappen (classify op changes van deze bron, claims-
+  mining op het document) met hun eigen status. Een compleetheidssignaal
+  (`SourceDossierCompleteness`, pure Domain-functie) leidt daaruit af:
+  *volledig* (scan ok + geen hangende/mislukte stap + opbrengst), *onvolledig*
+  (scan of vervolgstap mislukt/hangt), *leeg* (scan ok, niets opgeleverd —
+  kan legitiem zijn) of *nooit gescand*. Semantische volledigheid ("zijn
+  écht alle rulings uit dit artikel gehaald?") is niet hard te garanderen —
+  de UI is daar expliciet over en linkt door naar het ruwe document. Een
+  re-triggerknop draait scan (en daarmee classify) opnieuw voor déze ene
+  bron. Bronnen met een gefaald/onvolledig signaal staan ook als
+  signaalregel in het kennis-gaten-rapport (§4.5), met doorklik naar het
+  dossier. Uitklap in de bestaande bronnentabel, alles geprojecteerd op
+  bestaande data (#127-patroon) — geen embeddings, geen LLM.
+  *Route* `/admin` (uitklap per bron) · *endpoint*
+  `GET /api/admin/sources/{id}/dossier`.
 
 ### 4.2 Kaarten
 
@@ -375,7 +398,9 @@ apart in §6.
   bronnen-scout wekelijks in de scheduler-tick, met job-gate,
   run_log-vensters en degradatiepaden (#122).
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
-  de volgende harvest. *Endpoint* `/api/admin/overview/gaps`.
+  de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
+  er ook als signaalregel op (#171, `SourceDossierCompleteness`), met
+  doorklik naar het bron-dossier. *Endpoint* `/api/admin/overview/gaps`.
 - **Judge-benchmark** (#158) — job "benchmark" draait een vaste, extern
   aangeleverde meerkeuzevragenset (de scheidsrechter-judge-test, seed
   `BenchmarkSeed`) door exact dezelfde `/ask`-pipeline (retrieval + prompt

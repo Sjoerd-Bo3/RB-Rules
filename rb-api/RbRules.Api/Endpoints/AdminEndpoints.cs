@@ -269,6 +269,13 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
+        // Bron-dossier (#171, spiegelbeeld van #167): wat heeft déze bron
+        // aan het systeem toegevoegd, en is dat compleet verwerkt? Alleen
+        // projectie op bestaande data (#127-patroon).
+        admin.MapGet("/sources/{id}/dossier", async (
+                string id, SourceDossierService dossier, CancellationToken ct) =>
+            await dossier.GetAsync(id, ct) is { } d ? Results.Ok(d) : Results.NotFound());
+
         // Bron-feeds (#167): zelf toevoegen/beheren, patroon van de
         // sources-endpoints hierboven. UrlGuard op elke (nieuwe) URL — een
         // feed-URL is net zo goed externe/beheerder-invoer als een bron-URL.

@@ -225,7 +225,10 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   (#15), `IpHashing` (HMAC-SHA256 IP-hash voor de ask-geschiedenis, #157),
   `BenchmarkPrompt` (gecommitteerde-keuze-prompt + deterministische
   letter-parser, #158), `BenchmarkSeed` (judge-vragenset, idempotent net als
-  `SourceSeed`), `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
+  `SourceSeed`), `SourceDossierCompleteness` (#171, pure statusfunctie —
+  scan/vervolgstap-uitkomst + opbrengst → volledig/onvolledig/leeg/nooit
+  gescand, gedeeld door de dossier-service en het kennis-gaten-rapport),
+  `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
   datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
@@ -238,8 +241,14 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
   op `AskService` met `AskOptions.Benchmark = true`, #158),
-  `KnowledgeGapsService`, `ReviewNoteService` (#124, beheerder-notitie →
-  geverifieerde ruling), `ChatRulingService` (#166, in-chat-ruling →
+  `KnowledgeGapsService` (kennis-gaten-rapport; sinds #171 ook het
+  bron-verwerkingssignaal, zelfde `SourceDossierCompleteness`-statusfunctie
+  als de dossier-service), `SourceDossierService` (#171, spiegelbeeld van
+  `CardDetailService.DossierAsync`/#127: herkomst via `FeedId`, opbrengst
+  via `SourceId` — Document/RuleChunk/Change — en genormaliseerde `SourceUrl`
+  — BanEntry/Erratum/Correction — plus claims via de `ClaimSource`-FK, en
+  verwerkingsstatus uit `run_log`), `ReviewNoteService` (#124, beheerder-
+  notitie → geverifieerde ruling), `ChatRulingService` (#166, in-chat-ruling →
   verified/pending naar autoriteit), `JobLedger`, `PushService`,
   `MailService`, `UserAccountService`, `PasskeyService`, en de migraties in
   `Migrations/`.
@@ -261,7 +270,7 @@ pending, #166), `/api/auth/*`
 (magic-link + passkeys), `/api/changes|sources|bans|sets/upcoming`,
 `/api/push/*`, `/api/admin/*` (o.a. vraag-traces: `/asktraces` als slanke
 lijst, `/asktraces/{id}` met het volledige gesprek — antwoord + eerdere
-beurten, #143).
+beurten, #143; bron-dossier: `/sources/{id}/dossier`, #171).
 
 ### rb-ai — belangrijkste modules
 

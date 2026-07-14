@@ -32,13 +32,22 @@ public record GapAgingSignal(string Kind, string Title, string Reason, DateTimeO
 /// mist N nummers" — met doorklik naar het set-dekking-overzicht.</summary>
 public record GapSetCoverageSignal(string SetId, string Name, int Missing, int BaseTotal);
 
+/// <summary>Verwerkingssignaal (#171, GapAgingSignal-stijl): een bron waarvan
+/// de laatste scan mislukte, een vervolgstap (classify/claims) hing of
+/// faalde, of die nog nooit gescand is — met doorklik naar het bron-dossier.
+/// Bewust géén rij voor "leeg" (scan ok, niets opgeleverd) — dat kan
+/// legitiem zijn en is geen signaal.</summary>
+public record GapSourceProcessingSignal(
+    string SourceId, string Name, string Status, string Reason, DateTimeOffset? At);
+
 public record KnowledgeGapsReport(
     GapCoverage Coverage,
     IReadOnlyList<GapQuestion> Questions,
     IReadOnlyList<GapSourceStatus> Sources,
     GapDrift Drift,
     IReadOnlyList<GapAgingSignal> Aging,
-    IReadOnlyList<GapSetCoverageSignal> SetCoverage);
+    IReadOnlyList<GapSetCoverageSignal> SetCoverage,
+    IReadOnlyList<GapSourceProcessingSignal> SourceProcessing);
 
 /// <summary>Kennis-gaten-rapport (#52): meet waar de kennisbank dun is in
 /// plaats van te raden. Vier invalshoeken: dekking (kaarten zonder
@@ -146,7 +155,97 @@ public class KnowledgeGapsService(RbRulesDbContext db, BrainGraphService graph)
             sources,
             await BuildDriftAsync(ct),
             await BuildAgingAsync(ct),
-            await BuildSetCoverageAsync(ct));
+            await BuildSetCoverageAsync(ct),
+            await BuildSourceProcessingAsync(ct));
+    }
+
+    /// <summary>Begrensd venster op run_log voor het verwerkingssignaal
+    /// (#171) — zelfde stijl als <see cref="TraceWindow"/>: recent genoeg om
+    /// elke actieve bron te dekken, dit rapport gaat om de actuele staat.</summary>
+    private const int ProcessingLogWindow = 3000;
+
+    /// <summary>Verwerkingssignalen (#171): per ingeschakelde bron het
+    /// compleetheidssignaal (<see cref="SourceDossierCompleteness"/>) — alleen
+    /// de bronnen die aandacht vragen (onvolledig/nooit gescand) komen als
+    /// rij terug, "leeg" en "volledig" zijn geen signaal.</summary>
+    private async Task<IReadOnlyList<GapSourceProcessingSignal>> BuildSourceProcessingAsync(
+        CancellationToken ct)
+    {
+        var sources = await db.Sources.AsNoTracking()
+            .Where(s => s.Enabled)
+            .Select(s => new { s.Id, s.Name, s.TrustTier })
+            .ToListAsync(ct);
+        if (sources.Count == 0) return [];
+        var sourceIds = sources.Select(s => s.Id).ToHashSet();
+
+        var lastScanBySource = (await db.RunLogs.AsNoTracking()
+                .Where(l => l.Kind == "scan" && l.Ref != null && sourceIds.Contains(l.Ref!))
+                .OrderByDescending(l => l.CreatedAt)
+                .Take(ProcessingLogWindow)
+                .Select(l => new { l.Ref, l.Status, l.Detail, l.CreatedAt })
+                .ToListAsync(ct))
+            .GroupBy(l => l.Ref!)
+            .ToDictionary(g => g.Key, g => g.First()); // al gesorteerd, dus First() = nieuwste
+
+        var errorRows = await db.RunLogs.AsNoTracking()
+            .Where(l => (l.Kind == "claims" || l.Kind == "classify")
+                        && l.Status == "error" && l.Ref != null)
+            .OrderByDescending(l => l.CreatedAt)
+            .Take(ProcessingLogWindow)
+            .Select(l => new { l.Kind, l.Ref })
+            .ToListAsync(ct);
+        var claimErrorSources = errorRows
+            .Where(l => l.Kind == "claims" && sourceIds.Contains(l.Ref!))
+            .Select(l => l.Ref!)
+            .ToHashSet();
+
+        // Classify-fouten dragen "change:{id}" — terugvertalen naar de bron
+        // via Change.SourceId (run_log kent de bron zelf niet op dit kind).
+        var changeSourceById = await db.Changes.AsNoTracking()
+            .Where(c => sourceIds.Contains(c.SourceId))
+            .Select(c => new { c.Id, c.SourceId })
+            .ToDictionaryAsync(c => $"change:{c.Id}", c => c.SourceId, ct);
+        var classifyErrorSources = errorRows
+            .Where(l => l.Kind == "classify" && l.Ref != null
+                        && changeSourceById.ContainsKey(l.Ref!))
+            .Select(l => changeSourceById[l.Ref!])
+            .ToHashSet();
+
+        // Pending: nieuwste document per bron nog niet claims-gemined —
+        // materialiseer bewust (klein: documenten van ingeschakelde bronnen),
+        // "First() na OrderBy in een GroupBy-Select" is geen bewezen
+        // vertaalbare LINQ-constructie.
+        var latestDocBySource = (await db.Documents.AsNoTracking()
+                .Where(d => sourceIds.Contains(d.SourceId))
+                .Select(d => new { d.SourceId, d.RetrievedAt, d.ClaimsMinedAt })
+                .ToListAsync(ct))
+            .GroupBy(d => d.SourceId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(d => d.RetrievedAt).First());
+
+        var signals = new List<GapSourceProcessingSignal>();
+        foreach (var s in sources)
+        {
+            lastScanBySource.TryGetValue(s.Id, out var scan);
+            var anyFailed = claimErrorSources.Contains(s.Id) || classifyErrorSources.Contains(s.Id);
+            var anyPending = s.TrustTier >= 3
+                && latestDocBySource.TryGetValue(s.Id, out var doc) && doc.ClaimsMinedAt is null;
+            // opbrengstTotaal doet er hier niet toe: "leeg" en "volledig"
+            // filteren we toch allebei weg, dus een dummy 0 volstaat.
+            var status = SourceDossierCompleteness.Evaluate(scan?.Status, anyFailed, anyPending, 0);
+            if (status is not (SourceDossierCompleteness.Onvolledig
+                or SourceDossierCompleteness.NooitGescand)) continue;
+
+            var reason = status == SourceDossierCompleteness.NooitGescand
+                ? "nog nooit gescand"
+                : scan?.Status == "error"
+                    ? $"laatste scan mislukte: {scan?.Detail ?? "geen detail"}"
+                    : anyFailed
+                        ? "een vervolgstap (classify/claims-mining) faalde"
+                        : "een vervolgstap (claims-mining) loopt nog";
+            signals.Add(new(s.Id, s.Name, status, reason, scan?.CreatedAt));
+        }
+
+        return [.. signals.OrderByDescending(s => s.At ?? DateTimeOffset.MinValue)];
     }
 
     /// <summary>Set-dekking als gaten-signaal (#145): één regel per
