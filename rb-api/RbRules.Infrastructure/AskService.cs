@@ -68,12 +68,17 @@ public record AskStreamMeta(
 /// draaien dezelfde kanalen gewoon één voor één op de scoped context. Eén
 /// uitvallend kanaal levert een leeg kanaal plus een marker in de trace —
 /// nooit een 500. De kanalen leveren aan vaste slots en de prompt-opbouw
-/// blijft sequentieel: zelfde input geeft byte-voor-byte dezelfde prompt.</summary>
+/// blijft sequentieel: zelfde input geeft byte-voor-byte dezelfde prompt.
+/// <paramref name="rewriteCache"/> (#152, optioneel — singleton in
+/// Program.cs) is een kleine LRU op de genormaliseerde vraag: een
+/// cache-hit slaat de rewrite-call over; een null-uitkomst (rewrite-uitval)
+/// wordt nooit gecacht.</summary>
 public class AskService(
     RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai,
     AgenticRelationService agenticRelations,
     RequestUserContext userContext, ILogger<AskService> logger,
-    IDbContextFactory<RbRulesDbContext>? dbFactory = null)
+    IDbContextFactory<RbRulesDbContext>? dbFactory = null,
+    RewriteCache? rewriteCache = null)
 {
     private const int TopK = 8;
 
@@ -855,16 +860,28 @@ public class AskService(
         StartChannelAsync(name, fallback, () => WithChannelDbAsync(query, ct), ct);
 
     /// <summary>De query-rewrite-call (#66) als taak, zodat hij kan overlappen
-    /// met de rewrite-onafhankelijke kanalen (#152). Uitval of onzin-output is
-    /// het bestaande degradatiepad: Rewrite null, zoeken met de rauwe tekst.
-    /// Ms is de wandkloktijd van de call zelf (fase-meting).</summary>
+    /// met de rewrite-onafhankelijke kanalen (#152). Rewrite-cache (#152,
+    /// klein — LRU op de genormaliseerde vraag): een cache-hit slaat de hele
+    /// rb-ai-call over (Ms = 0, geen usage — er is geen call gemaakt). Uitval
+    /// of onzin-output is het bestaande degradatiepad: Rewrite null, zoeken
+    /// met de rauwe tekst; een null-uitkomst wordt nooit gecacht, anders zou
+    /// een tijdelijke rb-ai-hik het degradatiepad vastzetten voor de rest van
+    /// de procesduur. Ms is de wandkloktijd van de call zelf (fase-meting).</summary>
     private async Task<(QueryRewrite? Rewrite, AiUsage? Usage, long Ms)> RunRewriteAsync(
         string retrievalText, CancellationToken ct)
     {
+        var cacheKey = rewriteCache is null ? null : RewriteCache.NormalizeKey(retrievalText);
+        if (cacheKey is not null)
+        {
+            var cached = rewriteCache!.TryGet(cacheKey);
+            if (cached is not null) return (cached, null, 0);
+        }
+
         var rewriteSw = System.Diagnostics.Stopwatch.StartNew();
         var res = await ai.AskWithUsageAsync(
             QueryRewriter.BuildPrompt(retrievalText), QueryRewriter.SystemPrompt, ct: ct);
         var rewrite = res is null ? null : QueryRewriter.Parse(res.Answer);
+        if (rewrite is not null && cacheKey is not null) rewriteCache!.Set(cacheKey, rewrite);
         return (rewrite, res?.Usage, rewriteSw.ElapsedMilliseconds);
     }
 

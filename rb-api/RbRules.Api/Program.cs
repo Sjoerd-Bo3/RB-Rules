@@ -58,6 +58,11 @@ builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
+// Rewrite-cache (#152): singleton — moet de levensduur van het proces
+// overspannen (AskService zelf is scoped, per request), klein en LRU op de
+// genormaliseerde vraag. Zonder registratie zou AskService's optionele
+// parameter gewoon null blijven en caching uit staan (patroon dbFactory).
+builder.Services.AddSingleton<RewriteCache>();
 builder.Services.AddScoped<RuleSearchService>();
 builder.Services.AddScoped<PrimerService>();
 builder.Services.AddScoped<BanErrataSyncService>();
