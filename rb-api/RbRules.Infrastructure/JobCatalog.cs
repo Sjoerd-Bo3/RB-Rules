@@ -87,6 +87,13 @@ public static class JobCatalog
             // jobs-paneel in plaats van een verborgen modus-vlag op
             // "benchmark" — zelfde precedent als "scan" vs. de losse "feeds".
             new("benchmarksweep", BenchmarkSweepAsync),
+            // Wipe-mechanisme voor de LLM-afgeleide kennislaag (#187): gooit
+            // claims, primer-docs, correcties en relaties weg (+ reset de
+            // mining-markers) zodat een her-run met de Engelse prompts
+            // schoon opnieuw opbouwt. Bewust GEEN stap in "all" en géén
+            // automatische her-generatie hierna — expliciete, destructieve
+            // beheerdersbeslissing (zie KnowledgeRegenerationService).
+            new("regenerateknowledge", RegenerateKnowledgeAsync),
         }.ToDictionary(j => j.Name);
 
     private static async Task<string> RunAllAsync(
@@ -310,6 +317,14 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<BenchmarkService>()
             .RunSweepAsync(models: null, progress: report, ct: ct);
+        return r.Message;
+    }
+
+    private static async Task<string> RegenerateKnowledgeAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        report("afgeleide kennis (claims, primer-docs, correcties, relaties) verwijderen");
+        var r = await sp.GetRequiredService<KnowledgeRegenerationService>().WipeAsync(ct);
         return r.Message;
     }
 }

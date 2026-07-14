@@ -91,6 +91,9 @@ builder.Services.AddScoped<ClarificationMiningService>();
 builder.Services.AddScoped<RelationMiningService>();
 // Agentic-terugkoppeling (#120): voorstellen die de ask-agent achterlaat.
 builder.Services.AddScoped<AgenticRelationService>();
+// Wipe-mechanisme voor de LLM-afgeleide kennislaag (#187): expliciete
+// admin-job, nooit automatisch.
+builder.Services.AddScoped<KnowledgeRegenerationService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<ReviewNoteService>();
 // In-chat rulings vanuit /ask (#166): autoriteit bepaalt verified vs pending.
