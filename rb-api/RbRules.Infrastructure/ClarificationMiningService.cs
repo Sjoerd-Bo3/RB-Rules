@@ -4,7 +4,7 @@ using RbRules.Domain;
 namespace RbRules.Infrastructure;
 
 public record ClarificationMineResult(
-    int Documents, int Verified, int Pending, int Updated, int Failed, string Message);
+    int Documents, int Verified, int Pending, int Updated, int Failed, int Retracted, string Message);
 
 /// <summary>#177: FAQ-/clarificatie-artikelen (bv. de Unleashed Rules FAQ)
 /// worden door de scan-pipeline geknipt en geëmbed als vaste-lengte-slabs die
@@ -48,6 +48,19 @@ public record ClarificationMineResult(
 /// <see cref="ClaimMiningService"/>) herkent de parafrase en werkt de
 /// bestaande ruling bij in plaats van te dupliceren. Best-effort en gecapt
 /// per run; elke faalstap is herleidbaar in run_log (kind "clarify").
+///
+/// <b>#185-herkadering:</b> patch notes zijn UIT deze pijplijn gehaald
+/// (<see cref="ClarificationSources.IsMatch"/> matcht ze niet meer) — een
+/// patch-notes-artikel is een REGELWIJZIGING (delta), geen op-zichzelf-
+/// staande ruling, en hoort daarom alleen nog in de wijzigingen-feed via de
+/// gewone ingest-diff. Elke run trekt bovendien eerst de al gemínede
+/// patch-notes-Corrections van vóór deze scheiding terug
+/// (<see cref="RetractPatchNotesCorrectionsAsync"/>), en de hybride poort
+/// heeft er een derde toets bij: <see cref="ClarificationInformativeness"/>
+/// weert een geëxtraheerd item dat zelf niets meer is dan een kale
+/// aankondiging ("X is verduidelijkt/gewijzigd") zonder de regel/definitie/
+/// interactie te noemen — de vorm van de #185-bug (een lege Legion-"ruling"
+/// uit core-rules-patch-notes).
 ///
 /// Backfilt bestaande bronnen vanzelf (Sjoerd-eis, #177-vervolg): de
 /// bronselectie hierboven heeft geen tijdvenster — elke enabled trust-1 bron
@@ -98,6 +111,12 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         Action<string>? progress = null, CancellationToken ct = default)
     {
         maxItems = Math.Clamp(maxItems, 1, 300);
+
+        // #185-opruiming: eerst de al bestaande patch-notes-Corrections
+        // terugtrekken (oude #177-heuristiek minede die nog mee) — idempotent,
+        // vóór de eigenlijke extractie zodat elke run (handmatig of nachtelijk)
+        // dit vanzelf blijft bewaken zonder apart commando.
+        var retracted = await RetractPatchNotesCorrectionsAsync(ct);
 
         // In-memory filter (ClarificationSources.IsMatch is puur/geen EF-
         // vertaalbare methode, docs/CONVENTIONS.md): het aantal trust-1
@@ -228,11 +247,66 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         }
 
         var message =
-            $"{docs} document(en) verwerkt: {verified} geverifieerd, {pending} ter review, "
+            (retracted > 0 ? $"{retracted} patch-notes-ruling(en) ingetrokken (#185) · " : "")
+            + $"{docs} document(en) verwerkt: {verified} geverifieerd, {pending} ter review, "
             + $"{updated} bijgewerkt, {failed} mislukt"
             + (failed > 0 ? " (redenen in run_log)" : "")
             + (budgetHit ? $" — cap van {maxItems} bereikt, rest volgt bij de volgende run" : "");
-        return new(docs, verified, pending, updated, failed, message);
+        return new(docs, verified, pending, updated, failed, retracted, message);
+    }
+
+    /// <summary>#185-opruiming: retracten van clarify-mining-<see
+    /// cref="Correction"/>s wier bron een patch-notes-bron is (Provenance
+    /// "clarify-mining:{sourceId}" met een <see cref="ClarificationSources.
+    /// IsPatchNotesSignal"/>-bron). Vóór #185 matchte patch-notes ook mee in
+    /// <see cref="ClarificationSources.IsMatch"/>, waardoor een
+    /// aankondigingszin zonder regelinhoud (bv. de lege Legion-"ruling" uit
+    /// core-rules-patch-notes) als geverifieerde ruling kon eindigen — die
+    /// hoort niet in de rulings-laag, patch notes voeden alleen nog de
+    /// wijzigingen-feed (gewone ingest-diff). Hard verwijderen (niet
+    /// "rejected" markeren): het is geen menselijke afwijzing van een
+    /// specifieke bewering, het is "dit had nooit een ruling-rij moeten zijn"
+    /// — een tombstone zou de reviewqueue-telling nodeloos vervuilen.
+    ///
+    /// Werkt zowel op <c>verified</c> als <c>unverified</c>/pending items
+    /// (Sjoerd-eis): geen statusfilter. Idempotent: draait bij elke
+    /// "clarify"-run (handmatig of nachtelijk) mee, en is na de eerste
+    /// opruiming een goedkope no-op (geen matchende Corrections meer, want
+    /// patch-notes-bronnen worden sinds #185 niet meer gemined). Sources
+    /// wordt in-memory gejoind (klein aantal trust-1-bronnen, zelfde
+    /// afweging als de bronselectie hierboven); ontbreekt de Source-rij zelf
+    /// (bv. verwijderd uit het register), dan valt de check terug op de
+    /// sourceId uit de Provenance zelf — die draagt bij de patch-notes-seeds
+    /// (bv. "core-rules-patch-notes") het signaal al in de Id.</summary>
+    private async Task<int> RetractPatchNotesCorrectionsAsync(CancellationToken ct)
+    {
+        var candidates = await db.Corrections
+            .Where(c => c.Provenance != null && c.Provenance.StartsWith(ProvenancePrefix))
+            .ToListAsync(ct);
+        if (candidates.Count == 0) return 0;
+
+        var sources = await db.Sources.AsNoTracking()
+            .Select(s => new { s.Id, s.Url, s.Name })
+            .ToDictionaryAsync(s => s.Id, ct);
+
+        var toRetract = candidates.Where(c =>
+        {
+            var sourceId = c.Provenance![ProvenancePrefix.Length..];
+            return sources.TryGetValue(sourceId, out var src)
+                ? ClarificationSources.IsPatchNotesSignal(src.Id, src.Url, src.Name)
+                : ClarificationSources.IsPatchNotesSignal(sourceId, null, null);
+        }).ToList();
+        if (toRetract.Count == 0) return 0;
+
+        db.Corrections.RemoveRange(toRetract);
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = LedgerKind, Ref = "cleanup-patch-notes", Status = "info",
+            Detail = $"{toRetract.Count} patch-notes-clarify-ruling(en) ingetrokken (#185 — "
+                     + "patch notes horen alleen nog in de wijzigingen-feed, niet als ruling)",
+        });
+        await db.SaveChangesAsync(ct);
+        return toRetract.Count;
     }
 
     private enum ClarifyOutcome { NewVerified, NewPending, Updated, RejectedKept, Skipped, Failed }
@@ -270,19 +344,21 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             concepts.Select(k => (k.Topic, k.Title)));
     }
 
-    /// <summary>Eén concept opslaan met de hybride poort (#177) én dedupe op
-    /// conceptniveau. Poort: grounded (citaat in de bron) EN anchored
-    /// (onderwerp resolvet) ⇒ verified; anders unverified met StatusReason
-    /// (de reviewqueue in). Dedupe-sleutel: (Provenance=bron, Scope, Ref) --
-    /// het citaat telt bewust NIET mee -- plus semantische nabijheid: een
-    /// genormaliseerd-gelijke óf embedding-nabije verduidelijking geldt als
-    /// dezelfde en wordt bijgewerkt (nooit gedegradeerd; een rejected tombstone
-    /// wordt nooit heropend) in plaats van gedupliceerd. Zo is een her-mine (na
-    /// retry OF na een cosmetische bronwijziging met een nieuwe Document-rij)
-    /// idempotent op conceptniveau. Degradeert bij Ollama-uitval naar de
-    /// genormaliseerde exacte-tekst-toets: een re-run dupliceert dan nog steeds
-    /// niet, maar een écht nieuw concept wacht op een run met werkende
-    /// embeddings (nooit een ruling zonder embedding, #100).</summary>
+    /// <summary>Eén concept opslaan met de hybride poort (#177, #185) én
+    /// dedupe op conceptniveau. Poort: grounded (citaat in de bron) EN
+    /// anchored (onderwerp resolvet) EN informative (geen kale
+    /// aankondigingszin, #185) ⇒ verified; anders unverified met
+    /// StatusReason (de reviewqueue in). Dedupe-sleutel: (Provenance=bron,
+    /// Scope, Ref) -- het citaat telt bewust NIET mee -- plus semantische
+    /// nabijheid: een genormaliseerd-gelijke óf embedding-nabije
+    /// verduidelijking geldt als dezelfde en wordt bijgewerkt (nooit
+    /// gedegradeerd; een rejected tombstone wordt nooit heropend) in plaats
+    /// van gedupliceerd. Zo is een her-mine (na retry OF na een cosmetische
+    /// bronwijziging met een nieuwe Document-rij) idempotent op
+    /// conceptniveau. Degradeert bij Ollama-uitval naar de genormaliseerde
+    /// exacte-tekst-toets: een re-run dupliceert dan nog steeds niet, maar
+    /// een écht nieuw concept wacht op een run met werkende embeddings (nooit
+    /// een ruling zonder embedding, #100).</summary>
     private async Task<(ClarifyOutcome Outcome, string? Failure)> StoreAsync(
         Source src, ExtractedClarification ec, string docContent,
         ClaimTopicMapper anchors, CancellationToken ct)
@@ -292,13 +368,20 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         var provenance = $"{ProvenancePrefix}{src.Id}";
         var normClarification = ClaimMiner.NormalizeStatement(ec.Clarification);
 
-        // Hybride poort (#177): grounded (citaat écht in de bron) EN anchored
-        // (onderwerp resolvet naar een bestaande knoop) ⇒ verified; anders
-        // pending met reden, de reviewqueue in.
+        // Hybride poort (#177, #185): grounded (citaat écht in de bron) EN
+        // anchored (onderwerp resolvet naar een bestaande knoop) EN
+        // informative (geen kale "X is verduidelijkt/gewijzigd"-aankondiging
+        // zonder regelinhoud — de #185-bug) ⇒ verified; anders pending met
+        // reden, de reviewqueue in. Een niet-informatief item gaat naar
+        // review in plaats van stil te worden overgeslagen: net als bij
+        // grounding/anchoring kan de heuristiek een keer mis zitten, en de
+        // beheerder heeft dan alsnog het laatste woord (zelfde uniforme
+        // poort-semantiek, geen aparte "skip"-tak).
         var grounded = ClarificationGrounding.IsGrounded(ec.Quote, docContent);
         var anchored = anchors.Resolve(ec.TopicType, topicRef) is not null;
-        var verifies = grounded && anchored;
-        var reason = verifies ? null : GateReason(grounded, anchored, ec);
+        var informative = !ClarificationInformativeness.IsMetaOnly(ec.Clarification);
+        var verifies = grounded && anchored && informative;
+        var reason = verifies ? null : GateReason(grounded, anchored, informative, ec);
 
         // Dedupe-scope: alle clarify-rulings van déze bron voor ditzelfde
         // onderwerp (Scope, Ref). Klein per (bron, onderwerp), dus tracked
@@ -387,9 +470,9 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
     }
 
     /// <summary>Leesbare reden dat de hybride poort een item pending laat, voor
-    /// de reviewqueue (StatusReason). Combineert beide faalredenen als beide
-    /// falen.</summary>
-    private static string GateReason(bool grounded, bool anchored, ExtractedClarification ec)
+    /// de reviewqueue (StatusReason). Combineert alle faalredenen als er
+    /// meerdere tegelijk gelden.</summary>
+    private static string GateReason(bool grounded, bool anchored, bool informative, ExtractedClarification ec)
     {
         var parts = new List<string>();
         if (!grounded)
@@ -398,6 +481,8 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
                 : "citaat niet terug te vinden in de bron");
         if (!anchored)
             parts.Add($"onderwerp '{ec.TopicRef.Trim()}' ({ec.TopicType}) niet herkend");
+        if (!informative)
+            parts.Add("verduidelijking is een aankondiging zonder regelinhoud (#185)");
         return string.Join("; ", parts);
     }
 

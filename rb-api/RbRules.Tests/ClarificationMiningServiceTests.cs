@@ -404,6 +404,63 @@ public class ClarificationMiningServiceTests
         Assert.Equal("verified", ruling.Status);
     }
 
+    // --- informativiteits-poort (#185) — de échte Legion-FAQ-fixture ----
+
+    [Fact]
+    public async Task Gate_LegionOperatieveUitleg_GroundedAnchoredInformative_Verified()
+    {
+        // De #185-promptinstructie: vat de werkende uitspraak vast (play =
+        // finalize voor Legion) MÉT het verbindende voorbeeld (Battering Ram)
+        // — dit is precies wat de échte Unleashed Rules FAQ zegt over Legion,
+        // in tegenstelling tot de kale aankondiging uit de patch notes. In
+        // het Engels opgeslagen (#185, Sjoerd-eis): dicht bij de brontekst,
+        // geen Nederlandse parafrase in de corpus.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = $$"""
+            {"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "sectionRef": "402.3",
+              "clarification": "Play has three technical meanings; for Legion the relevant one is 'finalize' — the moment an item is actually resolved on the chain. Conditional effects such as on Battering Ram check this finalize status.",
+              "quote": "{{LegionQuote}}"}]}
+            """;
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Verified);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("verified", ruling.Status);
+        Assert.Null(ruling.StatusReason);
+    }
+
+    [Fact]
+    public async Task Gate_LegionKaleAankondiging_GroundedAnchoredMaarNietInformatief_Unverified()
+    {
+        // De #185-bugvorm: het citaat klopt (grounded) en het onderwerp
+        // resolvet (anchored — mechaniek "Legion"), maar de "verduidelijking"
+        // zelf zegt alleen DÁT Legion is verduidelijkt, niet WAT er nu geldt.
+        // Vóór #185 verifieerde dit soort item automatisch (grounded+anchored
+        // was toen de hele poort) — exact de lege Legion-"ruling" uit issue
+        // #185. De informativiteits-poort moet dit nu naar review sturen.
+        // (Ook al in het Engels, #185-opslagtaal.)
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = $$"""
+            {"clarifications": [{"topicType": "mechanic", "topicRef": "Legion",
+              "clarification": "Legion's behavior was clarified in this update.",
+              "quote": "{{LegionQuote}}"}]}
+            """;
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Verified);
+        Assert.Equal(1, r.Pending);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("unverified", ruling.Status);
+        Assert.Contains("aankondiging zonder regelinhoud", ruling.StatusReason);
+        Assert.Null(ruling.VerifiedAt);
+    }
+
     // --- testinfra (zelfde patroon als ClaimMiningServiceTests) ----------
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)

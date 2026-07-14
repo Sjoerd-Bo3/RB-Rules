@@ -15,7 +15,13 @@ namespace RbRules.Tests;
 /// change die ScanOneAsync nu bij aankomst toevoegt, alleen voor officiële
 /// (TrustTier 1) bronnen die matchen op ClarificationSources.IsMatch — een
 /// gewone nieuwe bron blijft ongemoeid (bestaand gedrag,
-/// IngestServiceUpdatedAtTests).</summary>
+/// IngestServiceUpdatedAtTests).
+///
+/// #185: patch notes zijn UIT ClarificationSources.IsMatch gehaald, dus dit
+/// sjabloon vuurt sindsdien niet meer op hun eerste scan — hun echte duiding
+/// komt vanaf de tweede scan gewoon via de normale ingest-diff (voor/na),
+/// zie ScanAsync_EersteScanVanPatchNotesBron_MaaktGeenClarificationChange en
+/// ScanAsync_TweedeScanVanPatchNotesBron_MaaktGewoneDiffChange hieronder.</summary>
 public class IngestServiceClarificationChangeTests
 {
     private const string FaqUrl =
@@ -63,6 +69,63 @@ public class IngestServiceClarificationChangeTests
 
         Assert.Equal("new", Assert.Single(results).Status);
         Assert.Empty(await db.Changes.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ScanAsync_EersteScanVanPatchNotesBron_MaaktGeenClarificationChange()
+    {
+        // #185: patch notes matchen niet meer op ClarificationSources.IsMatch,
+        // dus deze tak (het #177-sjabloon) vuurt niet meer op hun eerste
+        // scan — een patch-notes-bron gedraagt zich nu als elke andere
+        // gewone bron: "new" zonder Change (er is nog niets om te diffen).
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "core-rules-patch-notes", Name = "Core Rules Patch Notes (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/riftbound-core-rules-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
+        });
+        await db.SaveChangesAsync();
+        var svc = NewIngest(db, _ => Html("Legion is a dependent keyword."));
+
+        var results = await svc.ScanAsync(onlyDue: false);
+
+        Assert.Equal("new", Assert.Single(results).Status);
+        Assert.Empty(await db.Changes.ToListAsync());
+        var src = await db.Sources.SingleAsync();
+        Assert.Null(src.UpdatedAt); // net ontdekt, geen wijziging gezien
+    }
+
+    [Fact]
+    public async Task ScanAsync_TweedeScanVanPatchNotesBron_MaaktGewoneDiffChange()
+    {
+        // De echte duiding van een patch-notes-wijziging komt sinds #185
+        // alleen nog via de normale ingest-diff (voor/na) — niet als losse
+        // ruling. Deze test bewijst dat het pad wérkt: content-wijziging op
+        // een patch-notes-bron levert een gewone Change op, exact zoals elke
+        // andere bron (IngestServiceUpdatedAtTests.
+        // ScanAsync_RealContentChange_SetsUpdatedAt).
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "core-rules-patch-notes", Name = "Core Rules Patch Notes (officieel)",
+            Url = "https://playriftbound.com/en-us/news/rules-and-releases/riftbound-core-rules-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
+        });
+        await db.SaveChangesAsync();
+        var content = "Legion is a dependent keyword.";
+        var svc = NewIngest(db, _ => Html(content));
+        await svc.ScanAsync(onlyDue: false); // eerste fetch: "new", geen change-item
+
+        content = "Legion is a dependent keyword. CLARIFIED: activated abilities with Legion trigger only once per turn.";
+        var results = await svc.ScanAsync(onlyDue: false); // échte wijziging
+
+        Assert.Equal("changed", Assert.Single(results).Status);
+        var change = await db.Changes.SingleAsync();
+        Assert.NotEqual("clarification", change.ChangeType); // geen #177-sjabloon meer
+        Assert.NotNull(change.Diff);
+        var src = await db.Sources.SingleAsync();
+        Assert.NotNull(src.UpdatedAt);
     }
 
     [Fact]
