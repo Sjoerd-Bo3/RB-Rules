@@ -2,7 +2,7 @@ import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
 import { quotaMessage } from '$lib/quota';
-import { userHeaders } from '$lib/server/user';
+import { USER_COOKIE, userHeaders } from '$lib/server/user';
 
 // Quota-fouten van rb-api (#42) vertaald naar een bruikbare melding — de
 // api()-helper geeft alleen de status door. De teksten staan in $lib/quota,
@@ -28,12 +28,33 @@ export interface AskStats {
 	} | null;
 }
 
-export const load: PageServerLoad = async () => {
+/** Aanpak-keuze (#153): het stukje accountinfo dat het vraagformulier nodig
+ *  heeft — alleen aanwezig voor een ingelogde bezoeker. */
+export interface AskAccount {
+	dailyAgenticQuota: number;
+	agenticToday: number;
+}
+
+export const load: PageServerLoad = async ({ cookies }) => {
+	let stats: AskStats;
 	try {
-		return { stats: await api<AskStats>('/api/ask/stats') };
+		stats = await api<AskStats>('/api/ask/stats');
 	} catch {
-		return { stats: { count: 0 } as AskStats };
+		stats = { count: 0 };
 	}
+	// Ingelogd (#153): dagtegoed voor Grondig ophalen — best-effort, want
+	// zonder account werkt de pagina gewoon (dan is er geen keuze en beslist
+	// de server sowieso Auto).
+	let account: AskAccount | null = null;
+	if (cookies.get(USER_COOKIE)) {
+		try {
+			const me = await api<AskAccount>('/api/auth/me', { headers: userHeaders(cookies) });
+			account = { dailyAgenticQuota: me.dailyAgenticQuota, agenticToday: me.agenticToday };
+		} catch {
+			account = null;
+		}
+	}
+	return { stats, account };
 };
 
 interface Citation {
@@ -102,6 +123,10 @@ interface AskResult {
 	questionType: string;
 	claims: AskClaim[] | null;
 	misconceptions: AskMisconception[] | null;
+	/** Aanpak-terugmelding (#153): welke aanpak het werd en waarom die
+	 *  eventueel afwijkt van de keuze (machine-sleutel, zie $lib/approach). */
+	approach: string | null;
+	approachReason: string | null;
 }
 
 export const actions: Actions = {
@@ -118,6 +143,10 @@ export const actions: Actions = {
 			history = [];
 		}
 		history = history.slice(-3);
+
+		// Aanpak-keuze (#153): reist als request-veld mee; rb-api is de
+		// meester (anoniem of onbekende waarde = Auto), dus hier geen poort.
+		const approach = String(form.get('approach') ?? '').trim() || undefined;
 
 		// Optionele board-state-foto — client verkleint al, dit is de vangrail.
 		let images: { mediaType: string; data: string }[] | undefined;
@@ -139,7 +168,8 @@ export const actions: Actions = {
 				body: JSON.stringify({
 					question,
 					images,
-					history: history.length ? history : undefined
+					history: history.length ? history : undefined,
+					approach
 				})
 			});
 			return { question, history, hadPhoto: Boolean(images), ...result };

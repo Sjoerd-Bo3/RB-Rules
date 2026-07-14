@@ -5,10 +5,38 @@
 	import AnswerView from '$lib/AnswerView.svelte';
 	import { citationEssence, splitSettled } from '$lib/answerFormat';
 	import { quotaMessage } from '$lib/quota';
+	import { APPROACH_OPTIONS, approachNotice, type Approach } from '$lib/approach';
 
 	let { data, form } = $props();
 	let busy = $state(false);
 	let phase = $state(0);
+
+	// Aanpak-keuze (#153, alleen ingelogd): Auto laat de bestaande gate
+	// beslissen, Snel forceert de single-pass, Grondig de brein-agent —
+	// binnen het eigen dagtegoed. De server blijft de meester: anoniem of
+	// zonder tegoed wordt de keuze daar genegeerd (met nette melding).
+	const account = $derived(data.account);
+	const agenticLeft = $derived(
+		account ? Math.max(0, account.dailyAgenticQuota - account.agenticToday) : 0
+	);
+	let approach = $state<Approach>('auto');
+	// Tegoed op (ook halverwege een sessie, na invalidateAll): terug naar
+	// Auto — een disabled radio zou anders stil uit het formulier vallen.
+	$effect(() => {
+		if (approach === 'thorough' && account && agenticLeft === 0) approach = 'auto';
+	});
+	const approachHint = $derived.by(() => {
+		if (!account) return '';
+		if (approach === 'thorough')
+			return `Grondig: de brein-agent redeneert door — duurt ±2 min en telt zwaarder mee. Vandaag nog ${agenticLeft} van ${account.dailyAgenticQuota} over.`;
+		const base = APPROACH_OPTIONS.find((o) => o.value === approach)?.hint ?? '';
+		return agenticLeft === 0
+			? `${base}. Het dagtegoed voor Grondig is vandaag op.`
+			: `${base}.`;
+	});
+	// Terugmelding van de server (#153): de keuze werd niet gehonoreerd —
+	// bij quota-op de eerlijke "automatisch beantwoord"-melding.
+	const answerNotice = $derived(approachNotice(form?.approachReason));
 
 	// Echte duurstatistiek (mediaan/p90 van de laatste vragen) i.p.v. schatting.
 	const stats = $derived(data.stats);
@@ -138,6 +166,9 @@
 		questionType: string | null;
 		citations: unknown[];
 		answer: string;
+		/** #153: terugval-reden uit het meta-frame — de melding hoort niet
+		 *  te wachten op het slotframe (agentic heeft een lange stille fase). */
+		approachReason: string | null;
 	}
 	let live = $state<LiveAsk | null>(null);
 	let liveError = $state<string | null>(null);
@@ -152,6 +183,7 @@
 	// deel t/m de laatste newline gaat door AnswerView, de staart als kale
 	// tekst. Het slotframe her-rendert daarna het volledige antwoord.
 	const liveParts = $derived(live ? splitSettled(live.answer) : { settled: '', tail: '' });
+	const liveNotice = $derived(approachNotice(live?.approachReason));
 
 	const canStream = () =>
 		typeof ReadableStream === 'function' && typeof TextDecoder === 'function';
@@ -243,7 +275,9 @@
 					body: JSON.stringify({
 						question: q,
 						history: turns.length ? turns : undefined,
-						images
+						images,
+						// #153: keuze reist mee; de server honoreert alleen ingelogd.
+						approach: account ? approach : undefined
 					})
 				});
 			} catch {
@@ -282,7 +316,14 @@
 				return;
 			}
 
-			live = { question: q, history: turns, questionType: null, citations: [], answer: '' };
+			live = {
+				question: q,
+				history: turns,
+				questionType: null,
+				citations: [],
+				answer: '',
+				approachReason: null
+			};
 			const reader = res.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = '';
@@ -301,6 +342,7 @@
 						text?: string;
 						questionType?: string;
 						citations?: unknown[];
+						approachReason?: string | null;
 						result?: Record<string, unknown>;
 						error?: string;
 					};
@@ -315,7 +357,8 @@
 						live = {
 							...live,
 							questionType: frame.questionType ?? null,
-							citations: frame.citations ?? []
+							citations: frame.citations ?? [],
+							approachReason: frame.approachReason ?? null
 						};
 					} else if (frame.type === 'delta' && live && typeof frame.text === 'string') {
 						live = { ...live, answer: live.answer + frame.text };
@@ -458,6 +501,30 @@
 			placeholder="Beschrijf de situatie of stel je regelvraag…"
 			bind:value={question}
 		></textarea>
+		{#if account}
+			<!-- Aanpak-keuze (#153, alleen ingelogd): compacte segment-keuze;
+			     de radio's reizen als approach-veld mee met de form-POST én
+			     (via state) met het streamingpad. Server-authoritatief. -->
+			<div class="approach-row">
+				<span class="meta approach-label" id="approach-label">Aanpak</span>
+				<div class="approach-opts" role="radiogroup" aria-labelledby="approach-label">
+					{#each APPROACH_OPTIONS as opt (opt.value)}
+						{@const off = opt.value === 'thorough' && agenticLeft === 0}
+						<label class="approach-opt" class:active={approach === opt.value} class:off>
+							<input
+								type="radio"
+								name="approach"
+								value={opt.value}
+								bind:group={approach}
+								disabled={off}
+							/>
+							{opt.label}
+						</label>
+					{/each}
+				</div>
+			</div>
+			<p class="meta small approach-hint">{approachHint}</p>
+		{/if}
 		<div class="form-row">
 			<button type="submit" disabled={busy}>{busy ? 'Bezig…' : 'Vraag'}</button>
 			<input
@@ -490,6 +557,7 @@
 			<div>
 				<p class="phase">{PHASES[phase]}</p>
 				<p class="meta">{waitText}</p>
+				{#if liveNotice}<p class="approach-notice">{liveNotice}</p>{/if}
 			</div>
 		</div>
 	{/if}
@@ -523,6 +591,7 @@
 				{#if live.questionType}<span class="qtype">{TYPE_LABELS[live.questionType] ?? live.questionType}</span>{/if}
 				Vraag: {live.question}
 			</p>
+			{#if liveNotice}<p class="approach-notice">{liveNotice}</p>{/if}
 			<AnswerView answer={liveParts.settled} citations={live.citations} cards={[]} />
 			<p class="md-tail">{liveParts.tail}{#if !liveError}<span class="cursor"></span>{/if}</p>
 			{#if liveError}<p class="warn">{liveError}</p>{/if}
@@ -540,6 +609,7 @@
 					</button>
 				</p>
 			{/if}
+			{#if answerNotice}<p class="approach-notice">{answerNotice}</p>{/if}
 			<AnswerView answer={form?.answer ?? ''} citations={form?.citations ?? []} cards={form?.cards ?? []} />
 			{#if form?.citations?.length}
 				<h2>Geciteerde regelsecties</h2>
@@ -752,6 +822,10 @@
 			<h2>Vraag door</h2>
 			<p class="meta small">Nog niet duidelijk, of wil je een vervolgsituatie checken? De vraag bouwt voort op dit gesprek.</p>
 			<input type="hidden" name="history" value={nextHistory} />
+			{#if account}
+				<!-- #153: de gekozen aanpak reist ook met doorvragen mee. -->
+				<input type="hidden" name="approach" value={approach} />
+			{/if}
 			<textarea name="question" rows="2" placeholder="Bijv.: En wat als de unit al exhausted was?" bind:value={followUp}></textarea>
 			<button type="submit" disabled={busy || !followUp.trim()}>Vraag door</button>
 		</form>
@@ -790,6 +864,33 @@
 	}
 	button[type='submit']:disabled { opacity: 0.55; }
 	.form-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+	/* Aanpak-keuze (#153): compact segment; wrapt op 390px zonder overflow. */
+	.approach-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+	.approach-label { font-size: 0.85rem; }
+	.approach-opts {
+		display: inline-flex; border: 1px solid var(--border); border-radius: 8px;
+		overflow: hidden; background: var(--surface-deep);
+	}
+	.approach-opt {
+		position: relative; padding: 6px 14px; font-size: 0.85rem;
+		color: var(--muted); cursor: pointer; white-space: nowrap;
+	}
+	.approach-opt + .approach-opt { border-left: 1px solid var(--border); }
+	.approach-opt:hover { color: var(--text); }
+	.approach-opt.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+	.approach-opt.off { opacity: 0.5; cursor: not-allowed; }
+	/* Radio zelf onzichtbaar maar focusbaar; focus zichtbaar op het segment. */
+	.approach-opt input {
+		position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0;
+	}
+	.approach-opt:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+	.approach-hint { margin: 6px 0 0; }
+	/* Terugmelding (#153): keuze niet gehonoreerd — status als kleur + tekst. */
+	.approach-notice {
+		background: var(--warn-soft); color: var(--warn);
+		border-radius: 8px; padding: 8px 12px; margin: 8px 0;
+		font-size: 0.85rem;
+	}
 	.hidden-input { display: none; }
 	.photo-chip { display: inline-flex; align-items: center; gap: 8px; }
 	.photo-chip img {
