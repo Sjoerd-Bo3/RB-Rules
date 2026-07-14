@@ -13,7 +13,7 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    [Migration("20260714125259_ChatRulingSourceRef")]
+    [Migration("20260714150038_ChatRulingSourceRef")]
     partial class ChatRulingSourceRef
     {
         /// <inheritdoc />
@@ -313,6 +313,161 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_ban_entry_card_riftbound_id");
 
                     b.ToTable("ban_entry", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.BenchmarkQuestion", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("category");
+
+                    b.Property<int?>("CorrectIndex")
+                        .HasColumnType("integer")
+                        .HasColumnName("correct_index");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Explanation")
+                        .HasColumnType("text")
+                        .HasColumnName("explanation");
+
+                    b.Property<string>("ExternalKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("external_key");
+
+                    b.PrimitiveCollection<string[]>("Options")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("options");
+
+                    b.Property<string>("Question")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("question");
+
+                    b.HasKey("Id")
+                        .HasName("pk_benchmark_question");
+
+                    b.HasIndex("ExternalKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_benchmark_question_external_key");
+
+                    b.ToTable("benchmark_question", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.BenchmarkResult", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Answer")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("answer");
+
+                    b.Property<int?>("ChosenIndex")
+                        .HasColumnType("integer")
+                        .HasColumnName("chosen_index");
+
+                    b.Property<bool?>("Correct")
+                        .HasColumnType("boolean")
+                        .HasColumnName("correct");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("DurationMs")
+                        .HasColumnType("integer")
+                        .HasColumnName("duration_ms");
+
+                    b.Property<long?>("InputTokens")
+                        .HasColumnType("bigint")
+                        .HasColumnName("input_tokens");
+
+                    b.Property<long?>("OutputTokens")
+                        .HasColumnType("bigint")
+                        .HasColumnName("output_tokens");
+
+                    b.Property<long>("QuestionId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("question_id");
+
+                    b.Property<long>("RunId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("run_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_benchmark_result");
+
+                    b.HasIndex("QuestionId")
+                        .HasDatabaseName("ix_benchmark_result_question_id");
+
+                    b.HasIndex("RunId")
+                        .HasDatabaseName("ix_benchmark_result_run_id");
+
+                    b.ToTable("benchmark_result", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.BenchmarkRun", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<int>("CorrectCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("correct_count");
+
+                    b.Property<int>("KeyedCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("keyed_count");
+
+                    b.Property<string>("Label")
+                        .HasColumnType("text")
+                        .HasColumnName("label");
+
+                    b.Property<int>("QuestionCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("question_count");
+
+                    b.Property<double?>("ScorePercent")
+                        .HasColumnType("double precision")
+                        .HasColumnName("score_percent");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_benchmark_run");
+
+                    b.HasIndex("StartedAt")
+                        .HasDatabaseName("ix_benchmark_run_started_at");
+
+                    b.ToTable("benchmark_run", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.Card", b =>
@@ -1558,6 +1713,10 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("enabled");
 
+                    b.Property<string>("FeedId")
+                        .HasColumnType("text")
+                        .HasColumnName("feed_id");
+
                     b.Property<DateTimeOffset?>("LastChecked")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_checked");
@@ -1597,7 +1756,57 @@ namespace RbRules.Infrastructure.Migrations
                     b.HasKey("Id")
                         .HasName("pk_source");
 
+                    b.HasIndex("FeedId")
+                        .HasDatabaseName("ix_source_feed_id");
+
                     b.ToTable("source", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.SourceFeed", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("AutoApprove")
+                        .HasColumnType("boolean")
+                        .HasColumnName("auto_approve");
+
+                    b.Property<string>("Cadence")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("cadence");
+
+                    b.Property<string>("CategoryFilter")
+                        .HasColumnType("text")
+                        .HasColumnName("category_filter");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.Property<DateTimeOffset?>("LastChecked")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_checked");
+
+                    b.Property<string>("LastHash")
+                        .HasColumnType("text")
+                        .HasColumnName("last_hash");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("url");
+
+                    b.HasKey("Id")
+                        .HasName("pk_source_feed");
+
+                    b.ToTable("source_feed", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.SourceProposal", b =>
@@ -1692,6 +1901,27 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_user_session_user_id");
 
                     b.ToTable("user_session", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.BenchmarkResult", b =>
+                {
+                    b.HasOne("RbRules.Domain.BenchmarkQuestion", "Question")
+                        .WithMany()
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_benchmark_result_benchmark_question_question_id");
+
+                    b.HasOne("RbRules.Domain.BenchmarkRun", "Run")
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_benchmark_result_benchmark_run_run_id");
+
+                    b.Navigation("Question");
+
+                    b.Navigation("Run");
                 });
 
             modelBuilder.Entity("RbRules.Domain.Change", b =>
@@ -1792,6 +2022,15 @@ namespace RbRules.Infrastructure.Migrations
                         .HasConstraintName("fk_rule_chunk_document_document_id");
 
                     b.Navigation("Document");
+                });
+
+            modelBuilder.Entity("RbRules.Domain.Source", b =>
+                {
+                    b.HasOne("RbRules.Domain.SourceFeed", null)
+                        .WithMany()
+                        .HasForeignKey("FeedId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_source_source_feeds_feed_id");
                 });
 
             modelBuilder.Entity("RbRules.Domain.UserSession", b =>
