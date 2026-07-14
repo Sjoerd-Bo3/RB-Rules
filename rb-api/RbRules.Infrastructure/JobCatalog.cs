@@ -53,6 +53,14 @@ public static class JobCatalog
             // Kennislaag 2 (#50): claims destilleren uit community-bronnen in
             // het register (trust >= 3), met corroboratie en officiële toets.
             new("claims", ClaimsAsync),
+            // FAQ-/clarificatie-concept-extractie (#177): losse verduidelij-
+            // kingen uit officiële FAQ-artikelen (trust 1) als geverifieerde
+            // rulings met eigen, gefocuste embedding — apart van "claims"
+            // omdat de bron hier al officieel is (direct verified, geen
+            // corroboratie/officiële-toets nodig) en apart van de bron-scan
+            // zelf (LLM-mining hoort niet in IngestService.ScanAsync's
+            // voetafdruk, zelfde motivatie als "claims" hierboven).
+            new("clarify", ClarifyAsync),
             // Dynamische relaties (#116): de LLM ontdekt relaties over de
             // kennislagen heen; voorstellen + nieuwe kind-labels landen in de
             // reviewqueue en gaan pas via de graph-job de graph in.
@@ -258,6 +266,14 @@ public static class JobCatalog
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<ClaimMiningService>()
+            .RunAsync(progress: report, ct: ct);
+        return r.Message;
+    }
+
+    private static async Task<string> ClarifyAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<ClarificationMiningService>()
             .RunAsync(progress: report, ct: ct);
         return r.Message;
     }

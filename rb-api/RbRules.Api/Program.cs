@@ -85,6 +85,9 @@ builder.Services.AddScoped<SimilarityExplainService>();
 builder.Services.AddScoped<RuleBrowserService>();
 builder.Services.AddScoped<GraphQueryService>();
 builder.Services.AddScoped<ClaimMiningService>();
+// FAQ-/clarificatie-concept-extractie (#177): losse verduidelijkingen uit
+// officiële FAQ-artikelen als geverifieerde rulings.
+builder.Services.AddScoped<ClarificationMiningService>();
 builder.Services.AddScoped<RelationMiningService>();
 // Agentic-terugkoppeling (#120): voorstellen die de ask-agent achterlaat.
 builder.Services.AddScoped<AgenticRelationService>();
