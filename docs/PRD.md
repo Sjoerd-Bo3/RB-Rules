@@ -54,7 +54,7 @@ mechaniek-vocabulaire groeit mee met de kaarten die verschijnen.
 |---|---|---|---|
 | **Speler** | Iemand die een potje speelt of leert | Snel een correct, begrijpelijk antwoord op een regelvraag; begrip van het spelverloop | `/ask`, `/rules`, `/primer` |
 | **Judge / toernooiorganisator** | Scheidsrechter of TO | Een verdedigbaar oordeel mét regelbasis en zekerheids-label; actuele bans/errata; legaliteit | `/ask` (scheidsrechter-format), feed (`/`), `/rules` |
-| **Deckbouwer / competitieve speler** | Speler die kaarten en interacties bestudeert | Kaarten vinden op eigenschap/betekenis, interacties en gelijkenissen zien, weten wat legaal is | `/cards`, `/cards/[id]`, `/graph` |
+| **Deckbouwer / competitieve speler** | Speler die kaarten en interacties bestudeert | Kaarten vinden op eigenschap/betekenis, interacties en gelijkenissen zien, weten wat legaal is | `/cards`, `/cards/[id]`, `/graph`, `/decks`, `/decks/[id]` |
 | **Beheerder / curator (Sjoerd)** | Eigenaar die de kennisbank onderhoudt | Overzicht en controle: jobs draaien, gemijnde kennis reviewen, antwoordkwaliteit en kosten volgen | `/admin` en subpagina's |
 
 De **beheerder-persona is een volwaardig productoppervlak**, geen bijzaak: de
@@ -96,6 +96,10 @@ hem vandaag bedient.
 - *Interacties en gelijkenissen begrijpen.* De kaartpagina toont "waarom lijken
   deze op elkaar", gekoppelde regels/errata en ontdekte interacties; de
   graph-verkenner laat kaart↔mechaniek↔regel-verbanden doorlopen.
+- *Inspiratie opdoen bij community-decks en hun legaliteit checken.* De
+  deck-browser (`/decks`) toont Piltover Archive-decks met facet op domein en
+  een legaliteitsbadge; de detailpagina laat precies zien welke kaart een
+  probleem geeft (nog niet legale set of geband) en linkt terug naar de bron.
 
 **Beheerder / curator**
 - *Kennis reviewen.* Nieuw gemijnde claims, relaties en mechaniek-kandidaten
@@ -510,6 +514,31 @@ apart in §6.
 - **Mobile-first** — layout getest op 390/768/1280px; de iOS-auto-zoom op
   form-controls (< 16px) is opgelost via `app.css`.
 
+### 4.7 Decks (Piltover Archive)
+
+- **Deck-browser** — read-only projectie boven op de door `DeckIngestService`
+  binnengehaalde Piltover Archive-decks (#15 fase 3, spoor A): lijst met
+  facet op domein en sortering op recentheid (`PaUpdatedAt`), views of likes.
+  Per deck: naam, domeinen, kaartaantal, views/likes, laatste PA-wijziging en
+  een legaliteitsbadge (kleur + tekst, geen emoji). Nadrukkelijk géén editor
+  en géén deck-mutatie — puur bladeren in wat de ingest al heeft opgeslagen.
+  *Route* `/decks` · *endpoints* `/api/decks`, `/api/decks/facets`.
+- **Legaliteitscheck** (`DeckLegality`, pure Domain-logica) — een deck is
+  legaal als al zijn gekoppelde kaarten (via `CanonicalRiftboundId`) in een
+  legale set zitten (`SetLegality.StatusFor` op de set-releasedatum) én geen
+  enkele kaart op de banlijst staat voor het format (default `constructed`).
+  Drie uitkomsten: legaal, illegaal-met-reden (per kaart: "nog niet legale
+  set" of "geband"), of onvolledig — niet-gekoppelde kaarten en sets zonder
+  bekende releasedatum maken een deck nooit hard "illegaal" (dat zou een
+  claim zijn die de data niet onderbouwt), ze tellen mee als onvolledig.
+- **Deckdetail** — de volledige decklijst per sectie (legend/champions/
+  battlefields/runes/maindeck/sideboard/bench, lege secties verborgen), elke
+  gekoppelde kaart klikbaar naar `/cards/[id]`; niet-gekoppelde regels tonen
+  de rauwe PA-kaartcode zonder link. De legaliteitsuitleg staat bovenaan
+  (welke kaart(en) en waarom), met een prominente "Bekijk op Piltover
+  Archive"-deeplink en attributietekst — wij spiegelen hun werk, geen eigen
+  deckbuilder. *Route* `/decks/[id]` · *endpoint* `/api/decks/{id}`.
+
 ---
 
 ## 5. Niet-functionele eisen
@@ -601,10 +630,11 @@ openstaande PR.
   robots-compliant PA-ingest (PR #148); backfill van ~10k decks droppelt
   binnen, automatisch ververst via de scheduler (spoor C, PR #179, elke 3
   uur). Fase 3, golf 1 (parallelle sporen): (A) deck-browser +
-  legaliteitscheck — *in-flight*, (B) "In decks"-dossierblok op de
-  kaartpagina — deze PR, (C) periodieke decks-verversing in de
-  scheduler-tick — gemerged (PR #179). Golf 2 (ná golf 1): (D)
-  co-occurrence/archetype-signalen als kennispiramide-laag 3 in /ask.
+  legaliteitscheck — *in-flight* (PR #181), zie §4.7, (B) "In decks"-
+  dossierblok op de kaartpagina — gemerged (PR #182), (C) periodieke
+  decks-verversing in de scheduler-tick — gemerged (PR #179). Golf 2 (ná
+  golf 1): (D) co-occurrence/archetype-signalen als kennispiramide-laag 3
+  in /ask.
   Onderzoek in `docs/ENGINE.md` §5.
 
 ---
