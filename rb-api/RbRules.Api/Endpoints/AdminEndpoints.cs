@@ -6,6 +6,14 @@ namespace RbRules.Api.Endpoints;
 
 public static class AdminEndpoints
 {
+    /// <summary>Melding bij een geweigerde AutoApprove-feed op een
+    /// niet-officieel domein (#167) — auto-toevoegen als trust-1 official bron
+    /// mag alleen op Riot's eigen domeinen.</summary>
+    private const string AutoApproveDomainError =
+        "AutoApprove kan alleen aan op een officieel Riot-domein "
+        + "(playriftbound.com); zet de feed op zo'n domein of laat AutoApprove uit "
+        + "— nieuwe artikelen komen dan in de reviewqueue (Bronvoorstellen).";
+
     public static void MapAdminEndpoints(this IEndpointRouteBuilder app)
     {
         // ── Beheer (X-Admin-Key) ───────────────────────────────────────
@@ -168,6 +176,8 @@ public static class AdminEndpoints
                 Counts = new
                 {
                     Sources = await db.Sources.CountAsync(s => s.Enabled),
+                    // Bron-feeds (#167): index-pagina's die op nieuwe artikelen worden afgespeurd.
+                    Feeds = await db.SourceFeeds.CountAsync(f => f.Enabled),
                     Changes = await db.Changes.CountAsync(),
                     Cards = await db.Cards.CountAsync(),
                     CardsEmbedded = await db.Cards.CountAsync(c => c.Embedding != null),
@@ -223,10 +233,98 @@ public static class AdminEndpoints
         {
             var src = await db.Sources.FindAsync(id);
             if (src is null) return Results.NotFound();
+
+            // Tombstone (#167): een via een bron-feed auto-ontdekte bron
+            // (FeedId != null) moet na een bewuste verwijdering verwijderd
+            // blijven — anders maakt FeedCrawlService hem bij de volgende
+            // reparse (na een feed-paginawijziging) stil opnieuw aan, want de
+            // dedup rust op "bestaat als Source/Proposal". Reuse de
+            // reviewqueue: een "rejected" SourceProposal houdt de URL in de
+            // known-set van de crawl (die alle proposal-statussen meeneemt),
+            // dus hij komt nooit ongevraagd terug. Handmatig toegevoegde
+            // bronnen (FeedId == null) hebben dit niet nodig.
+            if (src.FeedId is not null)
+            {
+                var existing = await db.SourceProposals.FirstOrDefaultAsync(p => p.Url == src.Url);
+                if (existing is null)
+                    db.SourceProposals.Add(new SourceProposal
+                    {
+                        Url = src.Url, Name = src.Name, Type = src.Type,
+                        Status = "rejected", ReviewedAt = DateTimeOffset.UtcNow,
+                        Motivation = "Handmatig verwijderde feed-bron — niet opnieuw "
+                            + "automatisch toevoegen (#167).",
+                    });
+                else
+                {
+                    existing.Status = "rejected";
+                    existing.ReviewedAt = DateTimeOffset.UtcNow;
+                }
+            }
+
             // FK's zijn cascade/set-null geconfigureerd (audit-fix) — geen wees-rijen.
             await db.Documents.Where(d => d.SourceId == id).ExecuteDeleteAsync();
             await db.Changes.Where(c => c.SourceId == id).ExecuteDeleteAsync();
             db.Sources.Remove(src);
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Bron-feeds (#167): zelf toevoegen/beheren, patroon van de
+        // sources-endpoints hierboven. UrlGuard op elke (nieuwe) URL — een
+        // feed-URL is net zo goed externe/beheerder-invoer als een bron-URL.
+        admin.MapGet("/feeds", async (RbRulesDbContext db) =>
+            await db.SourceFeeds.OrderBy(f => f.Id).ToListAsync());
+
+        admin.MapPost("/feeds", async (SourceFeed feed, RbRulesDbContext db) =>
+        {
+            if (string.IsNullOrWhiteSpace(feed.Id) || string.IsNullOrWhiteSpace(feed.Url))
+                return Results.BadRequest(new { error = "id en url zijn verplicht" });
+            if (UrlGuard.Check(feed.Url) is { Allowed: false } g)
+                return Results.UnprocessableEntity(new { error = $"URL geweigerd (SSRF-guard): {g.Reason}" });
+            // AutoApprove-gate (#167): auto-toevoegen als enabled trust-1
+            // official bron mag alleen op een officieel Riot-domein — weiger
+            // fail-fast zodat de opgeslagen staat nooit misleidend
+            // "AutoApprove aan" toont terwijl de crawl hem als reviewqueue
+            // behandelt. De crawl handhaaft dit sowieso (defense-in-depth).
+            if (feed.AutoApprove && !OfficialDomains.IsOfficialUrl(feed.Url))
+                return Results.UnprocessableEntity(new { error = AutoApproveDomainError });
+            db.SourceFeeds.Add(feed);
+            await db.SaveChangesAsync();
+            return Results.Created($"/api/admin/feeds/{feed.Id}", feed);
+        });
+
+        admin.MapPatch("/feeds/{id}", async (string id, FeedPatch patch, RbRulesDbContext db) =>
+        {
+            var feed = await db.SourceFeeds.FindAsync(id);
+            if (feed is null) return Results.NotFound();
+            if (patch.Url is not null && UrlGuard.Check(patch.Url) is { Allowed: false } g)
+                return Results.UnprocessableEntity(new { error = $"URL geweigerd (SSRF-guard): {g.Reason}" });
+            // AutoApprove-gate op de resulterende staat (#167): een PATCH die
+            // alleen de URL naar een niet-officieel domein wijzigt terwijl
+            // AutoApprove al aan stond, mag de misleidende combinatie niet
+            // laten ontstaan. Beoordeel dus (effectieve url, effectieve flag).
+            var effectiveUrl = patch.Url ?? feed.Url;
+            var effectiveAutoApprove = patch.AutoApprove ?? feed.AutoApprove;
+            if (effectiveAutoApprove && !OfficialDomains.IsOfficialUrl(effectiveUrl))
+                return Results.UnprocessableEntity(new { error = AutoApproveDomainError });
+
+            if (patch.Url is not null) feed.Url = patch.Url;
+            if (patch.Name is not null) feed.Name = patch.Name;
+            // Leeg (niet null) betekent expliciet "alle categorieën" — het filter uit.
+            if (patch.CategoryFilter is not null)
+                feed.CategoryFilter = string.IsNullOrWhiteSpace(patch.CategoryFilter) ? null : patch.CategoryFilter;
+            if (patch.AutoApprove is not null) feed.AutoApprove = patch.AutoApprove.Value;
+            if (patch.Cadence is not null) feed.Cadence = patch.Cadence;
+            if (patch.Enabled is not null) feed.Enabled = patch.Enabled.Value;
+            await db.SaveChangesAsync();
+            return Results.Ok(feed);
+        });
+
+        admin.MapDelete("/feeds/{id}", async (string id, RbRulesDbContext db) =>
+        {
+            var feed = await db.SourceFeeds.FindAsync(id);
+            if (feed is null) return Results.NotFound();
+            db.SourceFeeds.Remove(feed);
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
@@ -370,6 +468,10 @@ public static class AdminEndpoints
         admin.MapGet("/overview/proposals", async (
                 string? status, int? page, AdminOverviewService overview) =>
             Results.Ok(await overview.ProposalsAsync(status, page ?? 1)));
+
+        // Bron-feeds (#167): per feed laatste vangst + aantal ontdekte bronnen.
+        admin.MapGet("/overview/feeds", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.FeedsAsync()));
 
         // Relatievoorstellen (#116): status-chips + kind-vocabulaire + queue.
         admin.MapGet("/overview/relations", async (

@@ -193,7 +193,11 @@ public class IngestSsrfGuardTests
             new ChangeClassificationService(db, ai),
             // Kennis-hertoets (#119): zonder changes in het venster doet de
             // scan-afronding niets — deze tests kijken alleen naar de guard.
-            new KnowledgeRecheckService(db, new ClaimMiningService(db, ai, embeddings)));
+            new KnowledgeRecheckService(db, new ClaimMiningService(db, ai, embeddings)),
+            // Feed-crawl (#167): geen SourceFeeds in deze db ⇒ "geen feeds aan
+            // de beurt" zonder een enkele HTTP-call — de stub-respons wordt
+            // dus nooit aangesproken, alleen het type moet kloppen.
+            new FeedCrawlService(db, new HttpClient(new StubHandler(respond))));
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)

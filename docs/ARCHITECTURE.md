@@ -91,6 +91,7 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
 | Extern systeem | Rol | Koppelvlak |
 |---|---|---|
 | **playriftbound.com / Rules Hub** | Officiële regel-PDF's, patch notes, errata (laag 0) | `IngestService` via `SafeExternalHttp`; bronnen in `SourceSeed.cs` |
+| **playriftbound.com/en-us/news/…** (bron-feeds, #167) | Index-pagina's die periodiek nieuwe artikel-URL's opleveren — ontdekt bronnen, ís er geen | `FeedCrawlService` (`RiotNewsFeed`-parser) via `SafeExternalHttp`; feeds in `SourceFeedSeed.cs` |
 | **Riot-kaartgallery** | Leidende kaartenbron (JSON, set-facetten, token-kaarten); de riftcodex-API vult daarna alleen aan — extra kaarten en set-metadata, bestaande kaarten blijven onaangeraakt (#150) | `CardSyncService` |
 | **Community-bronnen** | riftbound.gg, fanfinity, UVS Games-PDF, mobalytics (laag 1-3) | `SourceSeed.cs`, `ClaimMiningService`, `BanErrataSyncService` |
 | **Piltover Archive** | Community-decks (#15, fundament meta-laag 3) | `DeckIngestService` via `SafeExternalHttp`; **alleen** de sitemap en publieke `/decks/view/{uuid}`-pagina's — hun `/api/` is robots-disallowed en wordt nooit aangeraakt; attributie + deep-link per deck |
@@ -117,6 +118,20 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
   Netiquette is een harde afspraak: ~1,5 s throttle, cap per run met
   hervatting via het run_log-grootboek, her-fetch alleen bij een nieuwere
   sitemap-lastmod — de ~10k-backfill loopt bewust over meerdere runs.
+- Bron-feeds (#167): de rules-and-releases-, algemene nieuws- en Rules-Hub-
+  index delen dezelfde React-kaartcomponent
+  (`data-testid="articlefeaturedcard-component"`) — één `RiotNewsFeed`-parser
+  dekt alle drie. Ook de "smalle" rules-and-releases-feed toont af en toe een
+  announcements-/organizedplay-artikel tussendoor (vandaar CategoryFilter op
+  élke feed, niet alleen de brede hub); sommige artikel-URL's missen het
+  categorie-segment (`/en-us/news/<slug>` i.p.v. `/en-us/news/<categorie>/
+  <slug>`) en een enkele kaart linkt extern (bv. YouTube) — de parser sluit
+  die uit op host in plaats van op categorie. AutoApprove auto-enablet een
+  artikel alléén als feed én artikel op een officieel Riot-domein staan
+  (`OfficialDomains`) — anders reviewqueue, ook met AutoApprove aan; zo maakt
+  een typo/look-alike nooit onbeheerd trust-1 official bronnen aan
+  (`FeedCrawlService`, endpoint-guard + crawl-guard, defense-in-depth net als
+  `UrlGuard`).
 
 ### Contextdiagram
 
@@ -203,15 +218,18 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `RuleSectionParser`, `SetLegality`, `VariantGrouping`, `RiftboundIds`
   (id-parse/normalisatie, #144), `RiftcodexCardMapper` (bronvorm-adapter,
   #144), `SetCoverage` (dekking per set, #145), `ClaimMining`,
-  `RelationMining`, `AgenticGate`, `SourceSeed`, `RiotCardMapper`,
-  `HubDiscovery`, `PiltoverDeckPage`/`PiltoverSitemap`/`DeckCardLinker`
+  `RelationMining`, `AgenticGate`, `SourceSeed`, `SourceFeedSeed` (#167),
+  `RiotCardMapper`, `HubDiscovery`, `RiotNewsFeed` (bron-feed-parser, #167),
+  `OfficialDomains` (Riot-domein-allowlist voor de feed-AutoApprove-gate, #167),
+  `PiltoverDeckPage`/`PiltoverSitemap`/`DeckCardLinker`
   (#15), `IpHashing` (HMAC-SHA256 IP-hash voor de ask-geschiedenis, #157),
   `BenchmarkPrompt` (gecommitteerde-keuze-prompt + deterministische
   letter-parser, #158), `BenchmarkSeed` (judge-vragenset, idempotent net als
   `SourceSeed`), `Entities.cs`. Bewuste enige uitzondering: het `Pgvector`-
   datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
-  `IngestService`, `RuleChunkPipeline`, `CardSyncService`,
+  `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
+  van `IngestService.ScanAsync`), `RuleChunkPipeline`, `CardSyncService`,
   `CardEmbeddingPipeline`, `EmbeddingService` (Ollama), `AskService`,
   `AskHistoryService` (eigen ask-geschiedenis op user_id/ip_hash, #157),
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`

@@ -8,7 +8,13 @@
 	interface Source {
 		id: string; name: string; url: string; trustTier: number;
 		cadence: string; enabled: boolean; lastChecked: string | null;
+		// Herkomst (#167): welke feed dit artikel ontdekte; null = handmatig/legacy.
+		feedId: string | null;
 	}
+	// Naam + id volstaat voor de "stamt van: …"-koppeling hieronder; het
+	// volledige beheer (toevoegen/bewerken/verwijderen) zit op de eigen
+	// overzichtspagina (#167).
+	interface FeedRef { id: string; name: string; }
 	interface Job {
 		name: string; status: string; startedAt: string;
 		finishedAt: string | null; detail: string | null; progress: string | null;
@@ -42,7 +48,8 @@
 		{ name: 'relations', label: 'Relaties minen', hint: 'LLM ontdekt relaties tussen de kennislagen (concepten, mechanieken, secties, kaarten, claims); voorstellen en nieuwe kind-labels komen in de reviewqueue — nooit rechtstreeks de graph in; draait ook elke nacht automatisch' },
 		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten komen als voorstel in de reviewqueue, nooit automatisch in het register; draait ook wekelijks automatisch' },
 		{ name: 'decks', label: 'Decks binnenhalen', hint: 'publieke decks van Piltover Archive via de sitemap (robots-compliant, met bronvermelding); throttled en gecapt per run — een volgende run gaat verder waar het grootboek gebleven is' },
-		{ name: 'benchmark', label: 'Judge-benchmark draaien', hint: 'de vaste scheidsrechter-vragenset door de /ask-pipeline; geïsoleerd van de kennisbank — geen trace, metric of relatie-terugkoppeling' }
+		{ name: 'benchmark', label: 'Judge-benchmark draaien', hint: 'de vaste scheidsrechter-vragenset door de /ask-pipeline; geïsoleerd van de kennisbank — geen trace, metric of relatie-terugkoppeling' },
+		{ name: 'feeds', label: 'Bron-feeds afspeuren', hint: 'nieuwe artikelen op de Riot-nieuwspagina\'s ontdekken; vertrouwde feeds zetten direct een bron, andere een voorstel — draait ook als eerste stap van "Bronnen scannen"' }
 	];
 
 	interface Correction {
@@ -97,6 +104,11 @@
 	}
 
 	const sources = $derived(data.sources as Source[]);
+	// Herkomst-lookup (#167): id → naam, voor de "stamt van: …"-koppeling in
+	// de bronnentabel; het volledige feed-beheer zit op de eigen pagina.
+	const feedNames = $derived(
+		new Map(((data.feeds ?? []) as FeedRef[]).map((f) => [f.id, f.name]))
+	);
 	const corrections = $derived((data.corrections ?? []) as Correction[]);
 	const openCorrections = $derived(corrections.filter((c) => c.status === 'unverified'));
 	const askTraces = $derived((data.askTraces ?? []) as AskTrace[]);
@@ -205,6 +217,8 @@
 		{ key: 'claims', label: 'Claims', slug: 'claims' },
 		{ key: 'relations', label: 'Relaties', slug: 'relaties' },
 		{ key: 'openProposals', label: 'Bronvoorstellen', slug: 'voorstellen' },
+		// Bron-feeds (#167): index-pagina's die automatisch nieuwe bronnen ontdekken.
+		{ key: 'feeds', label: 'Bron-feeds', slug: 'feeds' },
 		// Piltover Archive-decks (#15).
 		{ key: 'decks', label: 'Decks', slug: 'decks' },
 		// Accounts + kosteninzicht (#42).
@@ -406,16 +420,23 @@
 		{/if}
 
 		<!-- Bronnen -->
-		<h2>Bronnen</h2>
+		<h2>Bronnen <span class="meta">(<a class="meta-link" href="/admin/overview/feeds">bron-feeds beheren</a> — index-pagina's die hier automatisch nieuwe bronnen in zetten)</span></h2>
 		<div class="table-wrap">
 		<table>
-			<thead><tr><th>Bron</th><th>Trust</th><th>Cadans</th><th>Laatst gecontroleerd</th><th>Actief</th></tr></thead>
+			<thead><tr><th>Bron</th><th>Trust</th><th>Cadans</th><th>Herkomst</th><th>Laatst gecontroleerd</th><th>Actief</th></tr></thead>
 			<tbody>
 				{#each sources as s (s.id)}
 					<tr>
 						<td><strong>{s.name}</strong><br /><a class="meta" href={s.url}>{s.id}</a></td>
 						<td>{s.trustTier}</td>
 						<td>{s.cadence}</td>
+						<td class="meta">
+							{#if s.feedId}
+								stamt van: <a class="meta-link" href="/admin/overview/feeds#feed-{s.feedId}">{feedNames.get(s.feedId) ?? s.feedId}</a>
+							{:else}
+								handmatig
+							{/if}
+						</td>
 						<td class="meta">{s.lastChecked ? new Date(s.lastChecked).toLocaleString('nl-NL') : '—'}</td>
 						<td>
 							<form method="POST" action="?/toggle" use:enhance>

@@ -37,7 +37,9 @@ const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | nul
 	gebruikers: { allowed: ['vandaag', '7d', '30d'], fallback: '7d' },
 	// Judge-benchmark (#158): geen filter-chips, wel een los "run"-nummer
 	// voor de run-historie (zie de load-case hieronder).
-	benchmark: null
+	benchmark: null,
+	// Bron-feeds (#167): geen filter, gewoon de volledige (korte) lijst.
+	feeds: null
 };
 
 export const load: PageServerLoad = async ({ params, url, cookies }) => {
@@ -119,6 +121,8 @@ export const load: PageServerLoad = async ({ params, url, cookies }) => {
 				if (run) qs.set('run', run);
 				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/benchmark?${qs}`) };
 			}
+			case 'feeds':
+				return { ...base, data: await adminApi<unknown>('/api/admin/overview/feeds') };
 			default:
 				throw error(404, 'Onbekend overzicht');
 		}
@@ -382,6 +386,78 @@ export const actions: Actions = {
 			});
 			return { ok: true };
 		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	// Bron-feeds (#167): zelf toevoegen/bewerken/verwijderen, patroon van de
+	// bestaande bronnen-toggle. UrlGuard-weigeringen (422) komen als
+	// { error } terug — dezelfde vorm die adminApi hier al als Error opgooit.
+	createFeed: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = String(form.get('id') ?? '').trim();
+		const url = String(form.get('url') ?? '').trim();
+		const name = String(form.get('name') ?? '').trim();
+		if (!id || !url || !name) return fail(400, { error: 'Id, naam en URL zijn verplicht' });
+		const categoryFilter = String(form.get('categoryFilter') ?? '').trim();
+		const cadence = String(form.get('cadence') ?? 'daily');
+		try {
+			await adminApi('/api/admin/feeds', {
+				method: 'POST',
+				body: JSON.stringify({
+					id, name, url,
+					categoryFilter: categoryFilter || null,
+					autoApprove: form.get('autoApprove') === 'true',
+					cadence,
+					enabled: true
+				})
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	saveFeed: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = String(form.get('id') ?? '');
+		const patch: Record<string, unknown> = {};
+		// De volledige bewerkformulier stuurt altijd "cadence" mee (een select,
+		// nooit leeg) — dat is het betrouwbare signaal dat dít de volledige
+		// edit-save is, in plaats van de losse aan/uit-toggle hieronder. Bínnen
+		// die tak autoApprove altijd expliciet zetten: een aangevinkte checkbox
+		// die is uitgevinkt wordt door de browser helemaal niet meegestuurd, dus
+		// "form.has('autoApprove')" zou een bewuste uitzet-actie stil negeren.
+		if (form.has('cadence')) {
+			patch.name = String(form.get('name') ?? '');
+			patch.url = String(form.get('url') ?? '');
+			// Leeg veld betekent hier expliciet "alle categorieën" (filter uit).
+			patch.categoryFilter = String(form.get('categoryFilter') ?? '').trim();
+			patch.cadence = String(form.get('cadence'));
+			patch.autoApprove = form.get('autoApprove') === 'true';
+		}
+		if (form.has('enabled')) patch.enabled = form.get('enabled') === 'true';
+		try {
+			await adminApi(`/api/admin/feeds/${encodeURIComponent(id)}`, {
+				method: 'PATCH',
+				body: JSON.stringify(patch)
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	deleteFeed: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = String(form.get('id') ?? '');
+		try {
+			await adminApi(`/api/admin/feeds/${encodeURIComponent(id)}`, { method: 'DELETE' });
+			return { ok: true };
+		} catch (e) {
+			// id meesturen (zelfde vorm als saveFeed) zodat de melding bij de
+			// juiste rij landt in plaats van stil te verdwijnen in het
+			// (ingeklapte) toevoeg-formulier.
 			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
 		}
 	}

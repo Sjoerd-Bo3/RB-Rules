@@ -7,13 +7,16 @@ public record IngestResult(string SourceId, string Status, string? Detail = null
 
 /// <summary>Scan-pipeline (port van de PoP-runner, met audit-fixes):
 /// fetch → boilerplate-strip → hash → diff → AI-classify → store + log.
-/// Sluit af met een naclassificatie-ronde voor changes die eerder zonder
-/// samenvatting zijn opgeslagen (#58) en de kennis-hertoets (#119): een
+/// Opent met de bron-feed-crawl (#167, <see cref="FeedCrawlService"/>):
+/// nieuw-ontdekte artikelen worden zo in dezelfde run als Source al
+/// meegescand. Sluit af met een naclassificatie-ronde voor changes die eerder
+/// zonder samenvatting zijn opgeslagen (#58) en de kennis-hertoets (#119): een
 /// verwerkte regelwijziging legt de kennis die erop leunt terug voor
 /// review in plaats van die stil te laten verouderen.</summary>
 public class IngestService(
     RbRulesDbContext db, HttpClient http, RbAiClient ai,
-    ChangeClassificationService classifier, KnowledgeRecheckService recheck)
+    ChangeClassificationService classifier, KnowledgeRecheckService recheck,
+    FeedCrawlService feeds)
 {
     /// <summary>Retry-venster voor naclassificatie: oud genoeg om een paar
     /// dagen rb-ai-uitval te overbruggen, jong genoeg om de scan goedkoop te
@@ -29,6 +32,29 @@ public class IngestService(
         Action<string>? progress = null, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
+
+        // Bron-feeds (#167) vóór de bron-scan: een net ontdekt artikel wordt
+        // zo in dezelfde run als nieuwe Source al gescand (in plaats van pas
+        // een run later). FeedCrawlService is zelf al volledig best-effort
+        // per feed (eigen run_log-regels); deze try/catch vangt alleen een
+        // onverwachte fout die daar toch doorheen zou glippen (bv. de
+        // SourceFeeds-query zelf) — de bron-scan mag daar nooit op stranden.
+        // onlyDue gaat één-op-één door: de geplande uurlijkse tick
+        // (ScanScheduler) hamert zo niet elk uur op playriftbound.com, een
+        // handmatige scan of de losse "feeds"-job forceert alle feeds.
+        try
+        {
+            await feeds.RunAsync(onlyDue, progress: p => progress?.Invoke($"feeds — {p}"), ct: ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = FeedCrawlService.LedgerKind, Ref = null, Status = "error", Detail = ex.Message,
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
         var query = db.Sources.Where(s => s.Enabled);
         if (sourceId is not null) query = db.Sources.Where(s => s.Id == sourceId);
         var sources = await query

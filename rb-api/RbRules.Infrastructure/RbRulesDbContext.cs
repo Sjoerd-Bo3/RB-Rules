@@ -31,6 +31,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<Relation> Relations => Set<Relation>();
     public DbSet<RelationKind> RelationKinds => Set<RelationKind>();
     public DbSet<SourceProposal> SourceProposals => Set<SourceProposal>();
+    public DbSet<SourceFeed> SourceFeeds => Set<SourceFeed>();
     public DbSet<Deck> Decks => Set<Deck>();
     public DbSet<DeckCard> DeckCards => Set<DeckCard>();
     public DbSet<AppUser> Users => Set<AppUser>();
@@ -51,6 +52,11 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
         {
             e.ToTable("source");
             e.HasKey(x => x.Id);
+            // Herkomst (#167): feed-verwijdering laat de bron met FeedId =
+            // null staan — een via de feed ontdekte bron blijft gewoon een
+            // prima bron, alleen de herkomst-aanduiding vervalt.
+            e.HasOne<SourceFeed>().WithMany().HasForeignKey(x => x.FeedId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         b.Entity<Document>(e =>
@@ -253,6 +259,14 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // vergelijkt genormaliseerd; de index borgt het hard).
             e.HasIndex(x => x.Url).IsUnique();
             e.HasIndex(x => x.Status);
+        });
+
+        // Bron-feeds (#167): index-pagina's die periodiek op nieuwe
+        // artikel-URL's worden afgespeurd (FeedCrawlService).
+        b.Entity<SourceFeed>(e =>
+        {
+            e.ToTable("source_feed");
+            e.HasKey(x => x.Id);
         });
 
         // Accounts (#42). Bewust "app_user" en niet het "user" uit het issue:

@@ -99,6 +99,12 @@ met quota en rate-limiting.
   `/decks/view/{uuid}`-pagina's — hun `/api/` is robots-disallowed en blijft
   onaangeraakt. Browser-UA verplicht (403 zonder); deck-data zit als
   RSC-flight in `self.__next_f.push`-chunks (parser: `PiltoverDeckPage`).
+- Bron-feeds (#167): de rules-and-releases-, algemene nieuws- en Rules-Hub-
+  index delen dezelfde kaartcomponent (`RiotNewsFeed`-parser dekt alle drie),
+  maar ook de "smalle" feed toont af en toe een andere categorie tussendoor
+  (CategoryFilter dus overal, niet alleen op de brede hub); sommige
+  artikel-URL's missen het categorie-segment en een enkele kaart linkt extern
+  (YouTube) — uitsluiten op host, niet op categorie.
 
 ## Waar het werk staat
 - Roadmap: **docs/PRD.md §6** (uit de open issues, in-flight PR's
