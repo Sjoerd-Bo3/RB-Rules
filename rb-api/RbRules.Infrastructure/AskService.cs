@@ -87,9 +87,15 @@ public class AskService(
     AgenticRelationService agenticRelations,
     RequestUserContext userContext, ILogger<AskService> logger,
     IDbContextFactory<RbRulesDbContext>? dbFactory = null,
-    RewriteCache? rewriteCache = null)
+    RewriteCache? rewriteCache = null,
+    AgenticInFlightTracker? agenticInFlight = null)
 {
     private const int TopK = 8;
+
+    // #153: de in-flight-reservering is proces-breed (singleton in DI). De
+    // optionele parameter houdt de vele test-constructors ongewijzigd — die
+    // krijgen elk een eigen verse tracker, wat voor hun scenario's volstaat.
+    private readonly AgenticInFlightTracker _agenticInFlight = agenticInFlight ?? new();
 
     // De "ruling-skill": toon en spelregels — de structuur komt per vraagtype
     // uit QuestionRouter.StructureFor (interne router, geen extra LLM-call).
@@ -544,16 +550,37 @@ public class AskService(
             && textHits.Count == 0
             && !cardContext.LexicalEvidence
             && !primerRelevant;
-        // Grondig-quotum (#153): de stand komt uit de telling die de
-        // quota-filter dit request al deed (RequestUserContext.Usage) — geen
-        // tweede query. Alleen relevant voor een gehonoreerd Thorough; de
-        // volgorde in Decide legt flag/foto-terugval boven de quota-reden.
-        var quotaAvailable = requestedApproach == AskApproach.Thorough
-            && userContext.User is { } quotaUser
-            && (userContext.Usage?.AgenticForced ?? 0) < quotaUser.DailyAgenticQuota;
+        var hasImage = images is { Count: > 0 };
+
+        // Grondig-quotum (#153) mét TOCTOU-bescherming. Een permit is alléén
+        // nodig als dit een écht gebruiker-geforceerde escalatie zou worden:
+        // Grondig gekozen, flag aan, geen foto (vision-pad), en de gate zou 'm
+        // niet zélf al escaleren (dan is de run gratis en boekt hij op de
+        // gate — Fix 2). Voor die gevallen is quota irrelevant, dus quotaAvailable
+        // = true houdt de attributie schoon.
+        var autoWouldEscalate = AgenticGate.ShouldEscalate(
+            type, gateCardMentions, emptyRetrieval, agenticMode, hasImage);
+        var needsPermit = requestedApproach == AskApproach.Thorough
+            && agenticMode != AgenticMode.Off
+            && !hasImage
+            && !autoWouldEscalate
+            && userContext.User is not null;
+        // De reservering combineert de db-teller (RequestUserContext.Usage,
+        // door de quota-filter al geteld — geen tweede query) met de nu-lopende
+        // reserveringen onder één korte lock, zodat gelijktijdige Grondig-
+        // requests niet dezelfde teller zien. `using var` geeft de permit vrij
+        // bij method-eind — óók bij een onverwachte exception of client-abort,
+        // ná de agent-run en de metric-write.
+        using var agenticPermit = needsPermit
+            ? _agenticInFlight.TryReserve(
+                userContext.User!.Id,
+                userContext.Usage?.AgenticForced ?? 0,
+                userContext.User!.DailyAgenticQuota)
+            : null;
+        var quotaAvailable = !needsPermit || agenticPermit is not null;
         var decision = AgenticGate.Decide(
             requestedApproach, agenticMode, type, gateCardMentions, emptyRetrieval,
-            hasImage: images is { Count: > 0 }, quotaAvailable);
+            hasImage, quotaAvailable);
         var agentic = decision.Escalate;
         // Attributie voor metric/trace (#153): wie dwong de escalatie af.
         // "user"-rijen zijn tegelijk de teller van het Grondig-dagquotum.

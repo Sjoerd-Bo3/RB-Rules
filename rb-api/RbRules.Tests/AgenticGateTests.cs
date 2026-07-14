@@ -160,22 +160,52 @@ public class AgenticGateTests
         Assert.Equal("fast", AgenticGate.EffectiveApproach(d, AskApproach.Fast));
     }
 
-    // ── Decide — Thorough gehonoreerd: flag aan, geen foto, quota over ─
+    // ── Decide — Thorough gehonoreerd: gate zou NIET escaleren, dus de
+    //    gebruiker dwingt hem af (en dat kost een quotum) ─────────────────
 
-    [Theory]
-    [InlineData(AgenticMode.Auto)]
-    [InlineData(AgenticMode.Force)]
-    public void Decide_ThoroughMetQuota_EscaleertAlsGebruiker(AgenticMode mode)
+    [Fact]
+    public void Decide_ThoroughMetQuota_GateZouNietEscaleren_EscaleertAlsGebruiker()
     {
-        // Bewust een vraag die de auto-gate NIET zou escaleren: de gebruiker
-        // dwingt hem af.
+        // Definitie/0 kaartnamen: de auto-gate zou dit onder Auto NIET
+        // escaleren, dus de gebruiker forceert.
         var d = AgenticGate.Decide(
-            AskApproach.Thorough, mode, QuestionType.Definitie, cardMentions: 0,
+            AskApproach.Thorough, AgenticMode.Auto, QuestionType.Definitie, cardMentions: 0,
             emptyRetrieval: false, hasImage: false, quotaAvailable: true);
         Assert.True(d.Escalate);
         Assert.Equal(AskDecider.User, d.DecidedBy);
         Assert.Null(d.FallbackReason);
         Assert.Equal("thorough", AgenticGate.EffectiveApproach(d, AskApproach.Thorough));
+    }
+
+    // ── Decide — Thorough terwijl de gate zélf al zou escaleren: gratis,
+    //    boekt op de gate (kost geen gebruikersquotum) — Fix 2 (#153) ──────
+
+    [Fact]
+    public void Decide_ThoroughMaarGateZouEscaleren_BoektOpGateNietGebruiker()
+    {
+        // Ruling met ≥2 kaartnamen: de auto-gate zou dit sowieso escaleren.
+        // Grondig verandert daar niets aan — de escalatie is gratis en telt
+        // niet tegen het Grondig-quotum.
+        var d = AgenticGate.Decide(
+            AskApproach.Thorough, AgenticMode.Auto, QuestionType.Ruling, cardMentions: 2,
+            emptyRetrieval: false, hasImage: false, quotaAvailable: true);
+        Assert.True(d.Escalate);
+        Assert.Equal(AskDecider.Gate, d.DecidedBy);
+        Assert.Null(d.FallbackReason);
+        Assert.Equal("auto", AgenticGate.EffectiveApproach(d, AskApproach.Thorough));
+    }
+
+    [Fact]
+    public void Decide_ThoroughOnderForce_BoektOpGateNietGebruiker()
+    {
+        // Force escaleert elke vraag; ook dan is Grondig gratis (gate).
+        var d = AgenticGate.Decide(
+            AskApproach.Thorough, AgenticMode.Force, QuestionType.Definitie, cardMentions: 0,
+            emptyRetrieval: false, hasImage: false, quotaAvailable: true);
+        Assert.True(d.Escalate);
+        Assert.Equal(AskDecider.Gate, d.DecidedBy);
+        Assert.Null(d.FallbackReason);
+        Assert.Equal("auto", AgenticGate.EffectiveApproach(d, AskApproach.Thorough));
     }
 
     // ── Decide — Thorough onder flag off: Grondig bestaat niet ─────────

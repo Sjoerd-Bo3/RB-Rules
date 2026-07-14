@@ -113,7 +113,11 @@ public static class AgenticGate
                 new(auto, AskDecider.Gate, ReasonPhoto),
             AskApproach.Thorough when !quotaAvailable =>
                 new(auto, auto ? AskDecider.Gate : AskDecider.QuotaFallback, ReasonQuota),
-            AskApproach.Thorough => new(true, AskDecider.User),
+            // Zou de gate deze vraag tóch al escaleren (auto == true, bv.
+            // Ruling met ≥2 kaartnamen of onder Force), dan is de escalatie
+            // gratis — net als bij approach=Auto — en boekt hij op de gate, niet
+            // op de gebruiker: hij mag dan geen Grondig-quotum kosten.
+            AskApproach.Thorough => new(true, auto ? AskDecider.Gate : AskDecider.User),
             _ => new(auto, AskDecider.Gate),
         };
     }

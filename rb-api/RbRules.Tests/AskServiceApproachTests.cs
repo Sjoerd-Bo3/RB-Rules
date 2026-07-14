@@ -216,6 +216,55 @@ public class AskServiceApproachTests
         Assert.Equal(1, (await Accounts(db).UsageTodayAsync(UserId)).AgenticForced);
     }
 
+    // ── TOCTOU (#153): een nog-lopende geforceerde run bezet het laatste
+    //    permit → een gelijktijdig Grondig-request valt terug op quota ─────
+
+    [Fact]
+    public async Task Thorough_LaatstePermitAlInFlight_ValtTerugOpQuota()
+    {
+        using var db = NewDb();
+        await SeedAsync(db);
+        var ai = new AgenticAwareAi();
+        // Dagtegoed 3, waarvan er 2 als voltooid in de db-teller zitten; er is
+        // dus nog één permit. Een concurrent Grondig-request "reserveert" dat
+        // laatste permit al (simuleert een nog-lopende run die zijn metric nog
+        // niet schreef).
+        var tracker = new AgenticInFlightTracker();
+        using var concurrent = tracker.TryReserve(UserId, dbCountToday: 2, dailyQuota: 3);
+        Assert.NotNull(concurrent);
+        var svc = Svc(db, ai, LoggedIn(dailyAgenticQuota: 3, agenticForcedToday: 2), tracker);
+
+        var result = await WithModeAsync("auto", () => svc.AskAsync(
+            PlainQuestion, approach: AskApproach.Thorough));
+
+        // De db-teller alleen (2 < 3) zou nog "ruimte" zien — maar mét de
+        // lopende reservering is het quotum vol: geen escalatie, nette terugval.
+        Assert.Equal(SinglePassAnswer, result.Answer);
+        Assert.Equal(0, ai.AgenticCalls);
+        Assert.Equal("auto", result.Approach);
+        Assert.Equal(AgenticGate.ReasonQuota, result.ApproachReason);
+        Assert.Null((await db.AskMetrics.SingleAsync()).EscalatedBy);
+        // De reservering van de concurrent-run blijft ongemoeid staan.
+        Assert.Equal(1, tracker.InFlight(UserId));
+    }
+
+    [Fact]
+    public async Task Thorough_GeslaagdeRun_GeeftPermitWeerVrij()
+    {
+        using var db = NewDb();
+        await SeedAsync(db);
+        var ai = new AgenticAwareAi();
+        var tracker = new AgenticInFlightTracker();
+        var svc = Svc(db, ai, LoggedIn(), tracker);
+
+        await WithModeAsync("auto", () => svc.AskAsync(
+            PlainQuestion, approach: AskApproach.Thorough));
+
+        // Na afronding (metric geschreven) is het permit vrij — geen leak.
+        Assert.Equal(1, ai.AgenticCalls);
+        Assert.Equal(0, tracker.InFlight(UserId));
+    }
+
     // ── Streamingpad: zelfde honorering, meta draagt de terugmelding ───
 
     [Fact]
@@ -275,11 +324,13 @@ public class AskServiceApproachTests
     /// poort waarlangs de aanpak-keuze alleen-ingelogd gehonoreerd wordt.</summary>
     private sealed class TestableAskService(
         RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai,
-        RequestUserContext userContext)
+        RequestUserContext userContext, AgenticInFlightTracker? inFlight)
         : AskService(db, embeddings, ai,
             new AgenticRelationService(db, new BrainService(
                 db, embeddings, new CardResolver(db), NullLogger<BrainService>.Instance)),
-            userContext, NullLogger<AskService>.Instance)
+            // #152 schoof dbFactory/rewriteCache vóór agenticInFlight — named
+            // arg zodat de tracker niet positioneel op dbFactory belandt.
+            userContext, NullLogger<AskService>.Instance, agenticInFlight: inFlight)
     {
         private readonly RbRulesDbContext _db = db;
 
@@ -379,8 +430,9 @@ public class AskServiceApproachTests
     }
 
     private static TestableAskService Svc(
-        RbRulesDbContext db, AgenticAwareAi ai, RequestUserContext userContext) =>
-        new(db, FailingEmbeddings(), ai.Client, userContext);
+        RbRulesDbContext db, AgenticAwareAi ai, RequestUserContext userContext,
+        AgenticInFlightTracker? inFlight = null) =>
+        new(db, FailingEmbeddings(), ai.Client, userContext, inFlight);
 
     /// <summary>Failing Ollama (patroon #100): qv blijft null — deze tests
     /// draaien om de aanpak-keuze, niet om de vector-kanalen.</summary>
