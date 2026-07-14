@@ -86,6 +86,20 @@ public static class AskEndpoints
             });
         });
 
+        // ── Voorverwarmsignaal (#154) ──────────────────────────────────
+        // De /ask-paginalaad meldt zich hier (rb-web server-load, fire-and-
+        // forget) zodat rb-ai's warme-sessie-pool alvast een SDK-subprocess
+        // boot. Altijd 202 — uitval van rb-ai is volledig stil (PrewarmAsync
+        // slikt alles en is intern op 2s gekapt). Anoniem toegankelijk, maar
+        // achter een eigen per-IP-limiet: het signaal boot een subprocess op
+        // de VM en mag niet DoS-baar zijn; bewust níet de "llm"-policy, die
+        // zou paginalaads het vraagbudget van echte vragen laten opeten.
+        app.MapPost("/api/ask/prewarm", async (RbAiClient ai) =>
+        {
+            await ai.PrewarmAsync();
+            return Results.Accepted();
+        }).RequireRateLimiting("prewarm");
+
         // ── Interacties (S3) ───────────────────────────────────────────
         app.MapPost("/api/resolve", async (ResolveRequest req, InteractionService interactions) =>
         {

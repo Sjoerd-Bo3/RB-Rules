@@ -11,8 +11,15 @@ import {
   compactJson,
   createBrainSession,
 } from "./brain-tools.js";
+import { aiSemaphore, AI_QUEUE_WAIT_MS, ConcurrencyLimitError } from "./concurrency.js";
 import { RELATIONS_MARKER } from "./relations.js";
 import { usageFromSdk, type AskUsage } from "./usage.js";
+import {
+  pushableInput,
+  WarmPool,
+  type WarmBootHandle,
+  type WarmSignature,
+} from "./warmpool.js";
 
 // Auth: CLAUDE_CODE_OAUTH_TOKEN (abonnement) of ANTHROPIC_API_KEY.
 // Laat ANTHROPIC_API_KEY leeg bij abonnementsgebruik — die wint stilletjes.
@@ -111,9 +118,13 @@ export function createBrainMcpServer(onStep?: (step: string) => void) {
   });
 }
 
-/** Streaming-input met content-blocks — nodig zodra er afbeeldingen meegaan. */
-async function* userMessage(prompt: string, images: AskImage[]) {
-  yield {
+/** Bericht-vorm voor streaming input. Gedeeld door het koude beeld-pad
+ * (userMessage hieronder) en de warme pool (het bericht dat bij de claim in
+ * de vastgehouden input-iterator wordt gepusht) — de SDK schrijft voor een
+ * kale string-prompt exact dezelfde content-vorm naar het subprocess, dus
+ * warm en koud doen dezelfde API-call. */
+export function buildUserMessage(prompt: string, images: AskImage[]) {
+  return {
     type: "user" as const,
     message: {
       role: "user" as const,
@@ -134,6 +145,11 @@ async function* userMessage(prompt: string, images: AskImage[]) {
   };
 }
 
+/** Streaming-input met content-blocks — nodig zodra er afbeeldingen meegaan. */
+async function* userMessage(prompt: string, images: AskImage[]) {
+  yield buildUserMessage(prompt, images);
+}
+
 /** Antwoord + echte token-usage van één askClaude-run (#121). `usage` komt
  * uit het afsluitende result-bericht van de SDK (opgeteld over alle beurten,
  * incl. tool-overhead bij research/agentic) en is null wanneer de SDK er
@@ -143,13 +159,176 @@ export interface AskAnswer {
   usage: AskUsage | null;
 }
 
+/** Eén bron van waarheid voor de query-opties per taaktype (#154): het koude
+ * pad én de warme pool bouwen hun opties hier — de contract-test in
+ * ai.test.ts bewaakt dat warm en koud nooit uiteenlopen. systemPrompt en
+ * includePartialMessages liggen bij de SDK vast op het moment van `query()`
+ * (initialize-controlbericht resp. spawn-flag) en zijn daarom onderdeel van
+ * de warme-pool-signatuur. */
+export function buildQueryOptions(input: {
+  task: Task;
+  systemPrompt?: string;
+  includePartialMessages: boolean;
+  controller: AbortController;
+  onBrainStep?: (step: string) => void;
+}): Options {
+  const { task, systemPrompt, includePartialMessages, controller, onBrainStep } = input;
+  const research = task === "research";
+  const agentic = task === "agentic";
+  return {
+    model: MODEL[task],
+    maxTurns: research ? RESEARCH_MAX_TURNS : agentic ? AGENTIC_MAX_TURNS : 1,
+    // Basis-toolset (built-ins): leeg voor cheap/hard/agentic (agentic krijgt
+    // zijn tools via de MCP-server hieronder), alleen de web-tools voor
+    // research.
+    tools: research ? RESEARCH_TOOLS : [],
+    ...(research
+      ? {
+          // Headless: web-tools vooraf goedkeuren; al het overige wordt
+          // geweigerd in plaats van op een prompt te blijven hangen.
+          allowedTools: RESEARCH_TOOLS,
+          permissionMode: "dontAsk" as const,
+        }
+      : {}),
+    ...(agentic
+      ? {
+          // In-process brein-tools (§2.4): alléén mcp__brain__* in de
+          // allowlist, headless — al het overige wordt geweigerd.
+          mcpServers: { [BRAIN_SERVER_NAME]: createBrainMcpServer(onBrainStep) },
+          allowedTools: brainToolAllowlist(),
+          permissionMode: "dontAsk" as const,
+        }
+      : {}),
+    abortController: controller,
+    ...(systemPrompt ? { systemPrompt } : {}),
+    // Streaming (#31): partial messages alleen aanzetten als er een
+    // delta-afnemer is — anders blijft het berichtenverkeer zoals het was.
+    ...(includePartialMessages ? { includePartialMessages: true } : {}),
+  };
+}
+
+/** De warme-boot-opties zijn per constructie het koude cheap-pad met
+ * dezelfde signatuur — apart benoemd zodat de contract-test elke toekomstige
+ * special-casing van het warme pad ziet. */
+export function warmBootOptions(sig: WarmSignature, controller: AbortController): Options {
+  return buildQueryOptions({
+    task: "cheap",
+    systemPrompt: sig.systemPrompt,
+    includePartialMessages: sig.includePartialMessages,
+    controller,
+  });
+}
+
+function bootWarmCheapSession(sig: WarmSignature): WarmBootHandle {
+  const controller = new AbortController();
+  const input = pushableInput<ReturnType<typeof buildUserMessage>>();
+  const q = query({
+    prompt: input.iterable as Parameters<typeof query>[0]["prompt"],
+    options: warmBootOptions(sig, controller),
+  });
+  return {
+    messages: q,
+    push: (m) => input.push(m as ReturnType<typeof buildUserMessage>),
+    endInput: () => input.end(),
+    kill: () => {
+      controller.abort();
+      (q as { close?: () => void }).close?.();
+    },
+  };
+}
+
+/** Warme-sessie-pool (#154), signaal-gedreven — zie warmpool.ts voor het
+ * ontwerp en de grenzen. Kill-switch: AI_WARM_POOL=0 (default AAN: zonder
+ * /prewarm-signaal boot er toch niets, en de degradatie naar koud is
+ * transparant — de schakelaar is er voor ops-noodgevallen). */
+export const warmPool = new WarmPool({
+  boot: bootWarmCheapSession,
+  enabled: !["0", "false", "off"].includes(
+    (process.env.AI_WARM_POOL ?? "1").toLowerCase(),
+  ),
+  ttlMs: (() => {
+    const parsed = Number.parseInt(process.env.AI_WARM_TTL_MS ?? "", 10);
+    return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : 600_000; // 10 min
+  })(),
+});
+
+/** Voortgangsvlag voor de leeslus: heeft de sessie echt output geleverd
+ * (assistant/result/tekst-delta)? Bij een warme sessie die dood bleek bij de
+ * claim blijft dit false — dan is er gegarandeerd geen API-call gedaan en
+ * mag ai.ts transparant koud opnieuw starten. */
+export interface CollectProgress {
+  sawOutput: boolean;
+}
+
+/** Gedeelde leeslus over de SDK-berichten (koud én warm — #154).
+ *
+ * De Agent SDK levert dezelfde tekst twee keer: als streaming 'assistant'-
+ * berichten én als afsluitend 'result'-bericht. Tel ze NIET op — verzamel
+ * apart en geef het 'result' terug; val terug op assistant-tekst zonder
+ * result. Het result-bericht draagt ook de echte token-usage (#121). */
+export async function collectAnswer(
+  messages: AsyncIterable<unknown>,
+  onDelta?: (text: string) => void | Promise<void>,
+  progress?: CollectProgress,
+): Promise<AskAnswer> {
+  let assistantText = "";
+  let resultText = "";
+  let usage: AskUsage | null = null;
+  for await (const message of messages) {
+    const m = message as {
+      type: string;
+      text?: string;
+      result?: string;
+      usage?: unknown;
+      message?: { content?: Array<{ type: string; text?: string }> };
+      event?: { type?: string; delta?: { type?: string; text?: string } };
+    };
+    if (m.type === "stream_event") {
+      // Partial-message-event: alleen echte text-deltas doorgeven; het
+      // volledige antwoord komt daarnaast gewoon als assistant/result
+      // binnen (dus hier NIET aan assistantText/resultText toevoegen).
+      const ev = m.event;
+      if (
+        ev?.type === "content_block_delta" &&
+        ev.delta?.type === "text_delta" &&
+        ev.delta.text
+      ) {
+        if (progress) progress.sawOutput = true;
+        if (onDelta) await onDelta(ev.delta.text);
+      }
+    } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+      if (progress) progress.sawOutput = true;
+      for (const block of m.message.content) {
+        if (block.type === "text" && block.text) assistantText += block.text;
+      }
+    } else if (m.type === "text" && m.text) {
+      if (progress) progress.sawOutput = true;
+      assistantText += m.text;
+    } else if (m.type === "result") {
+      if (progress) progress.sawOutput = true;
+      if (m.result) resultText += m.result;
+      usage = usageFromSdk(m.usage) ?? usage;
+    }
+  }
+  return { answer: (resultText || assistantText).trim(), usage };
+}
+
 /** Stuur één prompt (optioneel met afbeeldingen) naar Claude.
  *
  * Met `onDelta` (#31, streaming) levert de Agent SDK naast de gewone
  * berichten ook partial-message-events (`includePartialMessages`); elke
  * text-delta gaat direct naar de callback zodat de aanroeper het antwoord
  * woord-voor-woord kan doorsturen. De return-waarde blijft in beide gevallen
- * het volledige eindantwoord — de niet-streamende route verandert niet. */
+ * het volledige eindantwoord — de niet-streamende route verandert niet.
+ *
+ * Capaciteit (#155): elke run verwerft eerst een permit in de globale
+ * semaphore (agentic weegt 2); boven de cap wacht hij kort in de rij en
+ * daarna bubbelt een ConcurrencyLimitError naar server.ts (429).
+ *
+ * Warme pool (#154): een cheap-call waarvan de sessie-opties byte-gelijk
+ * zijn aan een voorverwarmde sessie krijgt die sessie (subprocess-boot al
+ * betaald); in alle andere gevallen — en bij een dood gebleken warme sessie
+ * — start hij transparant koud. Eén sessie = één call, nooit hergebruik. */
 export async function askClaude(opts: {
   prompt: string;
   system?: string;
@@ -195,85 +374,65 @@ export async function askClaude(opts: {
   if (signal?.aborted) controller.abort();
   else signal?.addEventListener("abort", onAbort, { once: true });
 
-  const options: Options = {
-    model: MODEL[task],
-    maxTurns: research ? RESEARCH_MAX_TURNS : agentic ? AGENTIC_MAX_TURNS : 1,
-    // Basis-toolset (built-ins): leeg voor cheap/hard/agentic (agentic krijgt
-    // zijn tools via de MCP-server hieronder), alleen de web-tools voor
-    // research.
-    tools: research ? RESEARCH_TOOLS : [],
-    ...(research
-      ? {
-          // Headless: web-tools vooraf goedkeuren; al het overige wordt
-          // geweigerd in plaats van op een prompt te blijven hangen.
-          allowedTools: RESEARCH_TOOLS,
-          permissionMode: "dontAsk" as const,
-        }
-      : {}),
-    ...(agentic
-      ? {
-          // In-process brein-tools (§2.4): alléén mcp__brain__* in de
-          // allowlist, headless — al het overige wordt geweigerd.
-          mcpServers: { [BRAIN_SERVER_NAME]: createBrainMcpServer(onBrainStep) },
-          allowedTools: brainToolAllowlist(),
-          permissionMode: "dontAsk" as const,
-        }
-      : {}),
-    abortController: controller,
-    ...(systemPrompt ? { systemPrompt } : {}),
-    // Streaming (#31): partial messages alleen aanzetten als er een
-    // delta-afnemer is — anders blijft het berichtenverkeer zoals het was.
-    ...(onDelta ? { includePartialMessages: true } : {}),
-  };
-
-  const arg = {
-    prompt: images.length > 0 ? userMessage(prompt, images) : prompt,
-    options,
-  };
-
-  // De Agent SDK levert dezelfde tekst twee keer: als streaming 'assistant'-
-  // berichten én als afsluitend 'result'-bericht. Tel ze NIET op — verzamel
-  // apart en geef het 'result' terug; val terug op assistant-tekst zonder result.
-  let assistantText = "";
-  let resultText = "";
-  // Echte token-tellingen (#121): het result-bericht (succes én
-  // error_max_turns e.d.) draagt de usage van de hele run — opgeteld over
-  // alle beurten, dus incl. agentic tool-overhead. Geen result = null.
-  let usage: AskUsage | null = null;
+  const includePartialMessages = Boolean(onDelta);
+  let release: (() => void) | undefined;
+  let unhookWarmAbort: (() => void) | undefined;
+  const progress: CollectProgress = { sawOutput: false };
   try {
-    for await (const message of query(arg as Parameters<typeof query>[0])) {
-      const m = message as {
-        type: string;
-        text?: string;
-        result?: string;
-        usage?: unknown;
-        message?: { content?: Array<{ type: string; text?: string }> };
-        event?: { type?: string; delta?: { type?: string; text?: string } };
-      };
-      if (m.type === "stream_event") {
-        // Partial-message-event: alleen echte text-deltas doorgeven; het
-        // volledige antwoord komt daarnaast gewoon als assistant/result
-        // binnen (dus hier NIET aan assistantText/resultText toevoegen).
-        const ev = m.event;
-        if (
-          onDelta &&
-          ev?.type === "content_block_delta" &&
-          ev.delta?.type === "text_delta" &&
-          ev.delta.text
-        )
-          await onDelta(ev.delta.text);
-      } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
-        for (const block of m.message.content) {
-          if (block.type === "text" && block.text) assistantText += block.text;
+    // Permit vóór elke sessie-start (koud én warm-claim) — de voorverwarmde
+    // boot zelf telt niet (idle, geen API-call; de pool-cap begrenst die al).
+    release = await aiSemaphore.acquire(agentic ? 2 : 1, {
+      signal: controller.signal,
+      maxWaitMs: AI_QUEUE_WAIT_MS,
+    });
+
+    if (task === "cheap" && warmPool.isEnabled()) {
+      const sig: WarmSignature = { systemPrompt, includePartialMessages };
+      warmPool.observe(sig);
+      const claimed = controller.signal.aborted ? null : warmPool.claim(sig);
+      if (claimed) {
+        const killWarm = () => claimed.kill();
+        controller.signal.addEventListener("abort", killWarm, { once: true });
+        unhookWarmAbort = () =>
+          controller.signal.removeEventListener("abort", killWarm);
+        try {
+          claimed.send(buildUserMessage(prompt, images));
+          const res = await collectAnswer(claimed.messages(), onDelta, progress);
+          if (progress.sawOutput) return res;
+          // Sessie eindigde zonder één output-bericht: subprocess was dood
+          // bij de claim — er is geen API-call gedaan, dus koud is veilig.
+          console.log("[warmpool] warme sessie dood bij claim — transparant koud gestart");
+        } catch (e) {
+          if (progress.sawOutput || controller.signal.aborted || timedOut) throw e;
+          console.log(
+            `[warmpool] warme sessie faalde vóór output — transparant koud gestart: ${String(e).slice(0, 200)}`,
+          );
         }
-      } else if (m.type === "text" && m.text) {
-        assistantText += m.text;
-      } else if (m.type === "result") {
-        if (m.result) resultText += m.result;
-        usage = usageFromSdk(m.usage) ?? usage;
+        warmPool.noteDeadClaim();
+        progress.sawOutput = false;
       }
     }
+
+    const options = buildQueryOptions({
+      task,
+      systemPrompt,
+      includePartialMessages,
+      controller,
+      onBrainStep,
+    });
+    const arg = {
+      prompt: images.length > 0 ? userMessage(prompt, images) : prompt,
+      options,
+    };
+    return await collectAnswer(
+      query(arg as Parameters<typeof query>[0]),
+      onDelta,
+      progress,
+    );
   } catch (e) {
+    // Capaciteitsgrens (#155) onvertaald doorgeven: server.ts maakt er een
+    // 429 met machine-leesbare reden van.
+    if (e instanceof ConcurrencyLimitError) throw e;
     // Timeout en client-abort herkenbaar maken voor de aanroeper (run_log);
     // overige fouten ongewijzigd doorgeven — server.ts vertaalt ze naar een
     // nette 500 of een error-frame.
@@ -289,6 +448,7 @@ export async function askClaude(opts: {
   } finally {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
+    unhookWarmAbort?.();
+    release?.();
   }
-  return { answer: (resultText || assistantText).trim(), usage };
 }

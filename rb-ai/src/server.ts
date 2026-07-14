@@ -2,7 +2,8 @@
 // (CLAUDE_CODE_OAUTH_TOKEN) zodat rb-api (.NET) geen per-token API-key nodig
 // heeft. Alleen bereikbaar binnen het compose-netwerk — nooit publiek exposen.
 import { createServer } from "node:http";
-import { askClaude } from "./ai.js";
+import { askClaude, warmPool } from "./ai.js";
+import { aiSemaphore, ConcurrencyLimitError } from "./concurrency.js";
 import { splitRelationProposals } from "./relations.js";
 import { parseAskRequest } from "./validate.js";
 
@@ -41,7 +42,24 @@ const server = createServer(async (req, res) => {
       const configured = Boolean(
         process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY,
       );
-      return send(200, { status: "ok", service: "rb-ai", configured });
+      // capacity (#155) en warm (#154): tellers om de cap en de pool op
+      // echte cijfers bij te stellen — rb-api leest /health al best-effort.
+      return send(200, {
+        status: "ok",
+        service: "rb-ai",
+        configured,
+        capacity: aiSemaphore.snapshot(),
+        warm: warmPool.stats(),
+      });
+    }
+
+    if (req.method === "POST" && req.url === "/prewarm") {
+      // Voorverwarmsignaal (#154), gestuurd bij het laden van de /ask-pagina
+      // (rb-web → rb-api → hier). Idempotent en altijd direct een 202: het
+      // opent/verlengt het activiteitsvenster en boot hooguit één warme
+      // sessie op de achtergrond — er wordt nooit op de boot gewacht.
+      const result = warmPool.prewarm();
+      return send(202, { status: "accepted", ...result });
     }
 
     if (req.method === "POST" && req.url === "/ask") {
@@ -77,6 +95,11 @@ const server = createServer(async (req, res) => {
           ...(split.relations ? { relations: split.relations } : {}),
         });
       } catch (e) {
+        // Capaciteitsgrens (#155): nette 429 met machine-leesbare reden —
+        // rb-api's RbAiClient behandelt elke non-success als "AI weg" en
+        // degradeert naar de bestaande vriendelijke melding.
+        if (e instanceof ConcurrencyLimitError)
+          return send(429, { error: e.message, code: e.code });
         // Agentic faalt/timeout (#107): de tool-calls die vóór de uitval al
         // gedaan waren gaan mee in de fout-body — juist de hangende run wil
         // de beheerder in de trace kunnen inspecteren. Overige taken volgen
@@ -95,8 +118,20 @@ const server = createServer(async (req, res) => {
       // ontbreken) — dezelfde best-effort-doorgifte als op /ask.
       const parsed = parseAskRequest(await readJson(req));
       if (!parsed.ok) return send(400, { error: parsed.error });
-      res.writeHead(200, { "content-type": "application/x-ndjson" });
-      const frame = (obj: unknown) => res.write(JSON.stringify(obj) + "\n");
+      // De 200 + NDJSON-header gaat pas de deur uit bij het eerste frame
+      // (#155): zo kan een capaciteits-afwijzing — die altijd vóór de eerste
+      // delta valt — nog als echte 429 terug, het pad dat RbAiClient al als
+      // degradatie herkent. Ná de eerste byte blijft het error-frame-contract
+      // ongewijzigd.
+      let headSent = false;
+      const frame = (obj: unknown) => {
+        if (res.destroyed) return;
+        if (!headSent) {
+          headSent = true;
+          res.writeHead(200, { "content-type": "application/x-ndjson" });
+        }
+        res.write(JSON.stringify(obj) + "\n");
+      };
       try {
         const { answer, usage } = await askClaude({
           ...parsed.request,
@@ -107,6 +142,8 @@ const server = createServer(async (req, res) => {
         });
         frame({ type: "done", answer, usage });
       } catch (e) {
+        if (!headSent && e instanceof ConcurrencyLimitError)
+          return send(429, { error: e.message, code: e.code });
         // Uitval mídden in de stream: de 200 is al weg, dus de fout gaat als
         // frame mee — de aanroeper (rb-api) degradeert daarop netjes. Is de
         // client zelf weggelopen (abort), dan is het frame een no-op.
@@ -119,6 +156,8 @@ const server = createServer(async (req, res) => {
   } catch (e) {
     // Na writeHead kan er geen JSON-foutstatus meer; dan alleen netjes sluiten.
     if (res.headersSent) return res.end();
+    if (e instanceof ConcurrencyLimitError)
+      return send(429, { error: e.message, code: e.code });
     return send(500, { error: String(e) });
   }
 });

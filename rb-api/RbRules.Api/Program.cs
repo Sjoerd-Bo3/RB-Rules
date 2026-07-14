@@ -166,6 +166,19 @@ builder.Services.AddRateLimiter(o =>
             Window = TimeSpan.FromMinutes(15),
             QueueLimit = 0,
         }));
+    // Voorverwarmsignaal (#154): strikt per IP en bewust los van "llm" —
+    // een paginalaad mag geen vraagbudget opeten, maar boot wel (indirect)
+    // een subprocess op de VM en is dus niet ongelimiteerd. rb-ai's pool is
+    // daarnaast zelf idempotent en op één warme sessie gecapt.
+    o.AddPolicy("prewarm", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        "prewarm:" + (ctx.Request.Headers["X-Client-Ip"].FirstOrDefault()
+            ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "anon"),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 12,
+            Window = TimeSpan.FromMinutes(5),
+            QueueLimit = 0,
+        }));
 });
 
 var app = builder.Build();
