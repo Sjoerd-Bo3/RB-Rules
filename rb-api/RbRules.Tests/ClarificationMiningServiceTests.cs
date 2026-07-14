@@ -216,6 +216,51 @@ public class ClarificationMiningServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_DubbeleKeywordBron_WordtNietGemined_MaarWelOpgeruimd()
+    {
+        // Review-regressie (#185): een bron waarvan de naam/url ZOWEL een
+        // FAQ- ALS een patch-notes-woord bevat matcht beide predicaten. Zou
+        // mining niet expliciet IsPatchNotesSignal uitsluiten, dan werd zo'n
+        // bron gemíned én meteen weer door de retractie hard verwijderd, met
+        // de ClarifiedAt-gate die her-mining blokkeert ⇒ stil, permanent
+        // verlies van geldige rulings. Patch-notes wint: de bron wordt NIET
+        // gemíned (r.Documents == 0), de AI-stub wordt genegeerd, en een
+        // eventuele oude clarify-Correction van die bron wordt eenmalig
+        // opgeruimd (geen thrash).
+        using var db = NewDb();
+        const string dualId = "rules-faq-and-patch-notes";
+        const string dualUrl =
+            "https://playriftbound.com/en-us/news/rules-and-releases/rules-faq-and-patch-notes/";
+        db.Sources.Add(new Source
+        {
+            Id = dualId, Name = "Rules FAQ and Patch Notes", Url = dualUrl,
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = dualId, Content = "Legion means you finalize an item on the chain.",
+            ContentHash = "hash",
+        });
+        // Een al bestaande (verified) clarify-ruling van vóór deze splitsing.
+        db.Corrections.Add(new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = "Legion means you finalize an item on the chain.",
+            Provenance = $"clarify-mining:{dualId}", SourceRef = dualUrl,
+            Status = "verified", VerifiedAt = DateTimeOffset.UtcNow,
+            Embedding = new Vector(Enumerable.Repeat(0.1f, EmbeddingConfig.Dimensions).ToArray()),
+        });
+        await db.SaveChangesAsync();
+        var svc = new ClarificationMiningService(db, Ai(() => TwoConceptsAnswer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Documents);   // niet gemíned (patch-notes wint)
+        Assert.Equal(1, r.Retracted);   // oude ruling eenmalig opgeruimd
+        Assert.Empty(await db.Corrections.ToListAsync()); // en niet opnieuw aangemaakt (geen thrash)
+    }
+
+    [Fact]
     public async Task RunAsync_EmbeddingFailure_LaatDocumentOngemarkeerd_EnLogtReden()
     {
         using var db = NewDb();

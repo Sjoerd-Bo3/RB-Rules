@@ -124,7 +124,22 @@ public static class ClarificationGrounding
 /// het woord "verduidelijkt" bevat (bv. "... wat hierboven al is
 /// verduidelijkt met het volgende voorbeeld: ...") blijft daarmee gewoon
 /// informatief. Puur en getest, zelfde stijl als
-/// <see cref="ClarificationGrounding"/>.</summary>
+/// <see cref="ClarificationGrounding"/>.
+///
+/// <b>Bewust interim (#188).</b> Deze regex-heuristiek is een tijdelijke
+/// backstop: hij kan niet écht "kondigt-een-wijziging-aan" van "beschrijft-de-
+/// wijziging" onderscheiden, dus hij zit er twee kanten op naast (adversariële
+/// review #185): een KORTE operatieve zin met een wijzig-werkwoord ("The rule
+/// was clarified so that Legion triggers once per turn.") wordt ten onrechte
+/// meta-only bevonden en gaat naar review i.p.v. auto-verified; en een lege
+/// aankondiging mét dubbele punt ("Legion was clarified: see the updated core
+/// rules.") glipt er via de dubbele-punt-uitweg juist doorheen. De echte,
+/// LLM-gebaseerde informativiteitsbeslissing hoort in #188 (classificatie via
+/// het model, niet via regexes) en vervangt deze klasse. Belangrijk: de
+/// clarify-job draait pas weer op productie bij de Phase 2-re-ingest, en die
+/// komt ná #188 — de regexvorm raakt dus nooit echte data. De primaire
+/// oorzaak van de gerapporteerde Legion-bug is los hiervan al weg: patch-notes
+/// zijn uit de clarify-pijplijn gehaald (<see cref="ClarificationSources"/>).</summary>
 public static class ClarificationInformativeness
 {
     /// <summary>Boven deze lengte bevat een zin vrijwel altijd meer dan alleen

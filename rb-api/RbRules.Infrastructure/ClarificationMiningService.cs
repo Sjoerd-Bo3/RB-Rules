@@ -121,11 +121,24 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         // In-memory filter (ClarificationSources.IsMatch is puur/geen EF-
         // vertaalbare methode, docs/CONVENTIONS.md): het aantal trust-1
         // bronnen is klein, dus materialiseren eerst is goedkoop.
+        //
+        // #185: patch-notes-signaal wint. IsMatch (FAQ-woorden) en
+        // IsPatchNotesSignal (patch-notes-woorden) zijn onafhankelijke
+        // substring-checks over dezelfde Id/Url/Name — een bron die béíde
+        // families bevat (bv. een artikel "Rules FAQ & Patch Notes") zou
+        // anders hier gemíned worden én meteen door RetractPatchNotesCorrections-
+        // Async weer hard verwijderd, met de ClarifiedAt-gate die her-mining
+        // blokkeert ⇒ stil, permanent verlies van geldige rulings (thrash).
+        // Daarom sluiten we IsPatchNotesSignal-bronnen hier expliciet uit: een
+        // gemengde bron telt als patch-notes (voedt de wijzigingen-feed, niet
+        // de rulings-laag) — de veilige, conservatieve keuze; retractie ruimt
+        // eventuele oude corrections van zo'n bron eenmalig op, zonder thrash.
         var sources = (await db.Sources.AsNoTracking()
                 .Where(s => s.Enabled && s.TrustTier == 1)
                 .OrderByDescending(s => s.Rank)
                 .ToListAsync(ct))
-            .Where(s => ClarificationSources.IsMatch(s.Id, s.Url, s.Name))
+            .Where(s => ClarificationSources.IsMatch(s.Id, s.Url, s.Name)
+                        && !ClarificationSources.IsPatchNotesSignal(s.Id, s.Url, s.Name))
             .ToList();
 
         // Anker-resolver voor de hybride poort (#177): dezelfde bronnen als de
