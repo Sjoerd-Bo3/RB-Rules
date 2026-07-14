@@ -153,6 +153,17 @@ public class Correction
     /// herkend". Voedt de reviewqueue zodat de beheerder ziet waaróm iets ter
     /// review staat; null voor handmatig/verified aangemaakte correcties.</summary>
     public string? StatusReason { get; set; }
+    /// <summary>Beheerder-opmerking (#184, zelfde patroon als
+    /// <see cref="Claim.ReviewNote"/>/<see cref="Relation.ReviewNote"/>) —
+    /// blijft bij het item staan (traceerbaar) en triggert een her-evaluatie
+    /// (<see cref="RbRules.Infrastructure.CorrectionReevaluationService"/>)
+    /// van dít ene item. Mag een anker-correctie bevatten (bv.
+    /// "mechanic:Recall") die een fout-aangeankerd of onherkend onderwerp
+    /// overschrijft. Een volgende clarify-mining-her-mine
+    /// (<see cref="RbRules.Infrastructure.ClarificationMiningService"/>)
+    /// respecteert een gezette ReviewNote: Status/StatusReason worden dan
+    /// niet stilzwijgend teruggedraaid.</summary>
+    public string? ReviewNote { get; set; }
     public Vector? Embedding { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? VerifiedAt { get; set; }
