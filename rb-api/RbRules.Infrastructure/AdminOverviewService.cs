@@ -21,9 +21,15 @@ public record BanOverviewItem(
     long Id, string Name, string? CardRiftboundId, string Kind, string Format,
     DateOnly? EffectiveFrom, string SourceUrl, DateTimeOffset DetectedAt);
 
+/// <summary>SupersededByErratumId (#168): gevuld wanneer een ander errata-item
+/// over dezelfde kaart een hogere temporele precedentie heeft (gelijke of
+/// hogere TrustTier, nieuwere EffectiveFrom) — een kandidaat-signaal voor de
+/// beheerder, puur berekend uit de bestaande data (geen eigen status-kolom,
+/// geen automatische verwijdering; beide rijen blijven gewoon bestaan).</summary>
 public record ErratumOverviewItem(
     long Id, string CardName, string? CardRiftboundId, string NewText,
-    string SourceUrl, DateTimeOffset DetectedAt);
+    string SourceUrl, DateTimeOffset DetectedAt, DateOnly? EffectiveFrom,
+    long? SupersededByErratumId);
 
 public record InteractionOverviewItem(
     long Id, string Kind, string Explanation, string CardAId, string CardAName,
@@ -232,12 +238,47 @@ public class AdminOverviewService(RbRulesDbContext db)
                 b.EffectiveFrom, b.SourceUrl, b.DetectedAt))
             .ToListAsync();
 
-    public async Task<IReadOnlyList<ErratumOverviewItem>> ErrataAsync() =>
-        await db.Errata.AsNoTracking()
+    /// <summary>Errata-overzicht (#61) mét supersede-signaal (#168): per kaart
+    /// (CardRiftboundId, of anders de naam) met meer dan één errata-bron
+    /// wint de hoogste TrustTier / nieuwste EffectiveFrom — de rest krijgt
+    /// SupersededByErratumId als kandidaat-signaal, puur berekend, niets
+    /// wordt verwijderd of overschreven.</summary>
+    public async Task<IReadOnlyList<ErratumOverviewItem>> ErrataAsync()
+    {
+        var rows = await db.Errata.AsNoTracking()
             .OrderByDescending(e => e.DetectedAt).ThenBy(e => e.CardName)
-            .Select(e => new ErratumOverviewItem(
-                e.Id, e.CardName, e.CardRiftboundId, e.NewText, e.SourceUrl, e.DetectedAt))
+            .Select(e => new
+            {
+                e.Id, e.CardName, e.CardRiftboundId, e.NewText, e.SourceUrl,
+                e.DetectedAt, e.EffectiveFrom,
+            })
             .ToListAsync();
+        if (rows.Count == 0) return [];
+
+        var urls = rows.Select(r => r.SourceUrl).Distinct().ToList();
+        var tierByUrl = await db.Sources.AsNoTracking()
+            .Where(s => urls.Contains(s.Url))
+            .Select(s => new { s.Url, s.TrustTier })
+            .ToDictionaryAsync(s => s.Url, s => s.TrustTier);
+
+        var supersededBy = new Dictionary<long, long>();
+        foreach (var group in rows.GroupBy(r => r.CardRiftboundId ?? r.CardName.Trim().ToLowerInvariant()))
+        {
+            var distinctUrls = group.Select(r => r.SourceUrl).Distinct().Count();
+            if (distinctUrls < 2) continue; // dezelfde bron levert nooit een supersede-kandidaat op
+
+            var winner = Precedence.Winner(
+                group.ToList(),
+                r => tierByUrl.GetValueOrDefault(r.SourceUrl, Precedence.UnknownTier),
+                r => r.EffectiveFrom);
+            foreach (var r in group.Where(r => r.Id != winner.Id)) supersededBy[r.Id] = winner.Id;
+        }
+
+        return [.. rows.Select(e => new ErratumOverviewItem(
+            e.Id, e.CardName, e.CardRiftboundId, e.NewText, e.SourceUrl, e.DetectedAt,
+            e.EffectiveFrom,
+            supersededBy.TryGetValue(e.Id, out var winnerId) ? winnerId : null))];
+    }
 
     /// <summary>Geverifieerde interacties met kaartnamen erbij (twee stappen:
     /// pagina ophalen, dan namen voor precies die kaarten — geen joins over alles).</summary>

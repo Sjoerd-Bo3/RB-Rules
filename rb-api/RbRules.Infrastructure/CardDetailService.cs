@@ -8,7 +8,13 @@ public record CardVersion(
     string RiftboundId, string? SetId, string? SetLabel, string? Rarity,
     int? CollectorNumber, string? ImageUrl);
 
-public record CardErratumRef(string NewText, string SourceUrl, DateTimeOffset DetectedAt);
+/// <summary>EffectiveFrom (#168): vanaf wanneer deze tekst gold (afgeleid van
+/// de bron), null als de bron geen datum draagt. De lijst staat op
+/// precedentie-volgorde (hoogste TrustTier, dan nieuwste EffectiveFrom) — het
+/// eerste item is de tekst die NU geldt; latere items zijn candidate-
+/// achterhaald (zichtbaar, niet verwijderd).</summary>
+public record CardErratumRef(
+    string NewText, string SourceUrl, DateTimeOffset DetectedAt, DateOnly? EffectiveFrom);
 public record CardRelevantRule(string? Section, string Snippet, string SourceName, string Url);
 public record CardRuleLinks(
     IReadOnlyList<CardErratumRef> Errata, IReadOnlyList<CardRelevantRule> RelevantRules);
@@ -72,11 +78,8 @@ public class CardDetailService(RbRulesDbContext db, CardResolver resolver)
         var bannedGroups = await BanLookup.BannedCanonicalIdsAsync(db, ct);
         var banned = BanLookup.IsBanned(bannedGroups, c);
 
-        var erratum = await db.Errata
-            .Where(e => e.CardRiftboundId == id)
-            .OrderByDescending(e => e.DetectedAt)
-            .Select(e => e.NewText)
-            .FirstOrDefaultAsync(ct);
+        var errataForCard = await ErrataForCardAsync(id, ct);
+        var erratum = errataForCard.Count == 0 ? null : errataForCard[0].NewText;
 
         // Alle printings van deze kaart (alt-art/showcase/promo/herdruk).
         var canonicalId = CardText.CanonicalId(c);
@@ -117,11 +120,7 @@ public class CardDetailService(RbRulesDbContext db, CardResolver resolver)
         var card = await db.Cards.FindAsync([id], ct);
         if (card is null) return null;
 
-        var errata = await db.Errata
-            .Where(e => e.CardRiftboundId == id)
-            .OrderByDescending(e => e.DetectedAt)
-            .Select(e => new CardErratumRef(e.NewText, e.SourceUrl, e.DetectedAt))
-            .ToListAsync(ct);
+        var errata = await ErrataForCardAsync(id, ct);
 
         var embeddingSource = await resolver.EmbeddingAnchorAsync(card, ct);
         IReadOnlyList<CardRelevantRule> relevantRules = [];
@@ -141,6 +140,41 @@ public class CardDetailService(RbRulesDbContext db, CardResolver resolver)
         }
 
         return new(errata, relevantRules);
+    }
+
+    /// <summary>Errata voor een kaart, op temporele precedentie (#168): een
+    /// volledige sortering op hoogste TrustTier van de bron eerst, dan
+    /// nieuwste EffectiveFrom (Precedence.Compare), met DetectedAt als laatste
+    /// tie-break zolang EffectiveFrom nog niet overal bekend is (bijvoorbeeld
+    /// vlak na de migratie). Het eerste item is de tekst die NU geldt; latere
+    /// items zijn candidate-achterhaald, nog altijd zichtbaar. Twee aparte,
+    /// eenvoudige query's (geen LEFT JOIN-expressie) — bewezen vertaalbaar,
+    /// Errata↔Source is toch al een losse URL-koppeling.</summary>
+    private async Task<List<CardErratumRef>> ErrataForCardAsync(string id, CancellationToken ct)
+    {
+        var rows = await db.Errata.AsNoTracking()
+            .Where(e => e.CardRiftboundId == id)
+            .Select(e => new { e.NewText, e.SourceUrl, e.DetectedAt, e.EffectiveFrom })
+            .ToListAsync(ct);
+        if (rows.Count == 0) return [];
+
+        var urls = rows.Select(r => r.SourceUrl).Distinct().ToList();
+        var tierByUrl = await db.Sources.AsNoTracking()
+            .Where(s => urls.Contains(s.Url))
+            .Select(s => new { s.Url, s.TrustTier })
+            .ToDictionaryAsync(s => s.Url, s => s.TrustTier, ct);
+
+        var withTier = rows
+            .Select(r => (
+                Ref: new CardErratumRef(r.NewText, r.SourceUrl, r.DetectedAt, r.EffectiveFrom),
+                Tier: tierByUrl.GetValueOrDefault(r.SourceUrl, Precedence.UnknownTier)))
+            .ToList();
+        withTier.Sort((a, b) =>
+        {
+            var cmp = Precedence.Compare(a.Tier, a.Ref.EffectiveFrom, b.Tier, b.Ref.EffectiveFrom);
+            return cmp != 0 ? -cmp : b.Ref.DetectedAt.CompareTo(a.Ref.DetectedAt);
+        });
+        return [.. withTier.Select(x => x.Ref)];
     }
 
     private const int DossierRulings = 10;
