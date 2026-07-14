@@ -255,6 +255,56 @@ public class SourceDossierServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_Verwerkingsstatus_FaqBronDocumentNogNietGeclarified_Onvolledig()
+    {
+        // #177: clarify-mining geldt alleen voor FAQ-/clarificatie-bronnen
+        // (TrustTier == 1 + naam-/URL-heuristiek) — deze bron heeft een
+        // document dat nog niet geclarified is: "bezig".
+        using var db = NewDb();
+        db.Sources.Add(Source(
+            "s1", url: "https://playriftbound.com/en-us/news/rules-and-releases/unleashed-rules-faq/",
+            trustTier: 1));
+        db.Documents.Add(new Document
+        {
+            SourceId = "s1", Content = "Legion-uitleg", ContentHash = "h1", ClarifiedAt = null,
+        });
+        db.RunLogs.Add(new RunLog { Kind = "scan", Ref = "s1", Status = "unchanged" });
+        await db.SaveChangesAsync();
+
+        var dossier = await new SourceDossierService(db).GetAsync("s1");
+
+        Assert.Equal(SourceDossierCompleteness.Onvolledig, dossier!.Processing.CompletenessStatus);
+    }
+
+    [Fact]
+    public async Task GetAsync_Verwerkingsstatus_FaqBronGeclarifiedMetRuling_Volledig()
+    {
+        using var db = NewDb();
+        var url = "https://playriftbound.com/en-us/news/rules-and-releases/unleashed-rules-faq/";
+        db.Sources.Add(Source("s1", url: url, trustTier: 1));
+        db.Documents.Add(new Document
+        {
+            SourceId = "s1", Content = "Legion-uitleg", ContentHash = "h1",
+            ClarifiedAt = DateTimeOffset.UtcNow,
+        });
+        db.Corrections.Add(new Correction
+        {
+            Scope = "mechanic", Ref = "Legion", Text = "Legion = finalize.",
+            SourceRef = url, Status = "verified",
+        });
+        db.RunLogs.Add(new RunLog { Kind = "scan", Ref = "s1", Status = "unchanged" });
+        db.RunLogs.Add(new RunLog { Kind = "clarify", Ref = "s1", Status = "ok", Detail = "1 nieuwe verduidelijking(en)" });
+        await db.SaveChangesAsync();
+
+        var dossier = await new SourceDossierService(db).GetAsync("s1");
+
+        Assert.Equal(SourceDossierCompleteness.Volledig, dossier!.Processing.CompletenessStatus);
+        var step = Assert.Single(dossier.Processing.FollowUps, s => s.Kind == "clarify");
+        Assert.Equal("ok", step.Status);
+        Assert.Equal(1, dossier.Yield.RulingsTotal);
+    }
+
+    [Fact]
     public async Task GetAsync_Verwerkingsstatus_ScanOkNietsOpgeleverd_Leeg()
     {
         using var db = NewDb();

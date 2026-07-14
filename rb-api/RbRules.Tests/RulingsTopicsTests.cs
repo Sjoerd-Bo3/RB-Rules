@@ -8,8 +8,13 @@ public class RulingsTopicsTests
     [InlineData("card", "card")]
     [InlineData("rule_section", "section")] // het opslagformaat van Correction.Scope
     [InlineData("section", "section")]
+    [InlineData("mechanic", "mechanic")] // #177: ClarificationMiningService
+    [InlineData("concept", "concept")] // #177: ClarificationMiningService
     [InlineData("answer", "answer")]
     [InlineData("  CARD  ", "card")]
+    [InlineData("  MECHANIC  ", "mechanic")]
+    [InlineData("claim", "answer")] // review-notitie-promotie (#124) bucket als answer
+    [InlineData("relation", "answer")] // idem
     [InlineData("iets-onbekends", "answer")] // web-feedback is answer-scoped
     [InlineData(null, "answer")]
     public void FromCorrectionScope_MapsToSharedVocabulary(string? scope, string expected)
