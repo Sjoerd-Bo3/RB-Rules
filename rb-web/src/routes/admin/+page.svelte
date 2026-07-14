@@ -45,6 +45,7 @@
 		{ name: 'setrelease', label: 'Set-release-keten', hint: 'kaarten → mechanieken → embeddings → graph → primer-herziening; draait automatisch zodra de classifier een set-release herkent' },
 		{ name: 'classify', label: 'Classificaties aanvullen', hint: 'changes zonder samenvatting/duiding alsnog classificeren' },
 		{ name: 'claims', label: 'Claims minen', hint: 'community-claims destilleren uit registerbronnen (trust 3+), met corroboratie en toets tegen de officiële regels' },
+		{ name: 'clarify', label: 'FAQ-concepten minen', hint: 'losse verduidelijkingen uit officiële FAQ-/clarificatie-artikelen (trust 1) destilleren als geverifieerde rulings met eigen gefocuste embedding — pakt ook al-geïngeste bronnen mee; draait ook elke nacht automatisch' },
 		{ name: 'relations', label: 'Relaties minen', hint: 'LLM ontdekt relaties tussen de kennislagen (concepten, mechanieken, secties, kaarten, claims); voorstellen en nieuwe kind-labels komen in de reviewqueue — nooit rechtstreeks de graph in; draait ook elke nacht automatisch' },
 		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten komen als voorstel in de reviewqueue, nooit automatisch in het register; draait ook wekelijks automatisch' },
 		{ name: 'decks', label: 'Decks binnenhalen', hint: 'publieke decks van Piltover Archive via de sitemap (robots-compliant, met bronvermelding); throttled en gecapt per run — een volgende run gaat verder waar het grootboek gebleven is; draait ook elke 3 uur automatisch' },
@@ -549,7 +550,7 @@
 											</p>
 										{/if}
 										{#if d.processing.followUps.length}
-											<p class="meta">Vervolgstappen (classify/claims-mining):</p>
+											<p class="meta">Vervolgstappen (classify/claims-/clarify-mining):</p>
 											<ul class="dossier-list">
 												{#each d.processing.followUps as f, i (i)}
 													<li>
