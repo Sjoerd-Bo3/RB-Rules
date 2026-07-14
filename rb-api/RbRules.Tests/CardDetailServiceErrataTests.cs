@@ -148,14 +148,53 @@ public class CardDetailServiceErrataTests
         Assert.Equal("Bron aanwezig.", detail!.ErrataText);
     }
 
+    [Fact]
+    public async Task GetAsync_EqualTierNullDate_DeterministicByRankThenId_RegardlessOfInputOrder()
+    {
+        // Review-fix (#168): volledige gelijkstand op tier + (lege) EffectiveFrom.
+        // De winnaar mag NIET van invoervolgorde of DetectedAt afhangen —
+        // Source.Rank (bron-voorkeur) beslist, dan Erratum.Id. Twee DB's met
+        // omgekeerde invoervolgorde én omgekeerde DetectedAt moeten dezelfde
+        // "nu geldig"-tekst opleveren.
+        async Task<string?> WinnerFor(bool reversed)
+        {
+            using var db = NewDb();
+            db.Cards.Add(Card());
+            db.Sources.Add(OfficialSource("laag", "https://example.com/errata-laag", rank: 80));
+            db.Sources.Add(OfficialSource("hoog", "https://example.com/errata-hoog", rank: 100));
+            var laag = new Erratum
+            {
+                CardName = "Test Kaart", CardRiftboundId = CardId,
+                NewText = "Lage rank.", SourceUrl = "https://example.com/errata-laag",
+                DetectedAt = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero),
+            };
+            var hoog = new Erratum
+            {
+                CardName = "Test Kaart", CardRiftboundId = CardId,
+                NewText = "Hoge rank.", SourceUrl = "https://example.com/errata-hoog",
+                DetectedAt = new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero), // ouder — mag niet meetellen
+            };
+            // Invoervolgorde omdraaien wisselt ook de auto-increment Id-volgorde.
+            if (reversed) { db.Errata.Add(laag); db.Errata.Add(hoog); }
+            else { db.Errata.Add(hoog); db.Errata.Add(laag); }
+            await db.SaveChangesAsync();
+            return (await Service(db).GetAsync(CardId))!.ErrataText;
+        }
+
+        var a = await WinnerFor(reversed: false);
+        var b = await WinnerFor(reversed: true);
+        Assert.Equal("Hoge rank.", a); // hogere Source.Rank wint, ongeacht datum/detectie
+        Assert.Equal(a, b);            // reproduceerbaar, onafhankelijk van invoervolgorde
+    }
+
     // --- testinfra ---------------------------------------------------------
 
     private static Card Card() => new() { RiftboundId = CardId, Name = "Test Kaart", SetId = "OGN" };
 
-    private static Source OfficialSource(string id, string url) => new()
+    private static Source OfficialSource(string id, string url, int rank = 100) => new()
     {
         Id = id, Name = id, Url = url, Type = "official",
-        TrustTier = 1, Rank = 100, Parser = "html", Cadence = "weekly",
+        TrustTier = 1, Rank = rank, Parser = "html", Cadence = "weekly",
     };
 
     private static CardDetailService Service(RbRulesDbContext db) => new(db, new CardResolver(db));

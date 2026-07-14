@@ -46,38 +46,47 @@ public class PrecedenceTests
 
     // ── Winner ───────────────────────────────────────────────────────────
 
-    private record Candidate(string Name, short Tier, DateOnly? Date);
+    // ── CompareStable (deterministische totale orde, review-fix #168) ────
 
     [Fact]
-    public void Winner_PicksHighestTierThenNewest()
+    public void CompareStable_TierBeatsEverything()
     {
-        var candidates = new List<Candidate>
-        {
-            new("oud-officieel", 1, new DateOnly(2025, 1, 1)),
-            new("nieuw-officieel", 1, new DateOnly(2026, 6, 1)),
-            new("nieuw-community", 3, new DateOnly(2026, 12, 1)),
-        };
-        var winner = Precedence.Winner(candidates, c => c.Tier, c => c.Date);
-        Assert.Equal("nieuw-officieel", winner.Name);
+        // Tier 1 met oude datum, lage rank en lage id wint van tier 3 met
+        // verse datum, hoge rank en hoge id — gezag blijft primair.
+        Assert.True(Precedence.CompareStable<DateOnly>(
+            1, new DateOnly(2020, 1, 1), 0, 1,
+            3, new DateOnly(2026, 1, 1), 999, 999) > 0);
     }
 
     [Fact]
-    public void Winner_MixedTiers_OfficialWinsOverNewerCommunity()
+    public void CompareStable_EqualTier_NewestDateWins()
     {
-        var candidates = new List<Candidate>
-        {
-            new("community-vers", 3, new DateOnly(2026, 12, 1)),
-            new("officieel-oud", 1, new DateOnly(2020, 1, 1)),
-        };
-        Assert.Equal("officieel-oud", Precedence.Winner(candidates, c => c.Tier, c => c.Date).Name);
+        Assert.True(Precedence.CompareStable<DateOnly>(
+            1, new DateOnly(2026, 6, 1), 0, 1,
+            1, new DateOnly(2025, 1, 1), 999, 999) > 0);
     }
 
     [Fact]
-    public void Winner_NullDates_FirstCandidateStaysStable()
+    public void CompareStable_EqualTierAndDate_HigherRankWins()
     {
-        var candidates = new List<Candidate> { new("eerste", 1, null), new("tweede", 1, null) };
-        Assert.Equal("eerste", Precedence.Winner(candidates, c => c.Tier, c => c.Date).Name);
+        // Zelfde tier, beide null datum: Rank beslist (bron-voorkeur).
+        Assert.True(Precedence.CompareStable<DateOnly>(
+            1, null, 100, 1,
+            1, null, 80, 999) > 0);
     }
+
+    [Fact]
+    public void CompareStable_EqualTierDateRank_HigherIdWins_Deterministic()
+    {
+        // Volledige gelijkstand op tier/datum/rank ⇒ de finale sleutel (Id)
+        // beslist eenduidig. En omgekeerd exact gespiegeld (totale orde).
+        Assert.True(Precedence.CompareStable<DateOnly>(1, null, 100, 5, 1, null, 100, 2) > 0);
+        Assert.True(Precedence.CompareStable<DateOnly>(1, null, 100, 2, 1, null, 100, 5) < 0);
+    }
+
+    [Fact]
+    public void CompareStable_IdenticalKeys_IsZero() =>
+        Assert.Equal(0, Precedence.CompareStable<DateOnly>(1, null, 100, 7, 1, null, 100, 7));
 
     // ── ReorderTiedByTier ────────────────────────────────────────────────
 

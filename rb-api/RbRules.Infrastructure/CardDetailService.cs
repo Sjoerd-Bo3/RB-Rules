@@ -143,38 +143,46 @@ public class CardDetailService(RbRulesDbContext db, CardResolver resolver)
     }
 
     /// <summary>Errata voor een kaart, op temporele precedentie (#168): een
-    /// volledige sortering op hoogste TrustTier van de bron eerst, dan
-    /// nieuwste EffectiveFrom (Precedence.Compare), met DetectedAt als laatste
-    /// tie-break zolang EffectiveFrom nog niet overal bekend is (bijvoorbeeld
-    /// vlak na de migratie). Het eerste item is de tekst die NU geldt; latere
-    /// items zijn candidate-achterhaald, nog altijd zichtbaar. Twee aparte,
-    /// eenvoudige query's (geen LEFT JOIN-expressie) — bewezen vertaalbaar,
-    /// Errata↔Source is toch al een losse URL-koppeling.</summary>
+    /// DETERMINISTISCHE, totale sortering — hoogste TrustTier van de bron,
+    /// dan nieuwste EffectiveFrom, dan Source.Rank (bron-voorkeur), dan
+    /// Erratum.Id als stabiele finale sleutel (<see cref="Precedence.
+    /// CompareStable"/>). Bewust NIET op DetectedAt: die reset bij elke
+    /// errata-sync (BanErrataSyncService herbouwt de rijen), dus als tie-break
+    /// zou hij de "nu geldig"-keuze run-to-run laten flippen zonder echte
+    /// inhoudswijziging (review-fix). Het eerste item is de tekst die NU geldt;
+    /// latere items zijn candidate-achterhaald, nog altijd zichtbaar. Twee
+    /// aparte, eenvoudige query's (geen LEFT JOIN-expressie) — bewezen
+    /// vertaalbaar, Errata↔Source is toch al een losse URL-koppeling.</summary>
     private async Task<List<CardErratumRef>> ErrataForCardAsync(string id, CancellationToken ct)
     {
         var rows = await db.Errata.AsNoTracking()
             .Where(e => e.CardRiftboundId == id)
-            .Select(e => new { e.NewText, e.SourceUrl, e.DetectedAt, e.EffectiveFrom })
+            .OrderBy(e => e.Id) // deterministische basisvolgorde vóór de totale sort
+            .Select(e => new { e.Id, e.NewText, e.SourceUrl, e.DetectedAt, e.EffectiveFrom })
             .ToListAsync(ct);
         if (rows.Count == 0) return [];
 
         var urls = rows.Select(r => r.SourceUrl).Distinct().ToList();
-        var tierByUrl = await db.Sources.AsNoTracking()
+        var sourceByUrl = await db.Sources.AsNoTracking()
             .Where(s => urls.Contains(s.Url))
-            .Select(s => new { s.Url, s.TrustTier })
-            .ToDictionaryAsync(s => s.Url, s => s.TrustTier, ct);
+            .Select(s => new { s.Url, s.TrustTier, s.Rank })
+            .ToDictionaryAsync(s => s.Url, s => (Tier: s.TrustTier, s.Rank), ct);
 
-        var withTier = rows
-            .Select(r => (
-                Ref: new CardErratumRef(r.NewText, r.SourceUrl, r.DetectedAt, r.EffectiveFrom),
-                Tier: tierByUrl.GetValueOrDefault(r.SourceUrl, Precedence.UnknownTier)))
+        var ranked = rows
+            .Select(r =>
+            {
+                var src = sourceByUrl.GetValueOrDefault(r.SourceUrl, (Tier: Precedence.UnknownTier, Rank: 0));
+                return (
+                    Ref: new CardErratumRef(r.NewText, r.SourceUrl, r.DetectedAt, r.EffectiveFrom),
+                    r.Id, src.Tier, src.Rank);
+            })
             .ToList();
-        withTier.Sort((a, b) =>
-        {
-            var cmp = Precedence.Compare(a.Tier, a.Ref.EffectiveFrom, b.Tier, b.Ref.EffectiveFrom);
-            return cmp != 0 ? -cmp : b.Ref.DetectedAt.CompareTo(a.Ref.DetectedAt);
-        });
-        return [.. withTier.Select(x => x.Ref)];
+        // Winnaar (NU geldend) eerst: CompareStable geeft >0 als a voorrang
+        // heeft, Sort wil dan a vóór b (negatief) — dus negeren.
+        ranked.Sort((a, b) => -Precedence.CompareStable(
+            a.Tier, a.Ref.EffectiveFrom, a.Rank, a.Id,
+            b.Tier, b.Ref.EffectiveFrom, b.Rank, b.Id));
+        return [.. ranked.Select(x => x.Ref)];
     }
 
     private const int DossierRulings = 10;

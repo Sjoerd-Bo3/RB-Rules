@@ -246,7 +246,7 @@ public class AdminOverviewService(RbRulesDbContext db)
     public async Task<IReadOnlyList<ErratumOverviewItem>> ErrataAsync()
     {
         var rows = await db.Errata.AsNoTracking()
-            .OrderByDescending(e => e.DetectedAt).ThenBy(e => e.CardName)
+            .OrderByDescending(e => e.DetectedAt).ThenBy(e => e.CardName).ThenBy(e => e.Id)
             .Select(e => new
             {
                 e.Id, e.CardName, e.CardRiftboundId, e.NewText, e.SourceUrl,
@@ -256,10 +256,12 @@ public class AdminOverviewService(RbRulesDbContext db)
         if (rows.Count == 0) return [];
 
         var urls = rows.Select(r => r.SourceUrl).Distinct().ToList();
-        var tierByUrl = await db.Sources.AsNoTracking()
+        var sourceByUrl = await db.Sources.AsNoTracking()
             .Where(s => urls.Contains(s.Url))
-            .Select(s => new { s.Url, s.TrustTier })
-            .ToDictionaryAsync(s => s.Url, s => s.TrustTier);
+            .Select(s => new { s.Url, s.TrustTier, s.Rank })
+            .ToDictionaryAsync(s => s.Url, s => (Tier: s.TrustTier, s.Rank));
+        (short Tier, int Rank) SrcOf(string url) =>
+            sourceByUrl.GetValueOrDefault(url, (Tier: Precedence.UnknownTier, Rank: 0));
 
         var supersededBy = new Dictionary<long, long>();
         foreach (var group in rows.GroupBy(r => r.CardRiftboundId ?? r.CardName.Trim().ToLowerInvariant()))
@@ -267,10 +269,18 @@ public class AdminOverviewService(RbRulesDbContext db)
             var distinctUrls = group.Select(r => r.SourceUrl).Distinct().Count();
             if (distinctUrls < 2) continue; // dezelfde bron levert nooit een supersede-kandidaat op
 
-            var winner = Precedence.Winner(
-                group.ToList(),
-                r => tierByUrl.GetValueOrDefault(r.SourceUrl, Precedence.UnknownTier),
-                r => r.EffectiveFrom);
+            // Zelfde deterministische totale orde als CardDetailService
+            // (#168, review-fix): de winnaar hier moet exact de "nu geldig"-
+            // errata op de kaartpagina zijn, anders wijst het beheer de
+            // verkeerde rij als achterhaald aan.
+            var winner = group.Aggregate((best, cur) =>
+            {
+                var b = SrcOf(best.SourceUrl);
+                var c = SrcOf(cur.SourceUrl);
+                return Precedence.CompareStable(
+                    c.Tier, cur.EffectiveFrom, c.Rank, cur.Id,
+                    b.Tier, best.EffectiveFrom, b.Rank, best.Id) > 0 ? cur : best;
+            });
             foreach (var r in group.Where(r => r.Id != winner.Id)) supersededBy[r.Id] = winner.Id;
         }
 

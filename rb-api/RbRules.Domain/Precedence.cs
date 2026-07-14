@@ -36,24 +36,28 @@ public static class Precedence
         return dateA.Value.CompareTo(dateB.Value);
     }
 
-    /// <summary>Kiest de winnaar uit een niet-lege reeks kandidaten op
-    /// (TrustTier, datum) — zie <see cref="Compare{TDate}"/>. Bij een
-    /// volledig gelijke stand wint de eerste kandidaat (stabiel): de
-    /// aanroeper bepaalt zelf een zinvolle invoervolgorde (bijvoorbeeld
-    /// detectiemoment) als verdere tie-break.</summary>
-    public static T Winner<T, TDate>(
-        IReadOnlyList<T> candidates, Func<T, short> tier, Func<T, TDate?> date)
+    /// <summary>Deterministische, TOTALE orde (#168, review-fix): TrustTier
+    /// (gezag) → datum (recency, null = oudste) → <paramref name="rankA"/>/
+    /// <paramref name="rankB"/> (bron-voorkeur, hoger wint) → een stabiele
+    /// finale sleutel <paramref name="tieA"/>/<paramref name="tieB"/> (hoger
+    /// wint, bijv. <see cref="Erratum.Id"/>). Anders dan de kale
+    /// (tier, datum)-<see cref="Compare{TDate}"/> geeft dit ALTIJD een
+    /// eenduidige winnaar — nooit een echte gelijkstand waar de uitkomst van
+    /// invoervolgorde of een churnende timestamp afhangt. Positief als A
+    /// voorrang heeft op B, negatief andersom.
+    ///
+    /// De finale sleutel moet zelf stabiel zijn over runs heen: gebruik een
+    /// waarde die niet bij elke sync verandert (Rank en een behouden Id, nooit
+    /// een timestamp die per "Alles bijwerken" reset).</summary>
+    public static int CompareStable<TDate>(
+        short tierA, TDate? dateA, int rankA, long tieA,
+        short tierB, TDate? dateB, int rankB, long tieB)
         where TDate : struct, IComparable<TDate>
     {
-        if (candidates.Count == 0)
-            throw new ArgumentException("candidates mag niet leeg zijn", nameof(candidates));
-        var best = candidates[0];
-        for (var i = 1; i < candidates.Count; i++)
-        {
-            var c = candidates[i];
-            if (Compare(tier(c), date(c), tier(best), date(best)) > 0) best = c;
-        }
-        return best;
+        var byTierDate = Compare(tierA, dateA, tierB, dateB);
+        if (byTierDate != 0) return byTierDate;
+        if (rankA != rankB) return rankA.CompareTo(rankB); // hogere Rank = meer voorrang
+        return tieA.CompareTo(tieB);                       // hogere finale sleutel = meer voorrang
     }
 
     /// <summary>Stabiele her-ordening bovenop een al gerangschikte lijst (#168,
