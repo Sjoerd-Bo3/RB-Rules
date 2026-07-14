@@ -59,7 +59,16 @@ interface SimilarCard {
 }
 
 interface CardRules {
-	errata: { newText: string; sourceUrl: string | null; detectedAt: string }[];
+	errata: {
+		newText: string;
+		sourceUrl: string | null;
+		detectedAt: string;
+		/** Temporele precedentie (#168): vanaf wanneer deze tekst gold, of
+		 *  null als de bron geen datum draagt. De lijst staat al op
+		 *  precedentie-volgorde (hoogste TrustTier, dan nieuwste
+		 *  EffectiveFrom) — het eerste item is de tekst die NU geldt. */
+		effectiveFrom: string | null;
+	}[];
 	relevantRules: { section: string; snippet: string; sourceName: string; url: string }[];
 }
 

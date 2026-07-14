@@ -153,12 +153,14 @@
 	{#if data.rules.errata.length || data.rules.relevantRules.length}
 		<section>
 			<h2>Regels en errata voor deze kaart</h2>
-			{#each data.rules.errata as e (e.detectedAt)}
+			{#each data.rules.errata as e, i (e.detectedAt)}
 				<div class="rulebox errata-box">
 					<span class="badge">Errata</span>
+					{#if i > 0}<span class="badge superseded">eerdere versie</span>{/if}
 					<p><RbText text={e.newText} /></p>
 					<p class="meta">
-						{new Date(e.detectedAt).toLocaleDateString('nl-NL')}
+						{#if e.effectiveFrom}Geldig sinds {new Date(e.effectiveFrom).toLocaleDateString('nl-NL')} · {/if}
+						waargenomen {new Date(e.detectedAt).toLocaleDateString('nl-NL')}
 						{#if e.sourceUrl}· <a href={e.sourceUrl} target="_blank" rel="noopener">bron</a>{/if}
 					</p>
 				</div>
@@ -369,6 +371,9 @@
 	section[id] { scroll-margin-top: 70px; }
 	.badge.verified { background: var(--ok-soft); color: var(--ok); }
 	.badge.banned-badge { background: var(--err-soft); color: var(--err); }
+	/* Supersede-signaal (#168): neutraal, geen alarmkleur — een oudere
+	   errata-versie is geen fout, alleen niet meer de actuele tekst. */
+	.badge.superseded { background: var(--surface-deep); color: var(--muted); margin-left: 6px; }
 	.rulebox.ban-box { border-color: var(--err); }
 	.rulebox .q { font-weight: 600; margin: 8px 0 2px; overflow-wrap: anywhere; }
 	.rulebox .trust { font-size: 0.78rem; }

@@ -8,17 +8,26 @@
 		pdfUrl: string | null;
 		page: number | null;
 		parents: Parent[] | null;
+		/** Temporele precedentie (#168): zie citationDateLabel in /ask. */
+		publishedAt?: string | null;
+		updatedAt?: string | null;
 	}
 
 	let { code, citations }: { code: string; citations: CitationLike[] } = $props();
 	const cite = $derived(citations.find((c) => c.section === code) ?? null);
+
+	function dateLabel(c: CitationLike): string | null {
+		if (c.updatedAt) return `laatst bijgewerkt ${new Date(c.updatedAt).toLocaleDateString('nl-NL')}`;
+		if (c.publishedAt) return `geldig sinds ${new Date(c.publishedAt).toLocaleDateString('nl-NL')}`;
+		return null;
+	}
 </script>
 
 {#if cite}
 	<details class="rule-widget">
 		<summary>
 			<span class="sec-badge">§ {code}</span>
-			<span class="src">{cite.sourceName}</span>
+			<span class="src">{cite.sourceName}{#if dateLabel(cite)} · {dateLabel(cite)}{/if}</span>
 			<span class="hint-open">lees de regel</span>
 		</summary>
 		{#if cite.parents?.length}
