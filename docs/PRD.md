@@ -426,6 +426,12 @@ apart in §6.
 - **Dynamische relaties** — één generiek edge-type `RELATES_TO {kind, trust,
   explanation, status}` met een open, gereviewd vocabulaire; LLM-relaties gaan
   nooit rechtstreeks de graph in (Postgres is de bron, projectie na review).
+- **Rulings in de graph** (#191) — geverifieerde rulings/clarificaties krijgen
+  een `Ruling`-knoop (alleen `status=verified`; een `kind`-property
+  onderscheidt clarify-mining/chat-ruling/review-note) met dezelfde
+  `ABOUT`-resolutie als Claim (naar Card/Mechanic/RuleSection/Concept) en een
+  `SUPPORTED_BY`-edge naar de bron — de brein-API en de graph-verkenner tonen
+  een ruling voortaan bij haar onderwerp, niet alleen via semantisch zoeken.
 - **Graph-verkenner** — interactieve kaart↔mechaniek↔regel-visualisatie.
   *Route* `/graph` · *endpoint* `/api/graph/neighbors`.
 - **Self-learning** — negatieve/positieve feedback → reviewqueue →
