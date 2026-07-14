@@ -7,7 +7,7 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/validate.test.ts src/brain-tools.test.ts src/relations.test.ts src/usage.test.ts"
+    "test": "node --import tsx --test src/validate.test.ts src/brain-tools.test.ts src/relations.test.ts src/usage.test.ts src/warmpool.test.ts src/concurrency.test.ts src/ai.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.178",
