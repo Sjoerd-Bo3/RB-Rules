@@ -85,7 +85,11 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
     private const int SegmentChars = 12000;
     private const int MaxSegmentsPerDocument = 4;
     private const int ResponseSnippetLength = 400;
-    private const string ProvenancePrefix = "clarify-mining:";
+    /// <summary>Internal (niet private): CorrectionReevaluationService (#184)
+    /// herkent hiermee of een Correction uit deze pijplijn komt (de enige
+    /// ontstaanswijze met een brontekst om de hybride poort tegen te
+    /// gronden) en leidt er de bron-id uit af.</summary>
+    internal const string ProvenancePrefix = "clarify-mining:";
 
     /// <summary>Embedding-afstandspoort voor de concept-dedupe: binnen dit
     /// venster telt een bestaande ruling over hetzelfde onderwerp als "dezelfde
@@ -147,7 +151,9 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         // dus "Legion" resolvet ook zonder gemínede kaart), bestaande §-codes
         // en primer-concepten. Eén keer per run gebouwd; puur en getest
         // (ClaimTopicMapper). Onbekend onderwerp ⇒ null ⇒ niet anchored ⇒ review.
-        var anchors = await BuildAnchorsAsync(ct);
+        // Gedeeld met CorrectionReevaluationService (#184, AnchorResolverFactory)
+        // zodat beide exact dezelfde ankers zien.
+        var anchors = await AnchorResolverFactory.BuildAsync(db, ct);
 
         var docs = 0;
         var verified = 0;
@@ -324,39 +330,6 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
 
     private enum ClarifyOutcome { NewVerified, NewPending, Updated, RejectedKept, Skipped, Failed }
 
-    /// <summary>Bouwt de anker-resolver uit dezelfde bronnen als de
-    /// graph-projectie (GraphSyncService): alle printings (varianten →
-    /// canoniek), het volledige mechaniek-vocabulaire (seed + geaccepteerde
-    /// keywords ∪ gemínede kaartmechanieken), bestaande §-codes en
-    /// primer-concepten. Puur resultaat (ClaimTopicMapper); onbekend onderwerp
-    /// resolvet naar null.</summary>
-    private async Task<ClaimTopicMapper> BuildAnchorsAsync(CancellationToken ct)
-    {
-        var cards = await db.Cards.AsNoTracking()
-            .Select(c => new { c.RiftboundId, c.Name, c.VariantOf })
-            .ToListAsync(ct);
-        var accepted = await db.MechanicKeywords.AsNoTracking()
-            .Where(k => k.Status == "accepted").Select(k => k.Term).ToListAsync(ct);
-        var minedMechanics = (await db.Cards.AsNoTracking()
-                .Where(c => c.Mechanics != null).Select(c => c.Mechanics!).ToListAsync(ct))
-            .SelectMany(m => m);
-        var sections = await db.RuleChunks.AsNoTracking()
-            .Where(r => r.SectionCode != null && r.SectionCode != "")
-            .Select(r => new { r.SourceId, Code = r.SectionCode! })
-            .Distinct().ToListAsync(ct);
-        var concepts = (await db.KnowledgeDocs.AsNoTracking()
-                .Where(k => k.Kind == "primer")
-                .Select(k => new { k.Topic, k.Title })
-                .ToListAsync(ct))
-            .GroupBy(k => k.Topic).Select(g => g.First());
-
-        return ClaimTopicMapper.Create(
-            cards.Select(c => (c.RiftboundId, c.Name, c.VariantOf)),
-            MechanicMiner.Vocabulary(accepted).Concat(minedMechanics),
-            sections.Select(s => (s.SourceId, s.Code)),
-            concepts.Select(k => (k.Topic, k.Title)));
-    }
-
     /// <summary>Eén concept opslaan met de hybride poort (#177, #185) én
     /// dedupe op conceptniveau. Poort: grounded (citaat in de bron) EN
     /// anchored (onderwerp resolvet) EN informative (geen kale
@@ -394,7 +367,7 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         var anchored = anchors.Resolve(ec.TopicType, topicRef) is not null;
         var informative = !ClarificationInformativeness.IsMetaOnly(ec.Clarification);
         var verifies = grounded && anchored && informative;
-        var reason = verifies ? null : GateReason(grounded, anchored, informative, ec);
+        var reason = verifies ? null : GateReason(grounded, anchored, informative, ec.Quote, ec.TopicType, topicRef);
 
         // Dedupe-scope: alle clarify-rulings van déze bron voor ditzelfde
         // onderwerp (Scope, Ref). Klein per (bron, onderwerp), dus tracked
@@ -449,6 +422,19 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             match.Question = QuestionLabelFor(ec);
             match.SourceRef = src.Url;
             match.Embedding = vec;
+
+            // Beheerder-opmerking (#184) is een menselijk oordeel over de
+            // status van dit item (gezet via de reject-/her-evaluatie-actie)
+            // — een volgende her-mine mag dat niet stilzwijgend terugdraaien.
+            // Status/StatusReason blijven staan zoals de beheerder ze
+            // achterliet; alleen de brontekst hierboven ververst met de
+            // nieuwste extractie.
+            if (!string.IsNullOrWhiteSpace(match.ReviewNote))
+            {
+                await db.SaveChangesAsync(ct);
+                return (ClarifyOutcome.Updated, null);
+            }
+
             if (match.Status == "verified" || verifies)
             {
                 match.Status = "verified";
@@ -484,16 +470,19 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
 
     /// <summary>Leesbare reden dat de hybride poort een item pending laat, voor
     /// de reviewqueue (StatusReason). Combineert alle faalredenen als er
-    /// meerdere tegelijk gelden.</summary>
-    private static string GateReason(bool grounded, bool anchored, bool informative, ExtractedClarification ec)
+    /// meerdere tegelijk gelden. Internal (niet private): CorrectionReevaluation-
+    /// Service (#184) hergebruikt dezelfde bewoording bij een her-evaluatie die
+    /// de poort nog steeds niet haalt.</summary>
+    internal static string GateReason(
+        bool grounded, bool anchored, bool informative, string? quote, string topicType, string topicRef)
     {
         var parts = new List<string>();
         if (!grounded)
-            parts.Add(string.IsNullOrWhiteSpace(ec.Quote)
+            parts.Add(string.IsNullOrWhiteSpace(quote)
                 ? "geen citaat om te verifiëren"
                 : "citaat niet terug te vinden in de bron");
         if (!anchored)
-            parts.Add($"onderwerp '{ec.TopicRef.Trim()}' ({ec.TopicType}) niet herkend");
+            parts.Add($"onderwerp '{topicRef.Trim()}' ({topicType}) niet herkend");
         if (!informative)
             parts.Add("verduidelijking is een aankondiging zonder regelinhoud (#185)");
         return string.Join("; ", parts);
@@ -538,17 +527,33 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
     /// <summary>De verduidelijking uit een opgeslagen <see cref="Correction.
     /// Text"/> terug — het (optionele) bronscitaat na <see cref="QuoteMarker"/>
     /// valt weg, zodat de dedupe alleen op de verduidelijking zelf vergelijkt
-    /// (quote niet in de sleutel).</summary>
-    private static string ClarificationOf(string text)
+    /// (quote niet in de sleutel). Internal (niet private): CorrectionReevaluation-
+    /// Service (#184) gebruikt dit om de informativiteits-poort te her-draaien.</summary>
+    internal static string ClarificationOf(string text)
     {
         var i = text.IndexOf(QuoteMarker, StringComparison.Ordinal);
         return i < 0 ? text : text[..i];
     }
 
+    /// <summary>Het (optionele) bronscitaat uit een opgeslagen <see
+    /// cref="Correction.Text"/> terug — het omgekeerde van <see
+    /// cref="ClarificationOf"/>. Null als BuildText geen citaat aanhaalde
+    /// (ExtractedClarification.Quote was leeg). Internal: CorrectionReevaluation-
+    /// Service (#184) gebruikt dit om de grondigheidspoort te her-draaien
+    /// zonder de LLM-extractie te hoeven herhalen.</summary>
+    internal static string? ExtractQuote(string text)
+    {
+        var i = text.IndexOf(QuoteMarker, StringComparison.Ordinal);
+        if (i < 0) return null;
+        return text[(i + QuoteMarker.Length)..].Trim().Trim('“', '”', '"');
+    }
+
     /// <summary>topicType → Correction.Scope: "section" wordt het bestaande
     /// opslagformaat "rule_section"; onbekend degradeert naar "concept"
-    /// (zelfde veilige-kant-keuze als ClaimMiner.ParseClaims).</summary>
-    private static string ScopeFor(string topicType) => topicType switch
+    /// (zelfde veilige-kant-keuze als ClaimMiner.ParseClaims). Internal (niet
+    /// private): CorrectionReevaluationService (#184) hergebruikt dit bij een
+    /// anker-correctie uit een beheerder-opmerking.</summary>
+    internal static string ScopeFor(string topicType) => topicType switch
     {
         "card" => "card",
         "mechanic" => "mechanic",

@@ -39,8 +39,25 @@ public record ChangeOverviewItem(
     long Id, string SourceId, string SourceName, string ChangeType, string Severity,
     string? Summary, string? Meaning, DateTimeOffset DetectedAt);
 
+/// <summary>UrlSafe (#184): server-side UrlGuard.Check op de bewijs-URL —
+/// de UI rendert alleen een klikbare link als dit true is (sanitize vóór
+/// {@html}, docs/CONVENTIONS.md); anders de kale naam/URL als platte tekst.
+/// ClaimSource.Url is in de praktijk altijd Source.Url (al UrlGuard-gecheckt
+/// bij bronregistratie), dus dit is een extra, goedkope verdedigingslaag.</summary>
 public record ClaimSourceOverviewItem(
-    string SourceId, string SourceName, string Url, string? Quote, DateTimeOffset SeenAt);
+    string SourceId, string SourceName, string Url, bool UrlSafe, string? Quote, DateTimeOffset SeenAt);
+
+/// <summary>Reviewqueue-item voor clarify-correcties (#184): SourceName
+/// resolvet — waar mogelijk — de bron-naam via de clarify-mining-Provenance
+/// ("clarify-mining:{sourceId}", de enige ontstaanswijze met een
+/// resolveerbare Source-rij); SourceRefSafe is UrlGuard.Check op SourceRef
+/// (zelfde patroon als ClaimSourceOverviewItem.UrlSafe) — de UI rendert
+/// alleen een klikbare link als dit true is.</summary>
+public record CorrectionOverviewItem(
+    long Id, string Scope, string Ref, string Text, string? Question,
+    string? Provenance, string? SourceRef, string? SourceName, bool SourceRefSafe,
+    string Status, string? StatusReason, string? ReviewNote,
+    DateTimeOffset CreatedAt, DateTimeOffset? VerifiedAt);
 public record ClaimOverviewItem(
     long Id, string TopicType, string TopicRef, string Statement,
     int Corroboration, double TrustScore, string Status, string? StatusReason,
@@ -398,7 +415,8 @@ public class AdminOverviewService(RbRulesDbContext db)
             .GroupBy(s => s.ClaimId)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<ClaimSourceOverviewItem>)
                 [.. g.OrderBy(s => s.SeenAt).Select(s =>
-                    new ClaimSourceOverviewItem(s.SourceId, s.Name, s.Url, s.QuoteExcerpt, s.SeenAt))]);
+                    new ClaimSourceOverviewItem(
+                        s.SourceId, s.Name, s.Url, UrlGuard.Check(s.Url).Allowed, s.QuoteExcerpt, s.SeenAt))]);
 
         var items = rows.Select(c => new ClaimOverviewItem(
                 c.Id, c.TopicType, c.TopicRef, c.Statement, c.Corroboration,
@@ -407,6 +425,50 @@ public class AdminOverviewService(RbRulesDbContext db)
                 bySrc.GetValueOrDefault(c.Id, [])))
             .ToList();
         return new(total, page, PageSize, statusCounts, archived, items);
+    }
+
+    /// <summary>Correcties-reviewqueue (#177, bron+link+opmerking #184): de
+    /// laatste 200 (zelfde cap als de oorspronkelijke inline-query in
+    /// AdminEndpoints). SourceName resolvet alleen voor clarify-mining-rijen
+    /// (Provenance "clarify-mining:{sourceId}") — de enige ontstaanswijze met
+    /// een Source-rij erachter; andere ontstaanswegen (chat-ruling,
+    /// review-notitie-promotie) tonen alleen de kale SourceRef.</summary>
+    public async Task<IReadOnlyList<CorrectionOverviewItem>> CorrectionsAsync()
+    {
+        var rows = await db.Corrections.AsNoTracking()
+            .OrderByDescending(c => c.CreatedAt)
+            .Take(200)
+            .Select(c => new
+            {
+                c.Id, c.Scope, c.Ref, c.Text, c.Question, c.Provenance,
+                c.SourceRef, c.Status, c.StatusReason, c.ReviewNote,
+                c.CreatedAt, c.VerifiedAt,
+            })
+            .ToListAsync();
+
+        var prefix = ClarificationMiningService.ProvenancePrefix;
+        var sourceIds = rows
+            .Where(c => c.Provenance != null && c.Provenance.StartsWith(prefix))
+            .Select(c => c.Provenance![prefix.Length..])
+            .Distinct().ToList();
+        Dictionary<string, string> namesById = sourceIds.Count == 0
+            ? []
+            : await db.Sources.AsNoTracking()
+                .Where(s => sourceIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.Name })
+                .ToDictionaryAsync(s => s.Id, s => s.Name);
+
+        return [.. rows.Select(c =>
+        {
+            string? sourceName = null;
+            if (c.Provenance is not null && c.Provenance.StartsWith(prefix))
+                namesById.TryGetValue(c.Provenance[prefix.Length..], out sourceName);
+            var safe = c.SourceRef is not null && UrlGuard.Check(c.SourceRef).Allowed;
+            return new CorrectionOverviewItem(
+                c.Id, c.Scope, c.Ref, c.Text, c.Question, c.Provenance,
+                c.SourceRef, sourceName, safe, c.Status, c.StatusReason, c.ReviewNote,
+                c.CreatedAt, c.VerifiedAt);
+        })];
     }
 
     /// <summary>Relatievoorstellen (#116): status-chips + het kind-vocabulaire
