@@ -388,6 +388,14 @@ Bindende kwaliteitseisen; ze zijn uitgeschreven in `docs/CONVENTIONS.md` en
   nachtelijk, batched en gecapt op een goedkoop model; agentic ask heeft
   maxTurns, een tool-call-cap en een harde timeout en staat standaard achter een
   flag.
+- **AI-capaciteitsbescherming van de 8GB-VM** (#154/#155). Een
+  voorverwarmsignaal bij het laden van `/ask` (fire-and-forget, per-IP
+  gelimiteerd) haalt de SDK-subprocess-boot van het kritieke pad voor de
+  query-rewrite-call; een globale sessie-cap in rb-ai (`AI_MAX_CONCURRENCY`,
+  default 3, agentic weegt 2) voorkomt dat een piek aan gelijktijdige vragen
+  de VM leegtrekt — boven de cap wacht een vraag kort (max 30s) en degradeert
+  daarna netjes (bestaand "AI weg"-pad), nooit een crash of een stille
+  wurging van de VM.
 - **CI is de poort.** `dotnet test` + `svelte-check` + `tsc` groen vóór images
   publiceren; elke productie-bug krijgt eerst een regressietest.
 
