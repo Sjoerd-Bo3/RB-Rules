@@ -235,10 +235,18 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   heuristiek die een FAQ-/clarificatie-bron herkent — sinds #185 alléén FAQ/
   clarifications; patch-notes zijn een apart `IsPatchNotesSignal`-predicaat en
   doen niet mee in de clarify-pijplijn; `ClarificationMiner`, prompt+parser
-  voor de concept-extractie (output in het Engels, #186); `ClarificationGrounding`,
-  de citaat-in-brontekst-check; `ClarificationInformativeness.IsMetaOnly`
-  (#185), de derde poort-toets die een kale aankondigingszin zonder regelinhoud
-  weert; en `ReviewNoteAnchor` (#184), een pure regex-parser die een
+  voor de concept-extractie (output in het Engels, #186) — levert sinds #188
+  ook een `operative`-veld per item (het LLM-oordeel: stelt dit item de échte
+  regel/definitie/interactie, of kondigt het slechts een wijziging aan?);
+  `ClarificationGrounding`, de citaat-in-brontekst-check;
+  `ClarificationInformativeness.IsMetaOnly`, de derde poort-toets die een
+  kale aankondigingszin zonder regelinhoud weert — sinds #188 niet meer de
+  primaire informativiteitsbeslisser (die is het `operative`-LLM-oordeel
+  hierboven) maar het deterministische vangnet wanneer dat oordeel ontbreekt
+  of uitvalt; `ClarificationInformativeness.JudgeSystemPrompt`/`ParseOperative`
+  (#188), de lichte her-toets-prompt die `CorrectionReevaluationService`
+  gebruikt om opgeslagen tekst (zonder verse extractie) alsnog te
+  classificeren; en `ReviewNoteAnchor` (#184), een pure regex-parser die een
   anker-correctie uit een beheerder-opmerking haalt (bv. "mechanic:Recall")
   — puur en getest, zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
   het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
@@ -259,8 +267,11 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   embedding en onderwerp-anker. Hybride autoriteitspoort: alleen `verified` als
   het concept grounded is (`ClarificationGrounding`: citaat in `Document.
   Content`) én anchored (`ClaimTopicMapper.Resolve` op kaartnaam/mechaniek-
-  vocabulaire/§-code/primer-concept) én informative (#185:
-  `ClarificationInformativeness` — geen kale aankondigingszin) — anders
+  vocabulaire/§-code/primer-concept) én informative (geen kale
+  aankondigingszin — sinds #188 primair `ExtractedClarification.Operative`,
+  het LLM-oordeel dat `ClarificationMiner` meelevert; ontbreekt dat (null),
+  dan valt `StoreAsync` terug op `ClarificationInformativeness.IsMetaOnly`)
+  — anders
   `unverified` + `StatusReason` de reviewqueue in; een `rejected` tombstone
   wordt nooit heropend. Sinds #185 trekt elke run bovendien vóóraf de eerder
   ten onrechte gemínede patch-notes-`Correction`s terug
@@ -272,8 +283,12 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   opbouw zelf staat gedeeld in `AnchorResolverFactory`),
   `CorrectionReevaluationService` (#184, her-evaluatie van één `Correction`
   op een beheerder-opmerking: draait dezelfde hybride poort opnieuw voor dat
-  ene item — roept `ClarificationGrounding`/`ClaimTopicMapper.Resolve`/
-  `ClarificationInformativeness` aan zonder hun logica te wijzigen; een
+  ene item — roept `ClarificationGrounding`/`ClaimTopicMapper.Resolve` aan
+  zonder hun logica te wijzigen; informativiteit toetst het (#188) zelf via
+  een lichte `RbAiClient`-classificatie (`ClarificationInformativeness.
+  JudgeSystemPrompt`/`ParseOperative` — er is hier geen verse extractie om
+  een `Operative`-veld van te krijgen), die bij AI-uitval of onbruikbare
+  output terugvalt op `ClarificationInformativeness.IsMetaOnly`; een
   `ReviewNoteAnchor`-anker in de opmerking overschrijft Scope/Ref bij
   resolutie; alleen van toepassing op clarify-mining-`Correction`s (Provenance
   `clarify-mining:{sourceId}`, de enige ontstaanswijze met brontekst om tegen
