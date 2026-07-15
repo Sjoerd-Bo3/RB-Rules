@@ -1,5 +1,9 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Microsoft.Extensions.Logging.Abstractions;
 using Pgvector;
 using RbRules.Domain;
 using RbRules.Infrastructure;
@@ -7,11 +11,17 @@ using RbRules.Infrastructure;
 namespace RbRules.Tests;
 
 /// <summary>Her-evaluatie van één Correction op een beheerder-opmerking (#184):
-/// draait de hybride poort (#177/#185) opnieuw voor dít ene item. Roept de
-/// bestaande domeinlogica aan (ClarificationGrounding/ClaimTopicMapper/
-/// ClarificationInformativeness) zonder ze te wijzigen — deze tests dekken de
-/// nieuwe orkestratie, niet die onderliggende poort zelf (die staat al onder
-/// test in ClarificationMiningServiceTests).</summary>
+/// draait de hybride poort (#177/#185/#188) opnieuw voor dít ene item. Roept
+/// de bestaande domeinlogica aan (ClarificationGrounding/ClaimTopicMapper)
+/// zonder ze te wijzigen — deze tests dekken de nieuwe orkestratie, niet die
+/// onderliggende poort zelf (die staat al onder test in
+/// ClarificationMiningServiceTests). Sinds #188 draait de informativiteits-
+/// toets hier via een lichte rb-ai-call (<see cref="RbAiClient"/> gestubd,
+/// zelfde patroon als ClarificationMiningServiceTests) i.p.v. rechtstreeks
+/// <see cref="ClarificationInformativeness.IsMetaOnly"/> — de meeste tests
+/// hieronder geven de AI-stub bewust null (AI-uitval) mee, wat het bestaande
+/// IsMetaOnly-fallbackgedrag oplevert; twee nieuwe tests onderaan dekken
+/// expliciet het LLM-oordeel en de AI-uitval-fallback zelf.</summary>
 public class CorrectionReevaluationServiceTests
 {
     private const string SourceId = "playriftbound-com-unleashed-rules-faq";
@@ -34,7 +44,7 @@ public class CorrectionReevaluationServiceTests
         };
         db.Corrections.Add(correction);
         await db.SaveChangesAsync();
-        var svc = new CorrectionReevaluationService(db);
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
 
         var r = await svc.ReevaluateAsync(correction.Id, "mechanic:Recall");
 
@@ -60,7 +70,7 @@ public class CorrectionReevaluationServiceTests
         };
         db.Corrections.Add(correction);
         await db.SaveChangesAsync();
-        var svc = new CorrectionReevaluationService(db);
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
 
         var r = await svc.ReevaluateAsync(correction.Id, "dit klopt volgens mij toch echt wel");
 
@@ -81,7 +91,7 @@ public class CorrectionReevaluationServiceTests
         };
         db.Corrections.Add(correction);
         await db.SaveChangesAsync();
-        var svc = new CorrectionReevaluationService(db);
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
 
         var r = await svc.ReevaluateAsync(correction.Id, "toch even nakijken");
 
@@ -106,7 +116,7 @@ public class CorrectionReevaluationServiceTests
         };
         db.Corrections.Add(correction);
         await db.SaveChangesAsync();
-        var svc = new CorrectionReevaluationService(db);
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
 
         var r = await svc.ReevaluateAsync(correction.Id, "extra toelichting");
 
@@ -128,7 +138,7 @@ public class CorrectionReevaluationServiceTests
         };
         db.Corrections.Add(correction);
         await db.SaveChangesAsync();
-        var svc = new CorrectionReevaluationService(db);
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
 
         var r = await svc.ReevaluateAsync(correction.Id, "extra toelichting");
 
@@ -152,7 +162,7 @@ public class CorrectionReevaluationServiceTests
         };
         db.Corrections.Add(correction);
         await db.SaveChangesAsync();
-        var svc = new CorrectionReevaluationService(db);
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
 
         var r = await svc.ReevaluateAsync(correction.Id, "nog even bevestigd");
 
@@ -165,7 +175,7 @@ public class CorrectionReevaluationServiceTests
     public async Task ReevaluateAsync_OnbekendId_GeeftNotFound()
     {
         using var db = NewDb();
-        var svc = new CorrectionReevaluationService(db);
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
 
         var r = await svc.ReevaluateAsync(999, "opmerking");
 
@@ -188,7 +198,7 @@ public class CorrectionReevaluationServiceTests
         };
         db.Corrections.Add(correction);
         await db.SaveChangesAsync();
-        var svc = new CorrectionReevaluationService(db);
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
 
         var r = await svc.ReevaluateAsync(correction.Id, null);
 
@@ -197,6 +207,139 @@ public class CorrectionReevaluationServiceTests
         Assert.Equal(ReevaluateOutcome.Verified, r.Outcome);
         Assert.Equal("verified", correction.Status);
         Assert.Null(correction.ReviewNote); // geen opmerking meegegeven ⇒ niets bewaard
+    }
+
+    // --- #188: het LLM-oordeel stuurt de informativiteitspoort, met
+    // IsMetaOnly als deterministisch vangnet bij AI-uitval/parse-gat --------
+
+    [Fact]
+    public async Task ReevaluateAsync_LlmOperativeTrue_OverruledMetaOnlyRegex_Verified()
+    {
+        // Vals-positief-scenario (#185-review, zelfde zin als
+        // ClarificationMiningServiceTests.Gate_OperatieveWijzigZin_…):
+        // IsMetaOnly alleen zou dit ten onrechte meta-only vinden. Het LLM
+        // zegt hier terecht operative:true.
+        using var db = NewDb();
+        const string quote = "Legion means you finalize an item on the chain";
+        const string clarification =
+            "The rule was clarified so that activated abilities with Legion trigger only once per turn.";
+        Assert.True(ClarificationInformativeness.IsMetaOnly(clarification)); // de regex zit er hier naast
+        db.Sources.Add(new Source
+        {
+            Id = SourceId, Name = "Unleashed Rules FAQ", Url = "https://playriftbound.com/en-us/news/faq",
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = SourceId, Content = $"Uitleg over Legion. {quote}.", ContentHash = "hash",
+        });
+        var correction = new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = $"{clarification}\n\nCitaat uit de bron: “{quote}”",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified", StatusReason = "eerdere reden",
+        };
+        db.Corrections.Add(correction);
+        await db.SaveChangesAsync();
+        var svc = new CorrectionReevaluationService(db, Ai(() => """{"operative": true}"""));
+
+        var r = await svc.ReevaluateAsync(correction.Id, null);
+
+        Assert.Equal(ReevaluateOutcome.Verified, r.Outcome);
+        Assert.Equal("verified", correction.Status);
+        Assert.Null(correction.StatusReason);
+        Assert.NotNull(correction.VerifiedAt);
+    }
+
+    [Fact]
+    public async Task ReevaluateAsync_LlmOperativeFalse_OverruledInformatieveRegex_BlijftPending()
+    {
+        // Vals-negatief-scenario (#185-review, zelfde zin als
+        // ClarificationMiningServiceTests.Gate_LegeAankondigingMetDubbelePunt_…):
+        // IsMetaOnly alleen zou dit "informatief" noemen (dubbele-punt-uitweg).
+        // Het LLM zegt hier terecht operative:false.
+        using var db = NewDb();
+        const string quote = "Legion means you finalize an item on the chain";
+        const string clarification = "Legion was clarified: refer to the updated core rules.";
+        Assert.False(ClarificationInformativeness.IsMetaOnly(clarification)); // de regex zit er hier naast
+        db.Sources.Add(new Source
+        {
+            Id = SourceId, Name = "Unleashed Rules FAQ", Url = "https://playriftbound.com/en-us/news/faq",
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = SourceId, Content = $"Uitleg over Legion. {quote}.", ContentHash = "hash",
+        });
+        var correction = new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = $"{clarification}\n\nCitaat uit de bron: “{quote}”",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified", StatusReason = "eerdere reden",
+        };
+        db.Corrections.Add(correction);
+        await db.SaveChangesAsync();
+        var svc = new CorrectionReevaluationService(db, Ai(() => """{"operative": false}"""));
+
+        var r = await svc.ReevaluateAsync(correction.Id, null);
+
+        Assert.Equal(ReevaluateOutcome.StillPending, r.Outcome);
+        Assert.Equal("unverified", correction.Status);
+        Assert.Contains("aankondiging zonder regelinhoud", correction.StatusReason);
+        Assert.Null(correction.VerifiedAt);
+    }
+
+    [Fact]
+    public async Task ReevaluateAsync_AiUitval_ValtTerugOpIsMetaOnly_KaleAankondiging_BlijftPending()
+    {
+        // AI-uitval (rb-ai niet beschikbaar — de stub geeft null, zoals een
+        // niet-2xx-respons) mag nooit een 500 geven: de poort degradeert naar
+        // de deterministische IsMetaOnly-heuristiek. Voor een kale
+        // aankondiging is dat "pending", exact het gedrag van vóór #188.
+        using var db = NewDb();
+        await SeedFaqDocumentAsync(db);
+        var correction = new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = $"Legion is verduidelijkt.\n\nCitaat uit de bron: “{GroundedQuote.Replace("Recall", "Legion")}”",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified", StatusReason = "eerdere reden",
+        };
+        db.Corrections.Add(correction);
+        await db.SaveChangesAsync();
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
+
+        var r = await svc.ReevaluateAsync(correction.Id, null);
+
+        Assert.Equal(ReevaluateOutcome.StillPending, r.Outcome);
+        Assert.Equal("unverified", correction.Status);
+        Assert.Contains("aankondiging zonder regelinhoud", correction.StatusReason);
+    }
+
+    [Fact]
+    public async Task ReevaluateAsync_OnbruikbaarAiAntwoord_ValtTerugOpIsMetaOnly_Verified()
+    {
+        // Parse-gat (rb-ai antwoordt wél, maar zonder bruikbaar
+        // "operative"-veld): zelfde fallback als AI-uitval, niet een crash.
+        using var db = NewDb();
+        await SeedFaqDocumentAsync(db);
+        var correction = new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = $"Legion betekent finalizen.\n\nCitaat uit de bron: “{GroundedQuote.Replace("Recall", "Legion")}”",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified", StatusReason = "eerdere reden",
+        };
+        db.Corrections.Add(correction);
+        await db.SaveChangesAsync();
+        var svc = new CorrectionReevaluationService(db, Ai(() => "geen bruikbare JSON hier"));
+
+        var r = await svc.ReevaluateAsync(correction.Id, null);
+
+        Assert.Equal(ReevaluateOutcome.Verified, r.Outcome);
+        Assert.Equal("verified", correction.Status);
     }
 
     private static async Task SeedFaqDocumentAsync(RbRulesDbContext db)
@@ -237,4 +380,28 @@ public class CorrectionReevaluationServiceTests
                             v => v.ToString(), s => new Vector(s)));
         }
     }
+
+    // --- RbAiClient-stub (#188), zelfde patroon als ClarificationMiningServiceTests --
+
+    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(respond(request));
+    }
+
+    /// <summary>null ⇒ 500 (AI-uitval, zoals ClarificationMiningServiceTests.Ai).</summary>
+    private static RbAiClient Ai(Func<string?> answer) => new(
+        new HttpClient(new StubHandler(_ => answer() is { } a
+            ? Json(new { answer = a })
+            : new HttpResponseMessage(HttpStatusCode.InternalServerError)))
+        { BaseAddress = new Uri("http://rb-ai.test") },
+        NullLogger<RbAiClient>.Instance);
+
+    private static HttpResponseMessage Json(object payload) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
+            JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+    };
 }

@@ -449,7 +449,13 @@ public class ClarificationMiningServiceTests
         Assert.Equal("verified", ruling.Status);
     }
 
-    // --- informativiteits-poort (#185) — de échte Legion-FAQ-fixture ----
+    // --- informativiteits-poort (#185, #188) — de échte Legion-FAQ-fixture -
+    //
+    // De volgende twee tests geven GEEN "operative"-veld mee in de JSON-stub
+    // (ExtractedClarification.Operative blijft dus null) — ze dekken zo
+    // meteen ook de #188-fallback: ontbreekt het LLM-oordeel, dan valt de
+    // poort terug op ClarificationInformativeness.IsMetaOnly, exact het
+    // gedrag van vóór #188.
 
     [Fact]
     public async Task Gate_LegionOperatieveUitleg_GroundedAnchoredInformative_Verified()
@@ -493,6 +499,73 @@ public class ClarificationMiningServiceTests
             {"clarifications": [{"topicType": "mechanic", "topicRef": "Legion",
               "clarification": "Legion's behavior was clarified in this update.",
               "quote": "{{LegionQuote}}"}]}
+            """;
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Verified);
+        Assert.Equal(1, r.Pending);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("unverified", ruling.Status);
+        Assert.Contains("aankondiging zonder regelinhoud", ruling.StatusReason);
+        Assert.Null(ruling.VerifiedAt);
+    }
+
+    // --- #188: het LLM-oordeel (ec.Operative) stuurt de poort, niet de
+    // IsMetaOnly-regex — de twee scenario's uit de adversariële review #185
+    // waarop die regex het zelf mis heeft (zie ClarificationInformativeness-
+    // Tests voor de losse IsMetaOnly-assertie op dezelfde zinnen). ---------
+
+    [Fact]
+    public async Task Gate_OperatieveWijzigZin_LlmOperativeTrue_OverruledMetaOnlyRegex_Verified()
+    {
+        // Vals-positief-scenario (#185-review): een KORTE operatieve zin met
+        // een wijzig-werkwoord ("was clarified") — IsMetaOnly alleen zou dit
+        // ten onrechte meta-only vinden (zie ClarificationInformativenessTests.
+        // IsMetaOnly_KaleAankondiging_ReturnsTrue voor dezelfde zin). Het LLM
+        // zet hier terecht operative:true ⇒ de poort moet verified geven,
+        // ondanks wat de regex alleen zou zeggen.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        const string clarification =
+            "The rule was clarified so that activated abilities with Legion trigger only once per turn.";
+        Assert.True(ClarificationInformativeness.IsMetaOnly(clarification)); // de regex zit er hier naast
+        var answer = $$"""
+            {"clarifications": [{"topicType": "mechanic", "topicRef": "Legion",
+              "clarification": "{{clarification}}",
+              "quote": "{{LegionQuote}}", "operative": true}]}
+            """;
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Verified);
+        Assert.Equal(0, r.Pending);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("verified", ruling.Status);
+        Assert.Null(ruling.StatusReason);
+        Assert.NotNull(ruling.VerifiedAt);
+    }
+
+    [Fact]
+    public async Task Gate_LegeAankondigingMetDubbelePunt_LlmOperativeFalse_OverruledInformatieveRegex_Pending()
+    {
+        // Vals-negatief-scenario (#185-review): een lege aankondiging mét
+        // dubbele punt glipt via de dubbele-punt-uitweg door IsMetaOnly heen
+        // (zie ClarificationInformativenessTests.IsMetaOnly_OperatieveInhoud_
+        // ReturnsFalse voor dezelfde zin — de regex alleen zou dit
+        // "informatief" noemen). Het LLM zet hier terecht operative:false ⇒
+        // de poort moet naar review sturen, ondanks wat de regex alleen zou
+        // zeggen.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        const string clarification = "Legion was clarified: refer to the updated core rules.";
+        Assert.False(ClarificationInformativeness.IsMetaOnly(clarification)); // de regex zit er hier naast
+        var answer = $$"""
+            {"clarifications": [{"topicType": "mechanic", "topicRef": "Legion",
+              "clarification": "{{clarification}}",
+              "quote": "{{LegionQuote}}", "operative": false}]}
             """;
         var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
 
