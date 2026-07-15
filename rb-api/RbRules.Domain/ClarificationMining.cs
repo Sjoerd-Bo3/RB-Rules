@@ -126,20 +126,18 @@ public static class ClarificationGrounding
 /// informatief. Puur en getest, zelfde stijl als
 /// <see cref="ClarificationGrounding"/>.
 ///
-/// <b>Bewust interim (#188).</b> Deze regex-heuristiek is een tijdelijke
-/// backstop: hij kan niet écht "kondigt-een-wijziging-aan" van "beschrijft-de-
-/// wijziging" onderscheiden, dus hij zit er twee kanten op naast (adversariële
-/// review #185): een KORTE operatieve zin met een wijzig-werkwoord ("The rule
-/// was clarified so that Legion triggers once per turn.") wordt ten onrechte
-/// meta-only bevonden en gaat naar review i.p.v. auto-verified; en een lege
-/// aankondiging mét dubbele punt ("Legion was clarified: see the updated core
-/// rules.") glipt er via de dubbele-punt-uitweg juist doorheen. De echte,
-/// LLM-gebaseerde informativiteitsbeslissing hoort in #188 (classificatie via
-/// het model, niet via regexes) en vervangt deze klasse. Belangrijk: de
-/// clarify-job draait pas weer op productie bij de Phase 2-re-ingest, en die
-/// komt ná #188 — de regexvorm raakt dus nooit echte data. De primaire
-/// oorzaak van de gerapporteerde Legion-bug is los hiervan al weg: patch-notes
-/// zijn uit de clarify-pijplijn gehaald (<see cref="ClarificationSources"/>).</summary>
+/// <b>Deterministische fallback wanneer het LLM-oordeel ontbreekt/uitvalt
+/// (#188).</b> Sinds #188 is dit niet langer de primaire informativiteits-
+/// poort: die is een LLM-oordeel — <see cref="ClarificationMiner"/> vraagt de
+/// LLM zelf om een <see cref="ExtractedClarification.Operative"/>-veld per
+/// geëxtraheerd item, en <see cref="JudgeSystemPrompt"/>/<see
+/// cref="ParseOperative"/> hieronder her-toetsen opgeslagen tekst bij een
+/// her-evaluatie (<see cref="RbRules.Infrastructure.CorrectionReevaluationService"/>).
+/// Een regex kan "kondigt-een-wijziging-aan" niet écht van "beschrijft-de-
+/// wijziging" onderscheiden — dat is een LLM-oordeel — maar als vangnet voor
+/// wanneer dat oordeel ontbreekt (parse-gat, oude data zonder
+/// <c>operative</c>-veld) of uitvalt (AI-uitval) is deze heuristiek beter dan
+/// niets: nooit een harde 500, altijd een uitkomst.</summary>
 public static class ClarificationInformativeness
 {
     /// <summary>Boven deze lengte bevat een zin vrijwel altijd meer dan alleen
@@ -178,6 +176,59 @@ public static class ClarificationInformativeness
 
         return text.Length <= MaxMetaOnlyLength && MetaAnnouncement.IsMatch(text);
     }
+
+    /// <summary>#188: lichte her-toets-prompt voor <see
+    /// cref="RbRules.Infrastructure.CorrectionReevaluationService"/> — één
+    /// opgeslagen verduidelijking (geen brontekst, geen lijst) langs dezelfde
+    /// operatief/aankondiging-maatstaf als <see cref="ClarificationMiner"/>'s
+    /// extractieprompt, met dezelfde twee letterlijke voorbeelden (adversariële
+    /// review #185) zodat beide LLM-aanroepen consistent oordelen.</summary>
+    public const string JudgeSystemPrompt = """
+        You judge ONE clarification sentence about Riftbound, Riot Games'
+        League of Legends trading card game. Respond ONLY with JSON:
+        {"operative": true|false}
+        - true: the sentence states the actual rule/definition/interaction —
+          what now applies
+        - false: the sentence only announces THAT something was clarified or
+          changed, without saying WHAT now applies
+        Example (operative: true): "The rule was clarified so that activated
+        abilities with Legion trigger only once per turn."
+        Example (operative: false): "Legion was clarified: refer to the
+        updated core rules."
+        No text outside the JSON.
+        """;
+
+    public static string BuildJudgePrompt(string clarification) =>
+        $"Clarification:\n{clarification}";
+
+    /// <summary>null bij onbruikbare output (geen JSON, geen boolean
+    /// "operative"-veld) — de aanroeper degradeert dan naar <see
+    /// cref="IsMetaOnly"/>, nooit een crash.</summary>
+    public static bool? ParseOperative(string raw)
+    {
+        foreach (var json in LlmJson.Candidates(raw))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                // Objectvorm-guard (net als ClaimJudge.Map/OfficialCheck.Map):
+                // LlmJson.Candidates levert óók array-blokken ("[402.3]",
+                // "[true]") op, en GetBool → TryGetProperty gooit op een
+                // niet-object een InvalidOperationException — géén JsonException,
+                // dus de catch hieronder vangt 'm niet en de her-evaluatie zou
+                // 500'en i.p.v. te degraderen naar IsMetaOnly (contract:
+                // "nooit een crash").
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && ClaimMiner.GetBool(doc.RootElement, "operative") is { } operative)
+                    return operative;
+            }
+            catch (JsonException)
+            {
+                // geen geldige JSON op deze positie — volgende kandidaat
+            }
+        }
+        return null;
+    }
 }
 
 /// <summary>Eén uit een FAQ-/clarificatie-artikel gedestilleerd concept
@@ -185,9 +236,18 @@ public static class ClarificationInformativeness
 /// tegenovergestelde van de vaste-lengte-slab die de tekst nu platslaat.
 /// SectionRef is de optionele core-rule-§ die het artikel er expliciet bij
 /// noemt (null als het artikel er geen noemt, of als TopicType zelf al
-/// "section" is).</summary>
+/// "section" is). Operative (#188) is het LLM-oordeel over informativiteit —
+/// true als de verduidelijking de échte regel/definitie/interactie stelt,
+/// false als het slechts aankondigt DÁT iets is verduidelijkt zonder te
+/// zeggen WAT er nu geldt, null als het antwoord geen bruikbaar
+/// <c>operative</c>-veld bevatte (oude prompt-variant, parse-gat). Transient:
+/// niet opgeslagen op <see cref="RbRules.Domain.Correction"/> — alleen
+/// gebruikt door de poort in <c>ClarificationMiningService.StoreAsync</c>,
+/// met <see cref="ClarificationInformativeness.IsMetaOnly"/> als
+/// deterministische fallback wanneer dit veld null is.</summary>
 public record ExtractedClarification(
-    string TopicType, string TopicRef, string Clarification, string? SectionRef, string? Quote);
+    string TopicType, string TopicRef, string Clarification, string? SectionRef, string? Quote,
+    bool? Operative = null);
 
 /// <summary>Anker-correctie in een beheerder-opmerking (#184): een reviewqueue-
 /// item kan fout aangeankerd zijn (verkeerd of onherkend onderwerp) terwijl de
@@ -240,7 +300,17 @@ public static class ReviewNoteAnchor
 /// Engelstalige embedding-/rulings-corpus met een andere taal vervuilen;
 /// <c>/ask</c> vertaalt bij het antwoorden toch al naar het Nederlands voor
 /// de gebruiker (CLAUDE.md-werkafspraak 1 geldt dus voor de chat-laag, niet
-/// voor deze opslaglaag).</summary>
+/// voor deze opslaglaag).
+///
+/// <b>Informativiteits-oordeel (#188):</b> naast de extractie zelf vraagt de
+/// prompt de LLM ook om <see cref="ExtractedClarification.Operative"/> per
+/// item te zetten — is dit item de échte regel/definitie/interactie, of
+/// slechts een aankondiging dat er iets gewijzigd is? Dat is een
+/// classificatie-BESLISSING die het model beter kan nemen dan een regex
+/// (adversariële review #185 vond twee kanten waarop <see
+/// cref="ClarificationInformativeness.IsMetaOnly"/> ernaast zit); die regex
+/// blijft alleen nog als deterministisch vangnet voor wanneer dit veld
+/// ontbreekt.</summary>
 public static class ClarificationMiner
 {
     /// <summary>Cap per extractie-call — liever een handvol scherpe concepten
@@ -266,7 +336,7 @@ public static class ClarificationMiner
         hele tekst slaat de betekenis plat (elk concept verdunt de andere).
         Destilleer daarom elke DISCRETE verduidelijking als eigen, gefocust
         item. Antwoord UITSLUITEND met JSON:
-        {"clarifications": [{"topicType": "...", "topicRef": "...", "clarification": "...", "sectionRef": "...", "quote": "..."}]}
+        {"clarifications": [{"topicType": "...", "topicRef": "...", "clarification": "...", "sectionRef": "...", "quote": "...", "operative": true|false}]}
         - topicType ∈ card | mechanic | section | concept
         - topicRef: het onderwerp — de mechaniek-/keywordnaam (bv. "Legion"),
           de kaartnaam, het §-nummer, of een kort concept
@@ -295,6 +365,13 @@ public static class ClarificationMiner
         - quote: kort letterlijk citaat uit de brontekst als bewijs (max ~25
           woorden) — bij voorkeur het stuk met de operatieve kern, niet de
           aankondigingszin ervoor
+        - operative: jouw oordeel of "clarification" hierboven de ECHTE regel/
+          definitie/interactie stelt (true), of slechts aankondigt DAT iets is
+          verduidelijkt/gewijzigd zonder te zeggen WAT er nu geldt (false).
+          Voorbeeld (operative: true): "The rule was clarified so that
+          activated abilities with Legion trigger only once per turn."
+          Voorbeeld (operative: false): "Legion was clarified: refer to the
+          updated core rules."
         - Splits een alinea die meerdere keywords/concepten mengt in
           meerdere items — nooit één item met twee onderwerpen
         - Maximaal 25 items; liever 8 scherpe dan 25 wazige
@@ -313,7 +390,12 @@ public static class ClarificationMiner
     /// weg; een onbekend topicType degradeert naar "concept"; duplicaten
     /// binnen het antwoord (zelfde onderwerp + genormaliseerde tekst) vallen
     /// weg — hergebruikt <see cref="ClaimMiner.GetString"/>/Truncate/
-    /// NormalizeStatement, zelfde tolerantie-patroon als de claims-parser.</summary>
+    /// NormalizeStatement, zelfde tolerantie-patroon als de claims-parser.
+    /// <c>operative</c> (#188) leest via <see cref="ClaimMiner.GetBool"/>: een
+    /// ontbrekend of niet-boolean veld geeft null, niet false — de aanroeper
+    /// (ClarificationMiningService.StoreAsync) herkent null als "geen
+    /// LLM-oordeel" en valt dan terug op <see
+    /// cref="ClarificationInformativeness.IsMetaOnly"/>.</summary>
     public static IReadOnlyList<ExtractedClarification>? Parse(string raw)
     {
         var items = LlmJson.ExtractItems(raw, "clarifications");
@@ -341,7 +423,8 @@ public static class ClarificationMiner
                 topicRef,
                 clarification,
                 ClaimMiner.Truncate(ClaimMiner.GetString(item, "sectionRef"), MaxSectionRefLength),
-                ClaimMiner.Truncate(ClaimMiner.GetString(item, "quote"), MaxQuoteLength)));
+                ClaimMiner.Truncate(ClaimMiner.GetString(item, "quote"), MaxQuoteLength),
+                ClaimMiner.GetBool(item, "operative")));
         }
         return result;
     }

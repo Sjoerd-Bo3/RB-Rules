@@ -171,9 +171,15 @@ apart in §6.
   *anchored* (het onderwerp resolvet naar een bestaande knoop: kaartnaam,
   mechaniek-vocabulaire, §-code of primer-concept — vangt een verzonnen/fout
   anker dat anders stil aan een kaartpagina zou koppelen) én *informative*
-  (#185: geen kale aankondigingszin — "X is verduidelijkt/gewijzigd" — zonder
-  de regel/definitie/interactie zelf; `ClarificationInformativeness`, de vorm
-  van de lege Legion-"ruling"). Anders gaat het als
+  (geen kale aankondigingszin — "X is verduidelijkt/gewijzigd" — zonder de
+  regel/definitie/interactie zelf, de vorm van de lege Legion-"ruling" uit
+  #185). **Sinds #188 is de informativiteits-toets een LLM-oordeel**: de
+  `ClarificationMiner`-extractie levert een `operative`-veld per item mee
+  (het model onderscheidt "kondigt-een-wijziging-aan" van "beschrijft-de-
+  wijziging" beter dan een regex — een adversariële review vond twee kanten
+  waarop de oude heuristiek ernaast zat), met `ClarificationInformativeness.
+  IsMetaOnly` als deterministisch vangnet wanneer dat oordeel ontbreekt
+  (parse-gat, oude data) of uitvalt. Anders gaat het als
   `unverified` met een reden (`Correction.StatusReason`) de bestaande
   corrections-reviewqueue in, waar de beheerder het corrigeert, goedkeurt
   (`/verify`) of afwijst (`/reject` — een `rejected` tombstone die een
@@ -198,8 +204,11 @@ apart in §6.
   hun `Provenance`) als gesaniteerde (`UrlGuard`) klikbare link, en een
   opmerkingsveld (`Correction.ReviewNote`) dat traceerbaar bewaart wordt bij
   verifiëren/afwijzen/her-evalueren. "Opnieuw evalueren" draait de hybride
-  poort hierboven deterministisch opnieuw voor dát ene item — een opmerking
-  mag een anker-correctie bevatten (bv. "mechanic:Recall", "card:…",
+  poort hierboven opnieuw voor dát ene item — grounding/anchoring
+  deterministisch, informativiteit via een lichte rb-ai-classificatie
+  (`ClarificationInformativeness.JudgeSystemPrompt`, #188) die bij AI-uitval
+  of onbruikbaar antwoord terugvalt op `IsMetaOnly` (nooit een harde 500) —
+  een opmerking mag een anker-correctie bevatten (bv. "mechanic:Recall", "card:…",
   "section:402.3", `ReviewNoteAnchor`) die een fout-aangeankerd of onherkend
   onderwerp overschrijft, zodat een terecht item alsnog `verified` wordt
   zonder de LLM-extractie te herhalen (`CorrectionReevaluationService`). Een

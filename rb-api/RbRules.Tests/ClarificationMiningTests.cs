@@ -193,6 +193,47 @@ public class ClarificationMinerTests
         Assert.NotNull(r);
         Assert.Equal(ClarificationMiner.MaxClarificationLength, Assert.Single(r).Clarification.Length);
     }
+
+    // --- operative-veld (#188): het LLM-oordeel per item -----------------
+
+    [Fact]
+    public void Parse_OperativeTrue_SetsOperativeTrue()
+    {
+        var raw = """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen.", "operative": true}]}""";
+        var r = ClarificationMiner.Parse(raw);
+        Assert.NotNull(r);
+        Assert.True(Assert.Single(r).Operative);
+    }
+
+    [Fact]
+    public void Parse_OperativeFalse_SetsOperativeFalse()
+    {
+        var raw = """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion was clarified.", "operative": false}]}""";
+        var r = ClarificationMiner.Parse(raw);
+        Assert.NotNull(r);
+        Assert.False(Assert.Single(r).Operative);
+    }
+
+    [Fact]
+    public void Parse_OperativeFieldAbsent_OperativeIsNull()
+    {
+        // Oude prompt-variant/parse-gat: geen "operative"-veld ⇒ null, niet
+        // false — de aanroeper (ClarificationMiningService.StoreAsync)
+        // herkent null als "geen LLM-oordeel" en valt terug op IsMetaOnly.
+        var raw = """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen."}]}""";
+        var r = ClarificationMiner.Parse(raw);
+        Assert.NotNull(r);
+        Assert.Null(Assert.Single(r).Operative);
+    }
+
+    [Fact]
+    public void Parse_OperativeNonBoolean_TreatedAsAbsent_OperativeIsNull()
+    {
+        var raw = """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen.", "operative": "yes"}]}""";
+        var r = ClarificationMiner.Parse(raw);
+        Assert.NotNull(r);
+        Assert.Null(Assert.Single(r).Operative);
+    }
 }
 
 /// <summary>Informativiteitscheck (#185) — pure Domain-poort die een
@@ -211,6 +252,12 @@ public class ClarificationInformativenessTests
     [InlineData("The differences between these two interpretations have been clarified.")]
     [InlineData("Legion is gewijzigd in deze patch.")]
     [InlineData("Reflection tokens were changed.")]
+    // #188-adversariële review: de vals-positief-kant van de regex — een
+    // KORTE operatieve zin met een wijzig-werkwoord wordt door IsMetaOnly
+    // ten onrechte meta-only bevonden. Dit is exact waarom #188 het LLM-
+    // oordeel primair maakt (ClarificationMiner.Operative/JudgeSystemPrompt)
+    // en deze regex degradeert tot deterministisch vangnet.
+    [InlineData("The rule was clarified so that activated abilities with Legion trigger only once per turn.")]
     public void IsMetaOnly_KaleAankondiging_ReturnsTrue(string clarification) =>
         Assert.True(ClarificationInformativeness.IsMetaOnly(clarification));
 
@@ -223,6 +270,12 @@ public class ClarificationInformativenessTests
     [InlineData("Legion is verduidelijkt: het betekent dat je een item op de chain finalizet, zoals bij Battering Ram.")]
     [InlineData("Wat hierboven al is verduidelijkt met het volgende voorbeeld: Battering Ram checkt of Legion al gefinalized is voordat de bonus toepast, dus de volgorde van triggers is hier bepalend voor het resultaat.")]
     [InlineData("Shield absorbeert de volgende bron schade.")]
+    // #188-adversariële review: de vals-negatief-kant — een lege aankondiging
+    // mét dubbele punt glipt via de dubbele-punt-uitweg door de regex heen
+    // (het vervolg na de punt is lang genoeg, ook al zegt het zelf niets over
+    // WAT er nu geldt). Zelfde reden als hierboven: het LLM-oordeel wint,
+    // deze regex is alleen nog het vangnet.
+    [InlineData("Legion was clarified: refer to the updated core rules.")]
     public void IsMetaOnly_OperatieveInhoud_ReturnsFalse(string clarification) =>
         Assert.False(ClarificationInformativeness.IsMetaOnly(clarification));
 
@@ -232,6 +285,49 @@ public class ClarificationInformativenessTests
     [InlineData("   ")]
     public void IsMetaOnly_LegeClarification_ReturnsTrue(string? clarification) =>
         Assert.True(ClarificationInformativeness.IsMetaOnly(clarification));
+}
+
+/// <summary>De lichte her-toets-prompt voor CorrectionReevaluationService
+/// (#188): parser voor het {"operative": true|false}-antwoord. Puur/getest,
+/// zelfde tolerantie-patroon als ClaimJudge/OfficialCheck.</summary>
+public class ClarificationInformativenessJudgeTests
+{
+    [Fact]
+    public void ParseOperative_TrueJson_ReturnsTrue() =>
+        Assert.True(ClarificationInformativeness.ParseOperative("""{"operative": true}"""));
+
+    [Fact]
+    public void ParseOperative_FalseJson_ReturnsFalse() =>
+        Assert.False(ClarificationInformativeness.ParseOperative("""{"operative": false}""")!.Value);
+
+    [Fact]
+    public void ParseOperative_ToleratesSurroundingProse()
+    {
+        var raw = "Hier is mijn oordeel:\n{\"operative\": true}\nKlaar.";
+        Assert.True(ClarificationInformativeness.ParseOperative(raw));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("geen bruikbare JSON hier")]
+    [InlineData("{kapotte json}")]
+    [InlineData("""{"iets_anders": true}""")]
+    [InlineData("""{"operative": "yes"}""")]
+    // Review-regressie (#188): array-vormige kandidaten mogen niet crashen —
+    // GetBool → TryGetProperty gooit op een niet-object een InvalidOperation-
+    // Exception (geen JsonException). Zonder de objectvorm-guard 500't de
+    // her-evaluatie i.p.v. te degraderen naar IsMetaOnly.
+    [InlineData("[true]")]
+    [InlineData("[1, 2]")]
+    [InlineData("This clarification refers to section [402.3] of the updated core rules.")]
+    [InlineData("Operative: yes, it applies [1].")]
+    public void ParseOperative_OnbruikbaarAntwoord_ReturnsNull(string raw) =>
+        Assert.Null(ClarificationInformativeness.ParseOperative(raw));
+
+    [Fact]
+    public void BuildJudgePrompt_BevatDeVerduidelijking() =>
+        Assert.Contains("Legion betekent finalizen.",
+            ClarificationInformativeness.BuildJudgePrompt("Legion betekent finalizen."));
 }
 
 /// <summary>Fixture gebaseerd op de échte Unleashed Rules FAQ (playriftbound.com,
