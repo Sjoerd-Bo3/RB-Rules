@@ -313,6 +313,14 @@ public class ClarificationInformativenessJudgeTests
     [InlineData("{kapotte json}")]
     [InlineData("""{"iets_anders": true}""")]
     [InlineData("""{"operative": "yes"}""")]
+    // Review-regressie (#188): array-vormige kandidaten mogen niet crashen —
+    // GetBool → TryGetProperty gooit op een niet-object een InvalidOperation-
+    // Exception (geen JsonException). Zonder de objectvorm-guard 500't de
+    // her-evaluatie i.p.v. te degraderen naar IsMetaOnly.
+    [InlineData("[true]")]
+    [InlineData("[1, 2]")]
+    [InlineData("This clarification refers to section [402.3] of the updated core rules.")]
+    [InlineData("Operative: yes, it applies [1].")]
     public void ParseOperative_OnbruikbaarAntwoord_ReturnsNull(string raw) =>
         Assert.Null(ClarificationInformativeness.ParseOperative(raw));
 

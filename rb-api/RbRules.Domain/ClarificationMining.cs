@@ -211,7 +211,15 @@ public static class ClarificationInformativeness
             try
             {
                 using var doc = JsonDocument.Parse(json);
-                if (ClaimMiner.GetBool(doc.RootElement, "operative") is { } operative)
+                // Objectvorm-guard (net als ClaimJudge.Map/OfficialCheck.Map):
+                // LlmJson.Candidates levert óók array-blokken ("[402.3]",
+                // "[true]") op, en GetBool → TryGetProperty gooit op een
+                // niet-object een InvalidOperationException — géén JsonException,
+                // dus de catch hieronder vangt 'm niet en de her-evaluatie zou
+                // 500'en i.p.v. te degraderen naar IsMetaOnly (contract:
+                // "nooit een crash").
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && ClaimMiner.GetBool(doc.RootElement, "operative") is { } operative)
                     return operative;
             }
             catch (JsonException)
