@@ -234,7 +234,7 @@ public class KnowledgeRecheckServiceTests
         db.Changes.Add(change);
         var doc = new KnowledgeDoc
         {
-            Kind = "primer", Topic = "turn-structure", Title = "De beurtstructuur",
+            Kind = "primer", Topic = "turn-structure", Title = "The turn structure",
             Body = "Eerste alinea.\n\nTweede alinea (§101.2).",
             SectionRefs = "101.2", Status = "approved",
         };

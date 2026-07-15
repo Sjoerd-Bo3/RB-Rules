@@ -30,7 +30,7 @@ public class RulingTopicMapperTests
         cards: [("ogn-011-298", "Viktor", null)],
         mechanics: ["Accelerate"],
         sections: [("core-rules-pdf", "101.2")],
-        concepts: [("turn-structure", "De beurtstructuur")]);
+        concepts: [("turn-structure", "The turn structure")]);
 
     [Fact]
     public void Resolve_CardScope_MapsToCard() =>

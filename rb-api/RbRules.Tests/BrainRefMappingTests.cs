@@ -21,8 +21,8 @@ public class ClaimTopicMapperTests
         ],
         concepts:
         [
-            ("turn-structure", "De beurtstructuur"),
-            ("combat", "Combat en showdowns"),
+            ("turn-structure", "The turn structure"),
+            ("combat", "Combat and showdowns"),
         ]);
 
     [Theory]
@@ -55,7 +55,7 @@ public class ClaimTopicMapperTests
     [Theory]
     [InlineData("turn-structure")]      // topic-key
     [InlineData("turn structure")]      // key als lopende tekst
-    [InlineData("De beurtstructuur")]   // NL-titel
+    [InlineData("The turn structure")]  // titel (Engels sinds #197)
     public void Resolve_Concept_MatchesKeyAndTitle(string topicRef) =>
         Assert.Equal("concept:turn-structure",
             CreateMapper().Resolve("concept", topicRef)?.Format());
