@@ -330,11 +330,16 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
 
     private enum ClarifyOutcome { NewVerified, NewPending, Updated, RejectedKept, Skipped, Failed }
 
-    /// <summary>Eén concept opslaan met de hybride poort (#177, #185) én
+    /// <summary>Eén concept opslaan met de hybride poort (#177, #185, #188) én
     /// dedupe op conceptniveau. Poort: grounded (citaat in de bron) EN
     /// anchored (onderwerp resolvet) EN informative (geen kale
-    /// aankondigingszin, #185) ⇒ verified; anders unverified met
-    /// StatusReason (de reviewqueue in). Dedupe-sleutel: (Provenance=bron,
+    /// aankondigingszin) ⇒ verified; anders unverified met
+    /// StatusReason (de reviewqueue in). Informative komt sinds #188 primair
+    /// van het LLM-oordeel dat <see cref="ClarificationMiner"/> meelevert
+    /// (<see cref="ExtractedClarification.Operative"/>); ontbreekt dat oordeel
+    /// (null — parse-gat of oude data), dan valt de poort terug op de
+    /// deterministische <see cref="ClarificationInformativeness.IsMetaOnly"/>-
+    /// heuristiek. Dedupe-sleutel: (Provenance=bron,
     /// Scope, Ref) -- het citaat telt bewust NIET mee -- plus semantische
     /// nabijheid: een genormaliseerd-gelijke óf embedding-nabije
     /// verduidelijking geldt als dezelfde en wordt bijgewerkt (nooit
@@ -354,18 +359,25 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         var provenance = $"{ProvenancePrefix}{src.Id}";
         var normClarification = ClaimMiner.NormalizeStatement(ec.Clarification);
 
-        // Hybride poort (#177, #185): grounded (citaat écht in de bron) EN
-        // anchored (onderwerp resolvet naar een bestaande knoop) EN
+        // Hybride poort (#177, #185, #188): grounded (citaat écht in de bron)
+        // EN anchored (onderwerp resolvet naar een bestaande knoop) EN
         // informative (geen kale "X is verduidelijkt/gewijzigd"-aankondiging
-        // zonder regelinhoud — de #185-bug) ⇒ verified; anders pending met
-        // reden, de reviewqueue in. Een niet-informatief item gaat naar
-        // review in plaats van stil te worden overgeslagen: net als bij
-        // grounding/anchoring kan de heuristiek een keer mis zitten, en de
-        // beheerder heeft dan alsnog het laatste woord (zelfde uniforme
+        // zonder regelinhoud) ⇒ verified; anders pending met reden, de
+        // reviewqueue in. Een niet-informatief item gaat naar review in
+        // plaats van stil te worden overgeslagen: net als bij grounding/
+        // anchoring kan het oordeel een keer mis zitten, en de beheerder
+        // heeft dan alsnog het laatste woord (zelfde uniforme
         // poort-semantiek, geen aparte "skip"-tak).
+        //
+        // #188: informative is nu primair het LLM-oordeel dat de extractie
+        // zelf al meelevert (ec.Operative) — het model kan "kondigt-een-
+        // wijziging-aan" van "beschrijft-de-wijziging" onderscheiden, een
+        // regex niet (adversariële review #185). Ontbreekt dat oordeel (null:
+        // oude prompt-variant, parse-gat), dan valt de poort terug op de
+        // deterministische IsMetaOnly-heuristiek — nooit een harde 500.
         var grounded = ClarificationGrounding.IsGrounded(ec.Quote, docContent);
         var anchored = anchors.Resolve(ec.TopicType, topicRef) is not null;
-        var informative = !ClarificationInformativeness.IsMetaOnly(ec.Clarification);
+        var informative = ec.Operative ?? !ClarificationInformativeness.IsMetaOnly(ec.Clarification);
         var verifies = grounded && anchored && informative;
         var reason = verifies ? null : GateReason(grounded, anchored, informative, ec.Quote, ec.TopicType, topicRef);
 
