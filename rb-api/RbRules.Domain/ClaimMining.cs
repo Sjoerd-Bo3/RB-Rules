@@ -106,6 +106,15 @@ public static partial class ClaimMiner
             ? (string.IsNullOrWhiteSpace(v.GetString()) ? null : v.GetString()!.Trim())
             : null;
 
+    /// <summary>Nullable bool uit een LLM-JSON-item (#188): null als het veld
+    /// ontbreekt of geen JSON-boolean is — de aanroeper behandelt dat als
+    /// "geen LLM-oordeel" en degradeert naar zijn eigen deterministische
+    /// vangnet, nooit als "false".</summary>
+    internal static bool? GetBool(JsonElement obj, string key) =>
+        obj.TryGetProperty(key, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? v.GetBoolean()
+            : null;
+
     internal static string? Truncate(string? s, int max) =>
         s?.Length > max ? s[..max] : s;
 
