@@ -243,6 +243,38 @@ apart in §6.
   ongemoeid (nooit stilzwijgend teruggedraaid), en degradeert een al
   geverifieerde ruling sowieso nooit. *Endpoint*
   `/api/admin/corrections/{id}/reevaluate`.
+  **Anker-selectie uit het vocabulaire + herstel-pas** (#188 increment 3):
+  productiedata (issue #199) toonde dat 117 van de 133 pending
+  clarify-corrections faalden op *anchored* — de extractie koos een
+  vrije-vorm-onderwerp ("battlefield control without units") buiten het
+  bestaande anker-vocabulaire. De extractieprompt (`ClarificationMiner.
+  GetSystemPrompt`) krijgt daarom voortaan het ECHTE vocabulaire letterlijk
+  mee — de mechaniek-namen (seed + geaccepteerde keywords) en de
+  primer-concept-keys/-titels — met de instructie er bij voorkeur een anker
+  uit te KIEZEN; voor kaarten/§-codes (te talrijk om op te sommen) blijft de
+  instructie "gebruik de exacte naam/code". `ClaimTopicMapper.Resolve`
+  bepaalt nog altijd, ongewijzigd, of een gekozen anker ook echt bestaat —
+  beter gereedschap voor de LLM, geen wijziging van de poort. Voor de
+  bestaande achterstand draait de `clarify`-job er een **herstel-pas**
+  achteraan (`CorrectionReevaluationService.RepairPendingAnchorsAsync`,
+  gecapt op 40 per run + `CapHit` voor het #190-drain-pad): per pending item
+  met reden "onderwerp … niet herkend" (en zonder `ReviewNote` — #184,
+  beheerder-eigendom blijft onaangeraakt) doet één rb-ai-aanroep een
+  anker-KEUZE uit hetzelfde vocabulaire (`ClarificationAnchorRepair`,
+  antwoord `{"topicType":…,"topicRef":…}` of `{"none":true}`); een resolvend
+  antwoord her-toetst de volledige hybride poort (dezelfde logica als
+  "opnieuw evalueren" hierboven, gedeeld i.p.v. gedupliceerd). AI-uitval,
+  "none" of een niet-resolvend anker ⇒ het item blijft ongemoeid staan.
+  **Spookduplicaat-vangrail:** deze pas zet bewust géén `ReviewNote` (dat zou
+  een geautomatiseerde keuze onterecht als menselijk-beoordeeld labelen), dus
+  de bestaande cross-bucket-redding in `StoreAsync` (#184, die op
+  `ReviewNote != null` leunt) ziet een door deze pas verplaatst item niet —
+  zonder tegenmaatregel zou een latere her-mine die het oude vrije-vorm-
+  onderwerp opnieuw extraheert een tweede verified ruling over hetzelfde
+  onderwerp kunnen opleveren. De gedeelde poort-hertoets bewaakt dit zelf: een
+  anker-keuze die naar een (Provenance, Scope, Ref) wijst waar al een ándere
+  Correction op staat, wordt niet toegepast (blijft pending, met een
+  zichtbare reden) in plaats van een duplicaat te worden.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed
   en gekoppeld aan kaarten. *Endpoint* `/api/bans`.
 - **Bron-feeds** (#167) — index-pagina's (playriftbound.com/en-us/news/…) die

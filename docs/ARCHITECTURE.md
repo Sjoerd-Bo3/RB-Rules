@@ -268,9 +268,20 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   of uitvalt; `ClarificationInformativeness.JudgeSystemPrompt`/`ParseOperative`
   (#188), de lichte her-toets-prompt die `CorrectionReevaluationService`
   gebruikt om opgeslagen tekst (zonder verse extractie) alsnog te
-  classificeren; en `ReviewNoteAnchor` (#184), een pure regex-parser die een
-  anker-correctie uit een beheerder-opmerking haalt (bv. "mechanic:Recall")
-  — puur en getest, zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
+  classificeren; `ReviewNoteAnchor` (#184), een pure regex-parser die een
+  anker-correctie uit een beheerder-opmerking haalt (bv. "mechanic:Recall");
+  en sinds #188 increment 3 `ClarificationMiner.GetSystemPrompt`/
+  `BuildVocabularyBlock` (het echte anker-vocabulaire — mechaniek-namen +
+  primer-concepten — letterlijk in de extractieprompt op `{VOCABULARY}`, zodat
+  de LLM een bestaand anker KIEST i.p.v. een vrije-vorm-onderwerp te verzinnen
+  dat toch niet resolvet — issue #199: 117/133 pending items faalden hierop)
+  en `ClarificationAnchorRepair` (`GetSystemPrompt`/`BuildPrompt`/
+  `ParseAnchorChoice`, zelfde objectvorm-guard-patroon als
+  `ClarificationInformativeness.ParseOperative` — de herstel-pas-prompt die
+  `CorrectionReevaluationService.RepairPendingAnchorsAsync` gebruikt om één
+  bestaand pending item een anker-KEUZE uit hetzelfde vocabulaire te laten
+  kiezen, `{"topicType":…,"topicRef":…}` of `{"none":true}`) — puur en getest,
+  zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
   het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
@@ -311,8 +322,15 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `SourceContentKind.Resolve` op elke trust-1-bron in plaats van de kale
   naam-/URL-heuristiek — zelfde uitkomst voor een nog-niet-geclassificeerde
   bron dankzij de null-fallback, maar nu ook correct voor een bron zonder
-  magisch woord in zijn slug); de anker-resolver-
-  opbouw zelf staat gedeeld in `AnchorResolverFactory`),
+  magisch woord in zijn slug); de extractieprompt krijgt sinds #188 increment
+  3 ook het echte anker-vocabulaire mee (`ClarificationMiner.GetSystemPrompt`
+  i.p.v. de kale `SystemPrompt`) — de anker-resolver-opbouw zelf staat
+  gedeeld in `AnchorResolverFactory`, die sinds diezelfde increment naast de
+  opaque `ClaimTopicMapper` ook de leesbare mechaniek-/concept-vocabulaire
+  teruggeeft (`BuildWithVocabularyAsync`; het bestaande `BuildAsync` blijft
+  ongewijzigd voor aanroepers die alleen de resolver nodig hebben) zodat
+  extractie, herstel-pas en validatie gegarandeerd hetzelfde vocabulaire
+  zien),
   `CorrectionReevaluationService` (#184, her-evaluatie van één `Correction`
   op een beheerder-opmerking: draait dezelfde hybride poort opnieuw voor dat
   ene item — roept `ClarificationGrounding`/`ClaimTopicMapper.Resolve` aan
@@ -325,7 +343,28 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   resolutie; alleen van toepassing op clarify-mining-`Correction`s (Provenance
   `clarify-mining:{sourceId}`, de enige ontstaanswijze met brontekst om tegen
   te gronden); een `rejected`- of al `verified`-item degradeert/heropent
-  nooit, alleen de opmerking wordt dan bewaard),
+  nooit, alleen de opmerking wordt dan bewaard. De gate-hertoets zelf staat
+  sinds #188 increment 3 in de private `ApplyGateAsync`, geëxtraheerd zodat
+  `RepairPendingAnchorsAsync` (zie hieronder) 'm hergebruikt i.p.v.
+  dupliceert — inclusief een **spookduplicaat-vangrail**: past een
+  anker-override (handmatig óf LLM-gekozen) op een (Provenance, Scope, Ref)
+  waar al een ándere `Correction` op staat, dan wordt de verplaatsing niet
+  doorgevoerd (blijft "niet anchored", met een zichtbare reden) i.p.v. een
+  tweede `verified` ruling over hetzelfde onderwerp te scheppen.
+  `RepairPendingAnchorsAsync` (#188 increment 3, job "clarify" tweede stap —
+  zie `JobCatalog.ClarifyAsync`) is de geautomatiseerde tegenhanger: voor de
+  bestaande achterstand (issue #199, 117/133 pending items met StatusReason
+  "onderwerp … niet herkend") doet één rb-ai-aanroep per item een
+  anker-KEUZE uit het vocabulaire (`ClarificationAnchorRepair`), en
+  `ApplyGateAsync` her-toetst dan de volledige poort. Kandidaten: pending +
+  zonder `ReviewNote` (#184-eigendom blijft onaangeraakt) + die StatusReason.
+  Gecapt (standaard 40) met `AnchorRepairResult.CapHit`, zelfde #190-contract
+  als `ClarificationMineResult.CapHit`. Zet BEWUST geen `ReviewNote` op het
+  verplaatste item (zou een geautomatiseerde keuze onterecht als
+  mens-beoordeeld labelen; motivatie + het spookduplicaat-scenario staan in de
+  klasse-XML-doc) — de vangrail hierboven compenseert het ontbreken van de
+  `ReviewNote`-gebaseerde cross-bucket-redding die `StoreAsync` (#184,
+  ongewijzigd) voor handmatige correcties gebruikt),
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `KnowledgeRegenerationService` (#187, job "regenerateknowledge" — wipet de
   LLM-afgeleide kennislaag (claim, correction, knowledge_doc kind=primer,
@@ -378,7 +417,11 @@ item), dus die horen bij de volgende run/tick, niet bij een drain-lus. De
 per-run gecapte jobs leiden Drained af van hun eigen resultaat:
 `claims`/`clarify`/`relations`/`decks` via `CapHit` (bij claims telt ook een
 hertoets-backlog groter dan het `MaxRechecksPerRun`-venster mee — een
-goedkope COUNT vooraf), `mine` via `Remaining − Failed`. `classify` is
+goedkope COUNT vooraf; `clarify` is sinds #188 increment 3 zelf twee gecapte
+stappen — extractie (`ClarificationMiningService.RunAsync`) + de
+anker-herstel-pas (`CorrectionReevaluationService.RepairPendingAnchorsAsync`)
+— en is pas Drained als BEIDE hun cap niet raakten), `mine` via
+`Remaining − Failed`. `classify` is
 ongecapt (één run = de hele backlog) en meldt om dezelfde reden
 `Remaining − Failed` — na een volledige pass resteren immers alleen
 failures; alle overige jobs zijn per definitie in één run klaar en laten de
