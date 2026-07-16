@@ -6,13 +6,15 @@ namespace RbRules.Infrastructure;
 public record IngestResult(string SourceId, string Status, string? Detail = null);
 
 /// <summary>Scan-pipeline (port van de PoP-runner, met audit-fixes):
-/// fetch → boilerplate-strip → hash → diff → AI-classify → store + log.
-/// Opent met de bron-feed-crawl (#167, <see cref="FeedCrawlService"/>):
-/// nieuw-ontdekte artikelen worden zo in dezelfde run als Source al
-/// meegescand. Sluit af met een naclassificatie-ronde voor changes die eerder
-/// zonder samenvatting zijn opgeslagen (#58) en de kennis-hertoets (#119): een
-/// verwerkte regelwijziging legt de kennis die erop leunt terug voor
-/// review in plaats van die stil te laten verouderen.</summary>
+/// fetch → boilerplate-strip → hash → bron-type-classificatie (#188
+/// increment 2, <see cref="ClassifyContentKindAsync"/>) → diff → AI-classify
+/// → store + log. Opent met de bron-feed-crawl (#167, <see
+/// cref="FeedCrawlService"/>): nieuw-ontdekte artikelen worden zo in dezelfde
+/// run als Source al meegescand. Sluit af met een naclassificatie-ronde voor
+/// changes die eerder zonder samenvatting zijn opgeslagen (#58) en de
+/// kennis-hertoets (#119): een verwerkte regelwijziging legt de kennis die
+/// erop leunt terug voor review in plaats van die stil te laten
+/// verouderen.</summary>
 public class IngestService(
     RbRulesDbContext db, HttpClient http, RbAiClient ai,
     ChangeClassificationService classifier, KnowledgeRecheckService recheck,
@@ -213,6 +215,21 @@ public class IngestService(
                 default:
                     return new(src.Id, "error", $"parser '{src.Parser}' nog niet ondersteund");
             }
+            // #188 increment 2: bron-type-classificatie (LLM i.p.v. keyword-
+            // heuristiek) — alleen officiële (trust-1) bronnen, en alleen als
+            // er nog geen classificatie is (null) of de vorige poging een
+            // heuristische fallback was (upgrade-pad: een latere run mag een
+            // heuristische classificatie alsnog naar een LLM-oordeel
+            // optillen; het omgekeerde gebeurt nooit stilzwijgend). Vóór de
+            // hash-vergelijking, zodat ook een ongewijzigde/flip-floppende
+            // pagina een kans krijgt — bronnen worden zo vanzelf
+            // geclassificeerd bij hun eerstvolgende scan, zonder apart
+            // backfill-commando (zelfde "backfilt vanzelf"-patroon als
+            // ClarificationMiningService).
+            if (src.TrustTier == 1
+                && (src.ContentKind is null || src.ContentKindSource == SourceContentKind.HeuristicOrigin))
+                await ClassifyContentKindAsync(src, text, ct);
+
             var hash = TextUtils.Sha256(text);
             if (src.LastHash == hash) return new(src.Id, "unchanged");
 
@@ -266,7 +283,8 @@ public class IngestService(
                 // Change.DetectedAt elders in deze pipeline).
                 src.UpdatedAt = DateTimeOffset.UtcNow;
             }
-            else if (src.TrustTier == 1 && ClarificationSources.IsMatch(src.Id, src.Url, src.Name))
+            else if (src.TrustTier == 1
+                     && SourceContentKind.Resolve(src.ContentKind, src.Id, src.Url, src.Name) == SourceContentKind.Faq)
             {
                 // #177: een FAQ-/clarificatie-artikel heeft bij zijn
                 // allereerste scan geen vorige versie om te diffen (isNew),
@@ -275,24 +293,32 @@ public class IngestService(
                 // FAQ) — terwijl de losse concepten er via
                 // ClarificationMiningService straks wél als citeerbare
                 // rulings uitkomen. Eén sjabloon-change bij aankomst (geen
-                // LLM-call — de concept-extractie levert de echte duiding
-                // later, apart als job); alleen voor officiële bronnen,
-                // zelfde trust-gate als de mining zelf.
+                // extra LLM-call — de classificatie hierboven heeft het
+                // bron-type al bepaald, de concept-extractie levert de echte
+                // duiding later, apart als job); alleen voor officiële
+                // bronnen, zelfde trust-gate als de mining zelf.
                 //
-                // #185: ClarificationSources.IsMatch matcht patch-notes-bronnen
-                // niet meer, dus deze tak vuurt sindsdien vanzelf niet meer op
-                // hun allereerste scan — een patch-notes-artikel heeft dan
-                // gewoon "new"-status zonder Change, exact zoals elke andere
-                // gewone bron (er is nog niets om te diffen). Bewust geen
-                // vervangende templated Change voor patch notes: hun ÉCHTE
-                // duiding komt vanaf hun TWEEDE scan gewoon via de normale
-                // diff hierboven (voor/na), en die is inhoudelijk beter dan
-                // een sjabloonzin zonder regeltekst. Voor FAQ-/clarificatie-
-                // bronnen blijft dit sjabloon wél zinvol: die krijgen NOOIT
-                // een diff-Change (elke scan mint dezelfde soort inhoud
-                // opnieuw als losse rulings, niet als delta), dus zonder dit
-                // sjabloon zou hun aankomst permanent onzichtbaar blijven in
-                // de wijzigingen-feed.
+                // #188 increment 2: de kind-check gebruikt SourceContentKind.
+                // Resolve (LLM-classificatie, met de oude
+                // ClarificationSources-heuristiek als transitionele
+                // null-fallback) i.p.v. rechtstreeks ClarificationSources.
+                // IsMatch — zelfde uitkomst voor een nog-niet-geclassificeerde
+                // bron, maar nu ook correct voor een bron die de LLM als
+                // "faq" herkent zonder de magische woorden in zijn slug.
+                //
+                // #185: patch-notes-bronnen matchen niet op "faq", dus deze
+                // tak vuurt niet op hun allereerste scan — een patch-notes-
+                // artikel heeft dan gewoon "new"-status zonder Change, exact
+                // zoals elke andere gewone bron (er is nog niets om te
+                // diffen). Bewust geen vervangende templated Change voor
+                // patch notes: hun ÉCHTE duiding komt vanaf hun TWEEDE scan
+                // gewoon via de normale diff hierboven (voor/na), en die is
+                // inhoudelijk beter dan een sjabloonzin zonder regeltekst.
+                // Voor FAQ-/clarificatie-bronnen blijft dit sjabloon wél
+                // zinvol: die krijgen NOOIT een diff-Change (elke scan mint
+                // dezelfde soort inhoud opnieuw als losse rulings, niet als
+                // delta), dus zonder dit sjabloon zou hun aankomst permanent
+                // onzichtbaar blijven in de wijzigingen-feed.
                 db.Changes.Add(new Change
                 {
                     SourceId = src.Id,
@@ -361,5 +387,47 @@ public class IngestService(
         if (string.IsNullOrWhiteSpace(diff)) return null;
         var raw = await ai.AskAsync(Classifier.BuildPrompt(sourceName, diff), Classifier.SystemPrompt, ct: ct);
         return raw is null ? null : Classifier.Parse(raw);
+    }
+
+    /// <summary>#188 increment 2: bron-type-classificatie via rb-ai ("faq" |
+    /// "patch-notes" | "other", <see cref="SourceContentKind"/>) i.p.v. de
+    /// oude keyword-heuristiek — het model beoordeelt naam + URL + een kort
+    /// content-fragment. Degradeert bij AI-uitval (scout-timeoutpatroon,
+    /// zelfde als ClarificationMiningService.AskSafeAsync) of een onbruikbaar
+    /// antwoord naar <see cref="SourceContentKind.HeuristicKind"/> — nooit een
+    /// harde 500, altijd een classificatie. Wijzigt alleen de getrackte
+    /// <paramref name="src"/>-entity; de aanroeper (ScanOneAsync/ScanAsync)
+    /// bewaart via de bestaande SaveChangesAsync na elke bron.</summary>
+    private async Task ClassifyContentKindAsync(Source src, string content, CancellationToken ct)
+    {
+        string? raw;
+        try
+        {
+            raw = await ai.AskAsync(
+                SourceContentKind.BuildPrompt(src.Name, src.Url, content), SourceContentKind.SystemPrompt, ct: ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            raw = null;
+        }
+
+        var kind = raw is null ? null : SourceContentKind.Parse(raw);
+        if (kind is not null)
+        {
+            src.ContentKind = kind;
+            src.ContentKindSource = SourceContentKind.LlmOrigin;
+            return;
+        }
+
+        src.ContentKind = SourceContentKind.HeuristicKind(src.Id, src.Url, src.Name);
+        src.ContentKindSource = SourceContentKind.HeuristicOrigin;
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "content-kind", Ref = src.Id, Status = "info",
+            Detail = raw is null
+                ? "rb-ai niet beschikbaar — heuristische bron-type-classificatie toegepast"
+                : "LLM-antwoord onbruikbaar voor bron-type-classificatie — heuristiek toegepast. "
+                  + $"Respons (afgekapt): {LlmJson.Snippet(raw, 200)}",
+        });
     }
 }
