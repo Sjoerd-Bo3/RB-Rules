@@ -320,7 +320,9 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   read-only projectie boven op de Piltover Archive-decks — lijst/facetten/
   paginering + de per-deck `DeckLegality`-uitkomst; laadt set-releasedatums en
   gebande canonieke kaarten per format één keer per aanroep, net als
-  `CardEndpoints`' set-legaliteitslookup), `JobLedger`, `PushService`,
+  `CardEndpoints`' set-legaliteitslookup), `JobLedger`,
+  `JobCatalog`/`JobPaths`/`PathRunner` (#190 — zie de eigen paragraaf
+  hieronder), `PushService`,
   `MailService`, `UserAccountService`, `PasskeyService`, en de migraties in
   `Migrations/`.
 - **`RbRules.Api`** — compositie: `Program.cs` doet alleen DI-registratie,
@@ -329,8 +331,48 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `CardEndpoints`, `DeckEndpoints`, `RuleEndpoints`, `KnowledgeEndpoints`,
   `BrainEndpoints`, `AskEndpoints`, `AuthEndpoints`, `FeedEndpoints`,
   `PushEndpoints`, `AdminEndpoints`. Achtergrondwerk via `JobRunner` +
-  `JobCatalog` + `ScanScheduler`; contracten in `ApiContracts.cs`; admin
-  achter `AdminAuthFilter`, gebruikersquota via `UserQuotaFilter`.
+  `JobCatalog`/`JobPaths` + `ScanScheduler`; contracten in `ApiContracts.cs`;
+  admin achter `AdminAuthFilter`, gebruikersquota via `UserQuotaFilter`.
+
+**`JobCatalog`/`JobRunner`/`JobPaths`/`PathRunner` (achtergrondjobs + paden,
+#59/#122/#190).** `JobCatalog` (Infrastructure) is de vlakke catalogus van
+`JobDefinition`'s (naam → `Func<IServiceProvider, Action<string>,
+CancellationToken, Task<JobOutcome>>`); `JobOutcome(Detail, Drained = true)`
+is sinds #190 het uniforme resultaat van elke job — `Drained` is het
+machine-leesbare "niets meer te doen deze run"-signaal (voor de vijf per-run
+gecapte jobs `mine`/`classify`/`claims`/`clarify`/`relations` afgeleid van
+hun eigen `Remaining`/`CapHit`-veld; alle andere jobs zijn per definitie in
+één run klaar en laten het gewoon op de default `true` staan). `JobRunner`
+(Api) is de generieke, in-memory éénjob-gate: `TryStart(name, work)` zet
+`_current`, draait `work` in een losse scope + `Task.Run`, en schrijft bij
+afronding altijd een `run_log`-regel (Kind="job", Ref=naam, Status=ok/error,
+Detail) — ongeacht of `work` een gewone job of een heel pad is, want beide
+hebben exact dezelfde functiehandtekening.
+
+`JobPaths` (Infrastructure, naast `JobCatalog`) is de padencatalogus: een
+`PathDefinition(Name, Steps)` is een geordende lijst `PathStep(JobName,
+Drain = false, MaxRepeats = 10)` die elk naar een bestaande `JobCatalog`-naam
+verwijst (gevalideerd in `JobPathsTests`). Vier paden — Ingest-, Kaart-,
+Kennis- en het Volledige-regeneratiepad (zie PRD §4.5 voor de precieze
+stappen; bewust GEEN wipe erin, dat blijft `regenerateknowledge` als losse
+Gevarenzone-actie). `PathRunner.RunAsync(path, sp, report, ct, findJob?)`
+(Infrastructure) draait de stappen sequentieel via `job.Run(sp, ...)` —
+`findJob` is een test-seam die in productie op `JobCatalog.Find` defaultet.
+Bij `Drain: true` herhaalt hij dezelfde job tot `outcome.Drained` of tot
+`MaxRepeats` bereikt is (dan gaat het pad gewoon door — de vangrail is geen
+fout, de volgende pad-run pakt de rest op dankzij de idempotente jobs). Elke
+(herhaalde) stap logt een eigen `run_log`-regel (Kind=padnaam, Ref=stapnaam).
+Gooit een stap een exception, dan logt `PathRunner` die stap als "error" en
+gooit door — het pad stopt daar (JobRunner's catch markeert de hele padrun
+als error); de al voltooide stappen blijven staan. Een pad start via
+`jobs.TryStart(pathName, (sp, report, ct) => PathRunner.RunAsync(path, sp,
+report, ct))` in `AdminEndpoints`/`ScanScheduler` — dezelfde
+`JobRunner`-instantie, dus een pad en een losse job kunnen nooit tegelijk
+draaien. `ScanScheduler` heeft ook een pad-equivalent van zijn
+`TryStartPeriodicJobAsync` (`TryStartPeriodicPathAsync`), maar de
+schedule-lijst (`PathSchedules`) is bewust leeg — de mogelijkheid staat
+klaar, de bestaande nachtelijke/wekelijkse cadans van de losse jobs
+verandert niet.
 
 Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/decks*`
 (#15 fase 3 spoor A: lijst/facetten/detail, read-only), `/api/rules*`,
@@ -345,7 +387,9 @@ lijst, `/asktraces/{id}` met het volledige gesprek — antwoord + eerdere
 beurten, #143; bron-dossier: `/sources/{id}/dossier`, #171; correcties:
 `/corrections` — projectie via `AdminOverviewService.CorrectionsAsync`, incl.
 bron-naam en `UrlGuard`-gesaniteerde link, #184 — `/corrections/{id}/verify|
-reject|reevaluate`).
+reject|reevaluate`; paden, #190: `GET /paths` (de catalogus, voor de
+beheer-UI), `POST /paths/{name}` — zelfde `TryStart`-conflictgedrag (202/409)
+als `POST /jobs/{name}`, de padnaam verschijnt vanzelf op `/status`).
 
 ### rb-ai — belangrijkste modules
 
