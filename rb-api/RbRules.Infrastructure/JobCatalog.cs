@@ -13,12 +13,17 @@ public sealed record JobDefinition(
 
 /// <summary>Resultaat van één jobrun (#190): <paramref name="Detail"/> is de
 /// bestaande detail-regel (run_log/admin, ongewijzigd gedrag); <paramref
-/// name="Drained"/> meldt machine-leesbaar of de job niets liet liggen voor
-/// een volgende run — de meeste jobs verwerken hun hele werklast in één keer
-/// (default true); een per-run gecapte job (mine/classify/claims/clarify/
-/// relations) zet dit op false zolang zijn cap geraakt is. Paden (#190)
-/// herhalen een Drain-stap tot dit true is (met een max-herhalingen-vangrail)
-/// — zónder string-matching op de detailtekst.</summary>
+/// name="Drained"/> meldt machine-leesbaar of de job geen VERS werk liet
+/// liggen voor een volgende run — de meeste jobs verwerken hun hele werklast
+/// in één keer (default true); een per-run gecapte job zet dit op false
+/// zolang zijn cap geraakt is (claims/clarify/relations/decks via hun eigen
+/// CapHit-veld; mine via Remaining − Failed). Vers werk ≠ failures
+/// (review-fix #190): items die zojuist FAALDEN tellen niet — een directe
+/// herhaling faalt vrijwel zeker opnieuw (rb-ai down, poison item), dus die
+/// horen bij de volgende run/tick, niet bij een drain-lus. Paden (#190)
+/// herhalen een Drain-stap tot dit true is, met een max-herhalingen-vangrail
+/// én een no-progress-guard in PathRunner — zónder string-matching op de
+/// detailtekst.</summary>
 public sealed record JobOutcome(string Detail, bool Drained = true);
 
 /// <summary>Catalogus van admin-jobs (#59: de ±150-regel switch in
@@ -216,10 +221,15 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<MechanicMiningService>()
             .RunAsync(progress: report, ct: ct);
-        // #190: machine-leesbaar drain-signaal (geen string-matching) — deze
-        // job is al capped/Remaining-bewust (MiningResult), dus Drained is
-        // gewoon "niets meer resterend".
-        return new($"{r.Mined} kaarten gemined, {r.Remaining} resterend", Drained: r.Remaining == 0);
+        // #190 (review-fix): vers-werk-semantiek. Remaining telt óók de
+        // zojuist gefaalde kaarten mee (Mechanics blijft null) — een kale
+        // Remaining==0 zou een pad-drain bij rb-ai-uitval of een poison card
+        // tot MaxRepeats futiele herhalingen kosten. Gedraineerd = geen
+        // kaarten meer die deze run niet eens aan de beurt kwamen; failures
+        // zijn geen verse werklast (een directe herhaling faalt vrijwel
+        // zeker opnieuw — de volgende run/tick probeert ze gewoon nog eens).
+        return new($"{r.Mined} kaarten gemined, {r.Remaining} resterend",
+            Drained: r.Remaining - r.Failed <= 0);
     }
 
     private static async Task<JobOutcome> RulesAsync(
@@ -280,9 +290,15 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<ChangeClassificationService>()
             .ClassifyPendingAsync(progress: report, ct: ct);
+        // #190 (review-fix): ClassifyPendingAsync is ONgecapt — één run
+        // verwerkt de hele backlog, dus wat na de run resteert zijn precies
+        // de zojuist gefaalde items (plus eventueel tussentijds binnengekomen
+        // changes). Kale Remaining==0 zou bij rb-ai-uitval een pad-drain de
+        // volledige falende backlog MaxRepeats keer laten herkauwen.
+        // Vers-werk-semantiek: alleen niet-geprobeerde items tellen.
         return new(
             $"{r.Classified} changes alsnog geclassificeerd, {r.Failed} mislukt, {r.Remaining} resterend",
-            Drained: r.Remaining == 0);
+            Drained: r.Remaining - r.Failed <= 0);
     }
 
     private static async Task<JobOutcome> ClaimsAsync(
@@ -317,7 +333,9 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<DeckIngestService>()
             .RunAsync(progress: report, ct: ct);
-        return new(r.Message);
+        // #190 (review-fix): de job is per-run gecapt (max pagina's) en het
+        // result meldt dat al machine-leesbaar — doorgeven i.p.v. discarden.
+        return new(r.Message, Drained: !r.CapHit);
     }
 
     private static async Task<JobOutcome> BenchmarkAsync(

@@ -2,11 +2,13 @@ namespace RbRules.Infrastructure;
 
 /// <summary>Eén stap in een pad (#190): verwijst naar een bestaande
 /// <see cref="JobCatalog"/>-job door naam (gevalideerd — zie
-/// PathCatalogTests). <paramref name="Drain"/> laat <see cref="PathRunner"/>
+/// JobPathsTests). <paramref name="Drain"/> laat <see cref="PathRunner"/>
 /// diezelfde job herhalen tot <see cref="JobOutcome.Drained"/> true is (geen
-/// cap meer geraakt) — <paramref name="MaxRepeats"/> is de vangrail zodat een
-/// permanent capte job (bv. een blijvend haperende LLM) een pad nooit
-/// eindeloos laat doorlopen.</summary>
+/// cap meer geraakt) — <paramref name="MaxRepeats"/> is de harde vangrail en
+/// de no-progress-guard in PathRunner de zachte, zodat een permanent capte
+/// of stilstaande job een pad nooit eindeloos laat doorlopen. Drain hoort
+/// alleen op per-run gecapte jobs: een ongecapte job doet zijn hele backlog
+/// in één run en zou bij Drain alleen zijn failures herkauwen.</summary>
 public sealed record PathStep(string JobName, bool Drain = false, int MaxRepeats = 10);
 
 /// <summary>Een pad: een naam (Kind in run_log/JobLedger, en de padnaam die
@@ -51,11 +53,15 @@ public static class JobPaths
         [
             // Ingest-pad: nieuwe/gewijzigde bronnen volledig verwerken —
             // scan → classificatie-backfill → mechaniek/claims/clarify-
-            // mining (elk gedraineerd) → embeddings → graph.
+            // mining (de gecapte miners gedraineerd) → embeddings → graph.
             new PathDefinition("ingest",
             [
                 new("scan"),
-                new("classify", Drain: true),
+                // Review-fix #190: classify is ONgecapt — één run verwerkt de
+                // hele backlog, dus draineren zou alleen de zojuist gefaalde
+                // items futiel herkauwen. Geen Drain; failures komen bij de
+                // volgende pad-run of scheduler-tick vanzelf terug.
+                new("classify"),
                 new("mine", Drain: true),
                 new("claims", Drain: true),
                 new("clarify", Drain: true),

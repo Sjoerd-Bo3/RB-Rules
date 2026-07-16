@@ -6,10 +6,15 @@ using RbRules.Domain;
 namespace RbRules.Infrastructure;
 
 /// <summary><paramref name="CapHit"/> (#190): machine-leesbaar of deze run
-/// op de per-run kostencap (<c>maxClaims</c>) is gestrand — er ligt dan werk
-/// klaar voor een volgende run. Paden draineren hierop in plaats van op de
-/// "cap van N claims bereikt"-tekst in <paramref name="Message"/> te
-/// matchen.</summary>
+/// op een per-run venster is gestrand — er ligt dan werk klaar voor een
+/// volgende run. Twee bronnen (review-fix #190): de extractie-kostencap
+/// (<c>maxClaims</c>) én de hertoets-backlog (meer "unchecked"-claims dan
+/// het <c>MaxRechecksPerRun</c>-venster deze run kon toetsen — een goedkope
+/// COUNT vooraf). Kanttekening: een hertoets die blijft degraderen (rb-ai
+/// weg, geen regelindex) laat de backlog staan en houdt CapHit dus true —
+/// de no-progress-guard in PathRunner stopt de drain-lus dan na twee
+/// identieke runs. Paden draineren hierop in plaats van op de "cap van N
+/// claims bereikt"-tekst in <paramref name="Message"/> te matchen.</summary>
 public record ClaimMineResult(
     int Documents, int NewClaims, int Corroborated, int Rejected,
     int Conflicts, int Rechecked, int Failed, string Message, bool CapHit = false);
@@ -185,18 +190,25 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
         }
 
         // Her-toets tegen officieel voor claims die eerder unchecked bleven.
-        var (rechecked, weerlegd) = budgetHit
-            ? (0, 0)
+        var (rechecked, weerlegd, recheckBacklog) = budgetHit
+            ? (0, 0, false)
             : await RecheckOfficialAsync(officialSourceIds, progress, ct);
         rejected += weerlegd;
 
+        // Review-fix #190: ook een hertoets-backlog groter dan het per-run-
+        // venster is "cap geraakt" — een pad-drain trekt de backlog dan in
+        // vervolgruns leeg i.p.v. hem stil te laten liggen.
+        var capHit = budgetHit || recheckBacklog;
         var message =
             $"{docs} documenten verwerkt: {newClaims} nieuwe claims, {corroborated} gecorroboreerd, "
             + $"{rejected} verworpen (officieel tegengesproken), {conflicts} conflicten, "
             + $"{rechecked} hergetoetst, {failed} mislukt"
             + (failed > 0 ? " (redenen in run_log)" : "")
-            + (budgetHit ? $" — cap van {maxClaims} claims bereikt, rest volgt bij de volgende run" : "");
-        return new(docs, newClaims, corroborated, rejected, conflicts, rechecked, failed, message, budgetHit);
+            + (budgetHit ? $" — cap van {maxClaims} claims bereikt, rest volgt bij de volgende run" : "")
+            + (recheckBacklog
+                ? $" — hertoets-backlog groter dan {MaxRechecksPerRun}, rest volgt bij de volgende run"
+                : "");
+        return new(docs, newClaims, corroborated, rejected, conflicts, rechecked, failed, message, capHit);
     }
 
     private enum ClaimOutcome { New, Corroborated, Seen, Rejected, Conflict, Failed }
@@ -430,14 +442,20 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
 
     /// <summary>Her-toets claims die eerder "unchecked" bleven. Tegenspraak
     /// weerlegt: een al geaccepteerde claim wordt superseded (terug de queue
-    /// in), een onbeoordeelde wordt rejected.</summary>
-    private async Task<(int Rechecked, int Weerlegd)> RecheckOfficialAsync(
+    /// in), een onbeoordeelde wordt rejected. <c>Backlog</c> (review-fix
+    /// #190) meldt of er méér pending claims waren dan het per-run-venster —
+    /// dat telt mee in <see cref="ClaimMineResult.CapHit"/> zodat een
+    /// pad-drain de hertoets-achterstand ook echt leegtrekt.</summary>
+    private async Task<(int Rechecked, int Weerlegd, bool Backlog)> RecheckOfficialAsync(
         IReadOnlyList<string> officialSourceIds,
         Action<string>? progress, CancellationToken ct)
     {
-        var pending = await db.Claims
+        var pendingQuery = db.Claims
             .Where(c => c.OfficialStatus == "unchecked" && c.Embedding != null
-                        && (c.Status == "unreviewed" || c.Status == "accepted"))
+                        && (c.Status == "unreviewed" || c.Status == "accepted"));
+        // Goedkope COUNT vóór de Take: het enige dat CapHit nodig heeft.
+        var totalPending = await pendingQuery.CountAsync(ct);
+        var pending = await pendingQuery
             .OrderBy(c => c.FirstSeen)
             .Take(MaxRechecksPerRun)
             .ToListAsync(ct);
@@ -481,7 +499,7 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
             });
             await db.SaveChangesAsync(ct);
         }
-        return (rechecked, weerlegd);
+        return (rechecked, weerlegd, totalPending > MaxRechecksPerRun);
     }
 
     /// <summary>Knipt documenttekst in extractie-delen op een woordgrens.</summary>
