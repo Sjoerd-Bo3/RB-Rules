@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { compactRanges } from '$lib/ranges';
+	import { relationBulkActionsVisible } from '$lib/reviewBulk';
 	import AnswerView from '$lib/AnswerView.svelte';
 
 	let { data, form } = $props();
@@ -84,7 +85,13 @@
 		/** Eén zin motivering (Engels, met de geraadpleegde refs erin gevouwen). */
 		recommendationReason: string | null;
 	}
-	interface RelationRecommendationCount { recommendation: string; count: number; }
+	interface RelationRecommendationCount {
+		recommendation: string;
+		count: number;
+		/** Max RecommendedAt binnen de groep zoals geladen — samen met count
+		 *  de TOCTOU-fence die de bulk-actie meestuurt (review-fix #199). */
+		asOf: string;
+	}
 	interface RelationKindExample {
 		fromRef: string; fromName: string | null; toRef: string; toName: string | null;
 	}
@@ -300,13 +307,24 @@
 	const relationsHandled = $derived(
 		(relations?.statusCounts ?? []).filter((s) => s.status !== 'unreviewed').reduce((a, s) => a + s.count, 0)
 	);
-	// Bulk-actie per aanbevelingsgroep (#199 v1): tellingen in de HUIDIGE
-	// weergave — de knop verdwijnt vanzelf als de groep leeg is.
-	function recommendationCount(rec: string): number {
-		return (relations?.recommendationCounts ?? []).find((c) => c.recommendation === rec)?.count ?? 0;
+	// Bulk-actie per aanbevelingsgroep (#199 v1): de hele groep (telling +
+	// asOf-fence) — de knop verdwijnt vanzelf als de groep leeg is, en
+	// rendert alléén in de default-/te-reviewen-weergave (review-fix
+	// findings 3/5/8: daar zijn telling, zichtbare items en actie-scope
+	// hetzelfde universum — unreviewed én niet gearchiveerd).
+	function recommendationGroup(rec: string): RelationRecommendationCount | undefined {
+		return (relations?.recommendationCounts ?? []).find((c) => c.recommendation === rec);
 	}
-	const acceptRecommendedCount = $derived(recommendationCount('accept'));
-	const rejectRecommendedCount = $derived(recommendationCount('reject'));
+	const acceptGroup = $derived(recommendationGroup('accept'));
+	const rejectGroup = $derived(recommendationGroup('reject'));
+	// Bulk-uitkomst bij de juiste knop: het resultaat (succes-telling of de
+	// 409-fence-/foutmelding) van de laatste bulk-actie, getypeerd — de
+	// ActionData-union laat zich in de template niet netjes narrowen.
+	const bulkForm = $derived(
+		form && 'bulkDecision' in form
+			? (form as { bulkDecision: string; bulkApplied?: number; error?: string })
+			: null
+	);
 
 	const gaps = $derived(data.kind === 'gaten' ? (data.data as GapsReport | null) : null);
 	const decks = $derived(data.kind === 'decks' ? (data.data as Paged<DeckItem> | null) : null);
@@ -489,15 +507,19 @@
 			     voor (triage-job "relatie-triage"), de mens klikt — één klik
 			     bevestigt/verwerpt de hele groep via hetzelfde accept-/reject-pad
 			     als de losse knoppen per item. confirm() vóór de post, telling in
-			     de knop zelf. -->
-			{#if acceptRecommendedCount}
+			     de knop zelf. Alléén in de default-/te-reviewen-weergave
+			     (review-fix: telling, zichtbare items en actie-scope moeten
+			     hetzelfde universum zijn) en mét de TOCTOU-fence (expectedCount +
+			     asOf): is de groep intussen veranderd — bv. door een gelijktijdige
+			     triage-run — dan weigert rb-api met 409 en is er niets beslist. -->
+			{#if relationBulkActionsVisible(data.filter) && acceptGroup}
 				<form
 					method="POST"
 					action="?/bulkDecideRelations"
 					use:enhance={({ cancel }) => {
 						if (
 							!confirm(
-								`Dit accepteert in één keer alle ${acceptRecommendedCount} voorstellen met aanbeveling "accepteren" — hetzelfde accept-pad als los bevestigen. Doorgaan?`
+								`Dit accepteert in één keer alle ${acceptGroup.count} voorstellen met aanbeveling "accepteren" — hetzelfde accept-pad als los bevestigen. Doorgaan?`
 							)
 						) {
 							cancel();
@@ -512,22 +534,28 @@
 				>
 					<input type="hidden" name="recommendation" value="accept" />
 					<input type="hidden" name="decision" value="accept" />
+					<input type="hidden" name="expectedCount" value={acceptGroup.count} />
+					<input type="hidden" name="asOf" value={acceptGroup.asOf} />
 					<button class="small" title="Bevestigt alle voorstellen met aanbeveling 'accepteren' in één keer">
-						Accepteer alle {acceptRecommendedCount} met aanbeveling accept
+						Accepteer alle {acceptGroup.count} met aanbeveling accept
 					</button>
-					{#if form && 'bulkApplied' in form && form.bulkDecision === 'accept'}
-						<span class="meta">{form.bulkApplied} {form.bulkApplied === 1 ? 'voorstel' : 'voorstellen'} geaccepteerd.</span>
+					{#if bulkForm?.bulkDecision === 'accept' && bulkForm.bulkApplied !== undefined}
+						<span class="meta">{bulkForm.bulkApplied} {bulkForm.bulkApplied === 1 ? 'voorstel' : 'voorstellen'} geaccepteerd.</span>
+					{/if}
+					<!-- 409-fence of andere fout — de melding landt bij de juiste knop. -->
+					{#if bulkForm?.bulkDecision === 'accept' && bulkForm.error}
+						<p class="warn">{bulkForm.error}</p>
 					{/if}
 				</form>
 			{/if}
-			{#if rejectRecommendedCount}
+			{#if relationBulkActionsVisible(data.filter) && rejectGroup}
 				<form
 					method="POST"
 					action="?/bulkDecideRelations"
 					use:enhance={({ cancel }) => {
 						if (
 							!confirm(
-								`Dit verwerpt in één keer alle ${rejectRecommendedCount} voorstellen met aanbeveling "verwerpen" — hetzelfde reject-pad als los verwerpen. Doorgaan?`
+								`Dit verwerpt in één keer alle ${rejectGroup.count} voorstellen met aanbeveling "verwerpen" — hetzelfde reject-pad als los verwerpen. Doorgaan?`
 							)
 						) {
 							cancel();
@@ -542,11 +570,17 @@
 				>
 					<input type="hidden" name="recommendation" value="reject" />
 					<input type="hidden" name="decision" value="reject" />
+					<input type="hidden" name="expectedCount" value={rejectGroup.count} />
+					<input type="hidden" name="asOf" value={rejectGroup.asOf} />
 					<button class="ghost small" title="Verwerpt alle voorstellen met aanbeveling 'verwerpen' in één keer">
-						Verwerp alle {rejectRecommendedCount} met aanbeveling reject
+						Verwerp alle {rejectGroup.count} met aanbeveling reject
 					</button>
-					{#if form && 'bulkApplied' in form && form.bulkDecision === 'reject'}
-						<span class="meta">{form.bulkApplied} {form.bulkApplied === 1 ? 'voorstel' : 'voorstellen'} verworpen.</span>
+					{#if bulkForm?.bulkDecision === 'reject' && bulkForm.bulkApplied !== undefined}
+						<span class="meta">{bulkForm.bulkApplied} {bulkForm.bulkApplied === 1 ? 'voorstel' : 'voorstellen'} verworpen.</span>
+					{/if}
+					<!-- 409-fence of andere fout — de melding landt bij de juiste knop. -->
+					{#if bulkForm?.bulkDecision === 'reject' && bulkForm.error}
+						<p class="warn">{bulkForm.error}</p>
 					{/if}
 				</form>
 			{/if}

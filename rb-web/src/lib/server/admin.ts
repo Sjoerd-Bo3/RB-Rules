@@ -12,6 +12,18 @@ export const authed = (cookies: { get(name: string): string | undefined }) => {
 	return t !== null && cookies.get(ADMIN_COOKIE) === t;
 };
 
+/** Fout van rb-api mét statuscode (#199 review-fix): acties die op een
+ *  specifieke status moeten reageren (409 = TOCTOU-fence op de bulk-actie)
+ *  kunnen die hier aflezen; bestaande catch-blokken zien gewoon een Error. */
+export class AdminApiError extends Error {
+	constructor(
+		message: string,
+		public readonly status: number
+	) {
+		super(message);
+	}
+}
+
 export async function adminApi<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const res = await fetch(`${API}${path}`, {
 		...init,
@@ -23,8 +35,9 @@ export async function adminApi<T>(path: string, init: RequestInit = {}): Promise
 	});
 	if (!res.ok) {
 		const body = await res.json().catch(() => null);
-		throw new Error(
-			(body as { error?: string } | null)?.error ?? `rb-api ${res.status}: ${path}`
+		throw new AdminApiError(
+			(body as { error?: string } | null)?.error ?? `rb-api ${res.status}: ${path}`,
+			res.status
 		);
 	}
 	return res.json() as Promise<T>;

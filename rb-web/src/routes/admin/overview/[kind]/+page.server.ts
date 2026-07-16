@@ -1,6 +1,6 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
-import { adminApi, authed } from '$lib/server/admin';
+import { AdminApiError, adminApi, authed } from '$lib/server/admin';
 
 // Tegel-overzichten (#61): één parametrische route, per kind een eigen fetch.
 // Filterwaarden worden hier gevalideerd zodat de UI-chips en de API-parameter
@@ -365,14 +365,31 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const recommendation = String(form.get('recommendation') ?? '');
 		const decision = String(form.get('decision') ?? '');
+		// TOCTOU-fence (review-fix #199): wat de UI rendeerde gaat mee — de
+		// groepstelling en de max RecommendedAt binnen de groep. rb-api
+		// weigert met 409 als de groep intussen is veranderd (bv. door een
+		// gelijktijdige triage-run); dan is er NIETS beslist.
+		const expectedCount = Number(form.get('expectedCount'));
+		const asOf = String(form.get('asOf') ?? '');
+		if (!Number.isInteger(expectedCount) || expectedCount < 0 || !asOf) {
+			return fail(400, {
+				error: 'De geladen groepstelling ontbreekt — ververs de pagina en probeer opnieuw.',
+				bulkDecision: decision
+			});
+		}
 		try {
 			const r = await adminApi<{ applied: number }>('/api/admin/relations/bulk-decide', {
 				method: 'POST',
-				body: JSON.stringify({ recommendation, decision })
+				body: JSON.stringify({ recommendation, decision, expectedCount, asOf })
 			});
 			return { ok: true, bulkApplied: r.applied, bulkDecision: decision };
 		} catch (e) {
-			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+			// 409 = fence: de nette melding uit rb-api landt bij de juiste knop.
+			const status = e instanceof AdminApiError && e.status === 409 ? 409 : 502;
+			return fail(status, {
+				error: e instanceof Error ? e.message : String(e),
+				bulkDecision: decision
+			});
 		}
 	},
 	// Kind-vocabulaire (#116, patroon mechanieken): accepteren laat relaties
