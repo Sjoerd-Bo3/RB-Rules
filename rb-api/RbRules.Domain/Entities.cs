@@ -42,6 +42,25 @@ public class Source
     /// moment als het bijbehorende <see cref="Change"/>-item). Null = nog
     /// nooit een wijziging gezien sinds deze kolom bestaat.</summary>
     public DateTimeOffset? UpdatedAt { get; set; }
+    /// <summary>Bron-type-classificatie (#188 increment 2, <see
+    /// cref="RbRules.Domain.SourceContentKind"/>): "faq" | "patch-notes" |
+    /// "other" — een LLM-BESLISSING i.p.v. de oude keyword-heuristiek (<see
+    /// cref="ClarificationSources"/>). Gezet bij de scan van een trust-1-bron
+    /// (<see cref="RbRules.Infrastructure.IngestService"/>). Null = nog niet
+    /// geclassificeerd — consumers vallen dan terug op de heuristiek (<see
+    /// cref="RbRules.Domain.SourceContentKind.Resolve"/>), zodat bestaande
+    /// bronnen blijven werken totdat ze opnieuw gescand zijn.</summary>
+    public string? ContentKind { get; set; }
+    /// <summary>Herkomst van <see cref="ContentKind"/>: "llm", "heuristic"
+    /// (AI-uitval of onbruikbaar LLM-antwoord bij de classificatie-poging) of
+    /// "admin" (expliciete override via het source-PATCH-pad, #188-review —
+    /// <see cref="RbRules.Domain.SourceContentKind.TryApplyOverride"/>).
+    /// Een heuristische classificatie mag een latere scan alsnog naar een
+    /// LLM-oordeel upgraden (nooit stilzwijgend andersom — een LLM- of
+    /// admin-oordeel wordt niet opnieuw overschreven; "admin" telt in de
+    /// consensus-poort van de patch-notes-retractie bovendien als menselijke
+    /// bevestiging). Null zolang <see cref="ContentKind"/> zelf null is.</summary>
+    public string? ContentKindSource { get; set; }
 }
 
 /// <summary>Bron-feed (#167): een index-pagina die periodiek wordt afgespeurd

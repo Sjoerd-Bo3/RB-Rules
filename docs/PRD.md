@@ -150,14 +150,40 @@ apart in §6.
   geknipt en geëmbed als vaste-lengte-slabs die meerdere losse
   verduidelijkingen mengen; één embedding over zo'n slab slaat de betekenis
   plat, dus een gerichte vraag ("Legion = finalize an item on the chain")
-  haalt het chunk niet boven. Herkenning via een naam-/URL-heuristiek
-  (`ClarificationSources.IsMatch`, geen migratie nodig — Source draagt Url/
-  Name al) op officiële (TrustTier 1) bronnen. **Patch-notes-bronnen doen
-  sinds #185 níét meer mee** (`IsPatchNotesSignal`) — een patch-notes-artikel
-  is een regelwijziging (delta) en hoort in de wijzigingen-feed, niet als
+  haalt het chunk niet boven. **Bron-type is sinds #188 increment 2 een
+  LLM-classificatie**: bij de scan van een officiële (TrustTier 1) bron
+  vraagt rb-ai eenmalig een oordeel — "faq", "patch-notes" of "other" — op
+  naam + URL + een kort content-fragment (Engelse prompt, #187-lijn),
+  gepersisteerd op `Source.ContentKind` (+ `ContentKindSource`: "llm",
+  "heuristic" of "admin", `SourceContentKind`). "faq" is beperkt tot Q&A-/
+  clarificatie-ARTIKELEN — een rulebook, core rules PDF of how-to-play-gids
+  legt óók regels uit maar is "other" (de prompt noemt die voorbeelden
+  letterlijk); een gemengd of onzeker artikel (bv. "Rules FAQ and Patch
+  Notes") is eveneens **"other"** (neutraal: niet gemined, niet geretract —
+  de #185-tie-break "patch-notes wint" is met de operative-poort uit #188
+  inc1 en de consensus-poort hieronder niet meer nodig). Wijkt het
+  LLM-oordeel af van de heuristiek, dan komt er één run_log-regel met beide
+  waarden (zichtbaarheid, geen blokkade). AI-uitval of een onbruikbaar
+  antwoord degradeert naar de oude naam-/URL-heuristiek
+  (`ClarificationSources.IsMatch`/`IsPatchNotesSignal`, nu het deterministische
+  vangnet); een latere scan mag zo'n heuristische classificatie alsnog naar
+  een LLM-oordeel optillen. Bronnen die nog niet (opnieuw) gescand zijn sinds
+  deze increment vallen transitioneel terug op diezelfde heuristiek
+  (`SourceContentKind.Resolve`). De beheerder kan de kind expliciet
+  vastzetten of wissen via het bestaande source-PATCH-pad (`SourcePatch.
+  ContentKind`; herkomst "admin" wordt nooit geherclassificeerd en telt als
+  menselijke bevestiging; leeg = wissen ⇒ herclassificatie). **Patch-notes-
+  bronnen doen sinds #185 níét meer mee** — een patch-notes-artikel is een
+  regelwijziging (delta) en hoort in de wijzigingen-feed, niet als
   op-zichzelf-staande ruling; elke clarify-run trekt bovendien de vóór #185
   ten onrechte gemínede patch-notes-rulings terug
-  (`RetractPatchNotesCorrectionsAsync`, verified én pending, idempotent). Job
+  (`RetractPatchNotesCorrectionsAsync`, verified én pending, idempotent) —
+  met een **consensus-poort** op dit destructieve pad (#188-review): hard
+  verwijderen alleen als de effectieve kind patch-notes is ÉN de
+  deterministische heuristiek dat bevestigt (of de beheerder de kind
+  expliciet vastzette); oneens ⇒ alles blijft staan + run_log-waarschuwing,
+  en een wees-bron (Source-rij verwijderd) wordt nooit meer opgeruimd op
+  alleen haar id — alleen gelogd voor handmatige beoordeling. Job
   "clarify" destilleert er via rb-ai discrete concepten uit (onderwerp +
   gefocuste verduidelijking + evt. §-verwijzing + citaat; de verduidelijking
   in het **Engels** opgeslagen, dicht bij de officiële bronbewoording, #186)

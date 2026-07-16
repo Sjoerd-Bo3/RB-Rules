@@ -241,6 +241,15 @@ public static class AdminEndpoints
             if (patch.Rank is not null) src.Rank = patch.Rank.Value;
             if (patch.Cadence is not null) src.Cadence = patch.Cadence;
             if (patch.Enabled is not null) src.Enabled = patch.Enabled.Value;
+            // Bron-type-override (#188-review, fix C): geldige kind ⇒
+            // herkomst "admin" (definitief), leeg ⇒ wissen (herclassificatie
+            // bij de volgende scan), ongeldig ⇒ 400 en niets aangeraakt.
+            if (patch.ContentKind is not null
+                && !SourceContentKind.TryApplyOverride(src, patch.ContentKind))
+                return Results.BadRequest(new
+                {
+                    error = "contentKind moet 'faq', 'patch-notes', 'other' of leeg (= wissen) zijn",
+                });
             await db.SaveChangesAsync();
             return Results.Ok(src);
         });

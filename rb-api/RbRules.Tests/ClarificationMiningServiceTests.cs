@@ -261,6 +261,67 @@ public class ClarificationMiningServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_GepersisteerdeContentKindFaq_WordtGemined_OokZonderTrefwoordInSlug()
+    {
+        // #188 increment 2, kern van deze increment: een bron zonder
+        // "faq"/"clarification" in id/url/naam (de oude heuristiek zou hier
+        // "other" zeggen — RunAsync_NietMatchendeBron_WordtOvergeslagen
+        // hierboven) doet toch mee zodra de LLM-classificatie op Source.
+        // ContentKind "faq" zegt.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "legion-explainer", Name = "Legion uitgelegd",
+            Url = "https://playriftbound.com/en-us/news/legion-explainer/",
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+            ContentKind = SourceContentKind.Faq, ContentKindSource = SourceContentKind.LlmOrigin,
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = "legion-explainer",
+            Content = $"Uitleg. {LegionQuote}, dus dat is het finaliseer-moment.",
+            ContentHash = "hash",
+        });
+        await db.SaveChangesAsync();
+        var svc = new ClarificationMiningService(db, Ai(() => OneConceptAnswer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Documents);
+        Assert.Equal(1, r.Verified);
+    }
+
+    [Fact]
+    public async Task RunAsync_GepersisteerdeContentKindPatchNotes_WordtNietGemined_OokMetFaqInDeNaam()
+    {
+        // Het omgekeerde: de naam/URL zien er FAQ-achtig uit (de heuristiek
+        // zou "faq" zeggen), maar de LLM heeft deze bron als "patch-notes"
+        // geclassificeerd — voor de BRONSELECTIE wint de gepersisteerde
+        // kind, dus de bron wordt niet gemined. (De destructieve retractie
+        // vereist sinds de #188-review daarbovenop heuristiek-consensus —
+        // zie ClarificationRetractionTests; alleen niet-minen is veilig
+        // zonder tweede signaal, want dat is omkeerbaar.)
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = SourceId, Name = "Unleashed Rules FAQ and Clarifications", Url = SourceUrl,
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+            ContentKind = SourceContentKind.PatchNotes, ContentKindSource = SourceContentKind.LlmOrigin,
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = SourceId, Content = "Legion is a dependent keyword.", ContentHash = "hash",
+        });
+        await db.SaveChangesAsync();
+        var svc = new ClarificationMiningService(db, Ai(() => TwoConceptsAnswer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Documents);
+        Assert.Empty(await db.Corrections.ToListAsync());
+    }
+
+    [Fact]
     public async Task RunAsync_EmbeddingFailure_LaatDocumentOngemarkeerd_EnLogtReden()
     {
         using var db = NewDb();

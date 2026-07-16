@@ -213,9 +213,9 @@ public class SourceDossierService(RbRulesDbContext db)
 
         // Clarify-mining-stappen (#177) voor deze bron (Ref = source.Id) —
         // alleen relevant voor FAQ-/clarificatie-bronnen (zelfde poort als
-        // ClarificationMiningService: TrustTier == 1 + de naam-/URL-
-        // heuristiek), maar de query zelf kost niets als er nooit een
-        // clarify-stap voor deze bron liep.
+        // ClarificationMiningService: TrustTier == 1 + bron-type "faq"),
+        // maar de query zelf kost niets als er nooit een clarify-stap voor
+        // deze bron liep.
         var clarifySteps = await db.RunLogs.AsNoTracking()
             .Where(l => l.Kind == ClarificationMiningService.LedgerKind && l.Ref == id)
             .OrderByDescending(l => l.CreatedAt)
@@ -245,10 +245,13 @@ public class SourceDossierService(RbRulesDbContext db)
         }
 
         // Idem voor clarify-mining (#177), maar dan de FAQ-/clarificatie-poort
-        // (TrustTier == 1 + naam-/URL-heuristiek) in plaats van trust ≥ 3.
+        // (TrustTier == 1 + bron-type "faq" — #188 increment 2:
+        // SourceContentKind.Resolve, de gepersisteerde LLM-classificatie met
+        // de oude naam-/URL-heuristiek als transitionele null-fallback) in
+        // plaats van trust ≥ 3.
         if (yield.Documents > 0
             && source.TrustTier == 1
-            && ClarificationSources.IsMatch(source.Id, source.Url, source.Name))
+            && SourceContentKind.Resolve(source.ContentKind, source.Id, source.Url, source.Name) == SourceContentKind.Faq)
         {
             var latestDocClarified = await db.Documents.AsNoTracking()
                 .Where(d => d.SourceId == id)

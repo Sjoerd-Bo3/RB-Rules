@@ -2,8 +2,16 @@ using Fido2NetLib;
 
 namespace RbRules.Api;
 
+/// <summary>Beheerder-bewerking van een bron. <c>ContentKind</c> (#188-review,
+/// fix C) is de bron-type-override: "faq" | "patch-notes" | "other" zet de
+/// classificatie vast met herkomst "admin" (nooit meer geherclassificeerd;
+/// telt in de consensus-poort van de patch-notes-retractie als menselijke
+/// bevestiging); leeg ("") wist haar — terug naar herclassificatie bij de
+/// eerstvolgende scan (zelfde leeg-is-expliciet-wissen-conventie als
+/// <see cref="FeedPatch.CategoryFilter"/>); null = niet aanraken.</summary>
 public record SourcePatch(
-    string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled);
+    string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled,
+    string? ContentKind = null);
 
 /// <summary>Beheerder-bewerking van een bron-feed (#167). CategoryFilter leeg
 /// (""), niet null, betekent expliciet "alle categorieën" (het filter uit).</summary>

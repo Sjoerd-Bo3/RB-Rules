@@ -31,7 +31,19 @@ namespace RbRules.Domain;
 /// ClarificationMiningService) gate't zelf ook op TrustTier == 1 — alleen een
 /// officiële bron krijgt automatisch een verified ruling
 /// (#166-autoriteitsmodel); deze detector zegt alleen iets over de vorm van
-/// de bron, niets over zijn gezag.</summary>
+/// de bron, niets over zijn gezag.
+///
+/// <b>Deterministisch vangnet sinds #188 increment 2.</b> Dit is niet langer
+/// de primaire bron-type-classificatie: die is een LLM-BESLISSING (<see
+/// cref="SourceContentKind"/>), gezet bij de scan van een trust-1-bron en
+/// gepersisteerd op <see cref="Source.ContentKind"/> — een substring-match op
+/// Id/Url/Name kan een bron zonder de magische woorden in zijn slug niet
+/// herkennen, en een dubbelzinnige naam (bv. "Rules FAQ and Patch Notes")
+/// matcht per ongeluk beide kanten. Deze klasse blijft bestaan als (a) het
+/// vangnet waar <see cref="SourceContentKind.HeuristicKind"/> op terugvalt
+/// bij AI-uitval/onbruikbaar LLM-antwoord, en (b) de transitionele
+/// null-fallback (<see cref="SourceContentKind.Resolve"/>) voor bronnen die
+/// nog niet opnieuw gescand zijn sinds deze increment.</summary>
 public static class ClarificationSources
 {
     private static readonly string[] FaqKeywords =
