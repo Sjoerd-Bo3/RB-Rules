@@ -3,8 +3,13 @@ using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
 
+/// <summary><paramref name="CapHit"/> (#190): machine-leesbaar of deze run
+/// op de per-run cap (<c>maxItems</c>) is gestrand — er ligt dan werk klaar
+/// voor een volgende run. Paden draineren hierop in plaats van op de "cap
+/// van N bereikt"-tekst in <paramref name="Message"/> te matchen.</summary>
 public record ClarificationMineResult(
-    int Documents, int Verified, int Pending, int Updated, int Failed, int Retracted, string Message);
+    int Documents, int Verified, int Pending, int Updated, int Failed, int Retracted,
+    string Message, bool CapHit = false);
 
 /// <summary>#177: FAQ-/clarificatie-artikelen (bv. de Unleashed Rules FAQ)
 /// worden door de scan-pipeline geknipt en geëmbed als vaste-lengte-slabs die
@@ -271,7 +276,7 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
             + $"{updated} bijgewerkt, {failed} mislukt"
             + (failed > 0 ? " (redenen in run_log)" : "")
             + (budgetHit ? $" — cap van {maxItems} bereikt, rest volgt bij de volgende run" : "");
-        return new(docs, verified, pending, updated, failed, retracted, message);
+        return new(docs, verified, pending, updated, failed, retracted, message, budgetHit);
     }
 
     /// <summary>#185-opruiming: retracten van clarify-mining-<see

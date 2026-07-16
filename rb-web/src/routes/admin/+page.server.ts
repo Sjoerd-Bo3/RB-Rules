@@ -7,10 +7,10 @@ export const load: PageServerLoad = async ({ cookies }) => {
 	if (!authed(cookies))
 		return {
 			authed: false, sources: [], status: null, corrections: [],
-			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: []
+			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: []
 		};
 	try {
-		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds] =
+		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds, paths] =
 			await Promise.all([
 				adminApi<unknown[]>('/api/sources'),
 				adminApi<unknown>('/api/admin/status'),
@@ -24,16 +24,18 @@ export const load: PageServerLoad = async ({ cookies }) => {
 				// Bron-feeds (#167): alleen de naam/id nodig voor "stamt van: …"
 				// bij de bronnentabel hieronder; het volledige beheer zit op
 				// /admin/overview/feeds.
-				adminApi<unknown[]>('/api/admin/overview/feeds').catch(() => [])
+				adminApi<unknown[]>('/api/admin/overview/feeds').catch(() => []),
+				// Paden (#190): geordende jobs die vanzelf doorstromen.
+				adminApi<unknown[]>('/api/admin/paths').catch(() => [])
 			]);
 		return {
 			authed: true, sources, status, corrections, askTraces,
-			knowledge, mechanics, upcoming, feeds, apiDown: false
+			knowledge, mechanics, upcoming, feeds, paths, apiDown: false
 		};
 	} catch {
 		return {
 			authed: true, sources: [], status: null, corrections: [],
-			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], apiDown: true
+			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], apiDown: true
 		};
 	}
 };
@@ -62,6 +64,19 @@ export const actions: Actions = {
 		const name = String(form.get('name') ?? '');
 		try {
 			await adminApi(`/api/admin/jobs/${encodeURIComponent(name)}`, { method: 'POST' });
+			return { started: name };
+		} catch (e) {
+			return fail(409, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Paden (#190): zelfde TryStart-conflictgedrag als losse jobs — één pad of
+	// job tegelijk (JobRunner-gate), dus dezelfde 409-afhandeling.
+	path: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const name = String(form.get('name') ?? '');
+		try {
+			await adminApi(`/api/admin/paths/${encodeURIComponent(name)}`, { method: 'POST' });
 			return { started: name };
 		} catch (e) {
 			return fail(409, { error: e instanceof Error ? e.message : String(e) });

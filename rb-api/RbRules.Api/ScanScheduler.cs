@@ -45,6 +45,15 @@ public class ScanScheduler(
     // claims-harvest — nieuwe FAQ-artikelen verschijnen niet vaker dan
     // dagelijks, en de run is idempotent (ClarifiedAt + exacte-tekst-toets).
     private static readonly TimeSpan ClarifyMineInterval = TimeSpan.FromDays(1);
+    // Paden periodiek inplanbaar (#190): zelfde venster-mechanisme als de
+    // losse jobs hierboven (JobLedger bepaalt het venster, TryStartPeriodicPathAsync
+    // is het pad-equivalent van TryStartPeriodicJobAsync), maar bewust LEEG —
+    // dit voegt alleen de MOGELIJKHEID toe om een pad in te plannen. De
+    // bestaande nachtelijke/wekelijkse cadans hierboven (relations/scout/
+    // decks/clarify als losse jobs) verandert niet; een pad hier inplannen is
+    // een latere, bewuste keuze (een nieuwe entry), geen gedragswijziging van
+    // deze PR.
+    private static readonly IReadOnlyList<(string PathName, TimeSpan Window)> PathSchedules = [];
     private DateTimeOffset _lastCardSync = DateTimeOffset.MinValue;
     private DateTimeOffset _lastClaimsMine = DateTimeOffset.MinValue;
 
@@ -203,6 +212,12 @@ public class ScanScheduler(
                 await TryStartPeriodicJobAsync(scope.ServiceProvider, "scout", ScoutInterval, ct);
                 await TryStartPeriodicJobAsync(scope.ServiceProvider, "decks", DecksInterval, ct);
                 await TryStartPeriodicJobAsync(scope.ServiceProvider, "clarify", ClarifyMineInterval, ct);
+
+                // Paden (#190): PathSchedules is leeg (zie hierboven) — deze
+                // lus is vandaag een no-op en verandert dus niets aan de
+                // bestaande cadans; de mogelijkheid staat wel klaar.
+                foreach (var (pathName, window) in PathSchedules)
+                    await TryStartPeriodicPathAsync(scope.ServiceProvider, pathName, window, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -246,6 +261,39 @@ public class ScanScheduler(
             // Grootboek even onleesbaar (db-hik): loggen en volgende tick
             // opnieuw — de scheduler zelf mag hier nooit op stoppen.
             logger.LogWarning(ex, "Periodieke job '{Name}' niet gestart", name);
+        }
+    }
+
+    /// <summary>Pad-equivalent van <see cref="TryStartPeriodicJobAsync"/>
+    /// (#190): zelfde venster-/gate-logica, maar start een heel
+    /// <see cref="PathDefinition"/> via <see cref="PathRunner"/>. Padrun-
+    /// afrondingen landen (via JobRunner) op dezelfde Kind="job"-regel als een
+    /// losse job, dus <see cref="JobLedger.LastRunAsync"/> werkt hier
+    /// ongewijzigd op de padnaam.</summary>
+    private async Task TryStartPeriodicPathAsync(
+        IServiceProvider sp, string name, TimeSpan window, CancellationToken ct)
+    {
+        try
+        {
+            var lastRun = await sp.GetRequiredService<JobLedger>().LastRunAsync(name, ct);
+            if (!Scheduling.IsWindowDue(window, lastRun, DateTimeOffset.UtcNow)) return;
+            if (JobPaths.Find(name) is not { } path)
+            {
+                logger.LogError("Periodiek pad '{Name}' bestaat niet in JobPaths", name);
+                return;
+            }
+            if (jobs.TryStart(name, (p, report, token) => PathRunner.RunAsync(path, p, report, token)))
+                logger.LogInformation(
+                    "Periodiek pad '{Name}' gestart (vorige run: {LastRun})",
+                    name, lastRun?.ToString("u") ?? "nog nooit");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Periodiek pad '{Name}' niet gestart", name);
         }
     }
 }

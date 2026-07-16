@@ -3,8 +3,14 @@ using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
 
+/// <summary><paramref name="CapHit"/> (#190): machine-leesbaar of er na deze
+/// run nog werk klaarligt — ofwel meer concept-ankers dan <c>maxUnits</c>
+/// toeliet, ofwel de mechanieken-overzichtspass zelf niet aan de beurt kwam
+/// doordat de concept-ankers het hele budget opsoupeerden. Paden draineren
+/// hierop in plaats van op tekst in <paramref name="Message"/> te matchen.</summary>
 public record RelationMineResult(
-    int Units, int NewRelations, int Duplicates, int NewKinds, int Failed, string Message);
+    int Units, int NewRelations, int Duplicates, int NewKinds, int Failed, string Message,
+    bool CapHit = false);
 
 /// <summary>Relatie-mining (#116): de LLM ontdekt relaties over de kennislagen
 /// heen (kaart↔mechaniek↔sectie↔concept↔claim) en levert ze als reviewbare
@@ -104,10 +110,13 @@ public class RelationMiningService(RbRulesDbContext db, RbAiClient ai)
             .Where(k => k.Kind == "primer")
             .OrderBy(k => k.Topic)
             .ToListAsync(ct);
-        var todo = docs
+        // #190: het volledige kandidatenaantal (vóór Take) is de basis voor
+        // CapHit hieronder — meer eligible dan maxUnits toeliet betekent dat
+        // er na deze run nog concept-ankers klaarliggen.
+        var eligible = docs
             .Where(k => force || k.RelationsMinedAt is null || k.RelationsMinedAt < k.UpdatedAt)
-            .Take(maxUnits)
             .ToList();
+        var todo = eligible.Take(maxUnits).ToList();
 
         foreach (var doc in todo)
         {
@@ -132,7 +141,9 @@ public class RelationMiningService(RbRulesDbContext db, RbAiClient ai)
         // ── 2. Mechanieken-overzichtspass: één gecapte call per run; de
         // dedupe maakt hem idempotent (her-run zonder nieuwe kennis is een
         // no-op in opslag, hooguit één cheap-call).
-        if (units < maxUnits && mechanics.Count >= 2)
+        var mechanicsPassEligible = mechanics.Count >= 2;
+        var mechanicsPassRan = false;
+        if (units < maxUnits && mechanicsPassEligible)
         {
             progress?.Invoke("mechanieken-overzicht minen (relaties tussen mechanieken, secties en concepten)");
             var (lines, offered) = await BuildMechanicsContextAsync(docs, mechanics, ct);
@@ -142,15 +153,22 @@ public class RelationMiningService(RbRulesDbContext db, RbAiClient ai)
                 systemPrompt, lines, offered,
                 vocabularySet, rejectedKinds, kindsByName, known, ct);
             Tally(outcome);
+            mechanicsPassRan = true;
             await db.SaveChangesAsync(ct);
         }
+
+        // #190: gestrand op de cap als er meer concept-ankers wachtten dan
+        // dit budget toeliet, óf als de concept-ankers het hele budget
+        // opsoupeerden vóórdat de mechanieken-pass aan de beurt kwam.
+        var capHit = eligible.Count > todo.Count || (mechanicsPassEligible && !mechanicsPassRan);
 
         var message =
             $"{units} eenheden verwerkt: {newRelations} nieuwe relatievoorstellen, "
             + $"{duplicates} al bekend of met verworpen kind, {newKinds} nieuwe kind-kandidaten, "
             + $"{failed} mislukt"
-            + (failed > 0 ? " (redenen in run_log)" : "");
-        return new(units, newRelations, duplicates, newKinds, failed, message);
+            + (failed > 0 ? " (redenen in run_log)" : "")
+            + (capHit ? $" — cap van {maxUnits} eenheden bereikt, rest volgt bij de volgende run" : "");
+        return new(units, newRelations, duplicates, newKinds, failed, message, capHit);
     }
 
     /// <summary>Eén mining-eenheid: cheap-call → tolerante parse → opslag als

@@ -24,7 +24,7 @@ public class JobRunner(IServiceScopeFactory scopeFactory, ILogger<JobRunner> log
 
     public bool TryStart(
         string name,
-        Func<IServiceProvider, Action<string>, CancellationToken, Task<string>> work)
+        Func<IServiceProvider, Action<string>, CancellationToken, Task<JobOutcome>> work)
     {
         lock (_lock)
         {
@@ -47,7 +47,8 @@ public class JobRunner(IServiceScopeFactory scopeFactory, ILogger<JobRunner> log
             try
             {
                 await using var scope = scopeFactory.CreateAsyncScope();
-                detail = await work(scope.ServiceProvider, Report, CancellationToken.None);
+                var outcome = await work(scope.ServiceProvider, Report, CancellationToken.None);
+                detail = outcome.Detail;
             }
             catch (Exception ex)
             {

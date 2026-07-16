@@ -39,6 +39,7 @@ public class RelationMiningServiceTests
         Assert.Equal(1, r.Units);
         Assert.Equal(2, r.NewRelations);
         Assert.Equal(0, r.Failed);
+        Assert.False(r.CapHit);
         Assert.NotNull(doc.RelationsMinedAt);
 
         var relations = await db.Relations.OrderBy(x => x.Id).ToListAsync();
@@ -183,6 +184,35 @@ public class RelationMiningServiceTests
         Assert.Equal(0, r.Failed);
         Assert.NotNull(doc.RelationsMinedAt);
         Assert.Empty(await db.Relations.ToListAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_MeerAnkersDanMaxUnits_ZetCapHit()
+    {
+        // #190: CapHit is het machine-leesbare drain-signaal voor paden — hier
+        // zijn er twee concept-ankers maar maxUnits laat er maar één toe.
+        using var db = NewDb();
+        var first = await SeedConceptWorldAsync(db);
+        db.KnowledgeDocs.Add(new KnowledgeDoc
+        {
+            Kind = "primer", Topic = "scoring", Title = "Scoring",
+            Body = "Scoring is about holding battlefields at end of round.",
+            Status = "approved",
+        });
+        await db.SaveChangesAsync();
+        var svc = new RelationMiningService(db, Ai(() => GoodAnswer));
+
+        var r = await svc.RunAsync(maxUnits: 1);
+
+        Assert.Equal(1, r.Units);
+        Assert.True(r.CapHit);
+        Assert.Contains("cap van 1 eenheden bereikt", r.Message);
+        Assert.NotNull(first.RelationsMinedAt); // "combat" komt eerst (alfabetisch)
+
+        // Her-run zonder cap-druk verwerkt de resterende anker en drained.
+        var again = await svc.RunAsync();
+        Assert.Equal(1, again.Units);
+        Assert.False(again.CapHit);
     }
 
     // --- testinfra (patroon ClaimMiningServiceTests) ----------------------

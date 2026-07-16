@@ -120,6 +120,9 @@ public class ClaimMiningServiceTests
 
         Assert.Equal(1, r.NewClaims);
         Assert.Equal(0, r.Failed);
+        // #190: geen cap geraakt — paden mogen op dit veld draineren i.p.v.
+        // op de detailtekst te matchen.
+        Assert.False(r.CapHit);
         Assert.NotNull(doc.ClaimsMinedAt);
         var claim = await db.Claims.SingleAsync();
         Assert.Equal("mulligan", claim.TopicRef);
@@ -144,6 +147,9 @@ public class ClaimMiningServiceTests
         Assert.Equal(1, r.Corroborated);
         Assert.Equal(0, r.Failed);
         Assert.Contains("cap van 1 claims bereikt", r.Message);
+        // #190: CapHit is het machine-leesbare equivalent van die tekst —
+        // paden (JobPaths/PathRunner) draineren hierop.
+        Assert.True(r.CapHit);
         Assert.Null(doc.ClaimsMinedAt);
 
         // Her-run zonder cap-druk: dedupe maakt de eerste claim idempotent
@@ -152,10 +158,54 @@ public class ClaimMiningServiceTests
         var again = await svc.RunAsync();
         Assert.Equal(1, again.Documents);
         Assert.Equal(1, again.Corroborated);
+        Assert.False(again.CapHit);
         Assert.NotNull(doc.ClaimsMinedAt);
     }
 
+    [Fact]
+    public async Task RunAsync_HertoetsBacklogGroterDanHetVenster_ZetCapHit()
+    {
+        // Review-fix #190: ook een "unchecked"-backlog groter dan het
+        // MaxRechecksPerRun-venster (15) is "cap geraakt" — anders bleef die
+        // achterstand voor een pad-drain onzichtbaar liggen. Geen community-
+        // bronnen geseed: de run doet alléén de hertoets, en zonder officiële
+        // regelindex blijven de claims unchecked (degradatie, geen AI-call).
+        using var db = NewDb();
+        for (var i = 0; i < 16; i++) db.Claims.Add(UncheckedClaim(i));
+        await db.SaveChangesAsync();
+        var svc = new ClaimMiningService(db, Ai(() => null), Embeddings(ok: false));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Documents);
+        Assert.Equal(0, r.Rechecked); // geen regelindex: alles blijft unchecked
+        Assert.True(r.CapHit);
+        Assert.Contains("hertoets-backlog groter dan 15", r.Message);
+    }
+
+    [Fact]
+    public async Task RunAsync_HertoetsBacklogBinnenHetVenster_GeenCapHit()
+    {
+        using var db = NewDb();
+        for (var i = 0; i < 15; i++) db.Claims.Add(UncheckedClaim(i));
+        await db.SaveChangesAsync();
+        var svc = new ClaimMiningService(db, Ai(() => null), Embeddings(ok: false));
+
+        var r = await svc.RunAsync();
+
+        Assert.False(r.CapHit);
+    }
+
     // --- testinfra -------------------------------------------------------
+
+    /// <summary>Claim die op de hertoets wacht: unchecked mét embedding
+    /// (de pending-selectie van RecheckOfficialAsync).</summary>
+    private static Claim UncheckedClaim(int i) => new()
+    {
+        TopicType = "concept", TopicRef = $"topic-{i}", Statement = $"Statement {i}.",
+        Status = "unreviewed", OfficialStatus = "unchecked",
+        Embedding = new Vector(new[] { 1f, i }),
+    };
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
         : HttpMessageHandler

@@ -62,6 +62,32 @@
 		}
 	];
 
+	// Paden (#190): geordende jobs die vanzelf doorstromen. De stappenlijst
+	// zelf komt van /api/admin/paths (pathDefs hieronder) — hier alleen het
+	// label/de uitleg per pad, in dezelfde vorm als JOBS hierboven.
+	interface PathStepInfo { jobName: string; drain: boolean; maxRepeats: number; }
+	interface PathInfo { name: string; steps: PathStepInfo[]; }
+	const pathDefs = $derived((data.paths ?? []) as PathInfo[]);
+
+	const PATHS: { name: string; label: string; hint: string }[] = [
+		{
+			name: 'ingest', label: 'Ingest-pad',
+			hint: 'nieuwe/gewijzigde bronnen volledig verwerken: bronnen scannen → classificaties aanvullen → mechanieken/claims/FAQ-concepten minen → embeddings → graph'
+		},
+		{
+			name: 'card', label: 'Kaart-pad',
+			hint: 'nieuwe/gewijzigde kaarten door de pijplijn: kaarten synchroniseren → embeddings → graph'
+		},
+		{
+			name: 'knowledge', label: 'Kennis-pad',
+			hint: 'de LLM-afgeleide kennislaag bijwerken zonder de bron-scan opnieuw te draaien: claims → FAQ-concepten → relaties → graph'
+		},
+		{
+			name: 'full', label: 'Volledige regeneratie',
+			hint: 'primer → het hele kennis-pad (claims → FAQ-concepten → relaties → graph); bevat NIET de wipe — die blijft de aparte Gevarenzone-actie hieronder'
+		}
+	];
+
 	interface Correction {
 		id: number; scope: string; ref: string; text: string;
 		question: string | null; status: string; createdAt: string;
@@ -281,7 +307,14 @@
 			: `${Math.round(s / 86400)}d`;
 	}
 	function jobLabel(name: string): string {
-		return JOBS.find((j) => j.name === name)?.label ?? name;
+		// Review-fix #190: ook paden draaien als JobRunner-run onder hun eigen
+		// naam — de running/laatste-run-banner toont anders de rauwe padnaam
+		// ("ingest") in plaats van het label ("Ingest-pad").
+		return (
+			JOBS.find((j) => j.name === name)?.label ??
+			PATHS.find((p) => p.name === name)?.label ??
+			name
+		);
 	}
 	// Laatste run per job (#122), handmatig én automatisch via de scheduler.
 	function lastRunLabel(name: string): string | null {
@@ -397,6 +430,41 @@
 			</div>
 		{/if}
 
+		<!-- Paden (#190): geordende jobs die vanzelf doorstromen — één klik
+		     start de hele keten (dezelfde éénjob-gate en live-voortgang als de
+		     losse jobs hieronder); de losse jobs blijven daarnaast beschikbaar
+		     voor gericht ingrijpen. -->
+		{#if pathDefs.length}
+			<h2>Paden</h2>
+			<div class="jobs">
+				{#each PATHS as p (p.name)}
+					{@const def = pathDefs.find((x) => x.name === p.name)}
+					<form
+						method="POST" action="?/path"
+						use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}
+						class="job panel path"
+					>
+						<input type="hidden" name="name" value={p.name} />
+						<div class="job-info">
+							<strong>{p.label}</strong>
+							<span class="hint">{p.hint}</span>
+							{#if def}
+								<ol class="path-steps">
+									{#each def.steps as s}
+										<li>{jobLabel(s.jobName)}{#if s.drain}<span class="meta"> (gedraineerd tot klaar)</span>{/if}</li>
+									{/each}
+								</ol>
+							{/if}
+							{#if lastRunLabel(p.name)}<span class="hint">{lastRunLabel(p.name)}</span>{/if}
+						</div>
+						<button disabled={running !== null}>
+							{running?.name === p.name ? 'Bezig' : 'Start pad'}
+						</button>
+					</form>
+				{/each}
+			</div>
+		{/if}
+
 		<!-- Acties -->
 		<h2>Acties</h2>
 		<form method="POST" action="?/job" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }} class="job panel job-all">
@@ -448,8 +516,9 @@
 				<span class="hint">
 					Onomkeerbaar: verwijdert alle claims, primer-docs, correcties en relaties, en reset de
 					mining-markers zodat brondocumenten opnieuw gemined worden. Genereert daarna NIETS
-					automatisch — start zelf, in volgorde: Primer genereren → Claims minen →
-					FAQ-concepten minen → Relaties minen.
+					automatisch — start daarna zelf het pad "Volledige regeneratie" hierboven (primer →
+					claims → FAQ-concepten → relaties → graph, elke mining-stap gedraineerd tot de cap niet
+					meer geraakt wordt).
 				</span>
 				{#if lastRunLabel('regenerateknowledge')}<span class="hint">{lastRunLabel('regenerateknowledge')}</span>{/if}
 			</div>
@@ -861,6 +930,9 @@
 	.job-info .hint { color: var(--muted); font-size: 0.78rem; }
 	/* Gevarenzone (#187): status via kleur + tekst, geen emoji's. */
 	.job.danger { border-color: var(--err); background: var(--err-soft); }
+	/* Paden (#190): stappenlijst iets kleiner/gedempt dan de hint erboven. */
+	.path-steps { list-style: decimal; margin: 4px 0 0 1.1em; padding: 0; color: var(--muted); font-size: 0.78rem; }
+	.path-steps li { margin: 1px 0; }
 	.danger-button { background: var(--err); color: var(--accent-ink); }
 	.primer-body { white-space: pre-wrap; margin: 8px 0 2px; line-height: 1.6; }
 	.trace { padding: 10px 14px; margin-bottom: 6px; }

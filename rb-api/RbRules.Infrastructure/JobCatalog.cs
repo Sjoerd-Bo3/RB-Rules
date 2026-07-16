@@ -4,11 +4,27 @@ namespace RbRules.Infrastructure;
 
 /// <summary>Definitie van een admin-achtergrondjob: naam + uit te voeren werk.
 /// Het werk krijgt een scoped IServiceProvider (JobRunner opent de scope),
-/// een voortgangs-reporter en een token; het resultaat is de detail-regel
-/// voor run_log/admin.</summary>
+/// een voortgangs-reporter en een token; het resultaat is <see
+/// cref="JobOutcome"/> (detail-regel voor run_log/admin + of de job
+/// gedraineerd is).</summary>
 public sealed record JobDefinition(
     string Name,
-    Func<IServiceProvider, Action<string>, CancellationToken, Task<string>> Run);
+    Func<IServiceProvider, Action<string>, CancellationToken, Task<JobOutcome>> Run);
+
+/// <summary>Resultaat van één jobrun (#190): <paramref name="Detail"/> is de
+/// bestaande detail-regel (run_log/admin, ongewijzigd gedrag); <paramref
+/// name="Drained"/> meldt machine-leesbaar of de job geen VERS werk liet
+/// liggen voor een volgende run — de meeste jobs verwerken hun hele werklast
+/// in één keer (default true); een per-run gecapte job zet dit op false
+/// zolang zijn cap geraakt is (claims/clarify/relations/decks via hun eigen
+/// CapHit-veld; mine via Remaining − Failed). Vers werk ≠ failures
+/// (review-fix #190): items die zojuist FAALDEN tellen niet — een directe
+/// herhaling faalt vrijwel zeker opnieuw (rb-ai down, poison item), dus die
+/// horen bij de volgende run/tick, niet bij een drain-lus. Paden (#190)
+/// herhalen een Drain-stap tot dit true is, met een max-herhalingen-vangrail
+/// én een no-progress-guard in PathRunner — zónder string-matching op de
+/// detailtekst.</summary>
+public sealed record JobOutcome(string Detail, bool Drained = true);
 
 /// <summary>Catalogus van admin-jobs (#59: de ±150-regel switch in
 /// AdminEndpoints is weg). Een nieuwe job is één registratie in
@@ -96,7 +112,7 @@ public static class JobCatalog
             new("regenerateknowledge", RegenerateKnowledgeAsync),
         }.ToDictionary(j => j.Name);
 
-    private static async Task<string> RunAllAsync(
+    private static async Task<JobOutcome> RunAllAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var results = new List<string>();
@@ -153,10 +169,10 @@ public static class JobCatalog
                 progress: p => report($"8/8 · interacties — {p}"), ct: ct);
             return $"{r.Verified} geverifieerd";
         });
-        return string.Join(" · ", results);
+        return new(string.Join(" · ", results));
     }
 
-    private static async Task<string> ScanAsync(
+    private static async Task<JobOutcome> ScanAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var scanStart = DateTimeOffset.UtcNow;
@@ -172,159 +188,177 @@ public static class JobCatalog
         {
             // push is best-effort
         }
-        return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
+        return new(string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}")));
     }
 
-    private static async Task<string> FeedsAsync(
+    private static async Task<JobOutcome> FeedsAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         // Handmatige/losse trigger: forceer alle enabled feeds ongeacht
         // cadence (zelfde onlyDue:false-keuze als de "Bronnen scannen"-actie).
         var r = await sp.GetRequiredService<FeedCrawlService>().RunAsync(
             onlyDue: false, progress: report, ct: ct);
-        return r.Message;
+        return new(r.Message);
     }
 
-    private static async Task<string> CardsAsync(
+    private static async Task<JobOutcome> CardsAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(report, ct);
-        return $"{r.Sets} sets, {r.CardsSummary}{r.RepairSummary}";
+        return new($"{r.Sets} sets, {r.CardsSummary}{r.RepairSummary}");
     }
 
-    private static async Task<string> EmbedAsync(
+    private static async Task<JobOutcome> EmbedAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<CardEmbeddingPipeline>()
             .RunAsync(progress: report, ct: ct);
-        return $"{r.Embedded} kaarten geembed, {r.Skipped} al actueel";
+        return new($"{r.Embedded} kaarten geembed, {r.Skipped} al actueel");
     }
 
-    private static async Task<string> MineAsync(
+    private static async Task<JobOutcome> MineAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<MechanicMiningService>()
             .RunAsync(progress: report, ct: ct);
-        return $"{r.Mined} kaarten gemined, {r.Remaining} resterend";
+        // #190 (review-fix): vers-werk-semantiek. Remaining telt óók de
+        // zojuist gefaalde kaarten mee (Mechanics blijft null) — een kale
+        // Remaining==0 zou een pad-drain bij rb-ai-uitval of een poison card
+        // tot MaxRepeats futiele herhalingen kosten. Gedraineerd = geen
+        // kaarten meer die deze run niet eens aan de beurt kwamen; failures
+        // zijn geen verse werklast (een directe herhaling faalt vrijwel
+        // zeker opnieuw — de volgende run/tick probeert ze gewoon nog eens).
+        return new($"{r.Mined} kaarten gemined, {r.Remaining} resterend",
+            Drained: r.Remaining - r.Failed <= 0);
     }
 
-    private static async Task<string> RulesAsync(
+    private static async Task<JobOutcome> RulesAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         // Handmatige run = volledige herbouw, zodat parser-verbeteringen
         // ook op bestaande documenten landen.
         var r = await sp.GetRequiredService<RuleChunkPipeline>()
             .RunAsync(force: true, report, ct);
-        return $"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen (herbouwd)";
+        return new($"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen (herbouwd)");
     }
 
-    private static async Task<string> BansAsync(
+    private static async Task<JobOutcome> BansAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         report("officiële documenten structureren via LLM");
         var r = await sp.GetRequiredService<BanErrataSyncService>().SyncAsync(ct);
-        return $"{r.Bans} bans, {r.Errata} errata gestructureerd";
+        return new($"{r.Bans} bans, {r.Errata} errata gestructureerd");
     }
 
-    private static async Task<string> GraphAsync(
+    private static async Task<JobOutcome> GraphAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         report("kaarten + facetten én de kennislagen (secties, concepten, claims, bronnen, errata, changes, relaties) naar Neo4j projecteren");
         var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
-        return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics, "
+        return new($"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics, "
             + $"{r.Sections} secties, {r.Concepts} concepten, {r.Claims} claims, "
             + $"{r.Sources} bronnen, {r.Errata} errata, {r.Changes} changes, "
-            + $"{r.Relations} relaties";
+            + $"{r.Relations} relaties");
     }
 
-    private static async Task<string> PrimerAsync(
+    private static async Task<JobOutcome> PrimerAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<PrimerService>()
             .GenerateAsync(progress: report, ct: ct);
-        return $"{r.Written} primer-docs geschreven (drafts), {r.Skipped} goedgekeurd gelaten, {r.Failed} mislukt";
+        return new($"{r.Written} primer-docs geschreven (drafts), {r.Skipped} goedgekeurd gelaten, {r.Failed} mislukt");
     }
 
-    private static async Task<string> InteractionsAsync(
+    private static async Task<JobOutcome> InteractionsAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<InteractionService>()
             .MineAsync(progress: report, ct: ct);
-        return $"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd";
+        return new($"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd");
     }
 
-    private static async Task<string> ScoutAsync(
+    private static async Task<JobOutcome> ScoutAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<SourceScoutService>()
             .RunAsync(progress: report, ct: ct);
-        return r.Message;
+        return new(r.Message);
     }
 
-    private static async Task<string> ClassifyAsync(
+    private static async Task<JobOutcome> ClassifyAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<ChangeClassificationService>()
             .ClassifyPendingAsync(progress: report, ct: ct);
-        return $"{r.Classified} changes alsnog geclassificeerd, {r.Failed} mislukt, {r.Remaining} resterend";
+        // #190 (review-fix): ClassifyPendingAsync is ONgecapt — één run
+        // verwerkt de hele backlog, dus wat na de run resteert zijn precies
+        // de zojuist gefaalde items (plus eventueel tussentijds binnengekomen
+        // changes). Kale Remaining==0 zou bij rb-ai-uitval een pad-drain de
+        // volledige falende backlog MaxRepeats keer laten herkauwen.
+        // Vers-werk-semantiek: alleen niet-geprobeerde items tellen.
+        return new(
+            $"{r.Classified} changes alsnog geclassificeerd, {r.Failed} mislukt, {r.Remaining} resterend",
+            Drained: r.Remaining - r.Failed <= 0);
     }
 
-    private static async Task<string> ClaimsAsync(
+    private static async Task<JobOutcome> ClaimsAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<ClaimMiningService>()
             .RunAsync(progress: report, ct: ct);
-        return r.Message;
+        return new(r.Message, Drained: !r.CapHit);
     }
 
-    private static async Task<string> ClarifyAsync(
+    private static async Task<JobOutcome> ClarifyAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<ClarificationMiningService>()
             .RunAsync(progress: report, ct: ct);
-        return r.Message;
+        return new(r.Message, Drained: !r.CapHit);
     }
 
-    private static async Task<string> RelationsAsync(
+    private static async Task<JobOutcome> RelationsAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<RelationMiningService>()
             .RunAsync(progress: report, ct: ct);
-        return r.Message;
+        return new(r.Message, Drained: !r.CapHit);
     }
-    private static Task<string> SetReleaseAsync(
+    private static async Task<JobOutcome> SetReleaseAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct) =>
-        sp.GetRequiredService<SetReleaseService>().RunChainAsync(report, ct);
+        new(await sp.GetRequiredService<SetReleaseService>().RunChainAsync(report, ct));
 
-    private static async Task<string> DecksAsync(
+    private static async Task<JobOutcome> DecksAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<DeckIngestService>()
             .RunAsync(progress: report, ct: ct);
-        return r.Message;
+        // #190 (review-fix): de job is per-run gecapt (max pagina's) en het
+        // result meldt dat al machine-leesbaar — doorgeven i.p.v. discarden.
+        return new(r.Message, Drained: !r.CapHit);
     }
 
-    private static async Task<string> BenchmarkAsync(
+    private static async Task<JobOutcome> BenchmarkAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<BenchmarkService>()
             .RunAsync(label: null, progress: report, ct: ct);
-        return r.Message;
+        return new(r.Message);
     }
 
-    private static async Task<string> BenchmarkSweepAsync(
+    private static async Task<JobOutcome> BenchmarkSweepAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<BenchmarkService>()
             .RunSweepAsync(models: null, progress: report, ct: ct);
-        return r.Message;
+        return new(r.Message);
     }
 
-    private static async Task<string> RegenerateKnowledgeAsync(
+    private static async Task<JobOutcome> RegenerateKnowledgeAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         report("afgeleide kennis (claims, primer-docs, correcties, relaties) verwijderen");
         var r = await sp.GetRequiredService<KnowledgeRegenerationService>().WipeAsync(ct);
-        return r.Message;
+        return new(r.Message);
     }
 }

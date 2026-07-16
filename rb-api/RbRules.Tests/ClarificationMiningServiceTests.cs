@@ -340,12 +340,15 @@ public class ClarificationMiningServiceTests
 
         Assert.Equal(1, r.Verified); // alleen Legion verwerkt (verified), dan cap
         Assert.Contains("cap van 1 bereikt", r.Message);
+        // #190: machine-leesbaar equivalent van die tekst — paden draineren hierop.
+        Assert.True(r.CapHit);
         Assert.Null(doc.ClarifiedAt);
 
         var again = await svc.RunAsync();
         Assert.Equal(1, again.Documents);
         Assert.Equal(1, again.Updated); // Legion is al bekend — bijgewerkt
         Assert.Equal(1, again.Pending); // Reflection tokens is nieuw (ter review)
+        Assert.False(again.CapHit);
         Assert.NotNull(doc.ClarifiedAt);
         Assert.Equal(2, await db.Corrections.CountAsync());
     }
