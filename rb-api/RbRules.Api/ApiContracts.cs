@@ -66,3 +66,8 @@ public record UserPatch(
 /// <summary>Review-beslissing op een claim/relatie (#124): optionele
 /// beheerder-notitie bij bevestigen, verwerpen of notitie-promotie.</summary>
 public record ReviewDecision(string? Note);
+
+/// <summary>Bulk-actie per aanbevelingsgroep op de relatie-reviewqueue (#199
+/// v1): Recommendation selecteert de groep ("accept"|"reject"|"unsure"),
+/// Decision is wat er met die groep gebeurt ("accept"|"reject").</summary>
+public record RelationBulkDecideRequest(string Recommendation, string Decision);

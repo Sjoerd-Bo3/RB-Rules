@@ -81,6 +81,14 @@ public static class JobCatalog
             // kennislagen heen; voorstellen + nieuwe kind-labels landen in de
             // reviewqueue en gaan pas via de graph-job de graph in.
             new("relations", RelationsAsync),
+            // Relatie-triage (#199 v1): LLM-aanbeveling (accept/reject/unsure
+            // + motivering) per open relatievoorstel — een aanbevelings-
+            // machine, geen autoriteitspad (zie RelationTriageService). Loopt
+            // ná "relations" (er moet iets te triageren zijn) en vóór "graph"
+            // (de graph-projectie kijkt alleen naar Status, niet naar de
+            // aanbeveling — de volgorde is dus geen harde afhankelijkheid,
+            // maar wel de logische plek in het kennis-pad).
+            new("relationtriage", RelationTriageAsync),
             // Evolutie-raamwerk (#52): de volledige set-release-keten
             // (sync -> nieuwe mechanieken -> embeddings -> graph -> primer).
             new("setrelease", SetReleaseAsync),
@@ -332,6 +340,15 @@ public static class JobCatalog
             .RunAsync(progress: report, ct: ct);
         return new(r.Message, Drained: !r.CapHit);
     }
+
+    private static async Task<JobOutcome> RelationTriageAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<RelationTriageService>()
+            .RunAsync(progress: report, ct: ct);
+        return new(r.Message, Drained: !r.CapHit);
+    }
+
     private static async Task<JobOutcome> SetReleaseAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct) =>
         new(await sp.GetRequiredService<SetReleaseService>().RunChainAsync(report, ct));

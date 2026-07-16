@@ -654,6 +654,22 @@ public class Relation
     public DateTimeOffset? ArchivedAt { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ReviewedAt { get; set; }
+
+    /// <summary>LLM-triage-aanbeveling (#199 v1, <see
+    /// cref="RbRules.Infrastructure.RelationTriageService"/>): "accept" |
+    /// "reject" | "unsure", null = nog niet getriaged. Puur een aanbeveling —
+    /// GEEN autoriteitspad: alleen een mens wijzigt <see cref="Status"/>
+    /// (rechtstreeks of via de bulk-actie, die per item hetzelfde
+    /// accept-/reject-pad aanroept). Blijft staan ná accept/reject zodat de
+    /// herkomst van de beslissing zichtbaar blijft (#199 eis 4); een
+    /// mens-beoordeeld voorstel (Status niet meer "unreviewed") wordt nooit
+    /// opnieuw getriaged.</summary>
+    public string? Recommendation { get; set; }
+    /// <summary>Één zin (Engels — afgeleide kennis, #187) die de aanbeveling
+    /// motiveert, met de geraadpleegde refs erin gevouwen (geen aparte kolom
+    /// voor refs — het datamodel blijft bewust tot drie nullable velden).</summary>
+    public string? RecommendationReason { get; set; }
+    public DateTimeOffset? RecommendedAt { get; set; }
 }
 
 /// <summary>Community-deck van Piltover Archive (#15, Piltover-first): wij

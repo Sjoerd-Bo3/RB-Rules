@@ -40,12 +40,17 @@ public static class JobPaths
         // Kennis-pad: de LLM-afgeleide kennislaag bijwerken zonder de
         // bron-scan opnieuw te draaien. Elke mining-stap draint (de
         // Phase 2-regeneratieles: claims/clarify hadden meerdere runs nodig
-        // om hun cap niet meer te raken).
+        // om hun cap niet meer te raken). "relationtriage" (#199 v1) staat
+        // ná "relations" (er moet iets te triageren zijn) en vóór "graph" —
+        // de triage-aanbeveling is geen graph-projectie-input, maar dit is
+        // wel de logische plek in de keten (de queue is dan meteen
+        // voorgesorteerd zodra deze pad-run klaar is).
         var knowledgeSteps = new PathStep[]
         {
             new("claims", Drain: true),
             new("clarify", Drain: true),
             new("relations", Drain: true),
+            new("relationtriage", Drain: true),
             new("graph"),
         };
 

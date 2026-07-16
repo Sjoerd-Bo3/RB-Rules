@@ -89,6 +89,9 @@ builder.Services.AddScoped<ClaimMiningService>();
 // officiële FAQ-artikelen als geverifieerde rulings.
 builder.Services.AddScoped<ClarificationMiningService>();
 builder.Services.AddScoped<RelationMiningService>();
+// Relatie-triage (#199 v1): LLM-aanbeveling per open voorstel + het bestaande
+// accept-/reject-pad (losse acties én de bulk-actie per aanbevelingsgroep).
+builder.Services.AddScoped<RelationTriageService>();
 // Agentic-terugkoppeling (#120): voorstellen die de ask-agent achterlaat.
 builder.Services.AddScoped<AgenticRelationService>();
 // Wipe-mechanisme voor de LLM-afgeleide kennislaag (#187): expliciete

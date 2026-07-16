@@ -70,10 +70,20 @@ public record ClaimOverview(
     IReadOnlyList<ClaimStatusCount> StatusCounts, int Archived,
     IReadOnlyList<ClaimOverviewItem> Items);
 
+/// <summary>Recommendation/RecommendationReason (#199 v1): de LLM-triage-
+/// aanbeveling — null zolang de triage-run dit voorstel nog niet zag. Puur
+/// informatief/sorteer-signaal, geen autoriteit (Status blijft de enige bron
+/// van waarheid voor de graph-projectie).</summary>
 public record RelationOverviewItem(
     long Id, string FromRef, string? FromName, string ToRef, string? ToName,
     string Kind, string Explanation, string Provenance, double Trust,
-    string Status, string? ReviewNote, DateTimeOffset? ArchivedAt, DateTimeOffset DetectedAt);
+    string Status, string? ReviewNote, DateTimeOffset? ArchivedAt, DateTimeOffset DetectedAt,
+    string? Recommendation, string? RecommendationReason);
+/// <summary>Aanbevelingsgroep-telling voor de bulk-actie (#199): hoeveel
+/// "unreviewed" voorstellen met deze aanbeveling in de HUIDIGE weergave staan
+/// (dezelfde status-/archieffilter als de items zelf) — de UI toont hiermee
+/// de telling naast de bulk-knop en kan 'm verbergen als de groep leeg is.</summary>
+public record RelationRecommendationCount(string Recommendation, int Count);
 /// <summary>Bewijs bij een kandidaat-kind (#123): een voorbeeldvoorstel
 /// dat het kind draagt, zodat reviewen geen gokken is.</summary>
 public record RelationKindExample(
@@ -87,7 +97,8 @@ public record RelationOverview(
     int Total, int Page, int PageSize,
     IReadOnlyList<RelationStatusCount> StatusCounts, int Archived,
     IReadOnlyList<RelationKindOverviewItem> Kinds,
-    IReadOnlyList<RelationOverviewItem> Items);
+    IReadOnlyList<RelationOverviewItem> Items,
+    IReadOnlyList<RelationRecommendationCount> RecommendationCounts);
 
 public record DeckOverviewItem(
     long Id, string PaId, string? Name, string[] Domains, int Cards, int UnknownCards,
@@ -522,8 +533,25 @@ public class AdminOverviewService(RbRulesDbContext db)
         };
 
         var total = await query.CountAsync();
+        // Aanbevelingsgroep-tellingen (#199) in de HUIDIGE weergave — de
+        // bulk-actie werkt per zichtbare groep, dus dezelfde status-/
+        // archieffilter als de items zelf (niet de ongefilterde tabel).
+        var recommendationCounts = (await query
+                .Where(r => r.Recommendation != null)
+                .GroupBy(r => r.Recommendation!)
+                .Select(g => new { g.Key, Count = g.Count() })
+                .ToListAsync())
+            .Select(r => new RelationRecommendationCount(r.Key, r.Count))
+            .ToList();
         var rows = await query
             .OrderBy(r => r.Status == "unreviewed" && r.ArchivedAt == null ? 0 : 1)
+            // Triage-sortering (#199, "accept eerst"): de twee bulk-
+            // actionabele groepen (accept/reject) eerst — die kan de
+            // beheerder in één klik wegwerken — dan "unsure" en tot slot nog
+            // niet getriaged (geen signaal), telkens nieuwste eerst.
+            .ThenBy(r => r.Recommendation == "accept" ? 0
+                : r.Recommendation == "reject" ? 1
+                : r.Recommendation == "unsure" ? 2 : 3)
             .ThenByDescending(r => r.DetectedAt).ThenBy(r => r.Id)
             .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
             .ToListAsync();
@@ -555,9 +583,10 @@ public class AdminOverviewService(RbRulesDbContext db)
         var items = rows.Select(r => new RelationOverviewItem(
                 r.Id, r.FromRef, NameFor(r.FromRef), r.ToRef, NameFor(r.ToRef),
                 r.Kind, r.Explanation, r.Provenance, r.Trust, r.Status,
-                r.ReviewNote, r.ArchivedAt, r.DetectedAt))
+                r.ReviewNote, r.ArchivedAt, r.DetectedAt,
+                r.Recommendation, r.RecommendationReason))
             .ToList();
-        return new(total, page, PageSize, statusCounts, archived, kinds, items);
+        return new(total, page, PageSize, statusCounts, archived, kinds, items, recommendationCounts);
     }
 
     /// <summary>Piltover Archive-decks (#15): recentst op PA bijgewerkt eerst,
