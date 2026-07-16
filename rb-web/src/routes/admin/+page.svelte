@@ -307,7 +307,14 @@
 			: `${Math.round(s / 86400)}d`;
 	}
 	function jobLabel(name: string): string {
-		return JOBS.find((j) => j.name === name)?.label ?? name;
+		// Review-fix #190: ook paden draaien als JobRunner-run onder hun eigen
+		// naam — de running/laatste-run-banner toont anders de rauwe padnaam
+		// ("ingest") in plaats van het label ("Ingest-pad").
+		return (
+			JOBS.find((j) => j.name === name)?.label ??
+			PATHS.find((p) => p.name === name)?.label ??
+			name
+		);
 	}
 	// Laatste run per job (#122), handmatig én automatisch via de scheduler.
 	function lastRunLabel(name: string): string | null {

@@ -339,10 +339,18 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
 `JobDefinition`'s (naam → `Func<IServiceProvider, Action<string>,
 CancellationToken, Task<JobOutcome>>`); `JobOutcome(Detail, Drained = true)`
 is sinds #190 het uniforme resultaat van elke job — `Drained` is het
-machine-leesbare "niets meer te doen deze run"-signaal (voor de vijf per-run
-gecapte jobs `mine`/`classify`/`claims`/`clarify`/`relations` afgeleid van
-hun eigen `Remaining`/`CapHit`-veld; alle andere jobs zijn per definitie in
-één run klaar en laten het gewoon op de default `true` staan). `JobRunner`
+machine-leesbare "geen VERS werk meer deze run"-signaal. Vers-werk-semantiek
+(review-fix #190): items die zojuist FAALDEN tellen niet als resterend werk
+— een directe herhaling faalt vrijwel zeker opnieuw (rb-ai down, poison
+item), dus die horen bij de volgende run/tick, niet bij een drain-lus. De
+per-run gecapte jobs leiden Drained af van hun eigen resultaat:
+`claims`/`clarify`/`relations`/`decks` via `CapHit` (bij claims telt ook een
+hertoets-backlog groter dan het `MaxRechecksPerRun`-venster mee — een
+goedkope COUNT vooraf), `mine` via `Remaining − Failed`. `classify` is
+ongecapt (één run = de hele backlog) en meldt om dezelfde reden
+`Remaining − Failed` — na een volledige pass resteren immers alleen
+failures; alle overige jobs zijn per definitie in één run klaar en laten de
+default `true` staan. `JobRunner`
 (Api) is de generieke, in-memory éénjob-gate: `TryStart(name, work)` zet
 `_current`, draait `work` in een losse scope + `Task.Run`, en schrijft bij
 afronding altijd een `run_log`-regel (Kind="job", Ref=naam, Status=ok/error,
@@ -352,19 +360,30 @@ hebben exact dezelfde functiehandtekening.
 `JobPaths` (Infrastructure, naast `JobCatalog`) is de padencatalogus: een
 `PathDefinition(Name, Steps)` is een geordende lijst `PathStep(JobName,
 Drain = false, MaxRepeats = 10)` die elk naar een bestaande `JobCatalog`-naam
-verwijst (gevalideerd in `JobPathsTests`). Vier paden — Ingest-, Kaart-,
-Kennis- en het Volledige-regeneratiepad (zie PRD §4.5 voor de precieze
-stappen; bewust GEEN wipe erin, dat blijft `regenerateknowledge` als losse
-Gevarenzone-actie). `PathRunner.RunAsync(path, sp, report, ct, findJob?)`
-(Infrastructure) draait de stappen sequentieel via `job.Run(sp, ...)` —
-`findJob` is een test-seam die in productie op `JobCatalog.Find` defaultet.
-Bij `Drain: true` herhaalt hij dezelfde job tot `outcome.Drained` of tot
-`MaxRepeats` bereikt is (dan gaat het pad gewoon door — de vangrail is geen
-fout, de volgende pad-run pakt de rest op dankzij de idempotente jobs). Elke
-(herhaalde) stap logt een eigen `run_log`-regel (Kind=padnaam, Ref=stapnaam).
-Gooit een stap een exception, dan logt `PathRunner` die stap als "error" en
-gooit door — het pad stopt daar (JobRunner's catch markeert de hele padrun
-als error); de al voltooide stappen blijven staan. Een pad start via
+verwijst (gevalideerd in `JobPathsTests`); Drain hoort alleen op per-run
+gecapte jobs — `classify` staat daarom zonder Drain in het Ingest-pad. Vier
+paden — Ingest-, Kaart-, Kennis- en het Volledige-regeneratiepad (zie PRD
+§4.5 voor de precieze stappen; bewust GEEN wipe erin, dat blijft
+`regenerateknowledge` als losse Gevarenzone-actie).
+`PathRunner.RunAsync(path, sp, report, ct, findJob?)` (Infrastructure)
+draait de stappen sequentieel via `job.Run(sp, ...)` — `findJob` is een
+test-seam die in productie op `JobCatalog.Find` defaultet. Bij `Drain: true`
+herhaalt hij dezelfde job tot `outcome.Drained`, met twee vangrails
+(review-fix #190): de harde `MaxRepeats`-grens én een no-progress-guard die
+de lus vroegtijdig stopt zodra twee opeenvolgende runs een identiek
+resultaat geven (zelfde `Detail` én nog steeds niet Drained — dan eet iets
+het per-run-budget op zonder dat er iets landt); beide vangrails zijn geen
+fout, het pad loopt door naar de volgende stap en de volgende run pakt de
+rest op dankzij de idempotente jobs. Elke (herhaalde) stap logt een eigen
+`run_log`-regel (Kind=padnaam, Ref=stapnaam), geschreven via een EIGEN,
+verse `IServiceScope`/DbContext per schrijfactie en best-effort (review-fix
+#190): nooit de scoped context waarin een stap net crashte — een vervuilde
+change-tracker zou de error-regel kunnen verliezen of half werk van de
+gefaalde stap alsnog committen, en een log-exceptie mag de oorspronkelijke
+stap-fout nooit maskeren. Gooit een stap een exception, dan logt
+`PathRunner` die stap als "error" en gooit door — het pad stopt daar
+(JobRunner's catch markeert de hele padrun als error); de al voltooide
+stappen blijven staan. Een pad start via
 `jobs.TryStart(pathName, (sp, report, ct) => PathRunner.RunAsync(path, sp,
 report, ct))` in `AdminEndpoints`/`ScanScheduler` — dezelfde
 `JobRunner`-instantie, dus een pad en een losse job kunnen nooit tegelijk

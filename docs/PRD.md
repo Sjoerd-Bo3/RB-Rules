@@ -525,22 +525,32 @@ apart in §6.
   (cards → embed → graph), **Kennis-pad** (claims → clarify → relations →
   graph) en **Volledige regeneratie** (primer + het Kennis-pad — bewust
   ZONDER de wipe, die blijft de losse Gevarenzone-actie `regenerateknowledge`
-  hieronder). Een stap kan **Drain**-gedrag hebben: `PathRunner` herhaalt
-  diezelfde job tot `JobOutcome.Drained` true is (geen per-run-cap meer
-  geraakt), met een max-herhalingen-vangrail (standaard 10) — de les uit een
-  handmatige Fase 2-kennisregeneratie waarbij claims/clarify meerdere runs
-  nodig hadden om hun cap niet meer te raken. Drained is machine-leesbaar
-  (`ClaimMineResult`/`ClarificationMineResult`/`RelationMineResult.CapHit`,
-  `MiningResult`/`ClassifyBackfillResult.Remaining == 0`) — geen
-  string-matching op de detailtekst. Faalt een stap, dan stopt het pad
-  netjes (status error); de al-gedraaide stappen blijven staan (de
-  onderliggende jobs zijn zelf idempotent). Elke (herhaalde) stap logt apart
-  naar run_log (Kind = padnaam, Ref = stapnaam). Periodiek inplannen is
-  mogelijk (zelfde `JobLedger`-vensterlogica als de losse jobs) maar nog niet
-  benut — de bestaande nachtelijke/wekelijkse cadans van de losse jobs is
-  ongewijzigd. *Route* `/admin` (sectie "Paden", boven de losse jobs) ·
-  *endpoints* `GET /api/admin/paths`, `POST /api/admin/paths/{name}` (meelift
-  op `/api/admin/status`).
+  hieronder). Een per-run gecapte stap kan **Drain**-gedrag hebben:
+  `PathRunner` herhaalt diezelfde job tot `JobOutcome.Drained` true is (geen
+  per-run-cap meer geraakt) — de les uit een handmatige Fase 2-
+  kennisregeneratie waarbij claims/clarify meerdere runs nodig hadden om hun
+  cap niet meer te raken. Twee vangrails op die lus: de harde
+  max-herhalingen-grens (standaard 10) én een no-progress-guard die stopt
+  zodra twee opeenvolgende runs een identiek resultaat geven (zelfde detail
+  én nog steeds niet gedraineerd — bv. een document waarvan al-bekende items
+  het hele run-budget opeten); beide laten het pad gewoon doorlopen naar de
+  volgende stap. Drained is machine-leesbaar mét vers-werk-semantiek
+  (zojuist gefaalde items tellen NIET als resterend werk — een directe
+  herhaling faalt vrijwel zeker opnieuw): claims/clarify/relations/decks via
+  hun `CapHit`-veld (bij claims telt ook een hertoets-backlog groter dan het
+  per-run-venster mee), mine via `Remaining − Failed`. Classify draait
+  bewust zónder Drain: die job is ongecapt (één run = de hele backlog), dus
+  draineren zou alleen failures herkauwen. Geen string-matching op de
+  detailtekst. Faalt een stap, dan stopt het pad netjes (status error); de
+  al-gedraaide stappen blijven staan (de onderliggende jobs zijn zelf
+  idempotent). Elke (herhaalde) stap logt apart naar run_log (Kind =
+  padnaam, Ref = stapnaam), via een eigen verse DbContext-scope per
+  schrijfactie — nooit de context waarin een stap net crashte. Periodiek
+  inplannen is mogelijk (zelfde `JobLedger`-vensterlogica als de losse jobs)
+  maar nog niet benut — de bestaande nachtelijke/wekelijkse cadans van de
+  losse jobs is ongewijzigd. *Route* `/admin` (sectie "Paden", boven de
+  losse jobs) · *endpoints* `GET /api/admin/paths`,
+  `POST /api/admin/paths/{name}` (meelift op `/api/admin/status`).
 - **Kennis regenereren (Engels)** (#187) — eigen, zwaar gewaarschuwd
   admin-paneel (confirm-stap, geen kale "Start"-knop): job
   `regenerateknowledge` verwijdert de volledige LLM-afgeleide kennislaag
