@@ -82,8 +82,14 @@ public record RelationOverviewItem(
 /// <summary>Aanbevelingsgroep-telling voor de bulk-actie (#199): hoeveel
 /// "unreviewed" voorstellen met deze aanbeveling in de HUIDIGE weergave staan
 /// (dezelfde status-/archieffilter als de items zelf) — de UI toont hiermee
-/// de telling naast de bulk-knop en kan 'm verbergen als de groep leeg is.</summary>
-public record RelationRecommendationCount(string Recommendation, int Count);
+/// de telling naast de bulk-knop en kan 'm verbergen als de groep leeg is.
+/// <paramref name="AsOf"/> (review-fix finding 1) is de max
+/// <c>RecommendedAt</c> binnen de groep zoals geladen — samen met
+/// <paramref name="Count"/> de TOCTOU-fence die de bulk-actie meestuurt:
+/// wijkt de groep bij het klikken af van wat gerenderd was, dan weigert
+/// rb-api met 409 in plaats van items te beslissen die de beheerder nooit
+/// zag.</summary>
+public record RelationRecommendationCount(string Recommendation, int Count, DateTimeOffset AsOf);
 /// <summary>Bewijs bij een kandidaat-kind (#123): een voorbeeldvoorstel
 /// dat het kind draagt, zodat reviewen geen gokken is.</summary>
 public record RelationKindExample(
@@ -539,9 +545,12 @@ public class AdminOverviewService(RbRulesDbContext db)
         var recommendationCounts = (await query
                 .Where(r => r.Recommendation != null)
                 .GroupBy(r => r.Recommendation!)
-                .Select(g => new { g.Key, Count = g.Count() })
+                .Select(g => new { g.Key, Count = g.Count(), AsOf = g.Max(r => r.RecommendedAt) })
                 .ToListAsync())
-            .Select(r => new RelationRecommendationCount(r.Key, r.Count))
+            // AsOf-coalesce buiten de query (MinValue kan geen aanbeveling
+            // "verbergen": een item mét RecommendedAt triggert dan juist de
+            // fence — veilig-falend).
+            .Select(r => new RelationRecommendationCount(r.Key, r.Count, r.AsOf ?? DateTimeOffset.MinValue))
             .ToList();
         var rows = await query
             .OrderBy(r => r.Status == "unreviewed" && r.ArchivedAt == null ? 0 : 1)

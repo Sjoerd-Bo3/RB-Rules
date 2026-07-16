@@ -673,13 +673,30 @@ public static class AdminEndpoints
         // (RelationTriageService.DecideAsync/ApplyDecision), in één
         // transactie (multi-row). Geen nieuw autoriteitspad: dit is puur een
         // dun vermenigvuldigde van de bestaande, losse acties hierboven.
+        // Review-fixes: expliciete input-validatie → 400 (finding 6) en de
+        // TOCTOU-fence (expectedCount + asOf) → 409 zodra de groep is
+        // veranderd sinds het renderen van de knop (finding 1).
         admin.MapPost("/relations/bulk-decide", async (
-            RelationBulkDecideRequest body, RelationTriageService triage) =>
+            RelationBulkDecideRequest? body, RelationTriageService triage) =>
         {
-            if (body.Decision is not ("accept" or "reject"))
-                return Results.BadRequest(new { error = "decision moet 'accept' of 'reject' zijn" });
-            var applied = await triage.BulkDecideAsync(body.Recommendation, body.Decision);
-            return Results.Ok(new { applied });
+            if (body is null)
+                return Results.BadRequest(new { error = "body ontbreekt of is geen geldige JSON" });
+            if (body.ValidationError() is { } invalid)
+                return Results.BadRequest(new { error = invalid });
+
+            var r = await triage.BulkDecideAsync(
+                body.Recommendation!, body.Decision!.Trim().ToLowerInvariant(),
+                body.ExpectedCount!.Value, body.AsOf!.Value);
+            return r.Status switch
+            {
+                RelationBulkStatus.Applied => Results.Ok(new { applied = r.Applied }),
+                RelationBulkStatus.FenceViolation => Results.Conflict(new
+                {
+                    error = "de aanbevelingsgroep is veranderd sinds het laden — "
+                            + "ververs de pagina en beoordeel opnieuw",
+                }),
+                _ => Results.BadRequest(new { error = "decision moet 'accept' of 'reject' zijn" }),
+            };
         });
 
         // Archief + notitie-promotie voor relaties (#124, claims-patroon).

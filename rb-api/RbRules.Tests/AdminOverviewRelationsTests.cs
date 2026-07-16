@@ -45,30 +45,38 @@ public class AdminOverviewRelationsTests
     }
 
     [Fact]
-    public async Task RelationsAsync_TeltAanbevelingsgroepenInDeHuidigeWeergave()
+    public async Task RelationsAsync_TeltAanbevelingsgroepen_MetAsOfFence()
     {
         using var db = NewDb();
-        Voorstel(db, "concept:a", "concept:b", recommendation: "accept");
-        Voorstel(db, "concept:c", "concept:d", recommendation: "accept");
-        Voorstel(db, "concept:e", "concept:f", recommendation: "reject");
+        var older = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var newest = DateTimeOffset.UtcNow.AddMinutes(-1);
+        Voorstel(db, "concept:a", "concept:b", recommendation: "accept", recommendedAt: older);
+        Voorstel(db, "concept:c", "concept:d", recommendation: "accept", recommendedAt: newest);
+        Voorstel(db, "concept:e", "concept:f", recommendation: "reject", recommendedAt: older);
         Voorstel(db, "concept:g", "concept:h", recommendation: null);
         await db.SaveChangesAsync();
 
         var overview = await new AdminOverviewService(db).RelationsAsync(null, 1);
 
-        Assert.Equal(2, overview.RecommendationCounts.Single(c => c.Recommendation == "accept").Count);
+        var accept = overview.RecommendationCounts.Single(c => c.Recommendation == "accept");
+        Assert.Equal(2, accept.Count);
+        // AsOf = de max RecommendedAt binnen de groep zoals geladen — de
+        // TOCTOU-fence die de bulk-actie meestuurt (review-fix #199).
+        Assert.Equal(newest, accept.AsOf);
         Assert.Equal(1, overview.RecommendationCounts.Single(c => c.Recommendation == "reject").Count);
         Assert.DoesNotContain(overview.RecommendationCounts, c => c.Recommendation == "unsure");
     }
 
     private static Relation Voorstel(
-        RbRulesDbContext db, string fromRef, string toRef, string? recommendation)
+        RbRulesDbContext db, string fromRef, string toRef, string? recommendation,
+        DateTimeOffset? recommendedAt = null)
     {
         var relation = new Relation
         {
             FromRef = fromRef, ToRef = toRef, Kind = "clarifies",
             Explanation = "uitleg", Provenance = "test", Trust = 0.5,
             Recommendation = recommendation,
+            RecommendedAt = recommendation is null ? null : recommendedAt ?? DateTimeOffset.UtcNow,
         };
         db.Relations.Add(relation);
         return relation;

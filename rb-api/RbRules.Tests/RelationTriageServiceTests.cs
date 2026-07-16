@@ -201,21 +201,25 @@ public class RelationTriageServiceTests
     }
 
     [Fact]
-    public async Task BulkDecideAsync_RaaktAlleenDeGevraagdeGroep()
+    public async Task BulkDecideAsync_GeldigeFence_RaaktAlleenDeGevraagdeGroep()
     {
         using var db = NewDb();
+        var now = DateTimeOffset.UtcNow;
         var accept1 = await SeedRelationAsync(db, "concept:combat", "section:core-rules-pdf/7.4");
         var accept2 = await SeedRelationAsync(db, "concept:combat", "section:core-rules-pdf/7.5");
         var reject1 = await SeedRelationAsync(db, "concept:combat", "section:core-rules-pdf/7.6");
-        accept1.Recommendation = "accept";
-        accept2.Recommendation = "accept";
-        reject1.Recommendation = "reject";
+        Recommend(accept1, "accept", now.AddMinutes(-2));
+        Recommend(accept2, "accept", now.AddMinutes(-1));
+        Recommend(reject1, "reject", now.AddMinutes(-1));
         await db.SaveChangesAsync();
         var svc = new RelationTriageService(db, Ai(() => null));
 
-        var applied = await svc.BulkDecideAsync("accept", "accept");
+        // Fence zoals de UI 'm rendeerde: telling 2, asOf = max RecommendedAt.
+        var r = await svc.BulkDecideAsync("accept", "accept",
+            expectedCount: 2, asOf: now.AddMinutes(-1));
 
-        Assert.Equal(2, applied);
+        Assert.Equal(RelationBulkStatus.Applied, r.Status);
+        Assert.Equal(2, r.Applied);
         Assert.Equal("accepted", accept1.Status);
         Assert.Equal("accepted", accept2.Status);
         // De reject-groep is ongemoeid — de bulk-actie raakt alleen de
@@ -224,36 +228,143 @@ public class RelationTriageServiceTests
     }
 
     [Fact]
+    public async Task BulkDecideAsync_TellingWijktAf_Weigert_EnBeslistNiets()
+    {
+        // TOCTOU-fence (review-fix finding 1): de beheerder zag 1 voorstel,
+        // maar de groep telt er inmiddels 2 (bv. een gelijktijdige
+        // triage-run) — niets beslissen, 409-pad.
+        using var db = NewDb();
+        var now = DateTimeOffset.UtcNow;
+        var seen = await SeedRelationAsync(db, "concept:combat", "section:core-rules-pdf/7.4");
+        var unseen = await SeedRelationAsync(db, "concept:combat", "section:core-rules-pdf/7.5");
+        Recommend(seen, "accept", now.AddMinutes(-2));
+        Recommend(unseen, "accept", now.AddMinutes(-1));
+        await db.SaveChangesAsync();
+        var svc = new RelationTriageService(db, Ai(() => null));
+
+        var r = await svc.BulkDecideAsync("accept", "accept",
+            expectedCount: 1, asOf: now);
+
+        Assert.Equal(RelationBulkStatus.FenceViolation, r.Status);
+        Assert.Equal(0, r.Applied);
+        Assert.Equal("unreviewed", seen.Status);
+        Assert.Equal("unreviewed", unseen.Status);
+    }
+
+    [Fact]
+    public async Task BulkDecideAsync_NieuwereAanbevelingDanAsOf_Weigert()
+    {
+        // Zelfde telling maar een VERSERE aanbeveling dan de geladen asOf:
+        // het kan een net her-getriaged/vervangen item zijn dat de beheerder
+        // in deze vorm nooit zag — ook dan weigeren.
+        using var db = NewDb();
+        var now = DateTimeOffset.UtcNow;
+        var relation = await SeedRelationAsync(db);
+        Recommend(relation, "accept", now);
+        await db.SaveChangesAsync();
+        var svc = new RelationTriageService(db, Ai(() => null));
+
+        var r = await svc.BulkDecideAsync("accept", "accept",
+            expectedCount: 1, asOf: now.AddMinutes(-5));
+
+        Assert.Equal(RelationBulkStatus.FenceViolation, r.Status);
+        Assert.Equal("unreviewed", relation.Status);
+    }
+
+    [Fact]
     public async Task BulkDecideAsync_RaaktGeenAlAlBeoordeeldeItems()
     {
         // Een mens-oordeel wint altijd: een al geaccepteerd/verworpen item
         // met dezelfde aanbeveling (bv. van vóór de bulk-klik) telt niet mee.
         using var db = NewDb();
+        var now = DateTimeOffset.UtcNow;
         var alreadyAccepted = await SeedRelationAsync(db);
-        alreadyAccepted.Recommendation = "accept";
+        Recommend(alreadyAccepted, "accept", now.AddHours(-2));
         alreadyAccepted.Status = "accepted";
-        alreadyAccepted.ReviewedAt = DateTimeOffset.UtcNow.AddHours(-1);
+        alreadyAccepted.ReviewedAt = now.AddHours(-1);
         await db.SaveChangesAsync();
         var svc = new RelationTriageService(db, Ai(() => null));
 
-        var applied = await svc.BulkDecideAsync("accept", "accept");
+        // De zichtbare groep is leeg (het item is afgehandeld) — met de
+        // bijpassende fence (0, nu) is dat een geldige, lege bulk.
+        var r = await svc.BulkDecideAsync("accept", "accept",
+            expectedCount: 0, asOf: now);
 
-        Assert.Equal(0, applied);
+        Assert.Equal(RelationBulkStatus.Applied, r.Status);
+        Assert.Equal(0, r.Applied);
+        Assert.Equal("accepted", alreadyAccepted.Status);
+    }
+
+    [Fact]
+    public async Task BulkDecideAsync_GearchiveerdItem_BlijftBuitenDeBulk()
+    {
+        // Review-fix findings 2/4/7: de view, de tellingen én de actie delen
+        // hetzelfde archief-gefilterde universum — een geparkeerd voorstel
+        // wordt nooit via bulk beslist (en telt niet mee voor de fence).
+        using var db = NewDb();
+        var now = DateTimeOffset.UtcNow;
+        var active = await SeedRelationAsync(db, "concept:combat", "section:core-rules-pdf/7.4");
+        var archived = await SeedRelationAsync(db, "concept:combat", "section:core-rules-pdf/7.5");
+        Recommend(active, "accept", now.AddMinutes(-1));
+        Recommend(archived, "accept", now.AddMinutes(-1));
+        archived.ArchivedAt = now;
+        await db.SaveChangesAsync();
+        var svc = new RelationTriageService(db, Ai(() => null));
+
+        var r = await svc.BulkDecideAsync("accept", "accept",
+            expectedCount: 1, asOf: now.AddMinutes(-1));
+
+        Assert.Equal(RelationBulkStatus.Applied, r.Status);
+        Assert.Equal(1, r.Applied);
+        Assert.Equal("accepted", active.Status);
+        Assert.Equal("unreviewed", archived.Status);
     }
 
     [Fact]
     public async Task BulkDecideAsync_OngeldigeDecision_DoetNiets()
     {
+        // Defensieve vangrail — het endpoint valideert al vóór de aanroep
+        // (finding 6), maar de service beslist zelf óók nooit op een
+        // onbekende decision.
         using var db = NewDb();
         var relation = await SeedRelationAsync(db);
-        relation.Recommendation = "accept";
+        Recommend(relation, "accept", DateTimeOffset.UtcNow);
         await db.SaveChangesAsync();
         var svc = new RelationTriageService(db, Ai(() => null));
 
-        var applied = await svc.BulkDecideAsync("accept", "delete");
+        var r = await svc.BulkDecideAsync("accept", "delete",
+            expectedCount: 1, asOf: DateTimeOffset.UtcNow);
 
-        Assert.Equal(0, applied);
+        Assert.Equal(RelationBulkStatus.Invalid, r.Status);
         Assert.Equal("unreviewed", relation.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_GearchiveerdVoorstel_WordtNietGetriaged()
+    {
+        // Review-fix findings 2/4/7: geen LLM-budget aan bewust geparkeerde
+        // items, en geen aanbeveling die later via een andere weg meeloopt.
+        using var db = NewDb();
+        var relation = await SeedRelationAsync(db);
+        relation.ArchivedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+        var calls = 0;
+        var svc = new RelationTriageService(db, Ai(() => { calls++; return AcceptAnswer; }));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Judged);
+        Assert.Null(relation.Recommendation);
+        Assert.Equal(0, calls);
+    }
+
+    /// <summary>Aanbeveling zetten zoals de triage-run dat doet (alle drie de
+    /// velden) — de fence-tests hebben een expliciete RecommendedAt nodig.</summary>
+    private static void Recommend(Relation relation, string recommendation, DateTimeOffset at)
+    {
+        relation.Recommendation = recommendation;
+        relation.RecommendationReason = "test reason";
+        relation.RecommendedAt = at;
     }
 
     // --- testinfra (patroon RelationMiningServiceTests) --------------------

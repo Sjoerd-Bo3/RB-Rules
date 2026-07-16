@@ -17,6 +17,20 @@ public record RelationTriageRunResult(
 
 public enum RelationDecisionOutcome { Applied, NotFound }
 
+/// <summary>Uitkomst van de bulk-actie (#199, review-fix finding 1):
+/// <see cref="FenceViolation"/> betekent dat de aanbevelingsgroep is
+/// veranderd tussen het renderen van de knop en de klik (TOCTOU — een
+/// gelijktijdige triage-run, bv. het kennis-pad, kan items aan de groep
+/// hebben toegevoegd die de beheerder nooit zag; die en-masse beslissen zou
+/// de facto het auto-accept-pad zijn dat v1 expliciet níét heeft). De
+/// aanroeper antwoordt 409 en de beheerder herlaadt; er is dan NIETS
+/// beslist. <see cref="Invalid"/> is de defensieve vangrail voor een
+/// ongeldige decision (het endpoint valideert al vóór de aanroep,
+/// finding 6).</summary>
+public enum RelationBulkStatus { Applied, FenceViolation, Invalid }
+
+public sealed record RelationBulkResult(RelationBulkStatus Status, int Applied = 0);
+
 /// <summary>LLM-triage voor de relatie-reviewqueue (#199 v1): per open
 /// voorstel (Status "unreviewed", nog geen <see cref="Relation.Recommendation"/>)
 /// één retrieval-gegronde LLM-beoordeling — accept/reject/unsure + motivering.
@@ -52,11 +66,15 @@ public class RelationTriageService(RbRulesDbContext db, RbAiClient ai)
     {
         maxItems = Math.Clamp(maxItems, 1, 200);
 
-        // Kandidaten: nog niet getriaged (Recommendation null) én nog niet
+        // Kandidaten: nog niet getriaged (Recommendation null), nog niet
         // door een mens beoordeeld (Status "unreviewed") — een mens-oordeel
         // wint altijd, dus geaccepteerde/verworpen voorstellen komen hier
-        // nooit meer langs, ook niet als Recommendation toevallig null bleef.
-        var query = db.Relations.Where(r => r.Status == "unreviewed" && r.Recommendation == null);
+        // nooit meer langs, ook niet als Recommendation toevallig null bleef —
+        // én niet gearchiveerd (review-fix findings 2/4/7): een bewust
+        // geparkeerd voorstel kost geen LLM-budget en krijgt geen aanbeveling
+        // die later via een andere weg alsnog zou meelopen.
+        var query = db.Relations.Where(r =>
+            r.Status == "unreviewed" && r.Recommendation == null && r.ArchivedAt == null);
 
         var totalEligible = await query.CountAsync(ct);
         if (totalEligible == 0)
@@ -168,23 +186,46 @@ public class RelationTriageService(RbRulesDbContext db, RbAiClient ai)
     /// <summary>Bulk-actie per aanbevelingsgroep (#199, "de machine sorteert
     /// voor, de mens klikt"): loopt <see cref="ApplyDecision"/> — dus
     /// letterlijk hetzelfde accept-/reject-pad als <see cref="DecideAsync"/>
-    /// — na voor élk voorstel met deze aanbeveling dat nog "unreviewed" is,
-    /// in één transactie (multi-row). Geen notitie: een bulk-klik draagt geen
-    /// per-item tekst. Retourneert het aantal geraakte voorstellen.</summary>
-    public async Task<int> BulkDecideAsync(
-        string recommendation, string decision, CancellationToken ct = default)
+    /// — na voor élk voorstel met deze aanbeveling dat nog "unreviewed" en
+    /// NIET gearchiveerd is (review-fix findings 2/4/7: de view, de
+    /// tellingen én deze actie delen hetzelfde archief-gefilterde universum;
+    /// een geparkeerd voorstel wordt nooit via bulk beslist), in één
+    /// transactie (multi-row). Geen notitie: een bulk-klik draagt geen
+    /// per-item tekst.
+    ///
+    /// <b>TOCTOU-fence (review-fix finding 1):</b> de beheerder beslist wat
+    /// hij ZAG, niet wat er inmiddels staat — een gelijktijdige triage-run
+    /// (het kennis-pad draait relationtriage vlak vóór graph) kan tussen
+    /// renderen en klikken items aan de groep toevoegen. De UI stuurt daarom
+    /// mee wat hij rendeerde: <paramref name="expectedCount"/> (de
+    /// groepstelling) en <paramref name="asOf"/> (de max
+    /// <see cref="Relation.RecommendedAt"/> binnen de groep zoals geladen —
+    /// werkt over paginering heen, geen id-lijsten nodig). Wijkt de herberekende
+    /// groep af (andere telling, óf een item met een nieuwere aanbeveling),
+    /// dan wordt er NIETS beslist en antwoordt de aanroeper 409.</summary>
+    public async Task<RelationBulkResult> BulkDecideAsync(
+        string recommendation, string decision, int expectedCount, DateTimeOffset asOf,
+        CancellationToken ct = default)
     {
-        if (decision is not ("accept" or "reject")) return 0;
+        if (decision is not ("accept" or "reject")) return new(RelationBulkStatus.Invalid);
         var normalized = recommendation.Trim().ToLowerInvariant();
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var relations = await db.Relations
-            .Where(r => r.Status == "unreviewed" && r.Recommendation == normalized)
+            .Where(r => r.Status == "unreviewed" && r.ArchivedAt == null
+                        && r.Recommendation == normalized)
             .ToListAsync(ct);
+
+        // Fence: exact de groep die de beheerder zag — een afwijkende telling
+        // of een aanbeveling nieuwer dan het geladen maximum betekent dat de
+        // groep is veranderd; niets beslissen (de transactie rolt leeg terug).
+        if (relations.Count != expectedCount || relations.Any(r => r.RecommendedAt > asOf))
+            return new(RelationBulkStatus.FenceViolation);
+
         foreach (var relation in relations) ApplyDecision(relation, decision, note: null);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
-        return relations.Count;
+        return new(RelationBulkStatus.Applied, relations.Count);
     }
 
     private static void ApplyDecision(Relation relation, string decision, string? note)
