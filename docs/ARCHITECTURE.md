@@ -275,12 +275,20 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   primer-concepten — letterlijk in de extractieprompt op `{VOCABULARY}`, zodat
   de LLM een bestaand anker KIEST i.p.v. een vrije-vorm-onderwerp te verzinnen
   dat toch niet resolvet — issue #199: 117/133 pending items faalden hierop)
-  en `ClarificationAnchorRepair` (`GetSystemPrompt`/`BuildPrompt`/
-  `ParseAnchorChoice`, zelfde objectvorm-guard-patroon als
-  `ClarificationInformativeness.ParseOperative` — de herstel-pas-prompt die
-  `CorrectionReevaluationService.RepairPendingAnchorsAsync` gebruikt om één
-  bestaand pending item een anker-KEUZE uit hetzelfde vocabulaire te laten
-  kiezen, `{"topicType":…,"topicRef":…}` of `{"none":true}`) — puur en getest,
+  en `ClarificationAnchorRepair` (Engelse herstel-pas-prompt — één bestaand
+  pending item + citaat + het oorspronkelijke onherkende onderwerp als
+  context, anker-KEUZE uit hetzelfde vocabulaire, "none" expliciet een
+  eersteklas antwoord; `ParseAnchorChoice` geeft sinds de adversariële
+  review een drieledige `AnchorChoice` terug — `Choice`/`None`/`Unusable`,
+  zodat de aanroeper een DEFINITIEVE "geen anker past" (terminaal) kan
+  onderscheiden van flaky output (transiënt), zelfde objectvorm-guard-patroon
+  als `ClarificationInformativeness.ParseOperative`; en `HasLexicalSupport`,
+  de deterministische lexicale-steun-poort vóór auto-promotie: de ankerterm
+  — volledig voor mechanic/card/section, minstens één significant token
+  (≥4 tekens) van key of titel voor een concept — moet aantoonbaar in
+  verduidelijking + citaat + oorspronkelijk onderwerp voorkomen, anders is
+  een resolvend-maar-verkeerd anker een onzichtbare one-way door naar
+  verified) — puur en getest,
   zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
   het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
@@ -346,25 +354,46 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   nooit, alleen de opmerking wordt dan bewaard. De gate-hertoets zelf staat
   sinds #188 increment 3 in de private `ApplyGateAsync`, geëxtraheerd zodat
   `RepairPendingAnchorsAsync` (zie hieronder) 'm hergebruikt i.p.v.
-  dupliceert — inclusief een **spookduplicaat-vangrail**: past een
-  anker-override (handmatig óf LLM-gekozen) op een (Provenance, Scope, Ref)
-  waar al een ándere `Correction` op staat, dan wordt de verplaatsing niet
-  doorgevoerd (blijft "niet anchored", met een zichtbare reden) i.p.v. een
-  tweede `verified` ruling over hetzelfde onderwerp te scheppen.
-  `RepairPendingAnchorsAsync` (#188 increment 3, job "clarify" tweede stap —
-  zie `JobCatalog.ClarifyAsync`) is de geautomatiseerde tegenhanger: voor de
-  bestaande achterstand (issue #199, 117/133 pending items met StatusReason
-  "onderwerp … niet herkend") doet één rb-ai-aanroep per item een
-  anker-KEUZE uit het vocabulaire (`ClarificationAnchorRepair`), en
-  `ApplyGateAsync` her-toetst dan de volledige poort. Kandidaten: pending +
-  zonder `ReviewNote` (#184-eigendom blijft onaangeraakt) + die StatusReason.
-  Gecapt (standaard 40) met `AnchorRepairResult.CapHit`, zelfde #190-contract
-  als `ClarificationMineResult.CapHit`. Zet BEWUST geen `ReviewNote` op het
-  verplaatste item (zou een geautomatiseerde keuze onterecht als
-  mens-beoordeeld labelen; motivatie + het spookduplicaat-scenario staan in de
-  klasse-XML-doc) — de vangrail hierboven compenseert het ontbreken van de
-  `ReviewNote`-gebaseerde cross-bucket-redding die `StoreAsync` (#184,
-  ongewijzigd) voor handmatige correcties gebruikt),
+  dupliceert; het gedeelde pad doet bewust GEEN duplicaat-check (review-fix:
+  een handmatige #184-anker-correctie is een bewuste menselijke verplaatsing
+  die altijd mag — het #184-spookduplicaat is daar al gedekt door de
+  cross-bucket-redding op ReviewNote in `StoreAsync`).
+  `RepairPendingAnchorsAsync` (#188 increment 3 herzien na de adversariële
+  review; job "clarify" tweede stap — zie `JobCatalog.ClarifyAsync`) is de
+  geautomatiseerde tegenhanger: voor de bestaande achterstand (issue #199,
+  117/133 pending items met StatusReason "onderwerp … niet herkend") doet
+  één rb-ai-aanroep per item een anker-KEUZE uit het vocabulaire
+  (`ClarificationAnchorRepair`, met citaat + oorspronkelijk onderwerp als
+  context); daarna is alles deterministisch. **Autoriteitsmodel
+  (review-uitkomst):** auto-promotie alleen bij lexicale steun
+  (`ClarificationAnchorRepair.HasLexicalSupport`) én de volledige
+  `ApplyGateAsync`-poort; zonder lexicale steun een AANBEVELING — Scope/Ref
+  verhuizen wél (queue toont het item bij het juiste onderwerp), status
+  blijft pending met reden "anker hersteld via LLM-suggestie … wacht op
+  review", beheerder verifieert via het bestaande /verify-pad
+  (#199-principe: machine sorteert voor, mens klikt). **Terminaliteit:** een
+  definitieve uitkomst ("none" of een niet-resolvende keuze) plakt
+  `TerminalMarker` ("anker-herstel geprobeerd") aan de StatusReason en het
+  selectie-predicaat sluit die uit — geen eeuwige her-eligibiliteit of
+  window-starvation; AI-uitval/onbruikbare output is transiënt (geen
+  marker), en een her-mine die het item bijwerkt schrijft een verse reden
+  zonder marker (her-opent eligibility — het beoogde
+  herstel-na-nieuwe-informatie-pad). **Duplicaat-bewaking (alléén dit
+  geautomatiseerde pad):** vóór elke verplaatsing een CANONIEKE check —
+  `ClaimTopicMapper.Resolve` op zowel de keuze als alle bezetters van
+  dezelfde bron, vergelijking op `BrainRef.Format()` zodat aliassen
+  (kaartvarianten, concept-key vs. -titel) niet langs elkaar heen matchen;
+  bezet ⇒ terminale duplicaat-kandidaat-reden ("al bezet … mogelijk
+  duplicaat, beoordeel handmatig"), niet verplaatst. Kandidaten: pending +
+  zonder `ReviewNote` (#184-eigendom blijft onaangeraakt) + StatusReason
+  "niet herkend" zonder `TerminalMarker`. Gecapt (standaard 40) met
+  `AnchorRepairResult.CapHit` over alleen echt-eligible items, zelfde
+  #190-contract als `ClarificationMineResult.CapHit`. Zet BEWUST geen
+  `ReviewNote` op het verplaatste item (zou een geautomatiseerde keuze
+  onterecht als mens-beoordeeld labelen) — de canonieke duplicaat-check
+  compenseert het ontbreken van de `ReviewNote`-gebaseerde
+  cross-bucket-redding die `StoreAsync` (#184, ongewijzigd) voor handmatige
+  correcties gebruikt),
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `KnowledgeRegenerationService` (#187, job "regenerateknowledge" — wipet de
   LLM-afgeleide kennislaag (claim, correction, knowledge_doc kind=primer,
