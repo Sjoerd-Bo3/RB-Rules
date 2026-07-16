@@ -268,9 +268,28 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   of uitvalt; `ClarificationInformativeness.JudgeSystemPrompt`/`ParseOperative`
   (#188), de lichte her-toets-prompt die `CorrectionReevaluationService`
   gebruikt om opgeslagen tekst (zonder verse extractie) alsnog te
-  classificeren; en `ReviewNoteAnchor` (#184), een pure regex-parser die een
-  anker-correctie uit een beheerder-opmerking haalt (bv. "mechanic:Recall")
-  — puur en getest, zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
+  classificeren; `ReviewNoteAnchor` (#184), een pure regex-parser die een
+  anker-correctie uit een beheerder-opmerking haalt (bv. "mechanic:Recall");
+  en sinds #188 increment 3 `ClarificationMiner.GetSystemPrompt`/
+  `BuildVocabularyBlock` (het echte anker-vocabulaire — mechaniek-namen +
+  primer-concepten — letterlijk in de extractieprompt op `{VOCABULARY}`, zodat
+  de LLM een bestaand anker KIEST i.p.v. een vrije-vorm-onderwerp te verzinnen
+  dat toch niet resolvet — issue #199: 117/133 pending items faalden hierop)
+  en `ClarificationAnchorRepair` (Engelse herstel-pas-prompt — één bestaand
+  pending item + citaat + het oorspronkelijke onherkende onderwerp als
+  context, anker-KEUZE uit hetzelfde vocabulaire, "none" expliciet een
+  eersteklas antwoord; `ParseAnchorChoice` geeft sinds de adversariële
+  review een drieledige `AnchorChoice` terug — `Choice`/`None`/`Unusable`,
+  zodat de aanroeper een DEFINITIEVE "geen anker past" (terminaal) kan
+  onderscheiden van flaky output (transiënt), zelfde objectvorm-guard-patroon
+  als `ClarificationInformativeness.ParseOperative`; en `HasLexicalSupport`,
+  de deterministische lexicale-steun-poort vóór auto-promotie: de ankerterm
+  — volledig voor mechanic/card/section, minstens één significant token
+  (≥4 tekens) van key of titel voor een concept — moet aantoonbaar in
+  verduidelijking + citaat + oorspronkelijk onderwerp voorkomen, anders is
+  een resolvend-maar-verkeerd anker een onzichtbare one-way door naar
+  verified) — puur en getest,
+  zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
   het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
@@ -311,8 +330,15 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `SourceContentKind.Resolve` op elke trust-1-bron in plaats van de kale
   naam-/URL-heuristiek — zelfde uitkomst voor een nog-niet-geclassificeerde
   bron dankzij de null-fallback, maar nu ook correct voor een bron zonder
-  magisch woord in zijn slug); de anker-resolver-
-  opbouw zelf staat gedeeld in `AnchorResolverFactory`),
+  magisch woord in zijn slug); de extractieprompt krijgt sinds #188 increment
+  3 ook het echte anker-vocabulaire mee (`ClarificationMiner.GetSystemPrompt`
+  i.p.v. de kale `SystemPrompt`) — de anker-resolver-opbouw zelf staat
+  gedeeld in `AnchorResolverFactory`, die sinds diezelfde increment naast de
+  opaque `ClaimTopicMapper` ook de leesbare mechaniek-/concept-vocabulaire
+  teruggeeft (`BuildWithVocabularyAsync`; het bestaande `BuildAsync` blijft
+  ongewijzigd voor aanroepers die alleen de resolver nodig hebben) zodat
+  extractie, herstel-pas en validatie gegarandeerd hetzelfde vocabulaire
+  zien),
   `CorrectionReevaluationService` (#184, her-evaluatie van één `Correction`
   op een beheerder-opmerking: draait dezelfde hybride poort opnieuw voor dat
   ene item — roept `ClarificationGrounding`/`ClaimTopicMapper.Resolve` aan
@@ -325,7 +351,49 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   resolutie; alleen van toepassing op clarify-mining-`Correction`s (Provenance
   `clarify-mining:{sourceId}`, de enige ontstaanswijze met brontekst om tegen
   te gronden); een `rejected`- of al `verified`-item degradeert/heropent
-  nooit, alleen de opmerking wordt dan bewaard),
+  nooit, alleen de opmerking wordt dan bewaard. De gate-hertoets zelf staat
+  sinds #188 increment 3 in de private `ApplyGateAsync`, geëxtraheerd zodat
+  `RepairPendingAnchorsAsync` (zie hieronder) 'm hergebruikt i.p.v.
+  dupliceert; het gedeelde pad doet bewust GEEN duplicaat-check (review-fix:
+  een handmatige #184-anker-correctie is een bewuste menselijke verplaatsing
+  die altijd mag — het #184-spookduplicaat is daar al gedekt door de
+  cross-bucket-redding op ReviewNote in `StoreAsync`).
+  `RepairPendingAnchorsAsync` (#188 increment 3 herzien na de adversariële
+  review; job "clarify" tweede stap — zie `JobCatalog.ClarifyAsync`) is de
+  geautomatiseerde tegenhanger: voor de bestaande achterstand (issue #199,
+  117/133 pending items met StatusReason "onderwerp … niet herkend") doet
+  één rb-ai-aanroep per item een anker-KEUZE uit het vocabulaire
+  (`ClarificationAnchorRepair`, met citaat + oorspronkelijk onderwerp als
+  context); daarna is alles deterministisch. **Autoriteitsmodel
+  (review-uitkomst):** auto-promotie alleen bij lexicale steun
+  (`ClarificationAnchorRepair.HasLexicalSupport`) én de volledige
+  `ApplyGateAsync`-poort; zonder lexicale steun een AANBEVELING — Scope/Ref
+  verhuizen wél (queue toont het item bij het juiste onderwerp), status
+  blijft pending met reden "anker hersteld via LLM-suggestie … wacht op
+  review", beheerder verifieert via het bestaande /verify-pad
+  (#199-principe: machine sorteert voor, mens klikt). **Terminaliteit:** een
+  definitieve uitkomst ("none" of een niet-resolvende keuze) plakt
+  `TerminalMarker` ("anker-herstel geprobeerd") aan de StatusReason en het
+  selectie-predicaat sluit die uit — geen eeuwige her-eligibiliteit of
+  window-starvation; AI-uitval/onbruikbare output is transiënt (geen
+  marker), en een her-mine die het item bijwerkt schrijft een verse reden
+  zonder marker (her-opent eligibility — het beoogde
+  herstel-na-nieuwe-informatie-pad). **Duplicaat-bewaking (alléén dit
+  geautomatiseerde pad):** vóór elke verplaatsing een CANONIEKE check —
+  `ClaimTopicMapper.Resolve` op zowel de keuze als alle bezetters van
+  dezelfde bron, vergelijking op `BrainRef.Format()` zodat aliassen
+  (kaartvarianten, concept-key vs. -titel) niet langs elkaar heen matchen;
+  bezet ⇒ terminale duplicaat-kandidaat-reden ("al bezet … mogelijk
+  duplicaat, beoordeel handmatig"), niet verplaatst. Kandidaten: pending +
+  zonder `ReviewNote` (#184-eigendom blijft onaangeraakt) + StatusReason
+  "niet herkend" zonder `TerminalMarker`. Gecapt (standaard 40) met
+  `AnchorRepairResult.CapHit` over alleen echt-eligible items, zelfde
+  #190-contract als `ClarificationMineResult.CapHit`. Zet BEWUST geen
+  `ReviewNote` op het verplaatste item (zou een geautomatiseerde keuze
+  onterecht als mens-beoordeeld labelen) — de canonieke duplicaat-check
+  compenseert het ontbreken van de `ReviewNote`-gebaseerde
+  cross-bucket-redding die `StoreAsync` (#184, ongewijzigd) voor handmatige
+  correcties gebruikt),
   `RelationMiningService`, `InteractionService`, `PrimerService`,
   `KnowledgeRegenerationService` (#187, job "regenerateknowledge" — wipet de
   LLM-afgeleide kennislaag (claim, correction, knowledge_doc kind=primer,
@@ -378,7 +446,11 @@ item), dus die horen bij de volgende run/tick, niet bij een drain-lus. De
 per-run gecapte jobs leiden Drained af van hun eigen resultaat:
 `claims`/`clarify`/`relations`/`decks` via `CapHit` (bij claims telt ook een
 hertoets-backlog groter dan het `MaxRechecksPerRun`-venster mee — een
-goedkope COUNT vooraf), `mine` via `Remaining − Failed`. `classify` is
+goedkope COUNT vooraf; `clarify` is sinds #188 increment 3 zelf twee gecapte
+stappen — extractie (`ClarificationMiningService.RunAsync`) + de
+anker-herstel-pas (`CorrectionReevaluationService.RepairPendingAnchorsAsync`)
+— en is pas Drained als BEIDE hun cap niet raakten), `mine` via
+`Remaining − Failed`. `classify` is
 ongecapt (één run = de hele backlog) en meldt om dezelfde reden
 `Remaining − Failed` — na een volledige pass resteren immers alleen
 failures; alle overige jobs zijn per definitie in één run klaar en laten de

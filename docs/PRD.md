@@ -243,6 +243,60 @@ apart in §6.
   ongemoeid (nooit stilzwijgend teruggedraaid), en degradeert een al
   geverifieerde ruling sowieso nooit. *Endpoint*
   `/api/admin/corrections/{id}/reevaluate`.
+  **Anker-selectie uit het vocabulaire + herstel-pas** (#188 increment 3,
+  aangescherpt na adversariële review): productiedata (issue #199) toonde
+  dat 117 van de 133 pending clarify-corrections faalden op *anchored* — de
+  extractie koos een vrije-vorm-onderwerp ("battlefield control without
+  units") buiten het bestaande anker-vocabulaire. De extractieprompt
+  (`ClarificationMiner.GetSystemPrompt`) krijgt daarom voortaan het ECHTE
+  vocabulaire letterlijk mee — de mechaniek-namen (seed + geaccepteerde
+  keywords) en de primer-concept-keys/-titels — met de instructie er bij
+  voorkeur een anker uit te KIEZEN; voor kaarten/§-codes (te talrijk om op
+  te sommen) blijft de instructie "gebruik de exacte naam/code".
+  `ClaimTopicMapper.Resolve` bepaalt nog altijd, ongewijzigd, of een gekozen
+  anker ook echt bestaat — beter gereedschap voor de LLM, geen wijziging van
+  de poort. Voor de bestaande achterstand draait de `clarify`-job er een
+  **herstel-pas** achteraan (`CorrectionReevaluationService.
+  RepairPendingAnchorsAsync`, gecapt op 40 per run + `CapHit` voor het
+  #190-drain-pad): per pending item met reden "onderwerp … niet herkend" (en
+  zonder `ReviewNote` — #184, beheerder-eigendom blijft onaangeraakt) doet
+  één rb-ai-aanroep een anker-KEUZE uit hetzelfde vocabulaire
+  (`ClarificationAnchorRepair`, Engelse prompt, mét citaat en het
+  oorspronkelijke onderwerp als context; antwoord
+  `{"topicType":…,"topicRef":…}` of `{"none":true}` — none is een eersteklas
+  antwoord). **Autoriteitsmodel (review-uitkomst):** een resolvend anker
+  bewijst alleen dat de term bestaat, niet dat hij bij déze tekst hoort —
+  auto-verificatie vereist daarom ook **lexicale steun**
+  (`ClarificationAnchorRepair.HasLexicalSupport`, deterministisch: de
+  ankerterm — voor een concept minstens één significant token van key of
+  titel — komt voor in verduidelijking + citaat + het oorspronkelijke
+  onderwerp), en dan pas draait de volledige hybride poort (dezelfde logica
+  als "opnieuw evalueren" hierboven, gedeeld i.p.v. gedupliceerd). Zonder
+  lexicale steun wordt het item een **aanbeveling** (het #199-principe:
+  machine sorteert voor, mens klikt): Scope/Ref verhuizen naar het
+  resolvende anker zodat de reviewqueue het bij het juiste onderwerp toont,
+  maar de status blijft pending ("anker hersteld via LLM-suggestie … wacht
+  op review") en de beheerder one-click-verifieert via het bestaande
+  /verify-pad. **Terminaliteit:** een definitieve uitkomst ("none" of een
+  niet-resolvende keuze) markeert het item terminaal ("anker-herstel
+  geprobeerd" in de StatusReason; het selectie-predicaat sluit die marker
+  uit) zodat het niet elke run cap-ruimte verbrandt; AI-uitval en
+  onbruikbare output zijn transiënt (volgende run opnieuw), en een latere
+  her-mine die het item bijwerkt schrijft een verse reden zonder marker en
+  her-opent de eligibility vanzelf (het herstel-na-nieuwe-informatie-pad).
+  `CapHit` telt alleen echt-eligible items. **Duplicaat-bewaking (alléén het
+  geautomatiseerde pad — een handmatige #184-anker-correctie mag altijd
+  verplaatsen):** vóór elke verplaatsing checkt de pas CANONIEK
+  (BrainRef-vergelijking via `ClaimTopicMapper.Resolve`, zodat aliassen —
+  kaartvarianten, concept-key vs. -titel — niet langs elkaar heen matchen)
+  of een ándere Correction van dezelfde bron het anker al bezet; zo ja, dan
+  wordt het item een terminale **duplicaat-kandidaat** ("anker … is al bezet
+  … mogelijk duplicaat, beoordeel handmatig") in plaats van een tweede
+  ruling over hetzelfde onderwerp. Achtergrond: de pas zet bewust géén
+  `ReviewNote` (dat zou een geautomatiseerde keuze onterecht als
+  menselijk-beoordeeld labelen), dus de ReviewNote-gebaseerde
+  cross-bucket-redding in `StoreAsync` (#184) ziet een door deze pas
+  verplaatst item niet — deze canonieke check dekt dat gat.
 - **Bans & errata** — gestructureerd opgeslagen per set, zichtbaar in de feed
   en gekoppeld aan kaarten. *Endpoint* `/api/bans`.
 - **Bron-feeds** (#167) — index-pagina's (playriftbound.com/en-us/news/…) die

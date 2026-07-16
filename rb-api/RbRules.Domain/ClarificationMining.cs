@@ -322,7 +322,20 @@ public static class ReviewNoteAnchor
 /// (adversariële review #185 vond twee kanten waarop <see
 /// cref="ClarificationInformativeness.IsMetaOnly"/> ernaast zit); die regex
 /// blijft alleen nog als deterministisch vangnet voor wanneer dit veld
-/// ontbreekt.</summary>
+/// ontbreekt.
+///
+/// <b>Anker-vocabulaire in de prompt (#188 increment 3):</b> productiedata
+/// (issue #199) toont dat 117 van de 133 pending clarify-corrections falen
+/// op anker-resolutie omdat de extractie een vrije-vorm-onderwerp koos
+/// ("battlefield control without units", "Repeat cost and printed cost")
+/// buiten het bestaande anker-vocabulaire. <see cref="GetSystemPrompt"/>
+/// geeft de LLM daarom het ECHTE vocabulaire (mechaniek-namen, primer-
+/// concepten) letterlijk mee als keuzemenu — kaarten/§-codes zijn te
+/// talrijk om op te sommen, daarvoor krijgt de LLM alleen de instructie om
+/// de exacte naam/code te gebruiken. <see cref="ClaimTopicMapper.Resolve"/>
+/// (via <see cref="ClarificationMiningService"/>'s hybride poort) blijft de
+/// deterministische validatie — dit is alleen beter gereedschap voor de
+/// LLM, geen wijziging van de poort zelf.</summary>
 public static class ClarificationMiner
 {
     /// <summary>Cap per extractie-call — liever een handvol scherpe concepten
@@ -337,7 +350,9 @@ public static class ClarificationMiner
     /// overgenomen teksten.</summary>
     public const int MaxQuoteLength = 200;
 
-    private static readonly HashSet<string> TopicTypes =
+    /// <summary>Internal (niet private): <see cref="ClarificationAnchorRepair"/>
+    /// hergebruikt dezelfde vier topicTypes voor de herstel-pas-keuze.</summary>
+    internal static readonly HashSet<string> TopicTypes =
         ["card", "mechanic", "section", "concept"];
 
     public const string SystemPrompt = """
@@ -350,8 +365,22 @@ public static class ClarificationMiner
         item. Antwoord UITSLUITEND met JSON:
         {"clarifications": [{"topicType": "...", "topicRef": "...", "clarification": "...", "sectionRef": "...", "quote": "...", "operative": true|false}]}
         - topicType ∈ card | mechanic | section | concept
-        - topicRef: het onderwerp — de mechaniek-/keywordnaam (bv. "Legion"),
-          de kaartnaam, het §-nummer, of een kort concept
+        - topicRef: het onderwerp. KIES BIJ VOORKEUR een anker uit het echte
+          vocabulaire hieronder (exacte spelling) — een onherkend anker
+          stuurt een verder prima item alsnog naar de reviewqueue:
+          {VOCABULARY}
+          - topicType "mechanic": een van de bekende mechanieken hierboven
+          - topicType "concept": een van de bekende primer-concepten
+            hierboven (key of titel)
+          - topicType "card": de kaartnaam (niet opgesomd, te veel kaarten)
+            — gebruik de EXACTE kaartnaam zoals die op de kaart staat
+          - topicType "section": het §-nummer (niet opgesomd) — gebruik het
+            EXACTE §-nummer (bv. "402.3")
+          - Past ECHT geen van de bekende mechanieken/concepten en gaat het
+            niet over een specifieke kaart of §, kies dan topicType
+            "concept" met een korte, eigen naam (dat is het bestaande
+            gedrag — gaat dan ter review). Verzin NOOIT een mechaniek- of
+            conceptnaam die op het vocabulaire lijkt maar er net naast zit
         - clarification: de OPERATIEVE kern — wat de mechaniek dóét, de
           definitie zelf, of hoe een interactie resolvet — in het ENGELS,
           dicht bij de bewoording van de brontekst (GEEN vertaling naar het
@@ -395,6 +424,38 @@ public static class ClarificationMiner
 
     public static string BuildPrompt(string sourceName, string articleText) =>
         $"Bron: {sourceName}\n\nArtikeltekst:\n{articleText}";
+
+    /// <summary>#188 increment 3: <see cref="SystemPrompt"/> mét het echte
+    /// anker-vocabulaire ingevuld op <c>{VOCABULARY}</c> — de aanroeper
+    /// (<see cref="RbRules.Infrastructure.ClarificationMiningService"/>)
+    /// haalt <paramref name="mechanics"/>/<paramref name="concepts"/> op via
+    /// <see cref="RbRules.Infrastructure.AnchorResolverFactory.
+    /// BuildWithVocabularyAsync"/> — dezelfde bron als de resolver zelf, dus
+    /// de prompt en de deterministische validatie zien altijd hetzelfde
+    /// vocabulaire. Zelfde patroon als <c>MechanicMiner.GetSystemPrompt</c>.</summary>
+    public static string GetSystemPrompt(
+        IEnumerable<string> mechanics, IEnumerable<(string Key, string Title)> concepts) =>
+        SystemPrompt.Replace("{VOCABULARY}", BuildVocabularyBlock(mechanics, concepts));
+
+    /// <summary>Anker-vocabulaire als leesbare opsomming voor de prompt (#188
+    /// increment 3): mechaniek-namen en primer-concept-keys/-titels
+    /// letterlijk, zodat de LLM een bestaand anker kan KIEZEN in plaats van
+    /// vrije tekst te verzinnen. Gedeeld door <see cref="GetSystemPrompt"/>
+    /// hierboven en de herstel-pas-prompt (<see
+    /// cref="ClarificationAnchorRepair.GetSystemPrompt"/>) zodat beide
+    /// LLM-aanroepen exact dezelfde lijst zien. Labels in het Engels
+    /// (review-fix: eentalige mining-prompts, zelfde lijn als de
+    /// inc2-fix op <see cref="SourceContentKind"/>).</summary>
+    public static string BuildVocabularyBlock(
+        IEnumerable<string> mechanics, IEnumerable<(string Key, string Title)> concepts)
+    {
+        var mechanicList = string.Join(", ", mechanics);
+        var conceptList = string.Join(", ", concepts.Select(c =>
+            string.Equals(c.Key, c.Title, StringComparison.OrdinalIgnoreCase)
+                ? c.Key : $"{c.Key} ({c.Title})"));
+        return $"Known mechanics: {(mechanicList.Length > 0 ? mechanicList : "(none yet)")}\n"
+             + $"Known primer concepts: {(conceptList.Length > 0 ? conceptList : "(none yet)")}";
+    }
 
     /// <summary>Tolerante JSON-extractie uit een LLM-antwoord. null bij
     /// mislukking (geen bruikbare JSON); een lege lijst betekent "geparsed,
@@ -440,4 +501,158 @@ public static class ClarificationMiner
         }
         return result;
     }
+}
+
+/// <summary>Uitkomstsoort van één anker-keuze-antwoord (#188 increment 3,
+/// review-fix): de aanroeper (<see cref="RbRules.Infrastructure.
+/// CorrectionReevaluationService.RepairPendingAnchorsAsync"/>) moet een
+/// DEFINITIEF "geen anker past" (<see cref="None"/> — het item wordt
+/// terminaal gemarkeerd en niet elke run opnieuw geprobeerd) kunnen
+/// onderscheiden van een TRANSIËNT onbruikbaar antwoord (<see
+/// cref="Unusable"/> — flaky output, volgende run mag opnieuw), net zoals
+/// AI-uitval transiënt is. Een platte null kon dat onderscheid niet
+/// dragen.</summary>
+public enum AnchorChoiceKind { Choice, None, Unusable }
+
+/// <summary>Geparseerde anker-keuze: bij <see cref="AnchorChoiceKind.Choice"/>
+/// zijn TopicType/TopicRef gezet, anders null.</summary>
+public sealed record AnchorChoice(
+    AnchorChoiceKind Kind, string? TopicType = null, string? TopicRef = null);
+
+/// <summary>LLM-anker-KEUZE voor de herstel-pas (#188 increment 3, <see
+/// cref="RbRules.Infrastructure.CorrectionReevaluationService.
+/// RepairPendingAnchorsAsync"/>): productiedata (issue #199, comment
+/// 2026-07-16) toont dat 117 van de 133 pending clarify-corrections falen op
+/// anker-resolutie omdat de extractie een vrije-vorm-onderwerp koos dat niet
+/// in het vocabulaire voorkomt. In plaats van de extractie te herhalen (die
+/// dezelfde fout kan maken), krijgt de LLM hier het bestaande item (mét
+/// citaat en het oorspronkelijke, onherkende onderwerp als context — review-
+/// fix) + het ECHTE vocabulaire, met de instructie alléén een anker te kiezen
+/// dat de verduidelijking zelf noemt of onmiskenbaar beschrijft; bij twijfel
+/// is <c>{"none": true}</c> een eersteklas antwoord. <see
+/// cref="ClaimTopicMapper.Resolve"/> blijft de deterministische poort, en
+/// <see cref="HasLexicalSupport"/> is de tweede deterministische toets
+/// (review-fix, kernbevinding): een resolvend anker bewijst alleen dat de
+/// term BESTAAT, niet dat hij bij déze tekst hoort — auto-verificatie is
+/// alleen verdedigbaar als het anker aantoonbaar het onderwerp is; anders is
+/// de herstel-pas een aanbevelings-machine (het #199-principe: machine
+/// sorteert voor, mens klikt). Prompt in het Engels (eentalige mining).</summary>
+public static class ClarificationAnchorRepair
+{
+    /// <summary>Ondergrens voor een "significant" token in de concept-steun-
+    /// toets van <see cref="HasLexicalSupport"/>: kortere tokens ("the",
+    /// "of", "een") dragen geen onderwerps-bewijs.</summary>
+    public const int MinConceptTokenLength = 4;
+
+    public const string SystemPrompt = """
+        You repair the topic anchor of ONE clarification in a knowledge base
+        about Riftbound, Riot Games' League of Legends trading card game. The
+        clarification below is fine on its content, but the previously chosen
+        topic ("anchor") was not recognized. Choose an anchor from the real
+        vocabulary below ONLY if the clarification itself names it or
+        unmistakably describes it:
+        {VOCABULARY}
+        - topicType "mechanic": one of the known mechanics above, spelled
+          EXACTLY as listed
+        - topicType "concept": one of the known primer concepts above (key or
+          title), spelled EXACTLY as listed
+        - topicType "card": only if the clarification is clearly about one
+          specific card — use the EXACT card name as printed on the card
+        - topicType "section": only if the clarification explicitly cites a
+          rules section number — use the EXACT section number (e.g. "402.3")
+        Respond ONLY with JSON: {"topicType": "...", "topicRef": "..."}
+        If no anchor is actually named or unmistakably described, respond
+        {"none": true} — "none" is a first-class answer, not a failure. When
+        in doubt, answer {"none": true}. NEVER invent an anchor outside this
+        vocabulary — that is exactly the problem this repair pass fixes.
+        No text outside the JSON.
+        """;
+
+    public static string GetSystemPrompt(
+        IEnumerable<string> mechanics, IEnumerable<(string Key, string Title)> concepts) =>
+        SystemPrompt.Replace("{VOCABULARY}", ClarificationMiner.BuildVocabularyBlock(mechanics, concepts));
+
+    /// <summary>Review-fix: naast de verduidelijking zelf krijgt de LLM ook
+    /// het bronscitaat en het oorspronkelijke (onherkende) onderwerp mee —
+    /// beide dragen vaak de term die het juiste anker verraadt, en zonder die
+    /// context moest het model gokken op de verduidelijking alleen.</summary>
+    public static string BuildPrompt(string clarification, string? quote, string originalTopicRef) =>
+        $"Clarification:\n{clarification}\n\n"
+        + $"Quote from the source article:\n{(string.IsNullOrWhiteSpace(quote) ? "(none)" : quote)}\n\n"
+        + $"Previously chosen (unrecognized) topic:\n{originalTopicRef}";
+
+    /// <summary>Drie uitkomsten (review-fix, zie <see cref="AnchorChoiceKind"/>):
+    /// een geldige keuze, een expliciet <c>{"none": true}</c> (definitief —
+    /// de aanroeper markeert het item terminaal), of onbruikbare output (geen
+    /// JSON, geen topicType/topicRef, onbekend topicType — transiënt, zelfde
+    /// behandeling als AI-uitval: volgende run opnieuw). Objectvorm-guard
+    /// vóór TryGetProperty (zelfde les als <see
+    /// cref="ClarificationInformativeness.ParseOperative"/>): <see
+    /// cref="LlmJson.Candidates"/> levert ook array-blokken op ("[1]",
+    /// "[true]"), en <see cref="ClaimMiner.GetBool"/>/GetString →
+    /// TryGetProperty gooit op een niet-object een
+    /// InvalidOperationException — géén JsonException, dus de catch
+    /// hieronder vangt 'm niet en de herstel-pas zou zonder deze guard
+    /// 500'en i.p.v. te degraderen.</summary>
+    public static AnchorChoice ParseAnchorChoice(string raw)
+    {
+        foreach (var json in LlmJson.Candidates(raw))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+                if (ClaimMiner.GetBool(doc.RootElement, "none") == true)
+                    return new(AnchorChoiceKind.None);
+
+                var topicType = ClaimMiner.GetString(doc.RootElement, "topicType")?.ToLowerInvariant();
+                var topicRef = ClaimMiner.GetString(doc.RootElement, "topicRef");
+                if (topicType is not null && topicRef is not null
+                    && ClarificationMiner.TopicTypes.Contains(topicType))
+                    return new(AnchorChoiceKind.Choice, topicType, topicRef);
+            }
+            catch (JsonException)
+            {
+                // geen geldige JSON op deze positie — volgende kandidaat
+            }
+        }
+        return new(AnchorChoiceKind.Unusable);
+    }
+
+    /// <summary>Deterministische lexicale-steun-poort vóór auto-promotie
+    /// (review-fix, kernbevinding): een LLM-gekozen anker mag alleen tot
+    /// automatische verificatie leiden als de ankerterm AANTOONBAAR in de
+    /// itemtekst voorkomt — de verduidelijking + het citaat + het
+    /// oorspronkelijke vrije-vorm-onderwerp samen (<paramref
+    /// name="haystack"/>, bouwt de aanroeper). Zonder die steun is een
+    /// verkeerd-maar-resolvend anker onzichtbaar: het item wordt verified
+    /// (one-way door) zonder dat iets in de tekst het anker staaft, en elke
+    /// run gaf een nieuwe niet-deterministische kans op zo'n misser. Voor
+    /// mechanic/card/section moet de volledige term/naam/§-code als substring
+    /// voorkomen (OrdinalIgnoreCase); voor een concept volstaat één
+    /// significant token (≥ <see cref="MinConceptTokenLength"/> tekens) uit
+    /// key of titel (<paramref name="anchorTerms"/> bevat beide) — een
+    /// concept-titel als "Turn Structure" staat zelden letterlijk in de
+    /// tekst, maar "turn" of "structure" wel. Geen steun ⇒ de aanroeper
+    /// promoveert niet maar doet een AANBEVELING (Scope/Ref verplaatsen,
+    /// status pending, reden "wacht op review").</summary>
+    public static bool HasLexicalSupport(
+        string topicType, IReadOnlyList<string> anchorTerms, string haystack)
+    {
+        if (string.IsNullOrWhiteSpace(haystack)) return false;
+
+        if (topicType == "concept")
+            return anchorTerms.SelectMany(ConceptTokens)
+                .Any(t => haystack.Contains(t, StringComparison.OrdinalIgnoreCase));
+
+        return anchorTerms.Any(t => !string.IsNullOrWhiteSpace(t)
+            && haystack.Contains(t.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static readonly char[] TokenSeparators =
+        [' ', '-', '_', '/', ',', '.', ':', ';', '(', ')', '\'', '"', '&', '\n', '\t'];
+
+    private static IEnumerable<string> ConceptTokens(string term) =>
+        (term ?? "").Split(TokenSeparators, StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length >= MinConceptTokenLength);
 }

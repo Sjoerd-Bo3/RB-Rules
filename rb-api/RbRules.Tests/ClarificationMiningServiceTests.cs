@@ -643,6 +643,84 @@ public class ClarificationMiningServiceTests
         Assert.Null(ruling.VerifiedAt);
     }
 
+    // --- anker-vocabulaire in de extractieprompt (#188 increment 3) ------
+
+    [Fact]
+    public async Task RunAsync_ExtractiePrompt_BevatEchteMechaniekVocabulaire_EnGeenPlaceholder()
+    {
+        // Issue #199: 117/133 pending items falen op anker-resolutie omdat de
+        // extractie een vrije-vorm-onderwerp buiten het vocabulaire koos. Dit
+        // dekt dat de prompt die WERKELIJK naar rb-ai gaat het echte
+        // vocabulaire bevat (seed-mechanieken ÉN geaccepteerde keywords uit de
+        // database) — niet alleen dat ClarificationMiner.GetSystemPrompt
+        // (los getest) de placeholder correct vervangt.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        db.MechanicKeywords.Add(new MechanicKeyword { Term = "Overwhelm", Status = "accepted" });
+        await db.SaveChangesAsync();
+
+        string? capturedSystem = null;
+        var handler = new StubHandler(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var doc = JsonDocument.Parse(body);
+            capturedSystem = doc.RootElement.TryGetProperty("system", out var s) ? s.GetString() : null;
+            return Json(new { answer = OneConceptAnswer });
+        });
+        var ai = new RbAiClient(
+            new HttpClient(handler) { BaseAddress = new Uri("http://rb-ai.test") },
+            NullLogger<RbAiClient>.Instance);
+        var svc = new ClarificationMiningService(db, ai, Embeddings(ok: true));
+
+        await svc.RunAsync();
+
+        Assert.NotNull(capturedSystem);
+        Assert.Contains("Legion", capturedSystem); // seed-mechaniekvocabulaire (MechanicMiner.SeedVocabulary)
+        Assert.Contains("Overwhelm", capturedSystem); // geaccepteerd keyword uit de database
+        Assert.DoesNotContain("{VOCABULARY}", capturedSystem); // placeholder is altijd vervangen
+    }
+
+    [Fact]
+    public async Task ReMine_OverschrijftTerminaleHerstelReden_ItemWeerEligibleVoorHerstelPas()
+    {
+        // Terminaliteit (#188 increment 3, review-fix): een item dat de
+        // anker-herstel-pas definitief niet kon plaatsen draagt de terminale
+        // marker in StatusReason en wordt niet elke run opnieuw geprobeerd.
+        // Een latere her-mine die het item bijwerkt schrijft echter een VERSE
+        // StatusReason via de normale poort (GateReason, zonder marker) — dat
+        // is het beoogde herstel-na-nieuwe-informatie-pad: een her-extractie
+        // heropent de herstel-eligibility vanzelf.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        db.Corrections.Add(new Correction
+        {
+            Scope = "concept", Ref = "Vaag onderwerp",
+            Text = "Reflection tokens tellen niet mee voor het handlimiet.",
+            Provenance = $"clarify-mining:{SourceId}", SourceRef = SourceUrl,
+            Status = "unverified",
+            StatusReason = "onderwerp 'Vaag onderwerp' (concept) niet herkend — "
+                + CorrectionReevaluationService.TerminalMarker + ", geen vocabulaire-match (#188)",
+            Embedding = new Vector(Enumerable.Repeat(0.1f, EmbeddingConfig.Dimensions).ToArray()),
+        });
+        await db.SaveChangesAsync();
+        var answer = """{"clarifications": [{"topicType": "concept", "topicRef": "Vaag onderwerp", "clarification": "Reflection tokens tellen niet mee voor het handlimiet."}]}""";
+        var svc = new ClarificationMiningService(db, Ai(() => answer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Updated);
+        var item = await db.Corrections.SingleAsync();
+        Assert.Contains("niet herkend", item.StatusReason);
+        Assert.DoesNotContain(CorrectionReevaluationService.TerminalMarker, item.StatusReason);
+
+        // En daarmee is het item weer een herstel-pas-kandidaat: de pas
+        // selecteert het opnieuw (AI-uitval hier ⇒ transiënt overslaan, maar
+        // het punt is dat het item weer meedoet).
+        var repair = new CorrectionReevaluationService(db, Ai(() => null));
+        var rr = await repair.RepairPendingAnchorsAsync();
+        Assert.Equal(1, rr.Skipped);
+    }
+
     // --- testinfra (zelfde patroon als ClaimMiningServiceTests) ----------
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)

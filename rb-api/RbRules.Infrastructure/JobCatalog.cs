@@ -314,7 +314,15 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<ClarificationMiningService>()
             .RunAsync(progress: report, ct: ct);
-        return new(r.Message, Drained: !r.CapHit);
+        // #188 increment 3: de anker-herstel-pas draait als tweede stap van
+        // dezelfde job — hij werkt de bestaande pending-achterstand af
+        // ("onderwerp niet herkend", issue #199: 117/133 items) die de
+        // extractiestap hierboven niet meer aanraakt (die items zijn al
+        // eerder gemíned). Eigen cap/CapHit, meegeteld in Drained zodat het
+        // #190-drain-pad ook deze achterstand tot nul afwerkt.
+        var repair = await sp.GetRequiredService<CorrectionReevaluationService>()
+            .RepairPendingAnchorsAsync(progress: report, ct: ct);
+        return new($"{r.Message} · {repair.Message}", Drained: !r.CapHit && !repair.CapHit);
     }
 
     private static async Task<JobOutcome> RelationsAsync(
