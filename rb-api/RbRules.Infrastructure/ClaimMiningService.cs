@@ -5,9 +5,14 @@ using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
 
+/// <summary><paramref name="CapHit"/> (#190): machine-leesbaar of deze run
+/// op de per-run kostencap (<c>maxClaims</c>) is gestrand — er ligt dan werk
+/// klaar voor een volgende run. Paden draineren hierop in plaats van op de
+/// "cap van N claims bereikt"-tekst in <paramref name="Message"/> te
+/// matchen.</summary>
 public record ClaimMineResult(
     int Documents, int NewClaims, int Corroborated, int Rejected,
-    int Conflicts, int Rechecked, int Failed, string Message);
+    int Conflicts, int Rechecked, int Failed, string Message, bool CapHit = false);
 
 /// <summary>Kennislaag 2 (#50): destilleert claims uit community-documenten in
 /// het bestaande bronnenregister (trust ≥ 3), dedupet ze via genormaliseerde
@@ -191,7 +196,7 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
             + $"{rechecked} hergetoetst, {failed} mislukt"
             + (failed > 0 ? " (redenen in run_log)" : "")
             + (budgetHit ? $" — cap van {maxClaims} claims bereikt, rest volgt bij de volgende run" : "");
-        return new(docs, newClaims, corroborated, rejected, conflicts, rechecked, failed, message);
+        return new(docs, newClaims, corroborated, rejected, conflicts, rechecked, failed, message, budgetHit);
     }
 
     private enum ClaimOutcome { New, Corroborated, Seen, Rejected, Conflict, Failed }

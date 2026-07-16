@@ -120,6 +120,9 @@ public class ClaimMiningServiceTests
 
         Assert.Equal(1, r.NewClaims);
         Assert.Equal(0, r.Failed);
+        // #190: geen cap geraakt — paden mogen op dit veld draineren i.p.v.
+        // op de detailtekst te matchen.
+        Assert.False(r.CapHit);
         Assert.NotNull(doc.ClaimsMinedAt);
         var claim = await db.Claims.SingleAsync();
         Assert.Equal("mulligan", claim.TopicRef);
@@ -144,6 +147,9 @@ public class ClaimMiningServiceTests
         Assert.Equal(1, r.Corroborated);
         Assert.Equal(0, r.Failed);
         Assert.Contains("cap van 1 claims bereikt", r.Message);
+        // #190: CapHit is het machine-leesbare equivalent van die tekst —
+        // paden (JobPaths/PathRunner) draineren hierop.
+        Assert.True(r.CapHit);
         Assert.Null(doc.ClaimsMinedAt);
 
         // Her-run zonder cap-druk: dedupe maakt de eerste claim idempotent
@@ -152,6 +158,7 @@ public class ClaimMiningServiceTests
         var again = await svc.RunAsync();
         Assert.Equal(1, again.Documents);
         Assert.Equal(1, again.Corroborated);
+        Assert.False(again.CapHit);
         Assert.NotNull(doc.ClaimsMinedAt);
     }
 
