@@ -66,3 +66,28 @@ public record UserPatch(
 /// <summary>Review-beslissing op een claim/relatie (#124): optionele
 /// beheerder-notitie bij bevestigen, verwerpen of notitie-promotie.</summary>
 public record ReviewDecision(string? Note);
+
+/// <summary>Bulk-actie per aanbevelingsgroep op de relatie-reviewqueue (#199
+/// v1): Recommendation selecteert de groep ("accept"|"reject"|"unsure"),
+/// Decision is wat er met die groep gebeurt ("accept"|"reject").
+/// ExpectedCount/AsOf zijn de TOCTOU-fence (review-fix finding 1): wat de UI
+/// rendeerde — de groepstelling en de max RecommendedAt binnen de groep.
+/// Alle velden nullable + <see cref="ValidationError"/> (review-fix
+/// finding 6): een ontbrekend veld is een 400 met een duidelijke fout, geen
+/// NRE-500.</summary>
+public record RelationBulkDecideRequest(
+    string? Recommendation, string? Decision, int? ExpectedCount, DateTimeOffset? AsOf)
+{
+    /// <summary>null = geldig; anders de mensleesbare 400-fout. Puur en
+    /// getest (RelationBulkDecideRequestTests) — het endpoint blijft dun.</summary>
+    public string? ValidationError() =>
+        Recommendation?.Trim().ToLowerInvariant() is not ("accept" or "reject" or "unsure")
+            ? "recommendation moet 'accept', 'reject' of 'unsure' zijn"
+            : Decision?.Trim().ToLowerInvariant() is not ("accept" or "reject")
+                ? "decision moet 'accept' of 'reject' zijn"
+                : ExpectedCount is null or < 0
+                    ? "expectedCount ontbreekt of is negatief — stuur de geladen groepstelling mee"
+                    : AsOf is null
+                        ? "asOf ontbreekt — stuur de geladen groeps-tijdstempel mee"
+                        : null;
+}

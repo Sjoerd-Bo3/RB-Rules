@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import { compactRanges } from '$lib/ranges';
+	import { relationBulkActionsVisible } from '$lib/reviewBulk';
 	import AnswerView from '$lib/AnswerView.svelte';
 
 	let { data, form } = $props();
@@ -78,6 +80,17 @@
 		id: number; fromRef: string; fromName: string | null; toRef: string; toName: string | null;
 		kind: string; explanation: string; provenance: string; trust: number;
 		status: string; reviewNote: string | null; archivedAt: string | null; detectedAt: string;
+		/** LLM-triage-aanbeveling (#199 v1): "accept"|"reject"|"unsure", null = nog niet getriaged. */
+		recommendation: string | null;
+		/** Eén zin motivering (Engels, met de geraadpleegde refs erin gevouwen). */
+		recommendationReason: string | null;
+	}
+	interface RelationRecommendationCount {
+		recommendation: string;
+		count: number;
+		/** Max RecommendedAt binnen de groep zoals geladen — samen met count
+		 *  de TOCTOU-fence die de bulk-actie meestuurt (review-fix #199). */
+		asOf: string;
 	}
 	interface RelationKindExample {
 		fromRef: string; fromName: string | null; toRef: string; toName: string | null;
@@ -90,6 +103,7 @@
 	}
 	interface RelationOverview extends Paged<RelationItem> {
 		statusCounts: ClaimStatusCount[]; archived: number; kinds: RelationKindItem[];
+		recommendationCounts: RelationRecommendationCount[];
 	}
 	interface ProposalItem {
 		id: number; url: string; name: string; type: string; motivation: string;
@@ -269,6 +283,17 @@
 		return PROPOSAL_STATUS[status] ?? { label: status, badge: 'warn-b' };
 	}
 
+	// Triage-aanbeveling (#199 v1): kleur + label — puur een aanbeveling, geen
+	// autoriteit (status = kleur + tekst blijft ook hier de regel).
+	const RECOMMENDATION_LABEL: Record<string, { label: string; badge: string }> = {
+		accept: { label: 'aanbeveling: accepteren', badge: 'ok-b' },
+		reject: { label: 'aanbeveling: verwerpen', badge: 'err' },
+		unsure: { label: 'aanbeveling: onzeker', badge: 'warn-b' }
+	};
+	function recommendationInfo(rec: string): { label: string; badge: string } {
+		return RECOMMENDATION_LABEL[rec] ?? { label: `aanbeveling: ${rec}`, badge: 'warn-b' };
+	}
+
 	// Chip-tellingen (#124): statussen tellen over het niet-gearchiveerde deel;
 	// de default-chip is de te-reviewen-telling.
 	function statusCount(counts: ClaimStatusCount[], status: string): number {
@@ -281,6 +306,24 @@
 	);
 	const relationsHandled = $derived(
 		(relations?.statusCounts ?? []).filter((s) => s.status !== 'unreviewed').reduce((a, s) => a + s.count, 0)
+	);
+	// Bulk-actie per aanbevelingsgroep (#199 v1): de hele groep (telling +
+	// asOf-fence) — de knop verdwijnt vanzelf als de groep leeg is, en
+	// rendert alléén in de default-/te-reviewen-weergave (review-fix
+	// findings 3/5/8: daar zijn telling, zichtbare items en actie-scope
+	// hetzelfde universum — unreviewed én niet gearchiveerd).
+	function recommendationGroup(rec: string): RelationRecommendationCount | undefined {
+		return (relations?.recommendationCounts ?? []).find((c) => c.recommendation === rec);
+	}
+	const acceptGroup = $derived(recommendationGroup('accept'));
+	const rejectGroup = $derived(recommendationGroup('reject'));
+	// Bulk-uitkomst bij de juiste knop: het resultaat (succes-telling of de
+	// 409-fence-/foutmelding) van de laatste bulk-actie, getypeerd — de
+	// ActionData-union laat zich in de template niet netjes narrowen.
+	const bulkForm = $derived(
+		form && 'bulkDecision' in form
+			? (form as { bulkDecision: string; bulkApplied?: number; error?: string })
+			: null
 	);
 
 	const gaps = $derived(data.kind === 'gaten' ? (data.data as GapsReport | null) : null);
@@ -458,6 +501,87 @@
 				<form method="POST" action="?/archiveHandledRelations" use:enhance class="archive-all">
 					<button class="ghost small" title="Geaccepteerd en verworpen het archief in — te reviewen blijft staan; de graph-projectie kijkt alleen naar de status">Archiveer alle afgehandelde ({relationsHandled})</button>
 					{#if form && 'archived' in form && form.archived !== undefined}<span class="meta">{form.archived} {form.archived === 1 ? 'item' : 'items'} gearchiveerd.</span>{/if}
+				</form>
+			{/if}
+			<!-- Bulk-actie per aanbevelingsgroep (#199 v1): de machine sorteert
+			     voor (triage-job "relatie-triage"), de mens klikt — één klik
+			     bevestigt/verwerpt de hele groep via hetzelfde accept-/reject-pad
+			     als de losse knoppen per item. confirm() vóór de post, telling in
+			     de knop zelf. Alléén in de default-/te-reviewen-weergave
+			     (review-fix: telling, zichtbare items en actie-scope moeten
+			     hetzelfde universum zijn) en mét de TOCTOU-fence (expectedCount +
+			     asOf): is de groep intussen veranderd — bv. door een gelijktijdige
+			     triage-run — dan weigert rb-api met 409 en is er niets beslist. -->
+			{#if relationBulkActionsVisible(data.filter) && acceptGroup}
+				<form
+					method="POST"
+					action="?/bulkDecideRelations"
+					use:enhance={({ cancel }) => {
+						if (
+							!confirm(
+								`Dit accepteert in één keer alle ${acceptGroup.count} voorstellen met aanbeveling "accepteren" — hetzelfde accept-pad als los bevestigen. Doorgaan?`
+							)
+						) {
+							cancel();
+							return;
+						}
+						return async ({ update }) => {
+							await update();
+							await invalidateAll();
+						};
+					}}
+					class="archive-all"
+				>
+					<input type="hidden" name="recommendation" value="accept" />
+					<input type="hidden" name="decision" value="accept" />
+					<input type="hidden" name="expectedCount" value={acceptGroup.count} />
+					<input type="hidden" name="asOf" value={acceptGroup.asOf} />
+					<button class="small" title="Bevestigt alle voorstellen met aanbeveling 'accepteren' in één keer">
+						Accepteer alle {acceptGroup.count} met aanbeveling accept
+					</button>
+					{#if bulkForm?.bulkDecision === 'accept' && bulkForm.bulkApplied !== undefined}
+						<span class="meta">{bulkForm.bulkApplied} {bulkForm.bulkApplied === 1 ? 'voorstel' : 'voorstellen'} geaccepteerd.</span>
+					{/if}
+					<!-- 409-fence of andere fout — de melding landt bij de juiste knop. -->
+					{#if bulkForm?.bulkDecision === 'accept' && bulkForm.error}
+						<p class="warn">{bulkForm.error}</p>
+					{/if}
+				</form>
+			{/if}
+			{#if relationBulkActionsVisible(data.filter) && rejectGroup}
+				<form
+					method="POST"
+					action="?/bulkDecideRelations"
+					use:enhance={({ cancel }) => {
+						if (
+							!confirm(
+								`Dit verwerpt in één keer alle ${rejectGroup.count} voorstellen met aanbeveling "verwerpen" — hetzelfde reject-pad als los verwerpen. Doorgaan?`
+							)
+						) {
+							cancel();
+							return;
+						}
+						return async ({ update }) => {
+							await update();
+							await invalidateAll();
+						};
+					}}
+					class="archive-all"
+				>
+					<input type="hidden" name="recommendation" value="reject" />
+					<input type="hidden" name="decision" value="reject" />
+					<input type="hidden" name="expectedCount" value={rejectGroup.count} />
+					<input type="hidden" name="asOf" value={rejectGroup.asOf} />
+					<button class="ghost small" title="Verwerpt alle voorstellen met aanbeveling 'verwerpen' in één keer">
+						Verwerp alle {rejectGroup.count} met aanbeveling reject
+					</button>
+					{#if bulkForm?.bulkDecision === 'reject' && bulkForm.bulkApplied !== undefined}
+						<span class="meta">{bulkForm.bulkApplied} {bulkForm.bulkApplied === 1 ? 'voorstel' : 'voorstellen'} verworpen.</span>
+					{/if}
+					<!-- 409-fence of andere fout — de melding landt bij de juiste knop. -->
+					{#if bulkForm?.bulkDecision === 'reject' && bulkForm.error}
+						<p class="warn">{bulkForm.error}</p>
+					{/if}
 				</form>
 			{/if}
 		{:else if data.kind === 'voorstellen' && proposals}
@@ -861,12 +985,23 @@
 						<p class="item-head">
 							<span class="badge {claimStatus(r.status).badge}">{claimStatus(r.status).label}</span>
 							{#if r.archivedAt}<span class="badge mute">gearchiveerd</span>{/if}
+							{#if r.recommendation}
+								<span class="badge {recommendationInfo(r.recommendation).badge}" title="LLM-triage-aanbeveling — geen autoriteit, de mens beslist zelf">
+									{recommendationInfo(r.recommendation).label}
+								</span>
+							{/if}
 							<span class="badge ok-b">{r.kind}</span>
 							<a href={graphHref(r.fromRef)} title="Verken deze knoop in de brein-verkenner"><strong>{r.fromName ?? r.fromRef}</strong></a>
 							<span class="meta">→</span>
 							<a href={graphHref(r.toRef)} title="Verken deze knoop in de brein-verkenner"><strong>{r.toName ?? r.toRef}</strong></a>
 						</p>
 						<p class="pre">{r.explanation}</p>
+						<!-- Triage-motivering (#199 v1): naast het bestaande bewijs, vóór
+						     de beheerder-notitie — machine-aanbeveling eerst, mens-oordeel
+						     daaronder. -->
+						{#if r.recommendationReason}
+							<p class="meta refs">Triage-motivering: {r.recommendationReason}</p>
+						{/if}
 						<!-- Reden/notitie zichtbaar bij het item (#124): verwerpen is niet
 						     langer zwijgend. -->
 						{#if r.reviewNote}<p class="meta refs">Notitie beheerder: {r.reviewNote}</p>{/if}

@@ -224,6 +224,9 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // service dedupet genormaliseerd, de index borgt het hard.
             e.HasIndex(x => new { x.FromRef, x.ToRef, x.Kind }).IsUnique();
             e.HasIndex(x => x.Status);
+            // Relatie-triage (#199 v1): de triage-run filtert op "nog geen
+            // aanbeveling" en de reviewqueue sorteert erop.
+            e.HasIndex(x => x.Recommendation);
         });
 
         b.Entity<RelationKind>(e =>

@@ -651,30 +651,52 @@ public static class AdminEndpoints
         // Relatie-review (#116): accepteren maakt het voorstel definitief
         // (blijft/komt in de graph bij de volgende graph-sync, mits het kind
         // geaccepteerd is); verwerpen haalt hem uit de projectie én voorkomt
-        // dat de miner hetzelfde voorstel opnieuw opvoert.
+        // dat de miner hetzelfde voorstel opnieuw opvoert. Loopt via
+        // RelationTriageService.DecideAsync (#199) — dezelfde plek die de
+        // bulk-actie hieronder aanroept, zodat er geen twee plekken zijn die
+        // kunnen uiteenlopen ("geen nieuw autoriteitspad").
         admin.MapPost("/relations/{id:long}/accept", async (
-            long id, ReviewDecision? body, RbRulesDbContext db) =>
-        {
-            var relation = await db.Relations.FindAsync(id);
-            if (relation is null) return Results.NotFound();
-            relation.Status = "accepted";
-            relation.ReviewedAt = DateTimeOffset.UtcNow;
-            if (!string.IsNullOrWhiteSpace(body?.Note)) relation.ReviewNote = body.Note.Trim();
-            await db.SaveChangesAsync();
-            return Results.Ok(new { ok = true });
-        });
+                long id, ReviewDecision? body, RelationTriageService triage) =>
+            await triage.DecideAsync(id, "accept", body?.Note) is RelationDecisionOutcome.Applied
+                ? Results.Ok(new { ok = true })
+                : Results.NotFound());
 
         admin.MapPost("/relations/{id:long}/reject", async (
-            long id, ReviewDecision? body, RbRulesDbContext db) =>
+                long id, ReviewDecision? body, RelationTriageService triage) =>
+            await triage.DecideAsync(id, "reject", body?.Note) is RelationDecisionOutcome.Applied
+                ? Results.Ok(new { ok = true })
+                : Results.NotFound());
+
+        // Bulk-actie per aanbevelingsgroep (#199 v1): "accepteer alle N met
+        // aanbeveling accept" / "verwerp alle N met aanbeveling reject" — één
+        // klik, de mens klikt. Loopt per item hetzelfde accept-/reject-pad na
+        // (RelationTriageService.DecideAsync/ApplyDecision), in één
+        // transactie (multi-row). Geen nieuw autoriteitspad: dit is puur een
+        // dun vermenigvuldigde van de bestaande, losse acties hierboven.
+        // Review-fixes: expliciete input-validatie → 400 (finding 6) en de
+        // TOCTOU-fence (expectedCount + asOf) → 409 zodra de groep is
+        // veranderd sinds het renderen van de knop (finding 1).
+        admin.MapPost("/relations/bulk-decide", async (
+            RelationBulkDecideRequest? body, RelationTriageService triage) =>
         {
-            var relation = await db.Relations.FindAsync(id);
-            if (relation is null) return Results.NotFound();
-            relation.Status = "rejected";
-            relation.ReviewedAt = DateTimeOffset.UtcNow;
-            // Verwerp-reden (#124) — zichtbaar bij het item in de queue.
-            if (!string.IsNullOrWhiteSpace(body?.Note)) relation.ReviewNote = body.Note.Trim();
-            await db.SaveChangesAsync();
-            return Results.Ok(new { ok = true });
+            if (body is null)
+                return Results.BadRequest(new { error = "body ontbreekt of is geen geldige JSON" });
+            if (body.ValidationError() is { } invalid)
+                return Results.BadRequest(new { error = invalid });
+
+            var r = await triage.BulkDecideAsync(
+                body.Recommendation!, body.Decision!.Trim().ToLowerInvariant(),
+                body.ExpectedCount!.Value, body.AsOf!.Value);
+            return r.Status switch
+            {
+                RelationBulkStatus.Applied => Results.Ok(new { applied = r.Applied }),
+                RelationBulkStatus.FenceViolation => Results.Conflict(new
+                {
+                    error = "de aanbevelingsgroep is veranderd sinds het laden — "
+                            + "ververs de pagina en beoordeel opnieuw",
+                }),
+                _ => Results.BadRequest(new { error = "decision moet 'accept' of 'reject' zijn" }),
+            };
         });
 
         // Archief + notitie-promotie voor relaties (#124, claims-patroon).

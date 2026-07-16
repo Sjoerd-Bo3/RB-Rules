@@ -591,9 +591,9 @@ apart in §6.
 
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
   (scan, feeds, cards, embed, mine, rules, bans, graph, primer, interactions,
-  scout, classify, claims, clarify, relations, setrelease, decks, benchmark,
-  benchmarksweep, regenerateknowledge) draaien via `JobRunner` met
-  live-voortgang en run_log. *Route* `/admin` · *endpoints*
+  scout, classify, claims, clarify, relations, relationtriage, setrelease,
+  decks, benchmark, benchmarksweep, regenerateknowledge) draaien via
+  `JobRunner` met live-voortgang en run_log. *Route* `/admin` · *endpoints*
   `/api/admin/jobs/{name}`, `/api/admin/status`, `/api/admin/logs`.
 - **Paden** (#190) — geordende ketens van bestaande jobs die vanzelf
   doorstromen (één klik = de hele keten), gedefinieerd in `JobPaths`
@@ -603,9 +603,10 @@ apart in §6.
   verschijnt zo vanzelf op `/api/admin/status`). Vier paden: **Ingest-pad**
   (scan → classify → mine → claims → clarify → embed → graph), **Kaart-pad**
   (cards → embed → graph), **Kennis-pad** (claims → clarify → relations →
-  graph) en **Volledige regeneratie** (primer + het Kennis-pad — bewust
-  ZONDER de wipe, die blijft de losse Gevarenzone-actie `regenerateknowledge`
-  hieronder). Een per-run gecapte stap kan **Drain**-gedrag hebben:
+  relationtriage → graph) en **Volledige regeneratie** (primer + het
+  Kennis-pad — bewust ZONDER de wipe, die blijft de losse Gevarenzone-actie
+  `regenerateknowledge` hieronder). Een per-run gecapte stap kan
+  **Drain**-gedrag hebben:
   `PathRunner` herhaalt diezelfde job tot `JobOutcome.Drained` true is (geen
   per-run-cap meer geraakt) — de les uit een handmatige Fase 2-
   kennisregeneratie waarbij claims/clarify meerdere runs nodig hadden om hun
@@ -616,8 +617,8 @@ apart in §6.
   het hele run-budget opeten); beide laten het pad gewoon doorlopen naar de
   volgende stap. Drained is machine-leesbaar mét vers-werk-semantiek
   (zojuist gefaalde items tellen NIET als resterend werk — een directe
-  herhaling faalt vrijwel zeker opnieuw): claims/clarify/relations/decks via
-  hun `CapHit`-veld (bij claims telt ook een hertoets-backlog groter dan het
+  herhaling faalt vrijwel zeker opnieuw): claims/clarify/relations/relationtriage/decks
+  via hun `CapHit`-veld (bij claims telt ook een hertoets-backlog groter dan het
   per-run-venster mee), mine via `Remaining − Failed`. Classify draait
   bewust zónder Drain: die job is ongecapt (één run = de hele backlog), dus
   draineren zou alleen failures herkauwen. Geen string-matching op de
@@ -631,6 +632,34 @@ apart in §6.
   losse jobs is ongewijzigd. *Route* `/admin` (sectie "Paden", boven de
   losse jobs) · *endpoints* `GET /api/admin/paths`,
   `POST /api/admin/paths/{name}` (meelift op `/api/admin/status`).
+- **Relatie-triage** (#199 v1) — job `relationtriage`: per open
+  relatievoorstel (Status "unreviewed", nog geen aanbeveling, niet
+  gearchiveerd — een geparkeerd voorstel kost geen LLM-budget en krijgt
+  geen aanbeveling) één retrieval-gegronde LLM-beoordeling —
+  `accept`/`reject`/`unsure` +
+  één-zin-motivering (Engels, met de geraadpleegde §/mechaniek/concept-refs
+  erin gevouwen), opgeslagen als drie nullable velden op `Relation`
+  (`Recommendation`, `RecommendationReason`, `RecommendedAt`). Bewust een
+  AANBEVELINGS-machine, GEEN autoriteitspad (v1 laat de optionele
+  auto-accept uit de issue expliciet ongebouwd): alleen een mens wijzigt
+  Status, een al mens-beoordeeld voorstel wordt nooit her-getriaged. Cap
+  ~40/run, gecapt met dezelfde vers-werk-semantiek als de andere
+  triage-jobs. De reviewqueue (zie "Reviewqueues" hieronder) sorteert op
+  aanbeveling (accept/reject eerst — de twee bulk-actionabele groepen) en
+  toont motivering naast het bestaande bewijs; een **bulk-actie per
+  aanbevelingsgroep** ("accepteer/verwerp alle N met aanbeveling X", met
+  confirm()) loopt per item hetzelfde bestaande accept-/reject-pad na (geen
+  nieuw autoriteitspad), alléén over unreviewed én niet-gearchiveerde
+  voorstellen, en rendert alléén in de te-reviewen-weergave — telling,
+  zichtbare items en actie-scope zijn zo hetzelfde universum. De bulk is
+  TOCTOU-gefenced (adversariële review, finding 1): de UI stuurt de
+  geladen groepstelling + de max `RecommendedAt` mee, en rb-api weigert
+  met 409 ("groep is veranderd — ververs de pagina") zodra de herberekende
+  groep afwijkt — een gelijktijdige triage-run (het kennis-pad) kan zo
+  nooit items laten meebeslissen die de beheerder niet zag; dat zou de
+  facto het auto-accept-pad zijn dat v1 níét heeft. *Endpoint* (bulk)
+  `POST /api/admin/relations/bulk-decide` (400 bij ontbrekende/ongeldige
+  velden, 409 bij een fence-schending, altijd alles-of-niets).
 - **Kennis regenereren (Engels)** (#187) — eigen, zwaar gewaarschuwd
   admin-paneel (confirm-stap, geen kale "Start"-knop): job
   `regenerateknowledge` verwijdert de volledige LLM-afgeleide kennislaag
@@ -684,7 +713,14 @@ apart in §6.
   `/api/admin/relationkinds/{id}/accept|reject`,
   `/api/admin/mechanics/{id}/accept|reject`,
   `/api/admin/proposals/{id}/accept|reject`. De correcties-reviewqueue heeft
-  daarnaast een eigen bron+opmerking→her-evaluatie-lus (#184, zie §4.1).
+  daarnaast een eigen bron+opmerking→her-evaluatie-lus (#184, zie §4.1). De
+  relatie-reviewqueue toont sinds #199 v1 (zie "Relatie-triage" hierboven) de
+  LLM-aanbeveling (accept/reject/unsure + motivering) naast elk voorstel,
+  gesorteerd met de bulk-actionabele groepen eerst, en — alléén in de
+  te-reviewen-weergave — een bulk-knop per aanbevelingsgroep
+  (`POST /api/admin/relations/bulk-decide`, TOCTOU-gefenced: 409 als de
+  groep sinds het laden veranderde) — de aanbeveling is puur
+  sorteer-/klik-hulp, geen autoriteit.
 - **Vraag-traces** — per vraag welke kennislagen en brein-stappen meededen
   (#40), en sinds #143 het volledige gesprek: het definitieve antwoord (ook
   het streaming-slotframe; bij AI-uitval de eerlijke uitvalmelding) en een
