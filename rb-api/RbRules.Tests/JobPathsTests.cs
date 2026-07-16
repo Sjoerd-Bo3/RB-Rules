@@ -55,17 +55,18 @@ public class JobPathsTests
     }
 
     [Fact]
-    public void KennisPad_HeeftClaimsClarifyRelationsAlsDrain_EnEindigtOpGraph()
+    public void KennisPad_HeeftClaimsClarifyRelationsRelationTriageAlsDrain_EnEindigtOpGraph()
     {
         var path = JobPaths.Find("knowledge");
         Assert.NotNull(path);
         Assert.Equal(
-            new[] { "claims", "clarify", "relations", "graph" },
+            new[] { "claims", "clarify", "relations", "relationtriage", "graph" },
             path!.Steps.Select(s => s.JobName).ToArray());
         Assert.True(path.Steps[0].Drain);
         Assert.True(path.Steps[1].Drain);
         Assert.True(path.Steps[2].Drain);
-        Assert.False(path.Steps[3].Drain); // graph is niet gecapt — geen drain nodig
+        Assert.True(path.Steps[3].Drain); // relationtriage (#199) is per-run gecapt
+        Assert.False(path.Steps[4].Drain); // graph is niet gecapt — geen drain nodig
     }
 
     [Fact]
