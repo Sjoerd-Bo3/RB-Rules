@@ -218,7 +218,8 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `RuleSectionParser`, `SetLegality`, `VariantGrouping`, `RiftboundIds`
   (id-parse/normalisatie, #144), `RiftcodexCardMapper` (bronvorm-adapter,
   #144), `SetCoverage` (dekking per set, #145), `ClaimMining`,
-  `RelationMining`, `AgenticGate`, `SourceSeed`, `SourceFeedSeed` (#167),
+  `RelationMining`, `RelationTriage` (prompt + tolerante parser voor de
+  relatie-triage, #199 v1), `AgenticGate`, `SourceSeed`, `SourceFeedSeed` (#167),
   `RiotCardMapper`, `HubDiscovery`, `RiotNewsFeed` (bron-feed-parser, #167),
   `OfficialDomains` (Riot-domein-allowlist voor de feed-AutoApprove-gate, #167),
   `PiltoverDeckPage`/`PiltoverSitemap`/`DeckCardLinker`
@@ -394,7 +395,8 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   compenseert het ontbreken van de `ReviewNote`-gebaseerde
   cross-bucket-redding die `StoreAsync` (#184, ongewijzigd) voor handmatige
   correcties gebruikt),
-  `RelationMiningService`, `InteractionService`, `PrimerService`,
+  `RelationMiningService`, `RelationTriageService` (#199 v1, zie
+  "`RelationTriageService`" hierboven), `InteractionService`, `PrimerService`,
   `KnowledgeRegenerationService` (#187, job "regenerateknowledge" — wipet de
   LLM-afgeleide kennislaag (claim, correction, knowledge_doc kind=primer,
   relation) en reset de mining-markers zodat her-mining met de Engelse
@@ -444,7 +446,7 @@ machine-leesbare "geen VERS werk meer deze run"-signaal. Vers-werk-semantiek
 — een directe herhaling faalt vrijwel zeker opnieuw (rb-ai down, poison
 item), dus die horen bij de volgende run/tick, niet bij een drain-lus. De
 per-run gecapte jobs leiden Drained af van hun eigen resultaat:
-`claims`/`clarify`/`relations`/`decks` via `CapHit` (bij claims telt ook een
+`claims`/`clarify`/`relations`/`relationtriage`/`decks` via `CapHit` (bij claims telt ook een
 hertoets-backlog groter dan het `MaxRechecksPerRun`-venster mee — een
 goedkope COUNT vooraf; `clarify` is sinds #188 increment 3 zelf twee gecapte
 stappen — extractie (`ClarificationMiningService.RunAsync`) + de
@@ -468,7 +470,33 @@ verwijst (gevalideerd in `JobPathsTests`); Drain hoort alleen op per-run
 gecapte jobs — `classify` staat daarom zonder Drain in het Ingest-pad. Vier
 paden — Ingest-, Kaart-, Kennis- en het Volledige-regeneratiepad (zie PRD
 §4.5 voor de precieze stappen; bewust GEEN wipe erin, dat blijft
-`regenerateknowledge` als losse Gevarenzone-actie).
+`regenerateknowledge` als losse Gevarenzone-actie). Het Kennis-pad kreeg met
+#199 v1 een vijfde stap: `relationtriage` (Drain: true), ná `relations` en
+vóór `graph`.
+
+**`RelationTriageService` (LLM-triage voor relatievoorstellen, #199 v1).**
+Per open `Relation` (Status "unreviewed", `Recommendation == null`) één
+retrieval-gegronde LLM-beoordeling (cap 40/run, zelfde vers-werk-semantiek
+als de andere gecapte miners) — de context is bewust goedkoop (geen
+embeddings): per ref (`BrainRef`) een exacte lookup (kaarttekst, §-chunk op
+`SourceId`+`SectionCode`, primer-doc op `Topic`, claim op id) of, alleen voor
+`mechanic:`-refs, dezelfde ILike-eerste-§-match als
+`RelationMiningService.BuildMechanicsContextAsync`. De parser
+(`RelationTriage.Parse`, Domain) volgt de #188-increment-3-les: een
+objectvorm-guard vóór elke `TryGetProperty`, want `LlmJson.Candidates` levert
+ook array-vormige blokken op. Het resultaat (`accept`/`reject`/`unsure` + één
+zin Engelse motivering, met de geraadpleegde refs erin gevouwen) landt op drie
+nullable kolommen (`Relation.Recommendation`, `RecommendationReason`,
+`RecommendedAt`, migratie `RelationTriage`) — bewust GEEN vierde kolom voor de
+refs. Dit is uitdrukkelijk GEEN autoriteitspad (de optionele auto-accept uit
+issue #199 is bewust niet gebouwd: een LLM-oordeel alleen mag nooit een
+statuswijziging dragen zonder deterministisch vangnet of mens): `Status`
+verandert alleen via `RelationTriageService.DecideAsync` (het bestaande
+accept-/reject-pad, nu ook aangeroepen door de losse `AdminEndpoints`-acties)
+of `BulkDecideAsync` (#199, de bulk-actie per aanbevelingsgroep — één
+transactie over alle "unreviewed" voorstellen met die aanbeveling, endpoint
+`POST /api/admin/relations/bulk-decide`). Een mens-beoordeeld voorstel
+(Status niet meer "unreviewed") wordt nooit her-getriaged.
 `PathRunner.RunAsync(path, sp, report, ct, findJob?)` (Infrastructure)
 draait de stappen sequentieel via `job.Run(sp, ...)` — `findJob` is een
 test-seam die in productie op `JobCatalog.Find` defaultet. Bij `Drain: true`
@@ -512,7 +540,11 @@ beurten, #143; bron-dossier: `/sources/{id}/dossier`, #171; correcties:
 bron-naam en `UrlGuard`-gesaniteerde link, #184 — `/corrections/{id}/verify|
 reject|reevaluate`; paden, #190: `GET /paths` (de catalogus, voor de
 beheer-UI), `POST /paths/{name}` — zelfde `TryStart`-conflictgedrag (202/409)
-als `POST /jobs/{name}`, de padnaam verschijnt vanzelf op `/status`).
+als `POST /jobs/{name}`, de padnaam verschijnt vanzelf op `/status`; relaties,
+#199 v1: `/relations/{id}/accept|reject` lopen via
+`RelationTriageService.DecideAsync` (ongewijzigd contract), plus
+`POST /relations/bulk-decide` — de bulk-actie per aanbevelingsgroep, één
+transactie, hergebruikt hetzelfde pad per item).
 
 ### rb-ai — belangrijkste modules
 
@@ -694,7 +726,10 @@ kennislagen: `RuleSection` (+`PART_OF`), `Concept` (+`EXPLAINS`), `Claim`
 (+`ABOUT`/`SUPPORTED_BY`, alleen accepted/unreviewed), `Source`, `Erratum`
 (+`SUPERSEDES`), `Change` (+`AFFECTS`), plus de dynamische
 `RELATES_TO {kind, trust, explanation, status}`-relaties via de reviewpoort
-(`RelationProjection`). Sinds #191 ook `Ruling` (+`ABOUT`/`SUPPORTED_BY`,
+(`RelationProjection`) — de #199 v1-triage-aanbeveling
+(`Relation.Recommendation`/`RecommendationReason`/`RecommendedAt`) is bewust
+GEEN edge-property en beïnvloedt `RelationProjection.ShouldProject` niet: een
+aanbeveling is geen status. Sinds #191 ook `Ruling` (+`ABOUT`/`SUPPORTED_BY`,
 alleen `status=verified`) voor geverifieerde rulings/clarificaties —
 dezelfde ABOUT-resolutie als `Claim` (`RulingTopicMapper`, Scope→topic via
 `RulingsTopics`), gematcht op `SourceRef` t.o.v. `Source.Url`
