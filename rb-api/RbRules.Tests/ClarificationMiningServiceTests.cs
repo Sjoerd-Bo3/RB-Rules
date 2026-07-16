@@ -643,6 +643,43 @@ public class ClarificationMiningServiceTests
         Assert.Null(ruling.VerifiedAt);
     }
 
+    // --- anker-vocabulaire in de extractieprompt (#188 increment 3) ------
+
+    [Fact]
+    public async Task RunAsync_ExtractiePrompt_BevatEchteMechaniekVocabulaire_EnGeenPlaceholder()
+    {
+        // Issue #199: 117/133 pending items falen op anker-resolutie omdat de
+        // extractie een vrije-vorm-onderwerp buiten het vocabulaire koos. Dit
+        // dekt dat de prompt die WERKELIJK naar rb-ai gaat het echte
+        // vocabulaire bevat (seed-mechanieken ÉN geaccepteerde keywords uit de
+        // database) — niet alleen dat ClarificationMiner.GetSystemPrompt
+        // (los getest) de placeholder correct vervangt.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        db.MechanicKeywords.Add(new MechanicKeyword { Term = "Overwhelm", Status = "accepted" });
+        await db.SaveChangesAsync();
+
+        string? capturedSystem = null;
+        var handler = new StubHandler(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var doc = JsonDocument.Parse(body);
+            capturedSystem = doc.RootElement.TryGetProperty("system", out var s) ? s.GetString() : null;
+            return Json(new { answer = OneConceptAnswer });
+        });
+        var ai = new RbAiClient(
+            new HttpClient(handler) { BaseAddress = new Uri("http://rb-ai.test") },
+            NullLogger<RbAiClient>.Instance);
+        var svc = new ClarificationMiningService(db, ai, Embeddings(ok: true));
+
+        await svc.RunAsync();
+
+        Assert.NotNull(capturedSystem);
+        Assert.Contains("Legion", capturedSystem); // seed-mechaniekvocabulaire (MechanicMiner.SeedVocabulary)
+        Assert.Contains("Overwhelm", capturedSystem); // geaccepteerd keyword uit de database
+        Assert.DoesNotContain("{VOCABULARY}", capturedSystem); // placeholder is altijd vervangen
+    }
+
     // --- testinfra (zelfde patroon als ClaimMiningServiceTests) ----------
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)

@@ -13,7 +13,22 @@ namespace RbRules.Infrastructure;
 /// null — logica zelf ongewijzigd, alleen verplaatst.</summary>
 internal static class AnchorResolverFactory
 {
-    public static async Task<ClaimTopicMapper> BuildAsync(RbRulesDbContext db, CancellationToken ct)
+    /// <summary>Ongewijzigd bestaand koppelvlak: alleen de opaque resolver,
+    /// voor aanroepers die geen prompt-vocabulaire nodig hebben (<see
+    /// cref="CorrectionReevaluationService"/>'s handmatige-opmerking-pad).</summary>
+    public static async Task<ClaimTopicMapper> BuildAsync(RbRulesDbContext db, CancellationToken ct) =>
+        (await BuildWithVocabularyAsync(db, ct)).Mapper;
+
+    /// <summary>#188 increment 3: naast de resolver ook de leesbare
+    /// mechaniek-/concept-vocabulaire voor de extractie-/herstel-pas-prompt
+    /// (<see cref="ClarificationMiner.BuildVocabularyBlock"/>) — dezelfde
+    /// query's, één keer uitgevoerd, zodat de prompt en de deterministische
+    /// validatie (<see cref="ClaimTopicMapper.Resolve"/>) gegarandeerd
+    /// hetzelfde vocabulaire zien. Cards/§-codes zijn te talrijk voor een
+    /// prompt-opsomming en blijven daarom alleen in de resolver — de prompt
+    /// instrueert daarvoor "gebruik de exacte naam/code".</summary>
+    public static async Task<(ClaimTopicMapper Mapper, IReadOnlyList<string> Mechanics, IReadOnlyList<(string Key, string Title)> Concepts)>
+        BuildWithVocabularyAsync(RbRulesDbContext db, CancellationToken ct)
     {
         var cards = await db.Cards.AsNoTracking()
             .Select(c => new { c.RiftboundId, c.Name, c.VariantOf })
@@ -31,12 +46,20 @@ internal static class AnchorResolverFactory
                 .Where(k => k.Kind == "primer")
                 .Select(k => new { k.Topic, k.Title })
                 .ToListAsync(ct))
-            .GroupBy(k => k.Topic).Select(g => g.First());
+            .GroupBy(k => k.Topic).Select(g => g.First()).ToList();
 
-        return ClaimTopicMapper.Create(
+        var mechanicVocabulary = MechanicMiner.Vocabulary(accepted).Concat(minedMechanics)
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var conceptVocabulary = concepts.Select(k => (k.Topic, k.Title)).ToList();
+
+        var mapper = ClaimTopicMapper.Create(
             cards.Select(c => (c.RiftboundId, c.Name, c.VariantOf)),
-            MechanicMiner.Vocabulary(accepted).Concat(minedMechanics),
+            mechanicVocabulary,
             sections.Select(s => (s.SourceId, s.Code)),
-            concepts.Select(k => (k.Topic, k.Title)));
+            conceptVocabulary);
+
+        return (mapper, mechanicVocabulary, conceptVocabulary);
     }
 }

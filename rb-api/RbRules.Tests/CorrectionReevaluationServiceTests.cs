@@ -342,6 +342,251 @@ public class CorrectionReevaluationServiceTests
         Assert.Equal("verified", correction.Status);
     }
 
+    // --- #188 increment 3: anker-herstel-pas -----------------------------
+    //
+    // Productiedata (issue #199, comment 2026-07-16): 117 van de 133 pending
+    // clarify-corrections falen op anker-resolutie — de extractie koos een
+    // vrije-vorm-onderwerp buiten het vocabulaire. RepairPendingAnchorsAsync
+    // is de geautomatiseerde tegenhanger van de handmatige
+    // ReviewNoteAnchor-correctie hierboven: de LLM kiest zelf een anker uit
+    // het echte vocabulaire, en dezelfde poort (ApplyGateAsync) her-toetst.
+
+    [Fact]
+    public async Task RepairPendingAnchorsAsync_HerkendAnker_GrondEnInformatief_PromoveertNaarVerified()
+    {
+        using var db = NewDb();
+        await SeedFaqDocumentAsync(db);
+        var quote = GroundedQuote.Replace("Recall", "Legion");
+        var correction = new Correction
+        {
+            Scope = "concept", Ref = "battlefield control without units",
+            Text = $"Legion means you finalize an item on the chain, so Battering Ram checks that status.\n\nCitaat uit de bron: “{quote}”",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified",
+            StatusReason = "onderwerp 'battlefield control without units' (concept) niet herkend",
+        };
+        db.Corrections.Add(correction);
+        await db.SaveChangesAsync();
+        var ai = RoutedAi((prompt, system) => system.Contains("herstelt het onderwerp-anker")
+            ? """{"topicType": "mechanic", "topicRef": "Legion"}"""
+            : """{"operative": true}""");
+        var svc = new CorrectionReevaluationService(db, ai);
+
+        var r = await svc.RepairPendingAnchorsAsync();
+
+        Assert.Equal(1, r.Repaired);
+        Assert.Equal(0, r.Skipped);
+        Assert.False(r.CapHit);
+        Assert.Equal("mechanic", correction.Scope);
+        Assert.Equal("Legion", correction.Ref);
+        Assert.Equal("verified", correction.Status);
+        Assert.Null(correction.StatusReason);
+        Assert.NotNull(correction.VerifiedAt);
+        // #188 increment 3 (bewust): geen ReviewNote — een geautomatiseerde
+        // keuze is geen "beheerder heeft hiernaar gekeken"-signaal.
+        Assert.Null(correction.ReviewNote);
+    }
+
+    [Fact]
+    public async Task RepairPendingAnchorsAsync_NoneKeuze_LaatItemOngemoeidStaan()
+    {
+        using var db = NewDb();
+        await SeedFaqDocumentAsync(db);
+        const string reason = "onderwerp 'iets heel vaags' (concept) niet herkend";
+        var correction = new Correction
+        {
+            Scope = "concept", Ref = "iets heel vaags",
+            Text = "Een verduidelijking die nergens goed bij past.",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified", StatusReason = reason,
+        };
+        db.Corrections.Add(correction);
+        await db.SaveChangesAsync();
+        var ai = RoutedAi((prompt, system) => system.Contains("herstelt het onderwerp-anker")
+            ? """{"none": true}"""
+            : """{"operative": true}""");
+        var svc = new CorrectionReevaluationService(db, ai);
+
+        var r = await svc.RepairPendingAnchorsAsync();
+
+        Assert.Equal(0, r.Repaired);
+        Assert.Equal(1, r.Skipped);
+        Assert.Equal("concept", correction.Scope); // ongewijzigd
+        Assert.Equal("iets heel vaags", correction.Ref);
+        Assert.Equal("unverified", correction.Status);
+        Assert.Equal(reason, correction.StatusReason); // exact ongewijzigd, niet herberekend
+    }
+
+    [Fact]
+    public async Task RepairPendingAnchorsAsync_ReviewNoteItem_BlijftBuitenBeschouwing_BeheerderEigendom()
+    {
+        // #184: een ReviewNote betekent "een beheerder heeft hiernaar
+        // gekeken" — de herstel-pas mag zo'n item niet eens als kandidaat
+        // selecteren, laat staan aanraken.
+        using var db = NewDb();
+        await SeedFaqDocumentAsync(db);
+        var correction = new Correction
+        {
+            Scope = "concept", Ref = "iets waar de beheerder al naar keek",
+            Text = "Een verduidelijking.",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified",
+            StatusReason = "onderwerp 'iets waar de beheerder al naar keek' (concept) niet herkend",
+            ReviewNote = "nog even nakijken",
+        };
+        db.Corrections.Add(correction);
+        await db.SaveChangesAsync();
+        var calls = 0;
+        var ai = new RbAiClient(
+            new HttpClient(new StubHandler(_ =>
+            {
+                calls++;
+                return Json(new { answer = """{"topicType": "mechanic", "topicRef": "Legion"}""" });
+            }))
+            { BaseAddress = new Uri("http://rb-ai.test") },
+            NullLogger<RbAiClient>.Instance);
+        var svc = new CorrectionReevaluationService(db, ai);
+
+        var r = await svc.RepairPendingAnchorsAsync();
+
+        Assert.Equal(0, r.Repaired);
+        Assert.Equal(0, r.Skipped);
+        Assert.Equal(0, calls); // niet eens een kandidaat — geen LLM-aanroep
+        Assert.Equal("concept", correction.Scope);
+        Assert.Equal("nog even nakijken", correction.ReviewNote);
+    }
+
+    [Fact]
+    public async Task RepairPendingAnchorsAsync_CapBereikt_RapporteertCapHit_VolgendeRunPaktRestOp()
+    {
+        using var db = NewDb();
+        await SeedFaqDocumentAsync(db);
+        var quote = GroundedQuote.Replace("Recall", "Legion");
+        // Drie kandidaten, elk met een eigen (bestaand, niet-botsend) seed-
+        // mechaniek als beoogd anker — MechanicMiner.SeedVocabulary bevat
+        // "Legion", "Tank" en "Shield" al zonder dat MechanicKeywords gezaaid
+        // hoeft te worden.
+        string[] mechanics = ["Legion", "Tank", "Shield"];
+        for (var i = 0; i < mechanics.Length; i++)
+        {
+            db.Corrections.Add(new Correction
+            {
+                Scope = "concept", Ref = $"vaag onderwerp {i}",
+                Text = $"Clarification about mechanic variant {i}.\n\nCitaat uit de bron: “{quote}”",
+                Provenance = $"clarify-mining:{SourceId}",
+                Status = "unverified",
+                StatusReason = $"onderwerp 'vaag onderwerp {i}' (concept) niet herkend",
+            });
+        }
+        await db.SaveChangesAsync();
+        var ai = RoutedAi((prompt, system) =>
+        {
+            if (!system.Contains("herstelt het onderwerp-anker")) return """{"operative": true}""";
+            for (var i = 0; i < mechanics.Length; i++)
+                if (prompt.Contains($"variant {i}")) return $$"""{"topicType": "mechanic", "topicRef": "{{mechanics[i]}}"}""";
+            return """{"none": true}""";
+        });
+        var svc = new CorrectionReevaluationService(db, ai);
+
+        var first = await svc.RepairPendingAnchorsAsync(maxItems: 2);
+
+        Assert.True(first.CapHit);
+        Assert.Equal(2, first.Repaired);
+        Assert.Contains("cap van 2 bereikt", first.Message);
+
+        var second = await svc.RepairPendingAnchorsAsync(maxItems: 2);
+
+        Assert.False(second.CapHit); // nog maar 1 kandidaat over, past ruim binnen de cap
+        Assert.Equal(1, second.Repaired);
+    }
+
+    [Fact]
+    public async Task RepairPendingAnchorsAsync_AiUitval_SlaatOverZonderCrash()
+    {
+        using var db = NewDb();
+        await SeedFaqDocumentAsync(db);
+        const string reason = "onderwerp 'vaag onderwerp' (concept) niet herkend";
+        var correction = new Correction
+        {
+            Scope = "concept", Ref = "vaag onderwerp", Text = "Een verduidelijking.",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified", StatusReason = reason,
+        };
+        db.Corrections.Add(correction);
+        await db.SaveChangesAsync();
+        var svc = new CorrectionReevaluationService(db, Ai(() => null)); // AI-uitval (500)
+
+        var r = await svc.RepairPendingAnchorsAsync();
+
+        Assert.Equal(0, r.Repaired);
+        Assert.Equal(1, r.Skipped);
+        Assert.Equal("unverified", correction.Status);
+        Assert.Equal(reason, correction.StatusReason);
+    }
+
+    [Fact]
+    public async Task RepairPendingAnchorsAsync_AnkerWijstNaarBestaandeCorrection_BlijftPending_GeenSpookduplicaat()
+    {
+        // Het spookduplicaat-scenario (#188 increment 3, Grenzen-afweging):
+        // een eerdere run (mining of herstel-pas) plaatste al een verified
+        // ruling op het ECHTE anker. Een latere her-mine extraheerde het
+        // onderwerp opnieuw met een ANDER (vrij-vorm) anker — zonder
+        // ReviewNote is dit tweede item niet zichtbaar voor StoreAsync's
+        // cross-bucket-redding. Zou de herstel-pas dit blindelings naar
+        // hetzelfde echte anker verplaatsen, dan ontstaan er twee verified
+        // rulings over hetzelfde onderwerp. ApplyGateAsync's collision-guard
+        // moet dit voorkomen: het item blijft pending, met een zichtbare
+        // reden, en de bestaande verified ruling blijft de enige.
+        using var db = NewDb();
+        await SeedFaqDocumentAsync(db);
+        var quote = GroundedQuote.Replace("Recall", "Legion");
+        db.Corrections.Add(new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = $"Legion means finalize.\n\nCitaat uit de bron: “{quote}”",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "verified", VerifiedAt = DateTimeOffset.UtcNow,
+        });
+        var duplicate = new Correction
+        {
+            Scope = "concept", Ref = "battlefield control without units",
+            Text = $"Legion means finalize, alternate phrasing of the same rule.\n\nCitaat uit de bron: “{quote}”",
+            Provenance = $"clarify-mining:{SourceId}",
+            Status = "unverified",
+            StatusReason = "onderwerp 'battlefield control without units' (concept) niet herkend",
+        };
+        db.Corrections.Add(duplicate);
+        await db.SaveChangesAsync();
+        var ai = RoutedAi((prompt, system) => system.Contains("herstelt het onderwerp-anker")
+            ? """{"topicType": "mechanic", "topicRef": "Legion"}"""
+            : """{"operative": true}""");
+        var svc = new CorrectionReevaluationService(db, ai);
+
+        var r = await svc.RepairPendingAnchorsAsync();
+
+        Assert.Equal(0, r.Repaired);
+        Assert.Equal(1, r.Skipped);
+        Assert.Equal("concept", duplicate.Scope); // NIET verplaatst
+        Assert.Equal("battlefield control without units", duplicate.Ref);
+        Assert.Equal("unverified", duplicate.Status);
+        Assert.Contains("wijst al naar een bestaande correction", duplicate.StatusReason);
+        Assert.Equal(2, await db.Corrections.CountAsync()); // geen derde rij ontstaan
+        Assert.Equal(1, await db.Corrections.CountAsync(c => c.Status == "verified")); // nog altijd maar één verified Legion-ruling
+    }
+
+    [Fact]
+    public async Task RepairPendingAnchorsAsync_GeenKandidaten_MeldtNiksTeDoen()
+    {
+        using var db = NewDb();
+        var svc = new CorrectionReevaluationService(db, Ai(() => null));
+
+        var r = await svc.RepairPendingAnchorsAsync();
+
+        Assert.Equal(0, r.Repaired);
+        Assert.Equal(0, r.Skipped);
+        Assert.False(r.CapHit);
+    }
+
     private static async Task SeedFaqDocumentAsync(RbRulesDbContext db)
     {
         db.Sources.Add(new Source
@@ -396,6 +641,26 @@ public class CorrectionReevaluationServiceTests
         new HttpClient(new StubHandler(_ => answer() is { } a
             ? Json(new { answer = a })
             : new HttpResponseMessage(HttpStatusCode.InternalServerError)))
+        { BaseAddress = new Uri("http://rb-ai.test") },
+        NullLogger<RbAiClient>.Instance);
+
+    /// <summary>#188 increment 3: RepairPendingAnchorsAsync doet TWEE
+    /// verschillende rb-ai-aanroepen per kandidaat (anker-keuze + de
+    /// bestaande informativiteitstoets) — deze stub routeert op de
+    /// meegestuurde <c>system</c>/<c>prompt</c>-tekst zodat een test elk apart
+    /// kan sturen, i.p.v. de kale <see cref="Ai"/>-stub die elke aanroep
+    /// hetzelfde antwoord geeft. null ⇒ 500 (AI-uitval).</summary>
+    private static RbAiClient RoutedAi(Func<string, string, string?> respond) => new(
+        new HttpClient(new StubHandler(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var doc = JsonDocument.Parse(body);
+            var prompt = doc.RootElement.TryGetProperty("prompt", out var p) ? p.GetString() ?? "" : "";
+            var system = doc.RootElement.TryGetProperty("system", out var s) ? s.GetString() ?? "" : "";
+            return respond(prompt, system) is { } a
+                ? Json(new { answer = a })
+                : new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        }))
         { BaseAddress = new Uri("http://rb-ai.test") },
         NullLogger<RbAiClient>.Instance);
 

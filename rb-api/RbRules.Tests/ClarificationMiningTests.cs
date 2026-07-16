@@ -399,3 +399,110 @@ public class ClarificationMinerLegionFixtureTests
         Assert.True(ClarificationInformativeness.IsMetaOnly(legion.Clarification));
     }
 }
+
+/// <summary>Anker-vocabulaire in de extractieprompt (#188 increment 3): issue
+/// #199 (comment 2026-07-16) toont dat 117 van de 133 pending clarify-
+/// corrections falen op anker-resolutie omdat de extractie een vrije-vorm-
+/// onderwerp koos dat niet in het bestaande vocabulaire voorkomt. <see
+/// cref="ClarificationMiner.GetSystemPrompt"/> vult het echte
+/// mechaniek-/concept-vocabulaire in op de <c>{VOCABULARY}</c>-placeholder in
+/// <see cref="ClarificationMiner.SystemPrompt"/>. De integratie met de echte
+/// database-vocabulaire (AnchorResolverFactory) staat in
+/// ClarificationMiningServiceTests.RunAsync_ExtractiePrompt_….</summary>
+public class ClarificationMinerVocabularyTests
+{
+    [Fact]
+    public void GetSystemPrompt_VultVocabulaireIn_EnLaatGeenPlaceholderOver()
+    {
+        var prompt = ClarificationMiner.GetSystemPrompt(
+            ["Legion", "Overwhelm"], [("turn-structure", "Turn Structure")]);
+
+        Assert.Contains("Legion", prompt);
+        Assert.Contains("Overwhelm", prompt);
+        Assert.Contains("Turn Structure", prompt);
+        Assert.DoesNotContain("{VOCABULARY}", prompt);
+    }
+
+    [Fact]
+    public void BuildVocabularyBlock_ConceptMetGelijkeKeyEnTitel_ToontMaarEenmaal()
+    {
+        var block = ClarificationMiner.BuildVocabularyBlock(
+            ["Legion"], [("legion-concept", "legion-concept")]);
+
+        Assert.Contains("legion-concept", block);
+        Assert.DoesNotContain("legion-concept (legion-concept)", block); // geen dubbele vermelding
+    }
+
+    [Fact]
+    public void BuildVocabularyBlock_ConceptMetAndereTitel_ToontBeide() =>
+        Assert.Contains("turn-structure (Turn Structure)",
+            ClarificationMiner.BuildVocabularyBlock([], [("turn-structure", "Turn Structure")]));
+
+    [Fact]
+    public void BuildVocabularyBlock_LegeVocabulaire_ToontLeesbarePlaceholder() =>
+        Assert.Contains("(nog geen)", ClarificationMiner.BuildVocabularyBlock([], []));
+}
+
+/// <summary>Herstel-pas-prompt (#188 increment 3, <see
+/// cref="ClarificationAnchorRepair"/>): dezelfde vocabulaire als de
+/// extractieprompt, maar met de vraag om een KEUZE i.p.v. vrije extractie.
+/// De end-to-end-orkestratie (LLM-aanroep + poort + spookduplicaat-vangrail)
+/// staat in CorrectionReevaluationServiceTests.RepairPendingAnchorsAsync_….</summary>
+public class ClarificationAnchorRepairTests
+{
+    [Fact]
+    public void GetSystemPrompt_VultVocabulaireIn_EnLaatGeenPlaceholderOver()
+    {
+        var prompt = ClarificationAnchorRepair.GetSystemPrompt(
+            ["Legion"], [("turn-structure", "Turn Structure")]);
+
+        Assert.Contains("Legion", prompt);
+        Assert.Contains("Turn Structure", prompt);
+        Assert.DoesNotContain("{VOCABULARY}", prompt);
+    }
+
+    [Fact]
+    public void BuildPrompt_BevatDeVerduidelijking() =>
+        Assert.Contains("Legion betekent finalizen.",
+            ClarificationAnchorRepair.BuildPrompt("Legion betekent finalizen."));
+
+    [Fact]
+    public void ParseAnchorChoice_GeldigeKeuze_ReturnsTopicTypeEnRef_CaseInsensitiefTopicType() =>
+        Assert.Equal(("mechanic", "Legion"),
+            ClarificationAnchorRepair.ParseAnchorChoice("""{"topicType": "Mechanic", "topicRef": "Legion"}"""));
+
+    [Fact]
+    public void ParseAnchorChoice_NoneJson_ReturnsNull() =>
+        Assert.Null(ClarificationAnchorRepair.ParseAnchorChoice("""{"none": true}"""));
+
+    [Fact]
+    public void ParseAnchorChoice_OnbekendTopicType_ReturnsNull() =>
+        // "champion" staat niet in ClarificationMiner.TopicTypes — degradeert
+        // naar null (geen keuze), niet naar een gok.
+        Assert.Null(ClarificationAnchorRepair.ParseAnchorChoice(
+            """{"topicType": "champion", "topicRef": "Viktor"}"""));
+
+    [Fact]
+    public void ParseAnchorChoice_ToleratesSurroundingProse()
+    {
+        var raw = "Mijn keuze:\n{\"topicType\": \"concept\", \"topicRef\": \"Turn Structure\"}\nKlaar.";
+        Assert.Equal(("concept", "Turn Structure"), ClarificationAnchorRepair.ParseAnchorChoice(raw));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("geen bruikbare JSON hier")]
+    [InlineData("{kapotte json}")]
+    [InlineData("""{"iets_anders": true}""")]
+    // Review-regressie (zelfde les als ClarificationInformativeness.
+    // ParseOperative, #188): array-vormige kandidaten mogen niet crashen —
+    // GetBool/GetString → TryGetProperty gooit op een niet-object een
+    // InvalidOperationException (geen JsonException). Zonder de
+    // objectvorm-guard 500't de herstel-pas i.p.v. te degraderen naar "geen
+    // keuze".
+    [InlineData("[true]")]
+    [InlineData("[1, 2]")]
+    [InlineData("This clarification refers to section [402.3] of the updated core rules.")]
+    public void ParseAnchorChoice_OnbruikbaarAntwoord_ReturnsNull(string raw) =>
+        Assert.Null(ClarificationAnchorRepair.ParseAnchorChoice(raw));
+}

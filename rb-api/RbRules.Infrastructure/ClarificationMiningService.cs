@@ -167,7 +167,14 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         // (ClaimTopicMapper). Onbekend onderwerp ⇒ null ⇒ niet anchored ⇒ review.
         // Gedeeld met CorrectionReevaluationService (#184, AnchorResolverFactory)
         // zodat beide exact dezelfde ankers zien.
-        var anchors = await AnchorResolverFactory.BuildAsync(db, ct);
+        //
+        // #188 increment 3: naast de opaque resolver ook de leesbare
+        // mechaniek-/concept-vocabulaire (mechanicVocab/conceptVocab) — die
+        // gaat letterlijk de extractieprompt in (ClarificationMiner.
+        // GetSystemPrompt) zodat de LLM een bestaand anker kan KIEZEN in
+        // plaats van een vrije-vorm-onderwerp te verzinnen dat toch niet
+        // resolvet (issue #199: 117/133 pending items faalden hierop).
+        var (anchors, mechanicVocab, conceptVocab) = await AnchorResolverFactory.BuildWithVocabularyAsync(db, ct);
 
         var docs = 0;
         var verified = 0;
@@ -201,7 +208,7 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
 
                 var raw = await AskSafeAsync(
                     ClarificationMiner.BuildPrompt(src.Name, segments[si]),
-                    ClarificationMiner.SystemPrompt, ct);
+                    ClarificationMiner.GetSystemPrompt(mechanicVocab, conceptVocab), ct);
                 if (raw is null)
                 {
                     extractionComplete = false;
