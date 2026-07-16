@@ -231,12 +231,25 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `DeckLegality` (#15 fase 3 spoor A: puur op platte kaartfeiten — legaal /
   illegaal-met-reden (nog niet legale set of geband) / onvolledig bij
   niet-gekoppelde kaarten of een set zonder bekende releasedatum),
-  `ClarificationMining` (#177: `ClarificationSources.IsMatch`, naam-/URL-
-  heuristiek die een FAQ-/clarificatie-bron herkent — sinds #185 alléén FAQ/
-  clarifications; patch-notes zijn een apart `IsPatchNotesSignal`-predicaat en
-  doen niet mee in de clarify-pijplijn; `ClarificationMiner`, prompt+parser
-  voor de concept-extractie (output in het Engels, #186) — levert sinds #188
-  ook een `operative`-veld per item (het LLM-oordeel: stelt dit item de échte
+  `SourceContentKind` (#188 increment 2: bron-type-classificatie — "faq" |
+  "patch-notes" | "other" — als LLM-BESLISSING i.p.v. een keyword-heuristiek;
+  `SystemPrompt`/`BuildPrompt`/`Parse` (objectvorm-guard, zelfde patroon als
+  `ClarificationInformativeness.ParseOperative`), `HeuristicKind` (het oude
+  `ClarificationSources`-predicaat, nu het deterministische vangnet bij
+  AI-uitval/onbruikbaar antwoord) en `Resolve` (de ene plek die consumers
+  gebruiken: gepersisteerde `Source.ContentKind` als die er is, anders de
+  heuristiek — transitioneel gedrag tot een bron opnieuw gescand is sinds
+  deze increment); geclassificeerd bij de scan van een trust-1-bron
+  (`IngestService.ClassifyContentKindAsync`, gepersisteerd op `Source.
+  ContentKind`/`ContentKindSource`), gelezen door `ClarificationMiningService`
+  (bronselectie/retractie) en `IngestService` (de templated Change)),
+  `ClarificationMining` (#177: `ClarificationSources`, de naam-/URL-heuristiek
+  die vóór #188 increment 2 de primaire bron-type-classificatie was — nu het
+  vangnet achter `SourceContentKind`; `IsMatch`/`IsPatchNotesSignal` blijven
+  ongewijzigd als de twee losse substring-predicaten waar `SourceContentKind.
+  HeuristicKind` op leunt; `ClarificationMiner`, prompt+parser voor de
+  concept-extractie (output in het Engels, #186) — levert sinds #188 ook een
+  `operative`-veld per item (het LLM-oordeel: stelt dit item de échte
   regel/definitie/interactie, of kondigt het slechts een wijziging aan?);
   `ClarificationGrounding`, de citaat-in-brontekst-check;
   `ClarificationInformativeness.IsMetaOnly`, de derde poort-toets die een
@@ -279,7 +292,11 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   per concept op (bron, Scope, Ref) + embedding-nabijheid — een parafrase bij
   een her-mine werkt de bestaande ruling bij (nooit degraderend) i.p.v. te
   stapelen, zelfde poort-patroon als `ClaimMiningService`; backfilt bestaande
-  bronnen vanzelf, geen tijdvenster op de bronselectie; de anker-resolver-
+  bronnen vanzelf, geen tijdvenster op de bronselectie (sinds #188 increment 2:
+  `SourceContentKind.Resolve` op elke trust-1-bron in plaats van de kale
+  naam-/URL-heuristiek — zelfde uitkomst voor een nog-niet-geclassificeerde
+  bron dankzij de null-fallback, maar nu ook correct voor een bron zonder
+  magisch woord in zijn slug); de anker-resolver-
   opbouw zelf staat gedeeld in `AnchorResolverFactory`),
   `CorrectionReevaluationService` (#184, her-evaluatie van één `Correction`
   op een beheerder-opmerking: draait dezelfde hybride poort opnieuw voor dat
@@ -563,10 +580,13 @@ Kernpunten (`AskService.cs`):
 
 ### 6.2 De scan-pipeline
 
-`IngestService.ScanAsync`: per bron fetch → boilerplate-strip → hash → diff →
-AI-classify → store + `run_log`, met flip-flop-suppressie en een
-naclassificatie-ronde (#58) voor changes die eerder zonder classificatie zijn
-opgeslagen. De `ScanScheduler` (BackgroundService) draait elk uur een scan van
+`IngestService.ScanAsync`: per bron fetch → boilerplate-strip → hash →
+bron-type-classificatie (#188 increment 2, alleen trust-1-bronnen zonder
+LLM-classificatie of met een heuristische — `ClassifyContentKindAsync`,
+`SourceContentKind`) → diff → AI-classify → store + `run_log`, met
+flip-flop-suppressie en een naclassificatie-ronde (#58) voor changes die
+eerder zonder classificatie zijn opgeslagen. De `ScanScheduler`
+(BackgroundService) draait elk uur een scan van
 de bronnen die aan de beurt zijn (cadence), stuurt web-push bij high-severity,
 her-indexeert regels en bans bij nieuwe/gewijzigde documenten, checkt de
 set-release-keten, en draait dagelijks kaart-sync + embeddings, nachtelijk
