@@ -296,9 +296,11 @@ public class ClarificationMiningServiceTests
     {
         // Het omgekeerde: de naam/URL zien er FAQ-achtig uit (de heuristiek
         // zou "faq" zeggen), maar de LLM heeft deze bron als "patch-notes"
-        // geclassificeerd — de gepersisteerde kind wint, de bron wordt NIET
-        // gemined (het gemengde-bron-scenario uit #185, nu via een expliciete
-        // classificatie i.p.v. een dubbel-matchende naam).
+        // geclassificeerd — voor de BRONSELECTIE wint de gepersisteerde
+        // kind, dus de bron wordt niet gemined. (De destructieve retractie
+        // vereist sinds de #188-review daarbovenop heuristiek-consensus —
+        // zie ClarificationRetractionTests; alleen niet-minen is veilig
+        // zonder tweede signaal, want dat is omkeerbaar.)
         using var db = NewDb();
         db.Sources.Add(new Source
         {

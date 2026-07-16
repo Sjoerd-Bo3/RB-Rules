@@ -141,14 +141,17 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         // slug, of die de LLM juist NIET als "faq" herkent ondanks zo'n woord
         // in de naam/URL.
         //
-        // #185-principe blijft: patch-notes wint bij dubbelzinnigheid — de
+        // Dubbelzinnig blijft veilig, maar sinds de #188-review NEUTRAAL: de
         // LLM-prompt (SourceContentKind.SystemPrompt) instrueert dat een
-        // gemengd artikel (bv. "Rules FAQ & Patch Notes") "patch-notes" is,
-        // en Resolve geeft één enkele kind terug (nooit "faq" én
-        // "patch-notes" tegelijk). Zonder die scheiding zou een gemengde bron
-        // hier gemíned worden én meteen door RetractPatchNotesCorrectionsAsync
-        // weer hard verwijderd, met de ClarifiedAt-gate die her-mining
-        // blokkeert ⇒ stil, permanent verlies van geldige rulings (thrash).
+        // gemengd/onzeker artikel (bv. "Rules FAQ & Patch Notes") "other" is
+        // — niet gemined, niet geretract. Resolve geeft sowieso één enkele
+        // kind terug (nooit "faq" én "patch-notes" tegelijk), dus de
+        // #185-thrash (een bron die gemíned wordt én meteen door
+        // RetractPatchNotesCorrectionsAsync hard verwijderd, met de
+        // ClarifiedAt-gate die her-mining blokkeert ⇒ stil, permanent
+        // verlies) kan hier niet meer optreden; de heuristische
+        // null-fallback houdt voor dubbel-keyword-namen het conservatieve
+        // #185-gedrag (patch-notes wint ⇒ niet minen).
         var sources = (await db.Sources.AsNoTracking()
                 .Where(s => s.Enabled && s.TrustTier == 1)
                 .OrderByDescending(s => s.Rank)
@@ -304,13 +307,34 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
     /// opruiming een goedkope no-op (geen matchende Corrections meer, want
     /// patch-notes-bronnen worden sinds #185 niet meer gemined). Sources
     /// wordt in-memory gejoind (klein aantal trust-1-bronnen, zelfde
-    /// afweging als de bronselectie hierboven), inclusief ContentKind (#188
-    /// increment 2) zodat de kind-check dezelfde LLM-classificatie/heuristiek-
-    /// fallback gebruikt als de bronselectie; ontbreekt de Source-rij zelf
-    /// (bv. verwijderd uit het register), dan valt de check terug op de
-    /// sourceId uit de Provenance zelf — die draagt bij de patch-notes-seeds
-    /// (bv. "core-rules-patch-notes") het heuristische signaal al in de
-    /// Id.</summary>
+    /// afweging als de bronselectie hierboven), inclusief ContentKind/
+    /// ContentKindSource (#188 increment 2) zodat de kind-check dezelfde
+    /// LLM-classificatie/heuristiek-fallback gebruikt als de bronselectie.
+    ///
+    /// <b>Consensus-poort (#188-review, fix A):</b> dit is het enige
+    /// DESTRUCTIEVE pad in de clarify-pijplijn (hard delete), en het mag
+    /// niet aan één eenmalig, onherroepelijk LLM-oordeel hangen — één fout
+    /// "patch-notes"-antwoord zou anders geverifieerde rulings permanent
+    /// wissen zonder herstelpad (de ClarifiedAt-gate blokkeert her-mining).
+    /// Er wordt daarom alleen verwijderd als de effectieve kind patch-notes
+    /// is ÉN een tweede, onafhankelijk signaal het bevestigt: de
+    /// deterministische heuristiek (<see cref="ClarificationSources.
+    /// IsPatchNotesSignal"/>) óf een expliciete beheerder-override
+    /// (ContentKindSource "admin" — precies het herstel-/bevestigingspad dat
+    /// de waarschuwing hieronder aanwijst). Zeggen LLM en heuristiek iets
+    /// verschillends, dan blijft alles staan en verschijnt een
+    /// run_log-waarschuwing. De oorspronkelijke #185-opruiming blijft zo
+    /// gewoon werken: de patch-notes-seeds (core-rules-patch-notes,
+    /// spiritforged-patch-notes) dragen het keyword — LLM en heuristiek eens
+    /// — opgeruimd.
+    ///
+    /// <b>Wees-bronnen (#188-review, fix B):</b> ontbreekt de Source-rij zelf
+    /// (bv. verwijderd uit het register), dan wordt NOOIT verwijderd — het
+    /// vroegere id-only-fallbackpad (patch-notes-woord in de sourceId) is
+    /// post-increment-2 onveilig, want een bron met zo'n woord in de id kan
+    /// door de LLM legitiem als "faq" geclassificeerd en gemined zijn
+    /// geweest. De corrections blijven staan met één run_log-regel voor
+    /// handmatige beoordeling.</summary>
     private async Task<int> RetractPatchNotesCorrectionsAsync(CancellationToken ct)
     {
         var candidates = await db.Corrections
@@ -319,21 +343,55 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         if (candidates.Count == 0) return 0;
 
         var sources = await db.Sources.AsNoTracking()
-            .Select(s => new { s.Id, s.Url, s.Name, s.ContentKind })
+            .Select(s => new { s.Id, s.Url, s.Name, s.ContentKind, s.ContentKindSource })
             .ToDictionaryAsync(s => s.Id, ct);
 
-        // #188 increment 2: SourceContentKind.Resolve i.p.v. rechtstreeks
-        // ClarificationSources.IsPatchNotesSignal — leest de gepersisteerde
-        // LLM-classificatie als die er is, anders dezelfde heuristiek als
-        // vóór deze increment (transitionele null-fallback).
-        var toRetract = candidates.Where(c =>
+        var toRetract = new List<Correction>();
+        var skippedLogged = false;
+        foreach (var group in candidates.GroupBy(c => c.Provenance![ProvenancePrefix.Length..]))
         {
-            var sourceId = c.Provenance![ProvenancePrefix.Length..];
-            return sources.TryGetValue(sourceId, out var src)
-                ? SourceContentKind.Resolve(src.ContentKind, src.Id, src.Url, src.Name) == SourceContentKind.PatchNotes
-                : SourceContentKind.Resolve(null, sourceId, null, null) == SourceContentKind.PatchNotes;
-        }).ToList();
-        if (toRetract.Count == 0) return 0;
+            if (!sources.TryGetValue(group.Key, out var src))
+            {
+                // Fix B: wees-provenance — nooit destructief op alleen een
+                // id-signaal; laten staan en zichtbaar maken.
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = LedgerKind, Ref = "cleanup-patch-notes", Status = "info",
+                    Detail = $"bron '{group.Key}' bestaat niet meer; {group.Count()} "
+                             + "correction(s) blijven staan — beoordeel handmatig",
+                });
+                skippedLogged = true;
+                continue;
+            }
+
+            var effective = SourceContentKind.Resolve(src.ContentKind, src.Id, src.Url, src.Name);
+            if (effective != SourceContentKind.PatchNotes) continue;
+
+            // Fix A: consensus vóór het hard delete — heuristiek of een
+            // expliciete beheerder-override moet het LLM-oordeel bevestigen.
+            var confirmed = ClarificationSources.IsPatchNotesSignal(src.Id, src.Url, src.Name)
+                            || src.ContentKindSource == SourceContentKind.AdminOrigin;
+            if (!confirmed)
+            {
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = LedgerKind, Ref = "cleanup-patch-notes", Status = "info",
+                    Detail = $"retractie overgeslagen voor bron '{src.Id}': LLM zegt patch-notes "
+                             + "maar de heuristiek niet — bevestig via de content-kind-override "
+                             + $"({group.Count()} correction(s) blijven staan)",
+                });
+                skippedLogged = true;
+                continue;
+            }
+
+            toRetract.AddRange(group);
+        }
+
+        if (toRetract.Count == 0)
+        {
+            if (skippedLogged) await db.SaveChangesAsync(ct);
+            return 0;
+        }
 
         db.Corrections.RemoveRange(toRetract);
         db.RunLogs.Add(new RunLog

@@ -220,12 +220,15 @@ public class IngestService(
             // er nog geen classificatie is (null) of de vorige poging een
             // heuristische fallback was (upgrade-pad: een latere run mag een
             // heuristische classificatie alsnog naar een LLM-oordeel
-            // optillen; het omgekeerde gebeurt nooit stilzwijgend). Vóór de
-            // hash-vergelijking, zodat ook een ongewijzigde/flip-floppende
-            // pagina een kans krijgt — bronnen worden zo vanzelf
-            // geclassificeerd bij hun eerstvolgende scan, zonder apart
-            // backfill-commando (zelfde "backfilt vanzelf"-patroon als
-            // ClarificationMiningService).
+            // optillen; het omgekeerde gebeurt nooit stilzwijgend). Een
+            // "llm"- of "admin"-herkomst valt buiten deze guard en wordt dus
+            // nooit geherclassificeerd — een beheerder-override (#188-review,
+            // SourceContentKind.TryApplyOverride) is definitief tot de
+            // beheerder hem zelf wist. Vóór de hash-vergelijking, zodat ook
+            // een ongewijzigde/flip-floppende pagina een kans krijgt —
+            // bronnen worden zo vanzelf geclassificeerd bij hun
+            // eerstvolgende scan, zonder apart backfill-commando (zelfde
+            // "backfilt vanzelf"-patroon als ClarificationMiningService).
             if (src.TrustTier == 1
                 && (src.ContentKind is null || src.ContentKindSource == SourceContentKind.HeuristicOrigin))
                 await ClassifyContentKindAsync(src, text, ct);
@@ -395,9 +398,13 @@ public class IngestService(
     /// content-fragment. Degradeert bij AI-uitval (scout-timeoutpatroon,
     /// zelfde als ClarificationMiningService.AskSafeAsync) of een onbruikbaar
     /// antwoord naar <see cref="SourceContentKind.HeuristicKind"/> — nooit een
-    /// harde 500, altijd een classificatie. Wijzigt alleen de getrackte
-    /// <paramref name="src"/>-entity; de aanroeper (ScanOneAsync/ScanAsync)
-    /// bewaart via de bestaande SaveChangesAsync na elke bron.</summary>
+    /// harde 500, altijd een classificatie. Wijkt een geslaagd LLM-oordeel af
+    /// van wat de heuristiek zou zeggen, dan komt er één run_log-regel met
+    /// beide waarden (#188-review, fix E — zichtbaarheid zonder blokkade;
+    /// stemmen ze overeen, dan blijft het stil: dat is het normale geval).
+    /// Wijzigt alleen de getrackte <paramref name="src"/>-entity; de
+    /// aanroeper (ScanOneAsync/ScanAsync) bewaart via de bestaande
+    /// SaveChangesAsync na elke bron.</summary>
     private async Task ClassifyContentKindAsync(Source src, string content, CancellationToken ct)
     {
         string? raw;
@@ -416,6 +423,23 @@ public class IngestService(
         {
             src.ContentKind = kind;
             src.ContentKindSource = SourceContentKind.LlmOrigin;
+
+            // #188-review, fix E: disagreement tussen LLM en heuristiek
+            // zichtbaar maken zonder te blokkeren — het LLM-oordeel wint en
+            // wordt gewoon opgeslagen, maar de beheerder kan de afwijking
+            // terugvinden (en zo nodig via de content-kind-override
+            // corrigeren of bevestigen). De consensus-poort in de retractie
+            // (ClarificationMiningService) is de plek waar een afwijking
+            // ook echt gedrag tegenhoudt.
+            var heuristic = SourceContentKind.HeuristicKind(src.Id, src.Url, src.Name);
+            if (kind != heuristic)
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = "content-kind", Ref = src.Id, Status = "info",
+                    Detail = $"LLM-oordeel '{kind}' wijkt af van de heuristiek ('{heuristic}') — "
+                             + "LLM-oordeel opgeslagen; corrigeer of bevestig zo nodig via de "
+                             + "content-kind-override",
+                });
             return;
         }
 

@@ -46,7 +46,7 @@ public class IngestServiceContentKindTests
     }
 
     [Fact]
-    public async Task ScanAsync_LlmClassificeert_ZetLlmKind_GeenHeuristiekLog()
+    public async Task ScanAsync_LlmWijktAfVanHeuristiek_ZetLlmKind_EnLogtDisagreement()
     {
         using var db = NewDb();
         db.Sources.Add(new Source
@@ -54,9 +54,37 @@ public class IngestServiceContentKindTests
             // Bewust GEEN "faq"/"patch-notes"-woord in id/url/naam — dit is
             // precies het scenario dat de oude keyword-heuristiek miste en
             // waarvoor #188 increment 2 bestaat: de LLM herkent het bron-type
-            // zonder magisch woord in de slug.
+            // zonder magisch woord in de slug. De heuristiek zegt hier
+            // "other" ⇒ het LLM-oordeel wijkt af ⇒ één disagreement-regel in
+            // run_log (#188-review, fix E: zichtbaarheid, geen blokkade —
+            // het LLM-oordeel wordt gewoon opgeslagen).
             Id = "legion-explainer", Name = "Legion uitgelegd",
             Url = "https://playriftbound.com/en-us/news/legion-explainer/",
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+        });
+        await db.SaveChangesAsync();
+        var svc = NewIngest(db, _ => Html("Legion betekent finalizen."), Ai(() => """{"kind": "faq"}"""));
+
+        await svc.ScanAsync(onlyDue: false);
+
+        var src = await db.Sources.SingleAsync();
+        Assert.Equal(SourceContentKind.Faq, src.ContentKind);
+        Assert.Equal(SourceContentKind.LlmOrigin, src.ContentKindSource);
+        var log = await db.RunLogs.SingleAsync(l => l.Kind == "content-kind");
+        Assert.Contains("'faq'", log.Detail);   // het LLM-oordeel
+        Assert.Contains("'other'", log.Detail); // wat de heuristiek zei
+    }
+
+    [Fact]
+    public async Task ScanAsync_LlmEnHeuristiekEens_GeenContentKindLog()
+    {
+        // Overeenstemming is het normale geval en blijft stil (#188-review,
+        // fix E): geen ruis in run_log als LLM en heuristiek hetzelfde
+        // zeggen.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "faq-source", Name = "Unleashed Rules FAQ and Clarifications", Url = FaqUrl,
             Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
         });
         await db.SaveChangesAsync();
@@ -163,13 +191,14 @@ public class IngestServiceContentKindTests
     }
 
     [Fact]
-    public async Task ScanAsync_GemengdeBron_LlmZegtPatchNotes_GeenTemplatedChangeOpEersteScan()
+    public async Task ScanAsync_GemengdeBron_LlmZegtOther_GeenTemplatedChangeOpEersteScan()
     {
-        // Het gemengde-bron-scenario (#185-review, "Rules FAQ and Patch
-        // Notes"): de naam/URL zien er FAQ-achtig uit (de oude heuristiek zou
-        // "faq" zeggen), maar de LLM oordeelt "patch-notes" — dan hoort de
-        // #177-sjabloon-Change NIET te vuren op de eerste scan (die is
-        // voorbehouden aan echte FAQ-bronnen).
+        // Het gemengde-bron-scenario ("Rules FAQ and Patch Notes"): de prompt
+        // instrueert sinds de #188-review dat gemengd/onzeker "other" is —
+        // neutraal (niet gemined als FAQ, niet geretract als patch-notes;
+        // de retractie vereist sowieso heuristiek-consensus). De
+        // #177-sjabloon-Change hoort dan NIET te vuren op de eerste scan
+        // (die is voorbehouden aan echte FAQ-bronnen).
         using var db = NewDb();
         db.Sources.Add(new Source
         {
@@ -178,15 +207,41 @@ public class IngestServiceContentKindTests
             Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
         });
         await db.SaveChangesAsync();
-        var svc = NewIngest(db, _ => Html("Legion is a dependent keyword."), Ai(() => """{"kind": "patch-notes"}"""));
+        var svc = NewIngest(db, _ => Html("Legion is a dependent keyword."), Ai(() => """{"kind": "other"}"""));
 
         var results = await svc.ScanAsync(onlyDue: false);
 
         Assert.Equal("new", Assert.Single(results).Status);
         Assert.Empty(await db.Changes.ToListAsync());
         var src = await db.Sources.SingleAsync();
-        Assert.Equal(SourceContentKind.PatchNotes, src.ContentKind);
+        Assert.Equal(SourceContentKind.Other, src.ContentKind);
         Assert.Equal(SourceContentKind.LlmOrigin, src.ContentKindSource);
+    }
+
+    [Fact]
+    public async Task ScanAsync_AdminKind_WordtNooitGeherclassificeerd()
+    {
+        // #188-review, fix C: een beheerder-override (herkomst "admin") is
+        // definitief — de scan-guard slaat hem over, ook al zou de LLM iets
+        // anders antwoorden. Alleen de beheerder zelf kan hem wissen (leeg
+        // patchen), waarna de eerstvolgende scan opnieuw classificeert.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "faq-source", Name = "Unleashed Rules FAQ and Clarifications", Url = FaqUrl,
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+            ContentKind = SourceContentKind.Other, ContentKindSource = SourceContentKind.AdminOrigin,
+        });
+        await db.SaveChangesAsync();
+        // Zou de classificatie toch draaien, dan zou dit antwoord de kind
+        // naar "faq" veranderen.
+        var svc = NewIngest(db, _ => Html("Legion betekent finalizen."), Ai(() => """{"kind": "faq"}"""));
+
+        await svc.ScanAsync(onlyDue: false);
+
+        var src = await db.Sources.SingleAsync();
+        Assert.Equal(SourceContentKind.Other, src.ContentKind);
+        Assert.Equal(SourceContentKind.AdminOrigin, src.ContentKindSource);
     }
 
     [Fact]

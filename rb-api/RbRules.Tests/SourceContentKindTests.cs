@@ -65,6 +65,90 @@ public class SourceContentKindParseTests
         Assert.DoesNotContain(new string('x', 1501), prompt);
         Assert.Contains(new string('x', 1500), prompt);
     }
+
+    [Fact]
+    public void SystemPrompt_GemengdOfOnzeker_InstrueertOther()
+    {
+        // #188-review, fix D: de tie-break is niet langer "patch-notes wint"
+        // maar neutraal "other" — sinds inc1 beschermt de operative-poort al
+        // op itemniveau tegen aankondigingszinnen, en de consensus-poort
+        // maakt een patch-notes-misclassificatie niet-destructief; neutraal-
+        // bij-twijfel is nu de veiligste regel.
+        Assert.Contains("when in doubt, answer \"other\"", SourceContentKind.SystemPrompt);
+        Assert.DoesNotContain("is \"patch-notes\"", SourceContentKind.SystemPrompt);
+    }
+
+    [Fact]
+    public void SystemPrompt_RulebooksEnGidsen_ExplicietOther()
+    {
+        // #188-review, finding 2/4: "faq" is beperkt tot Q&A-/clarificatie-
+        // ARTIKELEN — de prompt noemt de rulebook-/gids-voorbeelden
+        // letterlijk zodat een core rules PDF of how-to-play-gids nooit als
+        // "faq" wordt geclassificeerd (en dus nooit de clarify-mining in
+        // rolt).
+        Assert.Contains("rulebook", SourceContentKind.SystemPrompt);
+        Assert.Contains("core rules PDF", SourceContentKind.SystemPrompt);
+        Assert.Contains("how-to-play", SourceContentKind.SystemPrompt);
+        Assert.Contains("deckbuilding primer", SourceContentKind.SystemPrompt);
+    }
+}
+
+/// <summary>Beheerder-override op het source-PATCH-pad (#188-review, fix C):
+/// het bevestigings-/herstelpad dat de consensus-poort van de retractie
+/// aanwijst. Puur/getest — het endpoint (AdminEndpoints, PATCH
+/// /api/admin/sources/{id}) roept dit alleen aan en vertaalt false naar
+/// een 400.</summary>
+public class SourceContentKindOverrideTests
+{
+    [Theory]
+    [InlineData("faq", SourceContentKind.Faq)]
+    [InlineData("patch-notes", SourceContentKind.PatchNotes)]
+    [InlineData("other", SourceContentKind.Other)]
+    // Tolerant voor hoofdletters/witruimte — dit is beheerder-invoer.
+    [InlineData("FAQ", SourceContentKind.Faq)]
+    [InlineData("  Patch-Notes  ", SourceContentKind.PatchNotes)]
+    public void TryApplyOverride_GeldigeKind_ZetAdminHerkomst(string value, string expected)
+    {
+        var src = NewSource();
+
+        Assert.True(SourceContentKind.TryApplyOverride(src, value));
+        Assert.Equal(expected, src.ContentKind);
+        Assert.Equal(SourceContentKind.AdminOrigin, src.ContentKindSource);
+    }
+
+    [Fact]
+    public void TryApplyOverride_LegeString_WistDeClassificatie()
+    {
+        // Wissen = terug naar herclassificatie bij de eerstvolgende scan
+        // (zelfde leeg-is-expliciet-wissen-conventie als FeedPatch.
+        // CategoryFilter — met JSON kan een afwezig veld niet van een
+        // expliciete null onderscheiden worden).
+        var src = NewSource();
+        src.ContentKind = SourceContentKind.Faq;
+        src.ContentKindSource = SourceContentKind.AdminOrigin;
+
+        Assert.True(SourceContentKind.TryApplyOverride(src, "  "));
+        Assert.Null(src.ContentKind);
+        Assert.Null(src.ContentKindSource);
+    }
+
+    [Fact]
+    public void TryApplyOverride_OngeldigeWaarde_ReturnsFalse_EnRaaktNietsAan()
+    {
+        var src = NewSource();
+        src.ContentKind = SourceContentKind.Faq;
+        src.ContentKindSource = SourceContentKind.LlmOrigin;
+
+        Assert.False(SourceContentKind.TryApplyOverride(src, "rulebook"));
+        Assert.Equal(SourceContentKind.Faq, src.ContentKind);
+        Assert.Equal(SourceContentKind.LlmOrigin, src.ContentKindSource);
+    }
+
+    private static Source NewSource() => new()
+    {
+        Id = "s1", Name = "Bron", Url = "https://example.com/regels",
+        Type = "official", Parser = "html", Cadence = "weekly",
+    };
 }
 
 /// <summary>De heuristiek is sinds #188 increment 2 nog alleen het
@@ -89,8 +173,12 @@ public class SourceContentKindHeuristicTests
 
     [Fact]
     public void HeuristicKind_DubbelSignaal_PatchNotesWint() =>
-        // #185-principe: bevat een naam/URL zowel het FAQ- als het
-        // patch-notes-woord, dan telt de bron als patch-notes.
+        // #185-principe, alleen nog in de HEURISTIEK: bevat een naam/URL
+        // zowel het FAQ- als het patch-notes-woord, dan telt de bron als
+        // patch-notes (conservatief: niet minen). Bewust anders dan de
+        // LLM-prompt-tie-break, die sinds de #188-review gemengd/onzeker als
+        // "other" classificeert — zie SystemPrompt_GemengdOfOnzeker_
+        // InstrueertOther hierboven.
         Assert.Equal(SourceContentKind.PatchNotes,
             SourceContentKind.HeuristicKind(
                 "rules-faq-and-patch-notes",

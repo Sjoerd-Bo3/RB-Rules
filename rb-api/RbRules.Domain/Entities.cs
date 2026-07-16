@@ -51,12 +51,15 @@ public class Source
     /// cref="RbRules.Domain.SourceContentKind.Resolve"/>), zodat bestaande
     /// bronnen blijven werken totdat ze opnieuw gescand zijn.</summary>
     public string? ContentKind { get; set; }
-    /// <summary>Herkomst van <see cref="ContentKind"/>: "llm" of "heuristic"
-    /// (AI-uitval of onbruikbaar LLM-antwoord bij de classificatie-poging).
+    /// <summary>Herkomst van <see cref="ContentKind"/>: "llm", "heuristic"
+    /// (AI-uitval of onbruikbaar LLM-antwoord bij de classificatie-poging) of
+    /// "admin" (expliciete override via het source-PATCH-pad, #188-review —
+    /// <see cref="RbRules.Domain.SourceContentKind.TryApplyOverride"/>).
     /// Een heuristische classificatie mag een latere scan alsnog naar een
-    /// LLM-oordeel upgraden (nooit stilzwijgend andersom — een LLM-oordeel
-    /// wordt niet opnieuw overschreven). Null zolang <see cref="ContentKind"/>
-    /// zelf null is.</summary>
+    /// LLM-oordeel upgraden (nooit stilzwijgend andersom — een LLM- of
+    /// admin-oordeel wordt niet opnieuw overschreven; "admin" telt in de
+    /// consensus-poort van de patch-notes-retractie bovendien als menselijke
+    /// bevestiging). Null zolang <see cref="ContentKind"/> zelf null is.</summary>
     public string? ContentKindSource { get; set; }
 }
 
