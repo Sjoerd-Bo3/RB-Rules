@@ -162,6 +162,22 @@ public static class AdminEndpoints
                 : Results.Conflict(new { error = "er draait al een job — wacht tot die klaar is" });
         });
 
+        // ── Paden (#190): geordende JobCatalog-jobs die vanzelf doorstromen.
+        // De paddefinities zelf staan in JobPaths (Infrastructure); uitvoering
+        // via PathRunner, als één gewone JobRunner-run onder de padnaam —
+        // dezelfde éénjob-gate/TryStart-conflictgedrag als /jobs/{name}, en de
+        // padnaam verschijnt daardoor vanzelf op /status (Running/JobRuns).
+        admin.MapGet("/paths", () => Results.Ok(JobPaths.AllPaths));
+
+        admin.MapPost("/paths/{name}", (string name, JobRunner jobs) =>
+        {
+            var path = JobPaths.Find(name);
+            if (path is null) return Results.NotFound(new { error = $"onbekend pad '{name}'" });
+            return jobs.TryStart(name, (sp, report, ct) => PathRunner.RunAsync(path, sp, report, ct))
+                ? Results.Accepted("/api/admin/status", new { started = name })
+                : Results.Conflict(new { error = "er draait al een job of pad — wacht tot die klaar is" });
+        });
+
         admin.MapGet("/status", async (JobRunner jobs, JobLedger ledger, RbRulesDbContext db) =>
         {
             var (running, last) = jobs.Snapshot();
