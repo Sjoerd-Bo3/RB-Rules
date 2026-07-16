@@ -355,6 +355,26 @@ export const actions: Actions = {
 	archiveHandledRelations: async ({ cookies }) => archiveHandled(cookies, 'relations'),
 	promoteRelationNote: async ({ request, cookies }) =>
 		promoteNote(cookies, request, 'relations'),
+	// Bulk-actie per aanbevelingsgroep (#199 v1): "accepteer/verwerp alle N met
+	// aanbeveling X" — dun endpoint dat per item hetzelfde accept-/reject-pad
+	// aanroept (RelationTriageService.DecideAsync/ApplyDecision, rb-api), geen
+	// nieuw autoriteitspad. bulkDecision draagt mee zodat de UI de melding bij
+	// de juiste knop toont (accept- en reject-groep hebben allebei een form).
+	bulkDecideRelations: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const recommendation = String(form.get('recommendation') ?? '');
+		const decision = String(form.get('decision') ?? '');
+		try {
+			const r = await adminApi<{ applied: number }>('/api/admin/relations/bulk-decide', {
+				method: 'POST',
+				body: JSON.stringify({ recommendation, decision })
+			});
+			return { ok: true, bulkApplied: r.applied, bulkDecision: decision };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
 	// Kind-vocabulaire (#116, patroon mechanieken): accepteren laat relaties
 	// met dit kind meedoen in de graph-projectie; verwerpen houdt het kind
 	// (en nieuwe voorstellen ermee) uit beeld.
