@@ -633,8 +633,10 @@ apart in §6.
   losse jobs) · *endpoints* `GET /api/admin/paths`,
   `POST /api/admin/paths/{name}` (meelift op `/api/admin/status`).
 - **Relatie-triage** (#199 v1) — job `relationtriage`: per open
-  relatievoorstel (Status "unreviewed", nog geen aanbeveling) één
-  retrieval-gegronde LLM-beoordeling — `accept`/`reject`/`unsure` +
+  relatievoorstel (Status "unreviewed", nog geen aanbeveling, niet
+  gearchiveerd — een geparkeerd voorstel kost geen LLM-budget en krijgt
+  geen aanbeveling) één retrieval-gegronde LLM-beoordeling —
+  `accept`/`reject`/`unsure` +
   één-zin-motivering (Engels, met de geraadpleegde §/mechaniek/concept-refs
   erin gevouwen), opgeslagen als drie nullable velden op `Relation`
   (`Recommendation`, `RecommendationReason`, `RecommendedAt`). Bewust een
@@ -647,8 +649,17 @@ apart in §6.
   toont motivering naast het bestaande bewijs; een **bulk-actie per
   aanbevelingsgroep** ("accepteer/verwerp alle N met aanbeveling X", met
   confirm()) loopt per item hetzelfde bestaande accept-/reject-pad na (geen
-  nieuw autoriteitspad). *Endpoint* (bulk) `POST
-  /api/admin/relations/bulk-decide`.
+  nieuw autoriteitspad), alléén over unreviewed én niet-gearchiveerde
+  voorstellen, en rendert alléén in de te-reviewen-weergave — telling,
+  zichtbare items en actie-scope zijn zo hetzelfde universum. De bulk is
+  TOCTOU-gefenced (adversariële review, finding 1): de UI stuurt de
+  geladen groepstelling + de max `RecommendedAt` mee, en rb-api weigert
+  met 409 ("groep is veranderd — ververs de pagina") zodra de herberekende
+  groep afwijkt — een gelijktijdige triage-run (het kennis-pad) kan zo
+  nooit items laten meebeslissen die de beheerder niet zag; dat zou de
+  facto het auto-accept-pad zijn dat v1 níét heeft. *Endpoint* (bulk)
+  `POST /api/admin/relations/bulk-decide` (400 bij ontbrekende/ongeldige
+  velden, 409 bij een fence-schending, altijd alles-of-niets).
 - **Kennis regenereren (Engels)** (#187) — eigen, zwaar gewaarschuwd
   admin-paneel (confirm-stap, geen kale "Start"-knop): job
   `regenerateknowledge` verwijdert de volledige LLM-afgeleide kennislaag
@@ -705,9 +716,11 @@ apart in §6.
   daarnaast een eigen bron+opmerking→her-evaluatie-lus (#184, zie §4.1). De
   relatie-reviewqueue toont sinds #199 v1 (zie "Relatie-triage" hierboven) de
   LLM-aanbeveling (accept/reject/unsure + motivering) naast elk voorstel,
-  gesorteerd met de bulk-actionabele groepen eerst, en een bulk-knop per
-  aanbevelingsgroep (`POST /api/admin/relations/bulk-decide`) — de
-  aanbeveling is puur sorteer-/klik-hulp, geen autoriteit.
+  gesorteerd met de bulk-actionabele groepen eerst, en — alléén in de
+  te-reviewen-weergave — een bulk-knop per aanbevelingsgroep
+  (`POST /api/admin/relations/bulk-decide`, TOCTOU-gefenced: 409 als de
+  groep sinds het laden veranderde) — de aanbeveling is puur
+  sorteer-/klik-hulp, geen autoriteit.
 - **Vraag-traces** — per vraag welke kennislagen en brein-stappen meededen
   (#40), en sinds #143 het volledige gesprek: het definitieve antwoord (ook
   het streaming-slotframe; bij AI-uitval de eerlijke uitvalmelding) en een

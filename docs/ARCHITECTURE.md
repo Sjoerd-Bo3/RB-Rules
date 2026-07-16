@@ -475,7 +475,9 @@ paden — Ingest-, Kaart-, Kennis- en het Volledige-regeneratiepad (zie PRD
 vóór `graph`.
 
 **`RelationTriageService` (LLM-triage voor relatievoorstellen, #199 v1).**
-Per open `Relation` (Status "unreviewed", `Recommendation == null`) één
+Per open `Relation` (Status "unreviewed", `Recommendation == null`,
+`ArchivedAt == null` — een geparkeerd voorstel kost geen LLM-budget en
+krijgt geen aanbeveling, review-fix findings 2/4/7) één
 retrieval-gegronde LLM-beoordeling (cap 40/run, zelfde vers-werk-semantiek
 als de andere gecapte miners) — de context is bewust goedkoop (geen
 embeddings): per ref (`BrainRef`) een exacte lookup (kaarttekst, §-chunk op
@@ -494,8 +496,23 @@ statuswijziging dragen zonder deterministisch vangnet of mens): `Status`
 verandert alleen via `RelationTriageService.DecideAsync` (het bestaande
 accept-/reject-pad, nu ook aangeroepen door de losse `AdminEndpoints`-acties)
 of `BulkDecideAsync` (#199, de bulk-actie per aanbevelingsgroep — één
-transactie over alle "unreviewed" voorstellen met die aanbeveling, endpoint
-`POST /api/admin/relations/bulk-decide`). Een mens-beoordeeld voorstel
+transactie over alle "unreviewed", niet-gearchiveerde voorstellen met die
+aanbeveling, endpoint `POST /api/admin/relations/bulk-decide`). De bulk is
+**TOCTOU-gefenced** (review-fix finding 1): de UI stuurt de geladen
+groepstelling (`expectedCount`) en de max `RecommendedAt` binnen de groep
+(`asOf`) mee; wijkt de herberekende groep af (andere telling, óf een item
+met een nieuwere aanbeveling — bv. door een gelijktijdige
+`relationtriage`-run in het kennis-pad), dan wordt er NIETS beslist en
+antwoordt het endpoint 409 — de beheerder beslist wat hij zag, nooit wat er
+intussen bij kwam (dat zou de facto het auto-accept-pad zijn dat v1 níét
+heeft). De fence werkt over paginering heen zonder id-lijsten; de
+`AdminOverviewService`-groepstellingen dragen `AsOf` mee en de bulk-knoppen
+renderen alléén in de te-reviewen-weergave
+(`relationBulkActionsVisible`, rb-web) zodat telling, zichtbare items en
+actie-scope hetzelfde universum zijn (review-fix findings 3/5/8).
+Input-validatie zit puur op het contract-record
+(`RelationBulkDecideRequest.ValidationError`, finding 6): ontbrekende of
+ongeldige velden zijn een 400, geen NRE-500. Een mens-beoordeeld voorstel
 (Status niet meer "unreviewed") wordt nooit her-getriaged.
 `PathRunner.RunAsync(path, sp, report, ct, findJob?)` (Infrastructure)
 draait de stappen sequentieel via `job.Run(sp, ...)` — `findJob` is een
@@ -544,7 +561,10 @@ als `POST /jobs/{name}`, de padnaam verschijnt vanzelf op `/status`; relaties,
 #199 v1: `/relations/{id}/accept|reject` lopen via
 `RelationTriageService.DecideAsync` (ongewijzigd contract), plus
 `POST /relations/bulk-decide` — de bulk-actie per aanbevelingsgroep, één
-transactie, hergebruikt hetzelfde pad per item).
+transactie, hergebruikt hetzelfde pad per item, alleen unreviewed én
+niet-gearchiveerd; TOCTOU-gefenced op `expectedCount`+`asOf` → 409 bij een
+veranderde groep, 400 bij ontbrekende/ongeldige velden
+(`RelationBulkDecideRequest.ValidationError`), alles-of-niets).
 
 ### rb-ai — belangrijkste modules
 
