@@ -9,12 +9,19 @@ public record ReevaluateResult(ReevaluateOutcome Outcome, string? Reason);
 
 /// <summary>Resultaat van de anker-herstel-pas (#188 increment 3, <see
 /// cref="CorrectionReevaluationService.RepairPendingAnchorsAsync"/>).
-/// <paramref name="CapHit"/> volgt hetzelfde #190-contract als <see
+/// <paramref name="Repaired"/> = auto-geverifieerd (lexicale steun + volle
+/// poort); <paramref name="Recommended"/> (review-fix) = anker wél verplaatst
+/// maar als AANBEVELING pending gelaten (geen lexicale steun — de beheerder
+/// one-click-verifieert via het bestaande /verify-pad); <paramref
+/// name="Skipped"/> = overgeslagen/onopgelost (AI-uitval, "none",
+/// niet-resolvend, bezet anker of poort-faal). <paramref name="CapHit"/>
+/// volgt hetzelfde #190-contract als <see
 /// cref="ClarificationMineResult.CapHit"/>: machine-leesbaar of er ná deze
-/// run nog vers werk (meer kandidaten dan de cap) op de bank lag, zodat het
-/// admin-jobpad (JobCatalog.ClarifyAsync) hierop kan draineren.</summary>
+/// run nog vers werk (meer ECHT-eligible kandidaten dan de cap) op de bank
+/// lag, zodat het admin-jobpad (JobCatalog.ClarifyAsync) hierop kan
+/// draineren.</summary>
 public record AnchorRepairResult(
-    int Repaired, int Skipped, string Message, bool CapHit = false);
+    int Repaired, int Recommended, int Skipped, string Message, bool CapHit = false);
 
 /// <summary>Her-evaluatie van één Correction (#184), op initiatief van de
 /// beheerder vanuit de reviewqueue: een opmerking wordt bewaard
@@ -74,6 +81,21 @@ public class CorrectionReevaluationService(RbRulesDbContext db, RbAiClient ai)
     /// (ClaimMiningService/ClarificationMiningService: #58/#119-stijl).</summary>
     public const int DefaultRepairCap = 40;
 
+    /// <summary>Terminaliteits-marker (review-fix, findings 2+6): een
+    /// DEFINITIEVE herstel-pas-uitkomst ({"none": true} of een keuze die niet
+    /// resolvet) plakt deze marker aan de bestaande StatusReason; het
+    /// selectie-predicaat sluit gemarkeerde items uit, anders bleef élk
+    /// onopgelost item eeuwig her-eligible en verbrandde het elke run
+    /// cap-ruimte (window-starvation) mét telkens een nieuwe
+    /// niet-deterministische kans op een fout anker (ratchet). Een TRANSIËNTE
+    /// fout (AI-uitval, onbruikbare output) markeert bewust NIET — de
+    /// volgende run mag het opnieuw proberen. Een latere her-mine die het
+    /// item bijwerkt overschrijft StatusReason via de normale poort
+    /// (<see cref="ClarificationMiningService.GateReason"/>, zonder marker)
+    /// en maakt het item vanzelf weer eligible — dát is het beoogde
+    /// herstel-na-nieuwe-informatie-pad.</summary>
+    public const string TerminalMarker = "anker-herstel geprobeerd";
+
     public async Task<ReevaluateResult> ReevaluateAsync(
         long id, string? note, CancellationToken ct = default)
     {
@@ -123,14 +145,13 @@ public class CorrectionReevaluationService(RbRulesDbContext db, RbAiClient ai)
     /// <see cref="ReviewNoteAnchor"/>-opmerking vs. een LLM-anker-keuze uit
     /// <see cref="ClarificationAnchorRepair"/>).
     ///
-    /// <b>Spookduplicaat-vangrail:</b> als <paramref name="anchorOverride"/>
-    /// resolvet naar een anker waar een ANDERE Correction van dezelfde bron al
-    /// op staat (zelfde Provenance+Scope+Ref), wordt de verplaatsing NIET
-    /// doorgevoerd — anders zou het herstel-pad twee verified rulings over
-    /// hetzelfde onderwerp kunnen opleveren (zie
-    /// <see cref="RepairPendingAnchorsAsync"/>'s klasse-doc voor het volledige
-    /// scenario). De poort behandelt dat als "niet anchored", met een
-    /// zichtbare reden in StatusReason.</summary>
+    /// Review-fix (findings 4+7): dit gedeelde pad doet bewust GEEN
+    /// duplicaat-/collision-check — een handmatige #184-anker-correctie is
+    /// een bewuste menselijke verplaatsing die altijd mag (het
+    /// #184-spookduplicaat is daar al gedekt door de cross-bucket-redding op
+    /// ReviewNote in <see cref="ClarificationMiningService.StoreAsync"/>).
+    /// Alleen de geautomatiseerde herstel-pas bewaakt duplicaten, canoniek
+    /// (BrainRef-vergelijking), vóór hij dit pad aanroept.</summary>
     private async Task<ReevaluateResult> ApplyGateAsync(
         Correction c, (string TopicType, string TopicRef)? anchorOverride,
         ClaimTopicMapper anchors, CancellationToken ct)
@@ -139,23 +160,6 @@ public class CorrectionReevaluationService(RbRulesDbContext db, RbAiClient ai)
         var topicRef = anchorOverride?.TopicRef ?? c.Ref;
         var anchored = anchors.Resolve(topicType, topicRef) is not null;
 
-        string? duplicateNote = null;
-        if (anchorOverride is not null && anchored)
-        {
-            var targetScope = ClarificationMiningService.ScopeFor(anchorOverride.Value.TopicType);
-            var targetRefLower = anchorOverride.Value.TopicRef.ToLowerInvariant();
-            var collides = await db.Corrections.AsNoTracking().AnyAsync(x =>
-                x.Id != c.Id && x.Provenance == c.Provenance && x.Scope == targetScope
-                && x.Ref.ToLower() == targetRefLower, ct);
-            if (collides)
-            {
-                anchored = false;
-                duplicateNote = $"voorgesteld anker '{anchorOverride.Value.TopicRef}' "
-                    + $"({anchorOverride.Value.TopicType}) wijst al naar een bestaande "
-                    + "correction van deze bron — niet automatisch samengevoegd";
-            }
-        }
-
         var docContent = await LoadDocumentContentAsync(c.Provenance!, ct);
         var quote = ClarificationMiningService.ExtractQuote(c.Text);
         var grounded = ClarificationGrounding.IsGrounded(quote, docContent);
@@ -163,9 +167,8 @@ public class CorrectionReevaluationService(RbRulesDbContext db, RbAiClient ai)
             ClarificationMiningService.ClarificationOf(c.Text), ct);
         var verifies = grounded && anchored && informative;
 
-        // Anker-correctie toepassen zodra hij ook echt resolvet (en niet
-        // botst met een bestaande correction) — een niet-herkend of botsend
-        // voorgesteld anker verandert niets (blijft het oorspronkelijke
+        // Anker-correctie toepassen zodra hij ook echt resolvet — een niet-
+        // herkend voorgesteld anker verandert niets (blijft het oorspronkelijke
         // onderwerp, "anchored" is dan al false en de reden zegt waarom).
         if (anchorOverride is not null && anchored)
         {
@@ -185,58 +188,68 @@ public class CorrectionReevaluationService(RbRulesDbContext db, RbAiClient ai)
         c.Status = "unverified";
         c.StatusReason = ClarificationMiningService.GateReason(
             grounded, anchored, informative, quote, topicType, topicRef);
-        if (duplicateNote is not null) c.StatusReason += $"; {duplicateNote}";
         c.VerifiedAt = null;
         await db.SaveChangesAsync(ct);
         return new(ReevaluateOutcome.StillPending, c.StatusReason);
     }
 
-    /// <summary>Anker-herstel-pas (#188 increment 3): productiedata (issue
-    /// #199, comment 2026-07-16) toont dat 117 van de 133 pending clarify-
-    /// corrections falen op anker-resolutie — de extractie koos een
-    /// vrije-vorm-onderwerp ("battlefield control without units") dat niet in
-    /// het vocabulaire voorkomt, terwijl de inhoud zelf vaak gegrond en
-    /// informatief is. In plaats van de beheerder elk item met de hand te
-    /// laten corrigeren (<see cref="ReviewNoteAnchor"/>), doet deze pas één
-    /// LLM-KEUZE per item uit het echte vocabulaire (<see
-    /// cref="ClarificationAnchorRepair"/>) en her-toetst dan de volledige
-    /// poort via <see cref="ApplyGateAsync"/> — dezelfde logica als een
-    /// handmatige her-evaluatie, alleen automatisch aangestuurd.
+    /// <summary>Anker-herstel-pas (#188 increment 3, herzien na de
+    /// adversariële review): productiedata (issue #199, comment 2026-07-16)
+    /// toont dat 117 van de 133 pending clarify-corrections falen op
+    /// anker-resolutie — de extractie koos een vrije-vorm-onderwerp
+    /// ("battlefield control without units") dat niet in het vocabulaire
+    /// voorkomt, terwijl de inhoud zelf vaak gegrond en informatief is. Per
+    /// item doet één LLM-KEUZE uit het echte vocabulaire (<see
+    /// cref="ClarificationAnchorRepair"/>, met citaat + oorspronkelijk
+    /// onderwerp als context) een voorstel; wat er daarna gebeurt is
+    /// volledig deterministisch:
+    ///
+    /// <b>Autoriteitsmodel (review-fix, kernbevinding):</b> auto-verificatie
+    /// is alleen verdedigbaar als het anker AANTOONBAAR het onderwerp is —
+    /// een resolvend anker bewijst alleen dat de term bestaat, niet dat hij
+    /// bij deze tekst hoort. Daarom promoot deze pas alleen bij LEXICALE
+    /// STEUN (<see cref="ClarificationAnchorRepair.HasLexicalSupport"/>: de
+    /// ankerterm komt voor in verduidelijking + citaat + het oorspronkelijke
+    /// vrije-vorm-onderwerp), en dan nog via de volledige poort (<see
+    /// cref="ApplyGateAsync"/>: grounded + informative). Zonder lexicale
+    /// steun wordt het item een AANBEVELING (het #199-principe: machine
+    /// sorteert voor, mens klikt): Scope/Ref verhuizen wél naar het
+    /// resolvende anker — de queue toont het item dan bij het juiste
+    /// onderwerp — maar de status blijft pending met de reden "wacht op
+    /// review"; de beheerder one-click-verifieert via het bestaande
+    /// /verify-pad.
+    ///
+    /// <b>Terminaliteit (review-fix, findings 2+6):</b> een definitieve
+    /// uitkomst ({"none": true} of een niet-resolvende keuze) plakt <see
+    /// cref="TerminalMarker"/> aan de StatusReason zodat het item niet elke
+    /// run opnieuw cap-ruimte verbrandt; AI-uitval en onbruikbare output
+    /// zijn transiënt (geen marker, volgende run opnieuw). De aanbevelings-
+    /// en poort-faal-uitkomsten zijn vanzelf terminaal: hun nieuwe
+    /// StatusReason bevat "niet herkend" niet meer.
+    ///
+    /// <b>Duplicaat-bewaking (review-fix, findings 3+5, alléén dit
+    /// geautomatiseerde pad — de handmatige #184-route mag altijd
+    /// verplaatsen):</b> vóór elke verplaatsing wordt CANONIEK (BrainRef-
+    /// vergelijking via <see cref="ClaimTopicMapper.Resolve"/>, zodat
+    /// aliassen — kaartvarianten, concept-key vs. -titel — niet langs elkaar
+    /// heen matchen) gecheckt of een ándere Correction van dezelfde bron dat
+    /// anker al bezet. Zo ja: het item is een DUPLICAAT-KANDIDAAT en krijgt
+    /// die terminale reden — niet verplaatst, niet geverifieerd, beoordeel
+    /// handmatig. Achtergrond: deze pas zet bewust geen <see
+    /// cref="Correction.ReviewNote"/> (dat zou een geautomatiseerde keuze als
+    /// mens-beoordeeld labelen), dus de ReviewNote-gebaseerde cross-bucket-
+    /// redding in <see cref="ClarificationMiningService.StoreAsync"/> ziet
+    /// een door deze pas verplaatst item niet — zonder deze check zou een
+    /// her-mine die het oude vrije-vorm-onderwerp opnieuw extraheert via een
+    /// volgende herstel-run een tweede ruling op hetzelfde anker opleveren.
     ///
     /// Kandidaten: pending clarify-mining-Corrections met StatusReason
-    /// "onderwerp … niet herkend" (ongeacht of citaat/informativiteit óók
-    /// faalden — de #199-cijfers laten zien dat "anker + citaat gecombineerd"
-    /// ook een grote klasse is, en de herstelde ankernaam is ook dan nuttig
-    /// voor een volgende triage) en ZONDER <see cref="Correction.ReviewNote"/>
-    /// (#184: beheerder-eigendom — deze pas raakt niets aan waar een mens al
-    /// naar gekeken heeft). Cap per run (<see cref="DefaultRepairCap"/>) +
-    /// <see cref="AnchorRepairResult.CapHit"/> zodat het #190-drain-pad
-    /// (JobCatalog.ClarifyAsync) de rest oppakt. AI-uitval op de anker-keuze
-    /// zelf ⇒ item overslaan (nooit een 500, nooit gokken op een verzonnen
-    /// anker).
-    ///
-    /// <b>Spookduplicaat-afweging:</b> deze pas zet BEWUST geen <see
-    /// cref="Correction.ReviewNote"/> op het verplaatste item (in
-    /// tegenstelling tot een handmatige anker-correctie) — een ReviewNote
-    /// betekent in de rest van de codebase "een beheerder heeft hiernaar
-    /// gekeken" (het bepaalt bv. of <see
-    /// cref="ClarificationMiningService.StoreAsync"/> Status/Question mag
-    /// bijwerken), en een geautomatiseerde keuze als zodanig labelen zou die
-    /// betekenis vervuilen. Dat betekent wel dat de bestaande cross-bucket-
-    /// redding in StoreAsync (die alleen <c>ReviewNote != null</c>-siblings
-    /// meeneemt) een door déze pas verplaatst item niet ziet: een latere
-    /// her-mine van dezelfde bron die het oorspronkelijke vrije-vorm-onderwerp
-    /// wéér extraheert, zou anders een tweede, apart pending item op de OUDE
-    /// (Scope,Ref)-bucket kunnen maken — en als een volgende herstel-pas-run
-    /// óók dát item naar hetzelfde ECHTE anker stuurt, zouden er twee verified
-    /// rulings over hetzelfde onderwerp ontstaan. In plaats van StoreAsync
-    /// (bewust niet aangeraakt, zie #188-increment-scope) of ReviewNote te
-    /// misbruiken, bewaakt <see cref="ApplyGateAsync"/> dit zelf: vóór het
-    /// toepassen van een anker-override checkt het of een ANDERE Correction
-    /// van dezelfde bron al op dat (Scope,Ref) staat — zo ja, dan blijft dit
-    /// item onaangeraakt (pending, met een zichtbare reden) in plaats van een
-    /// duplicaat te worden. De tests bij deze klasse dekken het scenario
-    /// expliciet (spookduplicaat na bucket-verplaatsing).</summary>
+    /// "onderwerp … niet herkend", zonder <see cref="TerminalMarker"/> en
+    /// zonder <see cref="Correction.ReviewNote"/> (#184: beheerder-eigendom
+    /// blijft onaangeraakt). Cap per run (<see cref="DefaultRepairCap"/>) +
+    /// <see cref="AnchorRepairResult.CapHit"/> over de ECHT-eligible teller,
+    /// zodat het #190-drain-pad (JobCatalog.ClarifyAsync) de rest oppakt en
+    /// terminale items geen vals "vers werk" melden.</summary>
     public async Task<AnchorRepairResult> RepairPendingAnchorsAsync(
         int maxItems = DefaultRepairCap, Action<string>? progress = null, CancellationToken ct = default)
     {
@@ -246,10 +259,11 @@ public class CorrectionReevaluationService(RbRulesDbContext db, RbAiClient ai)
             c.Status == "unverified"
             && c.ReviewNote == null
             && c.Provenance != null && c.Provenance.StartsWith(ClarificationMiningService.ProvenancePrefix)
-            && c.StatusReason != null && c.StatusReason.Contains("niet herkend"));
+            && c.StatusReason != null && c.StatusReason.Contains("niet herkend")
+            && !c.StatusReason.Contains(TerminalMarker));
 
         var totalEligible = await query.CountAsync(ct);
-        if (totalEligible == 0) return new(0, 0, "geen anker-herstel nodig", CapHit: false);
+        if (totalEligible == 0) return new(0, 0, 0, "geen anker-herstel nodig", CapHit: false);
 
         var candidates = await query.OrderBy(c => c.Id).Take(maxItems).ToListAsync(ct);
         var capHit = totalEligible > candidates.Count;
@@ -258,17 +272,21 @@ public class CorrectionReevaluationService(RbRulesDbContext db, RbAiClient ai)
         var systemPrompt = ClarificationAnchorRepair.GetSystemPrompt(mechanics, concepts);
 
         var repaired = 0;
+        var recommended = 0;
         var skipped = 0;
         for (var i = 0; i < candidates.Count; i++)
         {
             var c = candidates[i];
             progress?.Invoke($"anker-herstel {i + 1}/{candidates.Count}");
 
+            var clarification = ClarificationMiningService.ClarificationOf(c.Text);
+            var quote = ClarificationMiningService.ExtractQuote(c.Text);
+
             string? raw;
             try
             {
                 raw = await ai.AskAsync(
-                    ClarificationAnchorRepair.BuildPrompt(ClarificationMiningService.ClarificationOf(c.Text)),
+                    ClarificationAnchorRepair.BuildPrompt(clarification, quote, c.Ref),
                     systemPrompt, ct: ct);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -279,17 +297,93 @@ public class CorrectionReevaluationService(RbRulesDbContext db, RbAiClient ai)
                 raw = null;
             }
 
-            var choice = raw is null ? null : ClarificationAnchorRepair.ParseAnchorChoice(raw);
-            if (choice is null) { skipped++; continue; } // AI-uitval, "none" of onbruikbaar antwoord: item blijft staan
+            var choice = raw is null
+                ? new AnchorChoice(AnchorChoiceKind.Unusable)
+                : ClarificationAnchorRepair.ParseAnchorChoice(raw);
 
-            var result = await ApplyGateAsync(c, choice, anchors, ct);
+            if (choice.Kind == AnchorChoiceKind.Unusable)
+            {
+                // Transiënt (AI-uitval of flaky output): item blijft
+                // ongemarkeerd staan — de volgende run probeert opnieuw.
+                skipped++;
+                continue;
+            }
+
+            var resolved = choice.Kind == AnchorChoiceKind.Choice
+                ? anchors.Resolve(choice.TopicType, choice.TopicRef)
+                : null;
+            if (resolved is null)
+            {
+                // Definitief: expliciete {"none": true} of een keuze die het
+                // vocabulaire toch niet haalt — terminaal markeren zodat het
+                // item niet elke run opnieuw cap-ruimte verbrandt. Een
+                // her-mine die het item bijwerkt, schrijft een verse
+                // StatusReason (zonder marker) en her-opent de eligibility.
+                c.StatusReason += $" — {TerminalMarker}, geen vocabulaire-match (#188)";
+                await db.SaveChangesAsync(ct);
+                skipped++;
+                continue;
+            }
+
+            // Canonieke duplicaat-check (findings 3+5): resolve óók de
+            // bezetters en vergelijk BrainRef.Format() — een alias (variant-
+            // kaartnaam, concept-key vs. -titel) matcht letterlijk niet maar
+            // wijst wel naar dezelfde knoop.
+            var chosenFormat = resolved.Value.Format();
+            var siblings = await db.Corrections.AsNoTracking()
+                .Where(x => x.Id != c.Id && x.Provenance == c.Provenance)
+                .Select(x => new { x.Scope, x.Ref })
+                .ToListAsync(ct);
+            var occupied = siblings.Any(s =>
+                anchors.Resolve(TopicTypeFor(s.Scope), s.Ref) is { } sib
+                && sib.Format() == chosenFormat);
+            if (occupied)
+            {
+                c.StatusReason = $"anker '{choice.TopicRef}' is al bezet door een bestaande "
+                    + "ruling van deze bron — mogelijk duplicaat, beoordeel handmatig (#188)";
+                await db.SaveChangesAsync(ct);
+                skipped++;
+                continue;
+            }
+
+            // Lexicale-steun-poort (kernbevinding): promoot alleen als de
+            // ankerterm aantoonbaar in de itemtekst voorkomt; voor een
+            // concept tellen ook de canonieke key en titel als term.
+            var supportTerms = new List<string> { choice.TopicRef! };
+            if (choice.TopicType == "concept")
+            {
+                var key = resolved.Value.Key;
+                supportTerms.Add(key);
+                foreach (var (conceptKey, title) in concepts)
+                    if (conceptKey == key) { supportTerms.Add(title); break; }
+            }
+            var haystack = string.Join('\n', clarification, quote ?? "", c.Ref);
+            if (!ClarificationAnchorRepair.HasLexicalSupport(choice.TopicType!, supportTerms, haystack))
+            {
+                // Aanbeveling (geen promotie): Scope/Ref wél verplaatsen zodat
+                // de reviewqueue het item bij het juiste onderwerp toont; de
+                // beheerder verifieert via het bestaande /verify-pad.
+                c.Scope = ClarificationMiningService.ScopeFor(choice.TopicType!);
+                c.Ref = choice.TopicRef!;
+                c.Status = "unverified";
+                c.StatusReason = $"anker hersteld via LLM-suggestie ('{choice.TopicType}:{choice.TopicRef}') "
+                    + "— wacht op review (#188)";
+                c.VerifiedAt = null;
+                await db.SaveChangesAsync(ct);
+                recommended++;
+                continue;
+            }
+
+            var result = await ApplyGateAsync(
+                c, (choice.TopicType!, choice.TopicRef!), anchors, ct);
             if (result.Outcome == ReevaluateOutcome.Verified) repaired++;
             else skipped++;
         }
 
-        var message = $"{repaired} anker(s) hersteld, {skipped} overgeslagen/onopgelost"
+        var message = $"{repaired} anker(s) hersteld, {recommended} aanbeveling(en) ter review, "
+            + $"{skipped} overgeslagen/onopgelost"
             + (capHit ? $" — cap van {maxItems} bereikt, rest volgt bij de volgende run" : "");
-        return new(repaired, skipped, message, capHit);
+        return new(repaired, recommended, skipped, message, capHit);
     }
 
     /// <summary>#188: lichte LLM-informativiteitstoets voor de her-evaluatie —

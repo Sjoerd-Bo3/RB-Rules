@@ -440,14 +440,18 @@ public class ClarificationMinerVocabularyTests
 
     [Fact]
     public void BuildVocabularyBlock_LegeVocabulaire_ToontLeesbarePlaceholder() =>
-        Assert.Contains("(nog geen)", ClarificationMiner.BuildVocabularyBlock([], []));
+        Assert.Contains("(none yet)", ClarificationMiner.BuildVocabularyBlock([], []));
 }
 
 /// <summary>Herstel-pas-prompt (#188 increment 3, <see
 /// cref="ClarificationAnchorRepair"/>): dezelfde vocabulaire als de
 /// extractieprompt, maar met de vraag om een KEUZE i.p.v. vrije extractie.
-/// De end-to-end-orkestratie (LLM-aanroep + poort + spookduplicaat-vangrail)
-/// staat in CorrectionReevaluationServiceTests.RepairPendingAnchorsAsync_….</summary>
+/// Sinds de adversariële review is het antwoord drieledig (<see
+/// cref="AnchorChoiceKind"/>): een keuze, een definitieve {"none": true}
+/// (terminaal voor de aanroeper), of onbruikbare output (transiënt — zelfde
+/// behandeling als AI-uitval). De end-to-end-orkestratie (LLM-aanroep +
+/// lexicale poort + canonieke duplicaat-check + terminaliteit) staat in
+/// CorrectionReevaluationServiceTests.RepairPendingAnchorsAsync_….</summary>
 public class ClarificationAnchorRepairTests
 {
     [Fact]
@@ -459,34 +463,67 @@ public class ClarificationAnchorRepairTests
         Assert.Contains("Legion", prompt);
         Assert.Contains("Turn Structure", prompt);
         Assert.DoesNotContain("{VOCABULARY}", prompt);
+        // Review-fix: "none" is een eersteklas antwoord (geen
+        // verlegenheidsoptie) en de keuze-instructie eist dat de tekst het
+        // anker zelf noemt of onmiskenbaar beschrijft.
+        Assert.Contains("first-class answer", prompt);
+        Assert.Contains("unmistakably describes it", prompt);
     }
 
     [Fact]
-    public void BuildPrompt_BevatDeVerduidelijking() =>
-        Assert.Contains("Legion betekent finalizen.",
-            ClarificationAnchorRepair.BuildPrompt("Legion betekent finalizen."));
+    public void BuildPrompt_BevatVerduidelijkingCitaatEnOorspronkelijkOnderwerp()
+    {
+        // Review-fix: citaat en het oorspronkelijke (onherkende) onderwerp
+        // gaan mee als context — beide dragen vaak de term die het juiste
+        // anker verraadt.
+        var prompt = ClarificationAnchorRepair.BuildPrompt(
+            "Legion means you finalize an item on the chain.",
+            "Legion means you finalize",
+            "battlefield control without units");
+
+        Assert.Contains("Legion means you finalize an item on the chain.", prompt);
+        Assert.Contains("Legion means you finalize", prompt);
+        Assert.Contains("battlefield control without units", prompt);
+    }
 
     [Fact]
-    public void ParseAnchorChoice_GeldigeKeuze_ReturnsTopicTypeEnRef_CaseInsensitiefTopicType() =>
-        Assert.Equal(("mechanic", "Legion"),
-            ClarificationAnchorRepair.ParseAnchorChoice("""{"topicType": "Mechanic", "topicRef": "Legion"}"""));
+    public void BuildPrompt_ZonderCitaat_ToontLeesbarePlaceholder() =>
+        Assert.Contains("(none)", ClarificationAnchorRepair.BuildPrompt(
+            "Some clarification.", null, "some topic"));
 
     [Fact]
-    public void ParseAnchorChoice_NoneJson_ReturnsNull() =>
-        Assert.Null(ClarificationAnchorRepair.ParseAnchorChoice("""{"none": true}"""));
+    public void ParseAnchorChoice_GeldigeKeuze_ReturnsChoice_CaseInsensitiefTopicType()
+    {
+        var r = ClarificationAnchorRepair.ParseAnchorChoice(
+            """{"topicType": "Mechanic", "topicRef": "Legion"}""");
+
+        Assert.Equal(AnchorChoiceKind.Choice, r.Kind);
+        Assert.Equal("mechanic", r.TopicType);
+        Assert.Equal("Legion", r.TopicRef);
+    }
 
     [Fact]
-    public void ParseAnchorChoice_OnbekendTopicType_ReturnsNull() =>
-        // "champion" staat niet in ClarificationMiner.TopicTypes — degradeert
-        // naar null (geen keuze), niet naar een gok.
-        Assert.Null(ClarificationAnchorRepair.ParseAnchorChoice(
-            """{"topicType": "champion", "topicRef": "Viktor"}"""));
+    public void ParseAnchorChoice_NoneJson_ReturnsNone_DefinitiefGeenKeuze() =>
+        // Review-fix (terminaliteit): een expliciete {"none": true} is een
+        // DEFINITIEVE uitkomst — de aanroeper markeert het item terminaal,
+        // anders dan bij onbruikbare output (transiënt, zie hieronder).
+        Assert.Equal(AnchorChoiceKind.None,
+            ClarificationAnchorRepair.ParseAnchorChoice("""{"none": true}""").Kind);
+
+    [Fact]
+    public void ParseAnchorChoice_OnbekendTopicType_ReturnsUnusable() =>
+        // "champion" staat niet in ClarificationMiner.TopicTypes — flaky
+        // output, transiënt (geen terminale marker), niet een gok.
+        Assert.Equal(AnchorChoiceKind.Unusable, ClarificationAnchorRepair.ParseAnchorChoice(
+            """{"topicType": "champion", "topicRef": "Viktor"}""").Kind);
 
     [Fact]
     public void ParseAnchorChoice_ToleratesSurroundingProse()
     {
         var raw = "Mijn keuze:\n{\"topicType\": \"concept\", \"topicRef\": \"Turn Structure\"}\nKlaar.";
-        Assert.Equal(("concept", "Turn Structure"), ClarificationAnchorRepair.ParseAnchorChoice(raw));
+        var r = ClarificationAnchorRepair.ParseAnchorChoice(raw);
+        Assert.Equal(AnchorChoiceKind.Choice, r.Kind);
+        Assert.Equal(("concept", "Turn Structure"), (r.TopicType, r.TopicRef));
     }
 
     [Theory]
@@ -498,11 +535,73 @@ public class ClarificationAnchorRepairTests
     // ParseOperative, #188): array-vormige kandidaten mogen niet crashen —
     // GetBool/GetString → TryGetProperty gooit op een niet-object een
     // InvalidOperationException (geen JsonException). Zonder de
-    // objectvorm-guard 500't de herstel-pas i.p.v. te degraderen naar "geen
-    // keuze".
+    // objectvorm-guard 500't de herstel-pas i.p.v. te degraderen naar
+    // "onbruikbaar".
     [InlineData("[true]")]
     [InlineData("[1, 2]")]
     [InlineData("This clarification refers to section [402.3] of the updated core rules.")]
-    public void ParseAnchorChoice_OnbruikbaarAntwoord_ReturnsNull(string raw) =>
-        Assert.Null(ClarificationAnchorRepair.ParseAnchorChoice(raw));
+    public void ParseAnchorChoice_OnbruikbaarAntwoord_ReturnsUnusable(string raw) =>
+        Assert.Equal(AnchorChoiceKind.Unusable,
+            ClarificationAnchorRepair.ParseAnchorChoice(raw).Kind);
+}
+
+/// <summary>Lexicale-steun-poort vóór auto-promotie (review-fix op #188
+/// increment 3, kernbevinding): een resolvend anker bewijst alleen dat de
+/// term BESTAAT, niet dat hij bij déze tekst hoort — auto-verificatie is
+/// alleen verdedigbaar als de ankerterm aantoonbaar in de itemtekst
+/// (verduidelijking + citaat + oorspronkelijk onderwerp) voorkomt. Puur en
+/// deterministisch; de aanroeper bouwt de haystack.</summary>
+public class ClarificationAnchorRepairLexicalSupportTests
+{
+    [Theory]
+    [InlineData("Legion means you finalize an item on the chain.")] // exact
+    [InlineData("The LEGION keyword triggers once per turn.")]      // case-insensitief
+    public void HasLexicalSupport_MechanicTermInTekst_True(string haystack) =>
+        Assert.True(ClarificationAnchorRepair.HasLexicalSupport("mechanic", ["Legion"], haystack));
+
+    [Fact]
+    public void HasLexicalSupport_MechanicTermNietInTekst_False() =>
+        // De #199-klasse: de tekst beschrijft het gedrag zonder de term te
+        // noemen — resolvend anker, maar géén aantoonbare steun ⇒ aanbeveling.
+        Assert.False(ClarificationAnchorRepair.HasLexicalSupport(
+            "mechanic", ["Legion"], "You finalize an item on the chain when its trigger resolves."));
+
+    [Fact]
+    public void HasLexicalSupport_KaartnaamVolledigVereist() =>
+        // Voor een kaart moet de VOLLEDIGE naam voorkomen — een los woord
+        // ("Shield") uit een kaartnaam is geen bewijs dat de kaart bedoeld is.
+        Assert.False(ClarificationAnchorRepair.HasLexicalSupport(
+            "card", ["Taric, the Shield of Valoran"], "Shield absorbs the next source of damage."));
+
+    [Fact]
+    public void HasLexicalSupport_SectionCodeInTekst_True() =>
+        Assert.True(ClarificationAnchorRepair.HasLexicalSupport(
+            "section", ["402.3"], "As rule 402.3 explains, the item is finalized."));
+
+    [Theory]
+    // Concept: één significant token (≥4 tekens) uit key of titel volstaat —
+    // "Turn Structure" staat zelden letterlijk in de tekst, "turn" wel.
+    [InlineData("At the start of each turn you draw a card.")]
+    [InlineData("The structure of a round has three phases.")]
+    public void HasLexicalSupport_ConceptToken_True(string haystack) =>
+        Assert.True(ClarificationAnchorRepair.HasLexicalSupport(
+            "concept", ["turn-structure", "Turn Structure"], haystack));
+
+    [Fact]
+    public void HasLexicalSupport_ConceptZonderEnigToken_False() =>
+        Assert.False(ClarificationAnchorRepair.HasLexicalSupport(
+            "concept", ["turn-structure", "Turn Structure"],
+            "Reflection tokens do not count toward hand size."));
+
+    [Fact]
+    public void HasLexicalSupport_ConceptKorteTokens_TellenNiet() =>
+        // Tokens korter dan 4 tekens ("the", "of") dragen geen bewijs — een
+        // conceptnaam die alleen uit korte woorden bestaat, matcht niet op
+        // toeval.
+        Assert.False(ClarificationAnchorRepair.HasLexicalSupport(
+            "concept", ["the-mul", "The Mul"], "The unit deals damage to the target."));
+
+    [Fact]
+    public void HasLexicalSupport_LegeHaystack_False() =>
+        Assert.False(ClarificationAnchorRepair.HasLexicalSupport("mechanic", ["Legion"], "  "));
 }
