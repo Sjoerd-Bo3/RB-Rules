@@ -233,16 +233,25 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   niet-gekoppelde kaarten of een set zonder bekende releasedatum),
   `SourceContentKind` (#188 increment 2: bron-type-classificatie — "faq" |
   "patch-notes" | "other" — als LLM-BESLISSING i.p.v. een keyword-heuristiek;
-  `SystemPrompt`/`BuildPrompt`/`Parse` (objectvorm-guard, zelfde patroon als
-  `ClarificationInformativeness.ParseOperative`), `HeuristicKind` (het oude
-  `ClarificationSources`-predicaat, nu het deterministische vangnet bij
-  AI-uitval/onbruikbaar antwoord) en `Resolve` (de ene plek die consumers
-  gebruiken: gepersisteerde `Source.ContentKind` als die er is, anders de
-  heuristiek — transitioneel gedrag tot een bron opnieuw gescand is sinds
-  deze increment); geclassificeerd bij de scan van een trust-1-bron
+  `SystemPrompt` (Engels, #187-lijn; "faq" beperkt tot Q&A-/clarificatie-
+  ARTIKELEN — rulebooks/how-to-play-gidsen zijn expliciet "other", en
+  gemengd/onzeker is sinds de #188-review neutraal "other" i.p.v. de oude
+  #185-tie-break "patch-notes wint")/`BuildPrompt`/`Parse` (objectvorm-guard,
+  zelfde patroon als `ClarificationInformativeness.ParseOperative`),
+  `HeuristicKind` (het oude `ClarificationSources`-predicaat, nu het
+  deterministische vangnet bij AI-uitval/onbruikbaar antwoord — dáár wint
+  patch-notes bij een dubbel-keyword-naam nog wel, conservatief),
+  `Resolve` (de ene plek die consumers gebruiken: gepersisteerde
+  `Source.ContentKind` als die er is, anders de heuristiek — transitioneel
+  gedrag tot een bron opnieuw gescand is sinds deze increment) en
+  `TryApplyOverride` (beheerder-override via het source-PATCH-pad: geldige
+  kind ⇒ herkomst "admin", definitief; leeg ⇒ wissen/herclassificeren);
+  geclassificeerd bij de scan van een trust-1-bron
   (`IngestService.ClassifyContentKindAsync`, gepersisteerd op `Source.
-  ContentKind`/`ContentKindSource`), gelezen door `ClarificationMiningService`
-  (bronselectie/retractie) en `IngestService` (de templated Change)),
+  ContentKind`/`ContentKindSource`, met een run_log-regel wanneer het
+  LLM-oordeel afwijkt van de heuristiek), gelezen door
+  `ClarificationMiningService` (bronselectie/retractie) en `IngestService`
+  (de templated Change)),
   `ClarificationMining` (#177: `ClarificationSources`, de naam-/URL-heuristiek
   die vóór #188 increment 2 de primaire bron-type-classificatie was — nu het
   vangnet achter `SourceContentKind`; `IsMatch`/`IsPatchNotesSignal` blijven
@@ -288,7 +297,13 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `unverified` + `StatusReason` de reviewqueue in; een `rejected` tombstone
   wordt nooit heropend. Sinds #185 trekt elke run bovendien vóóraf de eerder
   ten onrechte gemínede patch-notes-`Correction`s terug
-  (`RetractPatchNotesCorrectionsAsync`, hard delete, idempotent). Dedupliceert
+  (`RetractPatchNotesCorrectionsAsync`, hard delete, idempotent — sinds de
+  #188-review achter een consensus-poort: verwijderen alleen als de
+  effectieve kind patch-notes is ÉN de deterministische heuristiek dat
+  bevestigt of de beheerder de kind expliciet vastzette (herkomst "admin");
+  oneens ⇒ overslaan + run_log-waarschuwing, en een wees-bron (Source-rij
+  weg) wordt nooit meer op alleen haar id opgeruimd — alleen gelogd voor
+  handmatige beoordeling). Dedupliceert
   per concept op (bron, Scope, Ref) + embedding-nabijheid — een parafrase bij
   een her-mine werkt de bestaande ruling bij (nooit degraderend) i.p.v. te
   stapelen, zelfde poort-patroon als `ClaimMiningService`; backfilt bestaande
@@ -582,8 +597,9 @@ Kernpunten (`AskService.cs`):
 
 `IngestService.ScanAsync`: per bron fetch → boilerplate-strip → hash →
 bron-type-classificatie (#188 increment 2, alleen trust-1-bronnen zonder
-LLM-classificatie of met een heuristische — `ClassifyContentKindAsync`,
-`SourceContentKind`) → diff → AI-classify → store + `run_log`, met
+LLM-classificatie of met een heuristische; een "admin"-override wordt nooit
+geherclassificeerd — `ClassifyContentKindAsync`, `SourceContentKind`) →
+diff → AI-classify → store + `run_log`, met
 flip-flop-suppressie en een naclassificatie-ronde (#58) voor changes die
 eerder zonder classificatie zijn opgeslagen. De `ScanScheduler`
 (BackgroundService) draait elk uur een scan van
