@@ -104,6 +104,39 @@ public class ClarificationRetractionTests
     }
 
     [Fact]
+    public async Task RunAsync_LlmGeklassificeerdAlsPatchNotes_WordtIngetrokken_OokMetFaqInDeNaam()
+    {
+        // Het gemengde-bron-scenario (#185-review, "Rules FAQ and Patch
+        // Notes"): de naam ziet er FAQ-achtig uit (de heuristiek zou "faq"
+        // zeggen), maar de LLM heeft deze bron expliciet als "patch-notes"
+        // geclassificeerd (Source.ContentKind) — de retractie moet die
+        // gepersisteerde kind gebruiken, niet de naam-heuristiek, en de oude
+        // ruling alsnog opruimen.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = FaqSourceId, Name = "Unleashed Rules FAQ and Clarifications", Url = FaqUrl,
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+            ContentKind = SourceContentKind.PatchNotes, ContentKindSource = SourceContentKind.LlmOrigin,
+        });
+        db.Corrections.Add(new Correction
+        {
+            Scope = "mechanic", Ref = "Legion",
+            Text = "Legion's gedrag is in deze update verduidelijkt.",
+            Provenance = $"clarify-mining:{FaqSourceId}", SourceRef = FaqUrl,
+            Status = "verified", VerifiedAt = DateTimeOffset.UtcNow,
+            Embedding = new Vector(Enumerable.Repeat(0.1f, EmbeddingConfig.Dimensions).ToArray()),
+        });
+        await db.SaveChangesAsync();
+        var svc = new ClarificationMiningService(db, Ai(() => null), Embeddings(ok: false));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Retracted);
+        Assert.Empty(await db.Corrections.ToListAsync());
+    }
+
+    [Fact]
     public async Task RunAsync_BronRijVerwijderd_ValtTerugOpSourceIdInProvenance()
     {
         // Ook zonder (meer) een Source-rij herkent de opruiming een
