@@ -132,10 +132,22 @@ apart in §6.
   dan toetst een LLM-call ("zelfde gebeurtenis?") of ze echt samenvallen; zo ja,
   dan wordt de meest gezaghebbende bron (hoogste TrustTier, bij gelijke trust de
   vroegste detectie) de primaire kaart en verdwijnt de andere uit de hoofdlijst
-  als genestelde "bevestigd door {bron}"-badge. Beide `Change`-rijen blijven
-  bestaan (`Change.ConsolidatedWithId`) — dit is presentatie, geen inhoudelijke
-  waarheid (die blijft bij de structured ban-/errata-precedentie, #168). Draait
-  idempotent als jobstap `consolidatechanges` ná elke scan.
+  als genestelde "bevestigd door {bron}"-badge — uitklapbaar naar de
+  samenvatting, duiding én voor/na-diff van de bevestigende bron. Beide
+  `Change`-rijen blijven bestaan (`Change.ConsolidatedWithId`) — dit is
+  presentatie, geen inhoudelijke waarheid (die blijft bij de structured
+  ban-/errata-precedentie, #168). Draait idempotent als jobstap
+  `consolidatechanges` in het ingest-pad én uurlijks automatisch via de
+  scheduler; een "nee"-oordeel wordt per paar onthouden (pair-memo in
+  run_log), dus elk paar wordt hooguit één keer aan de LLM voorgelegd. Een
+  foute koppeling is herstelbaar: "Ontkoppel" in het admin-overzicht maakt
+  de secundaire weer een losse kaart en blokkeert her-consolidatie van dat
+  paar blijvend. "Verwijder uit feed" op een primaire verwijdert ook haar
+  bevestigingen (zelfde event; de UI-confirm meldt het aantal).
+  Editorial-changes ("volgorde gewijzigd; inhoud ongewijzigd") verschijnen
+  nooit als zelfstandige kaart op de publieke pagina (#207, read-time
+  gefilterd; "unknown" blijft zichtbaar en een editorial als bevestiging
+  van een echt event blijft werken) — het admin-overzicht toont ze wél.
   *Route* `/` · *endpoints* `/api/changes`, `/api/sources`, `/api/bans`,
   `/api/sets/upcoming`.
 - **Regels-browser** — hoofdstuk-hiërarchie van de Core/Tournament Rules met
@@ -708,9 +720,15 @@ apart in §6.
   trigger binnen. *Route* `/admin/overview/decks` · *endpoint*
   `/api/admin/overview/decks`.
 - **Aanklikbare status-tegels** — elke teller opent een overzichtspagina.
-  *Route* `/admin/overview/[kind]` · *endpoints* `/api/admin/overview/{cards,
+  De wijzigingen-tegel telt roots-only (#206): hetzelfde aantal als de
+  lijst waarheen hij linkt; het wijzigingen-overzicht toont bevestigingen
+  genest onder hun primaire, met per bevestiging een "Ontkoppel"-actie
+  (herstelpad voor een foute consolidatie — het paar wordt daarna nooit
+  meer automatisch gemerged). *Route* `/admin/overview/[kind]` · *endpoints*
+  `/api/admin/overview/{cards,
   rulechunks, bans, errata, interactions, changes, claims, proposals, relations,
-  users, gaps, setcoverage, benchmark, feeds}`.
+  users, gaps, setcoverage, benchmark, feeds}`,
+  `/api/admin/changes/{id}/unconsolidate`.
 - **Set-dekking** — tegel + overzichtspagina: per set het basistotaal,
   aanwezige én exact ontbrekende kaartnummers (compacte reeksweergave,
   bv. "12, 45–47, 203"), dekking %, variantentelling, afwijkende

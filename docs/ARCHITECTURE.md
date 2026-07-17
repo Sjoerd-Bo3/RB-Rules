@@ -500,7 +500,25 @@ van 30 dagen (ruim boven het kandidaat-venster) en volgt het #188-patroon
   changes hetzelfde event? ja/nee"), zelfde parser-patroon als `ClaimJudge`
   (objectvorm-guard vóór `TryGetProperty`, `LlmJson.Candidates`). AI-uitval
   of onparseerbaar antwoord ⇒ null; de service behandelt het paar dan als
-  NIET geconsolideerd (de veilige kant, met een `run_log`-regel).
+  NIET geconsolideerd (de veilige kant, met een `run_log`-regel) — dat is
+  transiënt: de volgende run probeert het paar gewoon opnieuw.
+- **Pair-memo** (review-fix findings 2+6): een "nee"-oordeel wordt per paar
+  onthouden via het bestaande run_log-als-memo-idioom (het
+  SetReleaseService-/DeckIngestService-grootboekpatroon): kind
+  `consolidatechanges`, ref `pair:{minId}-{maxId}`, status `rejected`. De
+  kandidaat-lus laadt die memo's in één gebatchte query en slaat zulke
+  paren over — elke paar-judge is éénmalig (geen herhaald LLM-budget, geen
+  tweede flip-kans op een eerder afgewezen paar). Een "ja" hoeft geen memo
+  (de merge zelf is het bewijs); transiënte uitval krijgt er bewust geen.
+  Binnen één run bewaakt een set van al-geprobeerde effectieve paren
+  (review-fix findings 4+7) dat een via de root-hermapping "ingeklapt" paar
+  niet nogmaals gejudged wordt.
+- **Ontkoppelen** (review-fix finding 1): `POST
+  /api/admin/changes/{id}/unconsolidate` (op de secundaire) zet
+  `ConsolidatedWithId` terug op null én schrijft hetzelfde sticky pair-memo
+  — zonder memo zou de eerstvolgende run de handmatige correctie meteen
+  terugdraaien. In rb-web als "Ontkoppel"-knop bij de bevestiging in
+  `/admin/overview/wijzigingen`.
 - `ChangeConsolidationPrimary.Wins` (Domain): hoogste bron-trust
   (laagste `TrustTier`) wint, bij gelijke trust de VROEGSTE detectie — het
   omgekeerde tie-break-doel van `Precedence` (#168, waar bij gelijk gezag
@@ -515,11 +533,23 @@ van 30 dagen (ruim boven het kandidaat-venster) en volgt het #188-patroon
 publieke `GET /api/changes` (`FeedEndpoints`) als het admin-overzicht
 (`AdminOverviewService.ChangesAsync`, `GET /api/admin/overview/changes`):
 alleen primaire changes (`ConsolidatedWithId == null`) tellen mee in de
-lijst/paginering; secundairen komen genest terug als
-`ConfirmedBy`-lijst (bron, URL, TrustTier, samenvatting, detectiemoment)
+lijst/paginering; secundairen komen genest terug als `ConfirmedBy`-lijst
+(bron, URL, TrustTier, samenvatting, duiding én voor/na-diff — review-fix
+finding 3: de secundaire details blijven ná consolidatie inspecteerbaar)
 op de primaire. rb-web (`/` en `/admin/overview/wijzigingen`) toont dat als
 een "bevestigd door {bron}"-badge met link, uitklapbaar naar de secundaire
-samenvatting.
+samenvatting/duiding/diff. Dezelfde roots-only-regel geldt voor de
+dashboard-tegel (`/api/admin/status` Counts.Changes) en de changes-historie
+in het sectie-dossier (`RuleBrowserService.DossierAsync`) — de tegel telt
+wat de lijst toont. De feed-curatie-delete
+(`DELETE /api/admin/changes/{id}`, `ChangeFeedService.DeleteAsync`,
+review-fix finding 9) verwijdert bij een primaire óók haar secundairen in
+dezelfde transactie — het is per definitie hetzelfde event, en de kale
+FK-SetNull zou de kaart anders meteen laten herrijzen vanuit de andere
+bron; een secundaire los verwijderen kan gewoon. Interne consumers
+(kennis-hertoets #119, classificatie-backfill #58, push, bron-dossier,
+graph-projectie) blijven bewust ongefilterd — die moeten élke detectie
+zien; elk draagt een comment met de reden.
 
 **`RelationTriageService` (LLM-triage voor relatievoorstellen, #199 v1).**
 Per open `Relation` (Status "unreviewed", `Recommendation == null`,
@@ -788,7 +818,15 @@ Changeconsolidatie (#206, `ChangeConsolidationService`, zie §5) draait
 bewust NIET binnen `ScanAsync` zelf maar als losse jobstap
 `consolidatechanges` ná `classify` in het Ingest-pad — zo blijft `ScanAsync`
 onaangeraakt en is de stap ook los te draaien (bv. terugwerkend op een
-bestaand paar). Bekende beperking: `PushService.NotifyHighSeverityAsync`
+bestaand paar). Daarnaast draait hij UURLIJKS mee in de
+ScanScheduler-periodiek (review-fix finding 5: de uurlijkse scan maakt de
+duplicaten, dus de consolidatie mag niet alleen van het handmatige
+ingest-pad afhangen) — via dezelfde `TryStartPeriodicJobAsync`-mechaniek
+als relations/scout/decks/clarify, declaratief in
+`ScanScheduler.JobSchedules` (getest: elke naam bestaat in de JobCatalog).
+Goedkoop: zonder verse changes levert de kandidaat-poort niets op en de
+pair-memo's voorkomen dubbele LLM-toetsen. Bekende beperking:
+`PushService.NotifyHighSeverityAsync`
 vuurt al binnen de `scan`-job zelf (vóór `consolidatechanges` in het pad),
 dus een net-geconsolideerd paar kan in theorie nog twee pushmeldingen voor
 hetzelfde event opleveren — geen incident, wel een bewuste, niet
