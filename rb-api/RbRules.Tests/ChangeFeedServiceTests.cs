@@ -170,6 +170,79 @@ public class ChangeFeedServiceTests
         Assert.Empty(result);
     }
 
+    [Fact]
+    public async Task ListAsync_Editorial_VerschijntNooitOpDePubliekeLijst_UnknownWel()
+    {
+        // #207: "volgorde gewijzigd; inhoud ongewijzigd" is ruis voor
+        // spelers — read-time gefilterd, dus ook bestaande editorial-rijen
+        // verdwijnen direct. "unknown" blijft zichtbaar: dat kan echte
+        // inhoud zijn die op de #58-naclassificatie wacht.
+        using var db = NewDb();
+        db.Sources.Add(Source("rules-hub", official: true));
+        db.Changes.Add(new Change
+        {
+            SourceId = "rules-hub", ChangeType = "editorial",
+            Summary = "Volgorde van aankondigingen gewijzigd; inhoud ongewijzigd.",
+        });
+        db.Changes.Add(new Change
+        {
+            SourceId = "rules-hub", ChangeType = "unknown", Summary = "Nog te classificeren.",
+        });
+        await db.SaveChangesAsync();
+
+        var items = await new ChangeFeedService(db).ListAsync(null, null, null, take: 50);
+
+        var item = Assert.Single(items);
+        Assert.Equal("unknown", item.ChangeType);
+    }
+
+    [Fact]
+    public async Task ChangesAsync_Admin_ToontEditorialsWel()
+    {
+        // #207: de scheiding zit in het aanroeppad — het admin-overzicht
+        // (eigen query in AdminOverviewService) blijft editorials tonen
+        // voor inspectie/verwijderen.
+        using var db = NewDb();
+        db.Sources.Add(Source("rules-hub", official: true));
+        db.Changes.Add(new Change
+        {
+            SourceId = "rules-hub", ChangeType = "editorial",
+            Summary = "Volgorde van aankondigingen gewijzigd; inhoud ongewijzigd.",
+        });
+        await db.SaveChangesAsync();
+
+        var overview = await new AdminOverviewService(db, new ChangeFeedService(db)).ChangesAsync(page: 1);
+
+        var item = Assert.Single(overview.Items);
+        Assert.Equal("editorial", item.ChangeType);
+    }
+
+    [Fact]
+    public async Task ListAsync_EditorialAlsSecundaire_BlijftAlsBevestigingWerken()
+    {
+        // #207-samenhang met #206: het editorial-filter geldt voor wat als
+        // ZELFSTANDIGE kaart zou verschijnen — een editorial die secundaire
+        // is van een niet-editoriale primaire blijft gewoon een bevestiging.
+        using var db = NewDb();
+        db.Sources.AddRange(Source("rules-hub", official: true), Source("mobalytics", official: false));
+        var primary = new Change { SourceId = "rules-hub", ChangeType = "ban", Summary = "Viktor banned." };
+        db.Changes.Add(primary);
+        await db.SaveChangesAsync();
+        db.Changes.Add(new Change
+        {
+            SourceId = "mobalytics", ChangeType = "editorial", Summary = "Banlist page reshuffled.",
+            ConsolidatedWithId = primary.Id,
+        });
+        await db.SaveChangesAsync();
+
+        var items = await new ChangeFeedService(db).ListAsync(null, null, null, take: 50);
+
+        var item = Assert.Single(items);
+        Assert.Equal(primary.Id, item.Id);
+        var confirmation = Assert.Single(item.ConfirmedBy);
+        Assert.Equal("mobalytics", confirmation.SourceId);
+    }
+
     private static Source Source(string id, bool official) => new()
     {
         Id = id, Name = id, Url = $"https://example.test/{id}",

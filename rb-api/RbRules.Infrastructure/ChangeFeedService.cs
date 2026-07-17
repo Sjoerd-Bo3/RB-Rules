@@ -49,11 +49,22 @@ public class ChangeFeedService(RbRulesDbContext db)
     /// (secundaire changes verdwijnen uit de hoofdlijst, #206), met de
     /// bestaande severity/type/source-filters — die filteren op de PRIMAIRE
     /// change zelf, niet op een bevestiging (kleinste, voorspelbaarste
-    /// gedrag; deze filters worden vandaag niet door rb-web gebruikt).</summary>
+    /// gedrag; deze filters worden vandaag niet door rb-web gebruikt).
+    /// Editorials (#207) verschijnen nooit als zelfstandige kaart op de
+    /// publieke pagina ("volgorde gewijzigd; inhoud ongewijzigd" is ruis
+    /// voor spelers) — read-time gefilterd, dus bestaande rijen verdwijnen
+    /// direct. "unknown" blijft wél zichtbaar (kan echte inhoud zijn die op
+    /// de #58-naclassificatie wacht), en een editorial die SECUNDAIRE is van
+    /// een niet-editoriale primaire blijft gewoon als bevestiging werken
+    /// (het filter geldt alleen voor de hoofdlijst, niet voor ConfirmedBy).
+    /// Het admin-overzicht (<see cref="AdminOverviewService.ChangesAsync"/>,
+    /// eigen query) toont editorials wél — inspectie/verwijderen blijft
+    /// mogelijk.</summary>
     public async Task<List<ChangeFeedItem>> ListAsync(
         string? severity, string? type, string? source, int take, CancellationToken ct = default)
     {
-        var query = db.Changes.Where(c => c.ConsolidatedWithId == null);
+        var query = db.Changes.Where(c =>
+            c.ConsolidatedWithId == null && c.ChangeType != "editorial");
         if (!string.IsNullOrWhiteSpace(severity)) query = query.Where(c => c.Severity == severity);
         if (!string.IsNullOrWhiteSpace(type)) query = query.Where(c => c.ChangeType == type);
         if (!string.IsNullOrWhiteSpace(source)) query = query.Where(c => c.SourceId == source);
