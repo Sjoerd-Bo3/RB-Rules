@@ -5,11 +5,12 @@
    Licht is de standaard; donker is koele graphite — geen zwart. Geen
    emoji's, status blijft altijd kleur + tekst. */
 :root {
-	/* Neutralen — licht (standaard) */
+	/* Neutralen — licht (standaard). Exacte waarden uit de goedgekeurde
+	   mockup (scratchpad/rb-designs.html). */
 	--bg: #f6f7f9;
 	--surface: #ffffff;
-	--surface-deep: #f0f2f5;
-	--border: rgba(20, 24, 40, 0.10);
+	--surface-deep: #eef0f3;
+	--border: rgba(20, 24, 40, 0.11);
 	--border-strong: rgba(20, 24, 40, 0.20);
 	--text: #1b1e26;
 	--muted: #606673;
@@ -52,8 +53,8 @@
 /* Donker: koele graphite, geen zwart. Volgt OS-voorkeur... */
 @media (prefers-color-scheme: dark) {
 	:root {
-		--bg: #131519;
-		--surface: #1b1e24;
+		--bg: #0f1114;
+		--surface: #181b21;
 		--surface-deep: #20242b;
 		--border: rgba(255, 255, 255, 0.10);
 		--border-strong: rgba(255, 255, 255, 0.20);
@@ -73,8 +74,8 @@
 /* ...maar een expliciete data-theme wint altijd, in beide richtingen (bv.
    een toekomstige thema-schakelaar of, voor deze proef, Playwright). */
 :root[data-theme='dark'] {
-	--bg: #131519;
-	--surface: #1b1e24;
+	--bg: #0f1114;
+	--surface: #181b21;
 	--surface-deep: #20242b;
 	--border: rgba(255, 255, 255, 0.10);
 	--border-strong: rgba(255, 255, 255, 0.20);
@@ -92,8 +93,8 @@
 :root[data-theme='light'] {
 	--bg: #f6f7f9;
 	--surface: #ffffff;
-	--surface-deep: #f0f2f5;
-	--border: rgba(20, 24, 40, 0.10);
+	--surface-deep: #eef0f3;
+	--border: rgba(20, 24, 40, 0.11);
 	--border-strong: rgba(20, 24, 40, 0.20);
 	--text: #1b1e26;
 	--muted: #606673;
@@ -124,6 +125,28 @@ body {
 }
 
 img { max-width: 100%; height: auto; }
+
+/* Toegankelijke focus (#214): zichtbaar op elk interactief element, in beide
+   thema's. Alleen bij toetsenbord-/programmatische focus (:focus-visible),
+   dus geen ring op muisklik. */
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+	border-radius: 4px;
+}
+
+/* Respecteer prefers-reduced-motion (#214): animaties en transitions vrijwel
+   uit voor wie dat aangeeft. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+		scroll-behavior: auto !important;
+	}
+}
 
 /* iOS zoomt in op form-controls met font-size < 16px (#56) — op smalle
    schermen dus altijd minimaal 16px. */

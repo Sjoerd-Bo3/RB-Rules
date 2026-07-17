@@ -4,8 +4,17 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
-		<meta name="theme-color" content="#0d1420" />
+		<meta name="theme-color" content="#f6f7f9" />
 		<link rel="manifest" href="/manifest.webmanifest" />
+		<!-- Thema vóór de eerste verf zetten (#214): geen licht-flits als de
+		     bezoeker donker koos. Alleen een expliciete keuze wint; anders volgt
+		     app.css de OS-voorkeur (prefers-color-scheme). -->
+		<script>
+			try {
+				var t = localStorage.getItem('rb-theme');
+				if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+			} catch (e) {}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
