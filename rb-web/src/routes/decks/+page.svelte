@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { navigating } from '$app/state';
+	import { useShell } from '$lib/shell.svelte';
 
 	let { data } = $props();
+	const shell = useShell();
 
 	const busy = $derived(navigating.to?.url.pathname === '/decks');
 	const lastPage = $derived(Math.max(1, Math.ceil(data.result.total / data.result.pageSize)));
@@ -38,6 +40,15 @@
 	function formatDate(iso: string | null): string | null {
 		return iso ? new Date(iso).toLocaleDateString('nl-NL') : null;
 	}
+
+	// Filters (domein + sortering) in de rechterrail (desktop) / bottom-sheet
+	// (mobiel) — feed-patroon #214. Alleen het domein telt als actief filter;
+	// sortering is een ordening, geen filter.
+	const activeCount = $derived(data.domain ? 1 : 0);
+	$effect(() => {
+		shell.rail = { snippet: filters, kind: 'filters', count: activeCount, title: 'Filters' };
+		return () => (shell.rail = null);
+	});
 </script>
 
 <svelte:head>
@@ -47,6 +58,31 @@
 		content="Community-decks van Piltover Archive, doorzoekbaar met legaliteitscheck tegen de actuele sets en banlijst — met attributie en deep-link terug."
 	/>
 </svelte:head>
+
+{#snippet filters()}
+	<!-- GET-form: het kaart-filter reist mee als verborgen veld zodat filteren
+	     een lopende kaart-selectie behoudt. -->
+	<form method="GET" class="filter-form">
+		{#if data.card}<input type="hidden" name="card" value={data.card} />{/if}
+		<label>
+			<span>Domein</span>
+			<select name="domain" value={data.domain}>
+				<option value="">Alle domeinen</option>
+				{#each data.facets.domains as d (d)}<option value={d}>{d}</option>{/each}
+			</select>
+		</label>
+		<label>
+			<span>Sortering</span>
+			<select name="sort" value={data.sort}>
+				{#each SORTS as s (s.key)}<option value={s.key}>{s.label}</option>{/each}
+			</select>
+		</label>
+		<div class="filter-actions">
+			<a href={data.card ? `/decks?card=${encodeURIComponent(data.card)}` : '/decks'} class="link-btn">Reset</a>
+			<button type="submit" onclick={() => (shell.sheetOpen = false)}>Toon decks</button>
+		</div>
+	</form>
+{/snippet}
 
 <main>
 	<h1>Decks <span>van Piltover Archive</span></h1>
@@ -64,24 +100,11 @@
 		</p>
 	{/if}
 
-	<form method="GET" class="filters">
-		{#if data.card}<input type="hidden" name="card" value={data.card} />{/if}
-		<select name="domain">
-			<option value="">Domein</option>
-			{#each data.facets.domains as d (d)}
-				<option value={d} selected={data.domain === d}>{d}</option>
-			{/each}
-		</select>
-		<select name="sort">
-			{#each SORTS as s (s.key)}
-				<option value={s.key} selected={data.sort === s.key}>{s.label}</option>
-			{/each}
-		</select>
-		<button type="submit" disabled={busy}>{busy ? 'Laden…' : 'Toepassen'}</button>
-		<a href={data.card ? `/decks?card=${encodeURIComponent(data.card)}` : '/decks'} class="reset">
-			Reset
-		</a>
-	</form>
+	{#if data.domain}
+		<div class="active-chips">
+			<a class="active-chip" href={href({ domain: '', page: 1 })}>domein: {data.domain} ✕</a>
+		</div>
+	{/if}
 
 	{#if data.error}
 		<p class="warn">{data.error}</p>
@@ -96,10 +119,10 @@
 					: ''}.
 		</p>
 	{:else}
-		<p class="meta count">{data.result.total} decks · pagina {data.result.page} van {lastPage}</p>
+		<p class="meta count tnum">{data.result.total} decks · pagina {data.result.page} van {lastPage}</p>
 		<div class="grid">
 			{#each data.result.items as deck (deck.id)}
-				<a class="card" href="/decks/{deck.id}">
+				<a class="card panel" href="/decks/{deck.id}">
 					<header>
 						<strong>{deck.name ?? '(naamloos deck)'}</strong>
 						<span class="badge {deck.legality.status === 'legal'
@@ -111,7 +134,7 @@
 						</span>
 					</header>
 					<p class="meta domains">{deck.domains.join(' / ') || '—'}</p>
-					<p class="meta stats">
+					<p class="meta stats tnum">
 						{deck.cardCount} kaarten · {deck.views} views · {deck.likes} likes
 						{#if formatDate(deck.paUpdatedAt)}· bijgewerkt {formatDate(deck.paUpdatedAt)}{/if}
 					</p>
@@ -172,41 +195,6 @@
 		font-weight: 400;
 		margin-left: 8px;
 	}
-	.filters {
-		display: flex;
-		gap: 8px;
-		flex-wrap: wrap;
-		align-items: center;
-		margin: 14px 0 16px;
-	}
-	select {
-		background: var(--surface-deep);
-		color: var(--text);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 9px 11px;
-	}
-	button {
-		background: var(--accent);
-		color: var(--accent-ink);
-		border: 0;
-		border-radius: 8px;
-		padding: 9px 16px;
-		font-weight: 600;
-		cursor: pointer;
-	}
-	button:disabled {
-		opacity: 0.6;
-		cursor: wait;
-	}
-	.reset {
-		color: var(--muted);
-		font-size: 0.85rem;
-		text-decoration: none;
-	}
-	.reset:hover {
-		color: var(--text);
-	}
 	.loading {
 		display: flex;
 		align-items: center;
@@ -219,7 +207,7 @@
 	}
 	.count {
 		font-size: 0.85rem;
-		margin: 0 0 10px;
+		margin: 14px 0 10px;
 	}
 	.warn {
 		color: var(--err);
@@ -230,9 +218,6 @@
 		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
 	}
 	.card {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
 		padding: 14px 16px;
 		display: flex;
 		flex-direction: column;
@@ -241,7 +226,7 @@
 		text-decoration: none;
 	}
 	.card:hover {
-		border-color: var(--accent);
+		border-color: var(--border-strong);
 	}
 	.card header {
 		display: flex;
@@ -273,5 +258,31 @@
 	}
 	.pager a:hover {
 		color: var(--accent);
+	}
+
+	/* Actieve filters als verwijderbare chips (feed-patroon). */
+	.active-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; }
+	.active-chip {
+		background: var(--surface-deep); color: var(--text); border: 1px solid var(--border);
+		border-radius: 999px; padding: 4px 12px; font-size: 0.8rem; text-decoration: none;
+	}
+	.active-chip:hover { border-color: var(--border-strong); }
+
+	/* Filter-form (rail + sheet) — zelfde vormtaal als /cards. */
+	.filter-form { display: flex; flex-direction: column; gap: 12px; }
+	.filter-form label { display: flex; flex-direction: column; gap: 4px; }
+	.filter-form label span {
+		font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+		color: var(--muted);
+	}
+	.filter-form select {
+		width: 100%; background: var(--surface-deep); color: var(--text);
+		border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px;
+	}
+	.filter-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; }
+	.filter-actions .link-btn { color: var(--muted); text-decoration: none; font-size: 0.85rem; padding: 6px 4px; }
+	.filter-actions button {
+		background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px;
+		padding: 9px 16px; font-weight: 700; cursor: pointer;
 	}
 </style>
