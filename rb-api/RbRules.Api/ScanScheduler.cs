@@ -45,6 +45,27 @@ public class ScanScheduler(
     // claims-harvest — nieuwe FAQ-artikelen verschijnen niet vaker dan
     // dagelijks, en de run is idempotent (ClarifiedAt + exacte-tekst-toets).
     private static readonly TimeSpan ClarifyMineInterval = TimeSpan.FromDays(1);
+    // Changeconsolidatie (#206, review-fix finding 5): de uurlijkse scan
+    // maakt de duplicaten, dus de consolidatie moet ook zonder handmatig
+    // ingest-pad draaien — elke tick (venster = ticklengte). Goedkoop:
+    // zonder verse changes levert de kandidaat-poort niets op, en de
+    // pair-memo's (run_log "pair:{a}-{b}" rejected) voorkomen dat een
+    // overlevend paar ooit twee keer aan de LLM wordt voorgelegd.
+    private static readonly TimeSpan ConsolidateChangesInterval = TimeSpan.FromHours(1);
+
+    /// <summary>Periodieke JobCatalog-jobs (#122-mechaniek): declaratief,
+    /// zodat de registratie testbaar is (ScanSchedulerScheduleTests valideert
+    /// dat elke naam in de JobCatalog bestaat — zelfde vangnet als
+    /// JobPathsTests voor padstappen).</summary>
+    public static readonly IReadOnlyList<(string JobName, TimeSpan Window)> JobSchedules =
+    [
+        ("relations", RelationsMineInterval),
+        ("scout", ScoutInterval),
+        ("decks", DecksInterval),
+        ("clarify", ClarifyMineInterval),
+        ("consolidatechanges", ConsolidateChangesInterval),
+    ];
+
     // Paden periodiek inplanbaar (#190): zelfde venster-mechanisme als de
     // losse jobs hierboven (JobLedger bepaalt het venster, TryStartPeriodicPathAsync
     // is het pad-equivalent van TryStartPeriodicJobAsync), maar bewust LEEG —
@@ -196,22 +217,21 @@ public class ScanScheduler(
                     logger.LogWarning(ex, "Mining/graph-sync overgeslagen (rb-ai/Neo4j onbereikbaar?)");
                 }
 
-                // Periodieke zelfverrijking (#122, #15 fase 3 spoor C):
-                // relatie-mining nachtelijk, de bronnen-scout wekelijks en de
-                // Piltover-decks-verversing elke 3 uur. Alle drie draaien als
-                // gewone JobRunner-job — dezelfde éénjob-gate als handmatige
-                // jobs (nooit twee tegelijk), dezelfde live-voortgang in
-                // beheer en dezelfde degradatiepaden in de services zelf.
-                // Het run_log-grootboek (kind "job", door JobRunner
-                // geschreven bij elke afronding) bepaalt het venster: een
-                // handmatige run gisteren of een container-herstart
-                // veroorzaakt geen dubbele run. "decks" hergebruikt
-                // DeckIngestService ongewijzigd (sitemap → pagina's → opslag,
-                // #148) en hervat de backfill vanzelf waar het grootboek bleef.
-                await TryStartPeriodicJobAsync(scope.ServiceProvider, "relations", RelationsMineInterval, ct);
-                await TryStartPeriodicJobAsync(scope.ServiceProvider, "scout", ScoutInterval, ct);
-                await TryStartPeriodicJobAsync(scope.ServiceProvider, "decks", DecksInterval, ct);
-                await TryStartPeriodicJobAsync(scope.ServiceProvider, "clarify", ClarifyMineInterval, ct);
+                // Periodieke zelfverrijking (#122, #15 fase 3 spoor C, #206):
+                // relatie-mining nachtelijk, de bronnen-scout wekelijks, de
+                // Piltover-decks-verversing elke 3 uur, clarify nachtelijk en
+                // de changeconsolidatie uurlijks. Alle draaien als gewone
+                // JobRunner-job — dezelfde éénjob-gate als handmatige jobs
+                // (nooit twee tegelijk), dezelfde live-voortgang in beheer en
+                // dezelfde degradatiepaden in de services zelf. Het
+                // run_log-grootboek (kind "job", door JobRunner geschreven
+                // bij elke afronding) bepaalt het venster: een handmatige run
+                // gisteren of een container-herstart veroorzaakt geen dubbele
+                // run. "decks" hergebruikt DeckIngestService ongewijzigd
+                // (sitemap → pagina's → opslag, #148) en hervat de backfill
+                // vanzelf waar het grootboek bleef.
+                foreach (var (jobName, window) in JobSchedules)
+                    await TryStartPeriodicJobAsync(scope.ServiceProvider, jobName, window, ct);
 
                 // Paden (#190): PathSchedules is leeg (zie hierboven) — deze
                 // lus is vandaag een no-op en verandert dus niets aan de
