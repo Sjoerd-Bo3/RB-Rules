@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import AnswerView from '$lib/AnswerView.svelte';
+	import ChangeCard from '$lib/ChangeCard.svelte';
 
 	let { data, form } = $props();
 
@@ -731,14 +732,12 @@
 											{#if d.yield.changesTotal}
 												<div>
 													<p class="meta"><strong>Wijzigingen ({d.yield.changesTotal})</strong></p>
-													<ul class="dossier-list">
-														{#each d.yield.changes as c (c.id)}
-															<li>
-																{c.changeType} · {c.severity}{#if c.summary} — {c.summary}{/if}
-																<span class="meta">· {new Date(c.detectedAt).toLocaleDateString('nl-NL')}</span>
-															</li>
-														{/each}
-													</ul>
+													<!-- #210: gedeelde ChangeCard (compact) i.p.v. een losse
+													     <li>-opsomming — dezelfde kaart als de publieke feed en
+													     het wijzigingen-overzicht. -->
+													{#each d.yield.changes as c (c.id)}
+														<ChangeCard change={c} compact />
+													{/each}
 												</div>
 											{/if}
 											{#if d.yield.bansTotal}

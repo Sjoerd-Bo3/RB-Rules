@@ -1,4 +1,6 @@
 <script lang="ts">
+	import ChangeCard from '$lib/ChangeCard.svelte';
+
 	let { data } = $props();
 	const s = $derived(data.section);
 
@@ -129,13 +131,7 @@
 		<section id="wijzigingen">
 			<h2>Wijzigingen die deze regel raakten</h2>
 			{#each data.dossier.changes as ch (ch.id)}
-				<div class="box change">
-					<p class="change-head">
-						<span class="badge sev-{ch.severity}">{ch.changeType}</span>
-						<time class="meta small" datetime={ch.detectedAt}>{new Date(ch.detectedAt).toLocaleDateString('nl-NL')}</time>
-					</p>
-					{#if ch.summary}<p class="statement">{ch.summary}</p>{/if}
-				</div>
+				<ChangeCard change={ch} compact />
 			{/each}
 			<p class="meta small">Uit de wijzigingen-feed, gekoppeld via de kennisgraaf — <a href="/">bekijk alle wijzigingen</a>.</p>
 		</section>
@@ -189,12 +185,5 @@
 		border-radius: var(--radius); padding: 10px 14px; margin-bottom: 8px;
 	}
 	.statement { margin: 4px 0; overflow-wrap: anywhere; }
-	.change-head { display: flex; align-items: baseline; gap: 10px; margin: 0; flex-wrap: wrap; }
-	.badge {
-		font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
-		border-radius: 999px; padding: 2px 9px; background: var(--accent-soft); color: var(--warn);
-	}
-	.badge.sev-high { background: var(--err-soft); color: var(--err); }
-	.badge.sev-low { background: var(--surface-deep); color: var(--muted); }
 	section .meta a { color: var(--muted); }
 </style>
