@@ -13,7 +13,7 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    [Migration("20260717103645_IgnoreSources")]
+    [Migration("20260717104824_IgnoreSources")]
     partial class IgnoreSources
     {
         /// <inheritdoc />
@@ -688,6 +688,10 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("change_type");
 
+                    b.Property<long?>("ConsolidatedWithId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("consolidated_with_id");
+
                     b.Property<DateTimeOffset>("DetectedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("detected_at");
@@ -716,6 +720,9 @@ namespace RbRules.Infrastructure.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_change");
+
+                    b.HasIndex("ConsolidatedWithId")
+                        .HasDatabaseName("ix_change_consolidated_with_id");
 
                     b.HasIndex("DetectedAt")
                         .HasDatabaseName("ix_change_detected_at");
@@ -2000,6 +2007,12 @@ namespace RbRules.Infrastructure.Migrations
 
             modelBuilder.Entity("RbRules.Domain.Change", b =>
                 {
+                    b.HasOne("RbRules.Domain.Change", null)
+                        .WithMany()
+                        .HasForeignKey("ConsolidatedWithId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_change_change_consolidated_with_id");
+
                     b.HasOne("RbRules.Domain.Source", "Source")
                         .WithMany()
                         .HasForeignKey("SourceId")
