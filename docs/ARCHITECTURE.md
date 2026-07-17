@@ -687,9 +687,15 @@ Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
 `/admin/overview/[kind]`). Navigatie in `+layout.svelte`.
 
 Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
-`RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `markdown.ts` +
-`rbtokens.ts` (sanitize + icoon-injectie vóór `{@html}`), `answerFormat.ts`,
-`passkeys.ts`, `quota.ts`, `ranges.ts` (compacte reeksweergave, #145). Ontwerptokens in `app.css` (`var(--accent)` etc.).
+`RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `ChangeCard.svelte`,
+`markdown.ts` + `rbtokens.ts` (sanitize + icoon-injectie vóór `{@html}`),
+`answerFormat.ts`, `changeCard.ts`, `passkeys.ts`, `quota.ts`, `ranges.ts`
+(compacte reeksweergave, #145), `types.ts` (API-responstypen die meer dan
+één route deelt). Ontwerptokens in `app.css` (`var(--accent)` etc.).
+`ChangeCard.svelte` (#210) is het eerste presentatiecomponent met een
+optioneel admin-actieslot via Svelte 5 snippets (`actions`,
+`confirmationActions`) en een `compact`-prop voor dichte contexten — het
+patroon voor toekomstige herbruikbare kaarten (i.p.v. per-route duplicatie).
 
 ### Datastores
 

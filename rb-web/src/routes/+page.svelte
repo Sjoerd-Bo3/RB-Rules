@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import ChangeCard from '$lib/ChangeCard.svelte';
 
 	let { data } = $props();
 
@@ -89,25 +90,6 @@
 		[...new Map(data.changes.map((c) => [c.sourceId, c.sourceName])).entries()]
 	);
 
-	// Diff-tekst → regels met kleur: '+'-blok groen, '-'-blok rood.
-	function diffLines(diff: string): { text: string; kind: 'add' | 'del' | 'head' }[] {
-		const out: { text: string; kind: 'add' | 'del' | 'head' }[] = [];
-		let mode: 'add' | 'del' = 'add';
-		for (const line of diff.split('\n')) {
-			if (line.startsWith('+')) { mode = 'add'; out.push({ text: line, kind: 'head' }); }
-			else if (line.startsWith('-')) { mode = 'del'; out.push({ text: line, kind: 'head' }); }
-			else if (line.trim()) out.push({ text: line.trim(), kind: mode });
-		}
-		return out;
-	}
-
-	function fmtWhen(iso: string): string {
-		const d = new Date(iso);
-		const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
-		const time = d.toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-		return days === 0 ? `vandaag ${d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : time;
-	}
-
 	// Aankomende set (#52): releasedatum → "31 juli 2026 (over 20 dagen)".
 	function fmtRelease(publishedOn: string): string {
 		const d = new Date(publishedOn);
@@ -181,14 +163,9 @@
 		<p class="meta count">{changes.length} van {data.changes.length} wijzigingen</p>
 
 		{#each changes as c (c.id)}
-			<article class="card">
-				<header>
-					<span class="badge {c.severity}">{c.severity}</span>
-					<strong>{c.changeType}</strong>
-					<a class="src" href={c.sourceUrl} target="_blank" rel="noopener"
-						title="trust-tier {c.trustTier}">{c.sourceName} ↗</a>
-					<span class="meta when">{fmtWhen(c.detectedAt)}</span>
-					{#if data.isAdmin}
+			{#if data.isAdmin}
+				<ChangeCard change={c}>
+					{#snippet actions()}
 						<form method="POST" action="?/delete" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
 							<input type="hidden" name="id" value={c.id} />
 							<!-- Delete-cascade (#206, finding 9): een primaire verwijderen
@@ -200,67 +177,27 @@
 										e.preventDefault();
 								}}>Verwijder</button>
 						</form>
-					{/if}
-				</header>
-				{#if c.summary}<p>{c.summary}</p>{/if}
-				{#if c.meaning}<p class="meaning">{c.meaning}</p>{/if}
-				{#if c.confirmedBy.length > 0}
-					<div class="confirmed">
-						<span class="badge confirmed-badge">bevestigd</span>
-						{#each c.confirmedBy as cb (cb.id)}
-							<a class="src confirm-link" href={cb.sourceUrl} target="_blank" rel="noopener"
-								title="trust-tier {cb.trustTier}">door {cb.sourceName} ↗</a>
-						{/each}
-					</div>
-					{#if c.confirmedBy.some((cb) => cb.summary || cb.meaning || cb.diff)}
-						<details>
-							<summary>Bevestiging(en) tonen</summary>
-							{#each c.confirmedBy as cb (cb.id)}
-								{#if cb.summary}
-									<p class="confirmation"><strong>{cb.sourceName}:</strong> {cb.summary}</p>
-								{/if}
-								{#if cb.meaning}<p class="confirmation meaning">{cb.meaning}</p>{/if}
-								<!-- Finding 3: de voor/na van de secundaire blijft ná
-								     consolidatie inspecteerbaar — zelfde diff-weergave
-								     als de primaire kaart. -->
-								{#if cb.diff}
-									<div class="diff">
-										{#each diffLines(cb.diff) as l, i (i)}
-											<div class="dline {l.kind}">{l.text}</div>
-										{/each}
-									</div>
-								{/if}
-							{/each}
-						</details>
-					{/if}
-				{/if}
-				{#if c.diff}
-					<details>
-						<summary>Wat is er precies gewijzigd? (voor/na)</summary>
-						<div class="diff">
-							{#each diffLines(c.diff) as l, i (i)}
-								<div class="dline {l.kind}">{l.text}</div>
-							{/each}
-						</div>
-					</details>
-				{/if}
-			</article>
+					{/snippet}
+				</ChangeCard>
+			{:else}
+				<ChangeCard change={c} />
+			{/if}
 		{/each}
 	{/if}
 </main>
 
 <style>
 	main { max-width: 860px; margin: 0 auto; padding: 24px 20px; }
-	h1 span { color: #d98a4e; }
+	h1 span { color: var(--accent); }
 	.hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 	.push-toggle {
-		background: transparent; color: #9fb0cc; border: 1px solid #243551;
+		background: transparent; color: var(--muted); border: 1px solid var(--border);
 		border-radius: 999px; padding: 7px 14px; font-size: 0.82rem; cursor: pointer;
 		margin-top: 14px; white-space: nowrap;
 	}
-	.push-toggle.on { color: #7fd1a8; border-color: #4fbf8b; }
+	.push-toggle.on { color: var(--ok); border-color: var(--ok); }
 	.push-toggle:disabled { opacity: 0.5; }
-	.subtitle, .meta, .empty { color: #9fb0cc; }
+	.subtitle, .meta, .empty { color: var(--muted); }
 	.upcoming {
 		display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
 		background: var(--accent-soft); border: 1px solid var(--accent);
@@ -271,61 +208,20 @@
 	.filters { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 4px; }
 	.fgroup { display: flex; flex-wrap: wrap; gap: 6px; }
 	.chip {
-		background: #16233b; color: #9fb0cc; border: 1px solid #243551;
+		background: var(--surface); color: var(--muted); border: 1px solid var(--border);
 		border-radius: 999px; padding: 3px 12px; font-size: 0.8rem; cursor: pointer;
 	}
-	.chip.on { background: #d98a4e; color: #1a1206; border-color: #d98a4e; font-weight: 700; }
+	.chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
 	.chip.clear { border-style: dashed; }
+	.chip.sev-high { color: var(--err); }
+	.chip.sev-medium { color: var(--warn); }
 	.count { font-size: 0.8rem; margin: 4px 0 12px; }
-	.card {
-		background: #16233b;
-		border: 1px solid #243551;
-		border-radius: 12px;
-		padding: 14px 16px;
-		margin-bottom: 12px;
-	}
-	.card header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-	.src { color: #9fb0cc; font-size: 0.85rem; text-decoration: none; border-bottom: 1px dotted #9fb0cc66; }
-	.when { margin-left: auto; font-size: 0.85rem; }
+	.warn { color: var(--err); }
+	/* Delete-knop (#206, admin-actieslot): compact, rustig totdat je hem
+	   nodig hebt — pas bij hover valt hij op als destructieve actie. */
 	.del {
-		background: none; border: 1px solid #243551; border-radius: 6px;
-		color: #9fb0cc; cursor: pointer; font-size: 0.75rem; padding: 2px 8px; opacity: 0.7;
+		background: none; border: 1px solid var(--border); border-radius: 6px;
+		color: var(--muted); cursor: pointer; font-size: 0.75rem; padding: 2px 8px; opacity: 0.7;
 	}
-	.del:hover { opacity: 1; border-color: #e5484d; color: #ff8b8e; }
-	.badge {
-		font-size: 0.72rem;
-		text-transform: uppercase;
-		/* De gedeelde .badge in app.css zet 0.04em letter-spacing; deze
-		   feed-badge had dat nooit — expliciet pixelgelijk houden (#59). */
-		letter-spacing: normal;
-		padding: 2px 8px;
-		border-radius: 999px;
-		font-weight: 700;
-		background: #24355133;
-	}
-	.badge.high { background: #e5484d2e; color: #ff8b8e; }
-	.badge.medium { background: #e0a32e2e; color: #f3c469; }
-	/* Consolidatie (#206): een bevestigde primaire change toont hier welke
-	   andere bron(nen) hetzelfde event meldden — status via kleur + tekst,
-	   geen emoji's. */
-	.confirmed { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-	.confirmed-badge { background: #4fbf8b26; color: #7fd1a8; }
-	.confirm-link { font-size: 0.82rem; }
-	.confirmation { font-size: 0.88rem; color: #9fb0cc; margin: 4px 0; }
-	.confirmation strong { color: #d7e0ef; }
-	.chip.sev-high { color: #ff8b8e; }
-	.chip.sev-medium { color: #f3c469; }
-	.warn { color: #ff8b8e; }
-	.meaning { color: #d98a4e; }
-	details { margin-top: 8px; }
-	summary { color: #9fb0cc; font-size: 0.85rem; cursor: pointer; }
-	.diff {
-		background: #0b1322; border: 1px solid #243551; border-radius: 8px;
-		padding: 10px 12px; margin-top: 8px; font-size: 0.85rem;
-		max-height: 320px; overflow: auto;
-	}
-	.dline { padding: 1px 6px; border-radius: 4px; }
-	.dline.head { color: #9fb0cc; font-weight: 700; margin-top: 4px; }
-	.dline.add { background: #58c08a14; color: #a5e3c3; }
-	.dline.del { background: #e5484d14; color: #ffb3b5; text-decoration: line-through; }
+	.del:hover { opacity: 1; border-color: var(--err); color: var(--err); }
 </style>

@@ -2,25 +2,11 @@ import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
 import { adminApi, authed } from '$lib/server/admin';
+import type { ChangeConfirmation } from '$lib/types';
 
-/** Bevestiging (#206): een secundaire change (andere bron, zelfde
- *  gebeurtenis) genest onder de primaire — SourceUrl is Source.Url, een
- *  geregistreerde bron-kolom (zelfde vertrouwen als sourceUrl hieronder,
- *  geen aparte UrlGuard-sanitize nodig). Meaning + diff (review-fix
- *  finding 3): de secundaire details blijven ná consolidatie
- *  inspecteerbaar — zelfde uitklap als de primaire kaart. */
-export interface ChangeConfirmation {
-	id: number;
-	sourceId: string;
-	sourceName: string;
-	sourceUrl: string;
-	trustTier: number;
-	summary: string | null;
-	meaning: string | null;
-	diff: string | null;
-	detectedAt: string;
-}
-
+// ChangeConfirmation verhuisde naar $lib/types.ts (#210): zowel deze feed als
+// het admin-overzicht "wijzigingen" gebruiken dezelfde rb-api-vorm
+// (ChangeFeedConfirmation) via ChangeCard.svelte.
 export interface Change {
 	id: number;
 	sourceId: string;

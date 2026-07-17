@@ -4,6 +4,8 @@
 	import { compactRanges } from '$lib/ranges';
 	import { relationBulkActionsVisible } from '$lib/reviewBulk';
 	import AnswerView from '$lib/AnswerView.svelte';
+	import ChangeCard from '$lib/ChangeCard.svelte';
+	import type { ChangeConfirmation } from '$lib/types';
 
 	let { data, form } = $props();
 
@@ -37,22 +39,14 @@
 		id: number; kind: string; explanation: string; cardAId: string; cardAName: string;
 		cardBId: string; cardBName: string; detectedAt: string;
 	}
-	/** Bevestiging (#206): secundaire change (andere bron, zelfde
-	 *  gebeurtenis) genest onder de primaire. sourceUrl is Source.Url — een
-	 *  geregistreerde bron-kolom, geen aparte UrlGuard-Safe-vlag nodig
-	 *  (dat patroon is voor vrije/LLM-tekst-URL's zoals bij correcties/claims).
-	 *  meaning/diff (review-fix finding 3): de secundaire details blijven ná
-	 *  consolidatie inspecteerbaar. */
-	interface ChangeConfirmationItem {
-		id: number; sourceId: string; sourceName: string; sourceUrl: string;
-		trustTier: number; summary: string | null; meaning: string | null;
-		diff: string | null; detectedAt: string;
-	}
+	// ChangeConfirmation (#206) verhuisde naar $lib/types.ts (#210): zelfde
+	// rb-api-vorm (ChangeFeedConfirmation) als de publieke feed, nu gedeeld
+	// via ChangeCard.svelte.
 	interface ChangeItem {
 		id: number; sourceId: string; sourceName: string; changeType: string;
 		severity: string; summary: string | null; meaning: string | null; detectedAt: string;
 		/** #206: leeg tenzij andere bronnen hetzelfde gebeurtenis bevestigden. */
-		confirmedBy: ChangeConfirmationItem[];
+		confirmedBy: ChangeConfirmation[];
 	}
 	interface CorrectionItem {
 		id: number; scope: string; ref: string; text: string; question: string | null;
@@ -748,41 +742,25 @@
 			{/each}
 		{/if}
 
-		<!-- Wijzigingen -->
+		<!-- Wijzigingen (#210: gedeelde ChangeCard, ook op de publieke feed) -->
 		{#if changes}
 			{#each changes.items as c (c.id)}
-				<div class="panel item">
-					<p class="item-head">
-						<span class="badge {c.severity === 'high' ? 'err' : c.severity === 'medium' ? 'warn-b' : 'ok-b'}">{c.severity}</span>
-						<strong>{c.changeType}</strong>
-						<span class="meta">{c.sourceName} · {fmtDate(c.detectedAt)}</span>
-					</p>
-					{#if c.summary}<p class="pre">{c.summary}</p>{/if}
-					{#if c.meaning}<p class="meta">{c.meaning}</p>{/if}
-					{#if !c.summary && !c.meaning}<p class="meta">Zonder samenvatting (zie #58).</p>{/if}
-					{#if c.confirmedBy.length > 0}
-						<p class="meta refs">
-							<span class="badge ok-b">bevestigd</span>
-							{#each c.confirmedBy as cb, i (cb.id)}
-								{i > 0 ? ', ' : ' door '}<a href={cb.sourceUrl} target="_blank" rel="noopener">{cb.sourceName}</a>
-							{/each}
-						</p>
-						{#each c.confirmedBy as cb (cb.id)}
-							{#if cb.summary}<p class="meta refs">{cb.sourceName}: {cb.summary}</p>{/if}
-							{#if cb.meaning}<p class="meta refs">{cb.meaning}</p>{/if}
-							<!-- Ontkoppelen (#206, finding 1): op de secundaire; rb-api
-							     schrijft een sticky pair-memo zodat de volgende run het
-							     paar niet meteen weer merget. -->
-							<form method="POST" action="?/unconsolidateChange" use:enhance class="unconsolidate">
-								<input type="hidden" name="id" value={cb.id} />
-								<button class="ghost small"
-									title="Maak de bevestiging van {cb.sourceName} weer een losse feed-kaart; dit paar wordt daarna nooit meer automatisch geconsolideerd">
-									Ontkoppel
-								</button>
-							</form>
-						{/each}
-					{/if}
-				</div>
+				<ChangeCard
+					change={c.summary || c.meaning ? c : { ...c, summary: 'Zonder samenvatting (zie #58).' }}
+				>
+					{#snippet confirmationActions(cb: ChangeConfirmation)}
+						<!-- Ontkoppelen (#206, finding 1): op de secundaire; rb-api
+						     schrijft een sticky pair-memo zodat de volgende run het
+						     paar niet meteen weer merget. -->
+						<form method="POST" action="?/unconsolidateChange" use:enhance class="unconsolidate">
+							<input type="hidden" name="id" value={cb.id} />
+							<button class="ghost small"
+								title="Maak de bevestiging van {cb.sourceName} weer een losse feed-kaart; dit paar wordt daarna nooit meer automatisch geconsolideerd">
+								Ontkoppel
+							</button>
+						</form>
+					{/snippet}
+				</ChangeCard>
 			{/each}
 		{/if}
 

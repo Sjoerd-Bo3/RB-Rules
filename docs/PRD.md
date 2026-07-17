@@ -148,6 +148,15 @@ apart in §6.
   nooit als zelfstandige kaart op de publieke pagina (#207, read-time
   gefilterd; "unknown" blijft zichtbaar en een editorial als bevestiging
   van een echt event blijft werken) — het admin-overzicht toont ze wél.
+  **Kaart-presentatie herzien (#210)**: één herbruikbaar `ChangeCard.svelte`
+  (`rb-web/src/lib`) tekent de kaart in alle vier contexten (publieke feed,
+  admin-overzicht "wijzigingen", sectie-dossier, bron-dossier — de laatste
+  twee via een compacte `compact`-variant zonder bron/bevestigingen/acties);
+  hiërarchie is kop (type+severity-badge, bron met officieel/community-
+  trustlabel, datum) → kern (samenvatting, speler-impact als accentrand-
+  blok) → voet (bevestigd-badges, voor/na-uitklap, admin-acties in een
+  Svelte 5 snippet-slot: Verwijder op de feed, Ontkoppel per bevestiging in
+  het admin-overzicht).
   *Route* `/` · *endpoints* `/api/changes`, `/api/sources`, `/api/bans`,
   `/api/sets/upcoming`.
 - **Regels-browser** — hoofdstuk-hiërarchie van de Core/Tournament Rules met
