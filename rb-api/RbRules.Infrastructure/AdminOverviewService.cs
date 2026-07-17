@@ -35,9 +35,13 @@ public record InteractionOverviewItem(
     long Id, string Kind, string Explanation, string CardAId, string CardAName,
     string CardBId, string CardBName, DateTimeOffset DetectedAt);
 
+/// <summary>ConfirmedBy (#206): bevestigende changes van andere bronnen
+/// (secundaire changes, geconsolideerd op deze primaire) — leeg als er geen
+/// zijn, ongewijzigd gedrag t.o.v. vóór #206.</summary>
 public record ChangeOverviewItem(
     long Id, string SourceId, string SourceName, string ChangeType, string Severity,
-    string? Summary, string? Meaning, DateTimeOffset DetectedAt);
+    string? Summary, string? Meaning, DateTimeOffset DetectedAt,
+    IReadOnlyList<ChangeFeedConfirmation> ConfirmedBy);
 
 /// <summary>UrlSafe (#184): server-side UrlGuard.Check op de bewijs-URL —
 /// de UI rendert alleen een klikbare link als dit true is (sanitize vóór
@@ -217,7 +221,7 @@ public record BenchmarkOverview(
 /// <summary>Tegel-overzichten voor beheer (#61): elke dashboard-tegel klikt door
 /// naar de onderliggende lijst. Alleen reads — projecties zonder embeddings,
 /// server-side gepagineerd waar lijsten groot zijn.</summary>
-public class AdminOverviewService(RbRulesDbContext db)
+public class AdminOverviewService(RbRulesDbContext db, ChangeFeedService changeFeed)
 {
     private const int PageSize = 60;
 
@@ -765,14 +769,25 @@ public class AdminOverviewService(RbRulesDbContext db)
     public async Task<Paged<ChangeOverviewItem>> ChangesAsync(int page)
     {
         page = ClampPage(page);
-        var total = await db.Changes.CountAsync();
-        var items = await db.Changes.AsNoTracking()
+        // #206: alleen primaire changes tellen/pagineren mee — secundaire
+        // (geconsolideerde) changes verdwijnen uit deze lijst en komen genest
+        // terug via ConfirmedBy (zelfde regel als de publieke feed).
+        var primaryQuery = db.Changes.Where(c => c.ConsolidatedWithId == null);
+        var total = await primaryQuery.CountAsync();
+        var rows = await primaryQuery.AsNoTracking()
             .OrderByDescending(c => c.DetectedAt).ThenBy(c => c.Id)
             .Skip(Math.Max(0, page - 1) * PageSize).Take(PageSize)
-            .Select(c => new ChangeOverviewItem(
-                c.Id, c.SourceId, c.Source!.Name, c.ChangeType, c.Severity,
-                c.Summary, c.Meaning, c.DetectedAt))
+            .Select(c => new
+            {
+                c.Id, c.SourceId, SourceName = c.Source!.Name, c.ChangeType, c.Severity,
+                c.Summary, c.Meaning, c.DetectedAt,
+            })
             .ToListAsync();
+
+        var confirmations = await changeFeed.ConfirmationsByPrimaryIdAsync([.. rows.Select(r => r.Id)]);
+        var items = rows.Select(r => new ChangeOverviewItem(
+            r.Id, r.SourceId, r.SourceName, r.ChangeType, r.Severity, r.Summary, r.Meaning, r.DetectedAt,
+            confirmations.GetValueOrDefault(r.Id, []))).ToList();
         return new(total, page, PageSize, items);
     }
 
