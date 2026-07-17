@@ -78,6 +78,7 @@ builder.Services.AddScoped<ChangeClassificationService>();
 // Changeconsolidatie (#206): koppelt changes die hetzelfde event vanuit
 // meerdere bronnen melden (feed-presentatie, geen inhoudelijke waarheid).
 builder.Services.AddScoped<ChangeFeedService>();
+builder.Services.AddScoped<PublicStatsService>();
 builder.Services.AddScoped<ChangeConsolidationService>();
 builder.Services.AddScoped<SourceScoutService>();
 builder.Services.AddScoped<CardResolver>();
