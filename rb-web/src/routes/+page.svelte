@@ -197,6 +197,25 @@
 				</header>
 				{#if c.summary}<p>{c.summary}</p>{/if}
 				{#if c.meaning}<p class="meaning">{c.meaning}</p>{/if}
+				{#if c.confirmedBy.length > 0}
+					<div class="confirmed">
+						<span class="badge confirmed-badge">bevestigd</span>
+						{#each c.confirmedBy as cb (cb.id)}
+							<a class="src confirm-link" href={cb.sourceUrl} target="_blank" rel="noopener"
+								title="trust-tier {cb.trustTier}">door {cb.sourceName} ↗</a>
+						{/each}
+					</div>
+					{#if c.confirmedBy.some((cb) => cb.summary)}
+						<details>
+							<summary>Bevestiging(en) tonen</summary>
+							{#each c.confirmedBy as cb (cb.id)}
+								{#if cb.summary}
+									<p class="confirmation"><strong>{cb.sourceName}:</strong> {cb.summary}</p>
+								{/if}
+							{/each}
+						</details>
+					{/if}
+				{/if}
 				{#if c.diff}
 					<details>
 						<summary>Wat is er precies gewijzigd? (voor/na)</summary>
@@ -268,6 +287,14 @@
 	}
 	.badge.high { background: #e5484d2e; color: #ff8b8e; }
 	.badge.medium { background: #e0a32e2e; color: #f3c469; }
+	/* Consolidatie (#206): een bevestigde primaire change toont hier welke
+	   andere bron(nen) hetzelfde event meldden — status via kleur + tekst,
+	   geen emoji's. */
+	.confirmed { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+	.confirmed-badge { background: #4fbf8b26; color: #7fd1a8; }
+	.confirm-link { font-size: 0.82rem; }
+	.confirmation { font-size: 0.88rem; color: #9fb0cc; margin: 4px 0; }
+	.confirmation strong { color: #d7e0ef; }
 	.chip.sev-high { color: #ff8b8e; }
 	.chip.sev-medium { color: #f3c469; }
 	.warn { color: #ff8b8e; }

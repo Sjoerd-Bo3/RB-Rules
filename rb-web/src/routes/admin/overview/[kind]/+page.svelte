@@ -37,9 +37,19 @@
 		id: number; kind: string; explanation: string; cardAId: string; cardAName: string;
 		cardBId: string; cardBName: string; detectedAt: string;
 	}
+	/** Bevestiging (#206): secundaire change (andere bron, zelfde
+	 *  gebeurtenis) genest onder de primaire. sourceUrl is Source.Url — een
+	 *  geregistreerde bron-kolom, geen aparte UrlGuard-Safe-vlag nodig
+	 *  (dat patroon is voor vrije/LLM-tekst-URL's zoals bij correcties/claims). */
+	interface ChangeConfirmationItem {
+		id: number; sourceId: string; sourceName: string; sourceUrl: string;
+		trustTier: number; summary: string | null; detectedAt: string;
+	}
 	interface ChangeItem {
 		id: number; sourceId: string; sourceName: string; changeType: string;
 		severity: string; summary: string | null; meaning: string | null; detectedAt: string;
+		/** #206: leeg tenzij andere bronnen hetzelfde gebeurtenis bevestigden. */
+		confirmedBy: ChangeConfirmationItem[];
 	}
 	interface CorrectionItem {
 		id: number; scope: string; ref: string; text: string; question: string | null;
@@ -747,6 +757,17 @@
 					{#if c.summary}<p class="pre">{c.summary}</p>{/if}
 					{#if c.meaning}<p class="meta">{c.meaning}</p>{/if}
 					{#if !c.summary && !c.meaning}<p class="meta">Zonder samenvatting (zie #58).</p>{/if}
+					{#if c.confirmedBy.length > 0}
+						<p class="meta refs">
+							<span class="badge ok-b">bevestigd</span>
+							{#each c.confirmedBy as cb, i (cb.id)}
+								{i > 0 ? ', ' : ' door '}<a href={cb.sourceUrl} target="_blank" rel="noopener">{cb.sourceName}</a>
+							{/each}
+						</p>
+						{#each c.confirmedBy as cb (cb.id)}
+							{#if cb.summary}<p class="meta refs">{cb.sourceName}: {cb.summary}</p>{/if}
+						{/each}
+					{/if}
 				</div>
 			{/each}
 		{/if}

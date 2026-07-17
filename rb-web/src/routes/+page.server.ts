@@ -3,6 +3,20 @@ import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
 import { adminApi, authed } from '$lib/server/admin';
 
+/** Bevestiging (#206): een secundaire change (andere bron, zelfde
+ *  gebeurtenis) genest onder de primaire — SourceUrl is Source.Url, een
+ *  geregistreerde bron-kolom (zelfde vertrouwen als sourceUrl hieronder,
+ *  geen aparte UrlGuard-sanitize nodig). */
+export interface ChangeConfirmation {
+	id: number;
+	sourceId: string;
+	sourceName: string;
+	sourceUrl: string;
+	trustTier: number;
+	summary: string | null;
+	detectedAt: string;
+}
+
 export interface Change {
 	id: number;
 	sourceId: string;
@@ -15,6 +29,8 @@ export interface Change {
 	sourceName: string;
 	sourceUrl: string;
 	trustTier: number;
+	/** #206: leeg tenzij andere bronnen hetzelfde gebeurtenis bevestigden. */
+	confirmedBy: ChangeConfirmation[];
 }
 
 /** Aankomende set (#52): bekend via de releasedatum uit de kaart-sync. */
