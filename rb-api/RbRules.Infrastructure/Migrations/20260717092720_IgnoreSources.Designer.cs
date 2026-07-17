@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260717092720_IgnoreSources")]
+    partial class IgnoreSources
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -685,10 +688,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("change_type");
 
-                    b.Property<long?>("ConsolidatedWithId")
-                        .HasColumnType("bigint")
-                        .HasColumnName("consolidated_with_id");
-
                     b.Property<DateTimeOffset>("DetectedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("detected_at");
@@ -717,9 +716,6 @@ namespace RbRules.Infrastructure.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_change");
-
-                    b.HasIndex("ConsolidatedWithId")
-                        .HasDatabaseName("ix_change_consolidated_with_id");
 
                     b.HasIndex("DetectedAt")
                         .HasDatabaseName("ix_change_detected_at");
@@ -2000,12 +1996,6 @@ namespace RbRules.Infrastructure.Migrations
 
             modelBuilder.Entity("RbRules.Domain.Change", b =>
                 {
-                    b.HasOne("RbRules.Domain.Change", null)
-                        .WithMany()
-                        .HasForeignKey("ConsolidatedWithId")
-                        .OnDelete(DeleteBehavior.SetNull)
-                        .HasConstraintName("fk_change_change_consolidated_with_id");
-
                     b.HasOne("RbRules.Domain.Source", "Source")
                         .WithMany()
                         .HasForeignKey("SourceId")

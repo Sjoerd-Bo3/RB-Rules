@@ -57,7 +57,12 @@ public class IngestService(
             await db.SaveChangesAsync(ct);
         }
 
-        var query = db.Sources.Where(s => s.Enabled);
+        // Genegeerd (#180) ≠ uitgeschakeld: beide slaan de geplande scan-lus
+        // over (geen LLM-kosten voor een bron die niets oplevert), maar een
+        // handmatige rescan van één specifieke bron (sourceId hieronder)
+        // bypasst dit filter net zoals hij Enabled al bypasste — de
+        // beheerder mag een genegeerde bron altijd gericht opnieuw bekijken.
+        var query = db.Sources.Where(s => s.Enabled && s.IgnoredAt == null);
         if (sourceId is not null) query = db.Sources.Where(s => s.Id == sourceId);
         var sources = await query
             .OrderBy(s => s.TrustTier).ThenByDescending(s => s.Rank)

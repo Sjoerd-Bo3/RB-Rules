@@ -416,7 +416,15 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `CardDetailService.DossierAsync`/#127: herkomst via `FeedId`, opbrengst
   via `SourceId` — Document/RuleChunk/Change — en genormaliseerde `SourceUrl`
   — BanEntry/Erratum/Correction — plus claims via de `ClaimSource`-FK, en
-  verwerkingsstatus uit `run_log`), `ReviewNoteService` (#124, beheerder-
+  verwerkingsstatus uit `run_log`), `SourceListService` (#180, de admin-
+  bronnenlijst-projectie: dezelfde bronnen als `/api/sources` — incl.
+  genegeerde, de UI filtert client-side — plus de negeer-kandidaat-vlag.
+  Bewust LICHTER dan `SourceDossierService`: vier gebatchte tellingen
+  (`run_log` "scan"-regels met status ≠ error, `Change`, `ClaimSource`,
+  `Correction.Provenance` op het `clarify-mining:{sourceId}`-prefix) over
+  de HELE lijst in plaats van een query per bron — geen N+1. De pure
+  drempelbeslissing (`SourceIgnoreCandidacy.Evaluate`, Domain) zit los van
+  de I/O), `ReviewNoteService` (#124, beheerder-
   notitie → geverifieerde ruling), `ChatRulingService` (#166, in-chat-ruling →
   verified/pending naar autoriteit), `DeckBrowserService` (#15 fase 3 spoor A:
   read-only projectie boven op de Piltover Archive-decks — lijst/facetten/

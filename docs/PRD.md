@@ -382,6 +382,30 @@ apart in §6.
   bestaande data (#127-patroon) — geen embeddings, geen LLM.
   *Route* `/admin` (uitklap per bron) · *endpoint*
   `GET /api/admin/sources/{id}/dossier`.
+- **Bronnen negeren met reden** (#180) — de feed-crawl (AutoApprove op
+  officiële domeinen) registreert ook merch-/toernooi-/preorder-artikelen als
+  trust-1-bronnen, die niets aan de kennisbank toevoegen. `Source.IgnoredAt`
+  + `IgnoreReason` (nullable) markeren dat bewust en blijvend — nadrukkelijk
+  ANDERS dan `Enabled` (dat blijft "tijdelijk uit"; een genegeerde bron mag
+  `Enabled` gewoon op true laten staan). Genegeerd ⇒ de scan-lus
+  (`IngestService.ScanAsync`) slaat de bron over (geen HTTP-fetch, geen
+  LLM-kosten) en de bron verdwijnt uit de standaard bronnenlijst (het
+  publieke `/api/sources` filtert 'm eruit); een "Genegeerd (N)"-chip in de
+  admin-bronnentabel toont ze alsnog, met reden en een "Terugzetten"-knop.
+  Negeren is GEEN delete: bestaande `Document`/`Change`-rijen blijven staan,
+  en de bron-rij zelf blijft bestaan — dezelfde bescherming tegen
+  stille heraanmaak als de #167/#175-tombstone voor een verwijderde
+  feed-bron (`FeedCrawlService`'s known-URL-dedup ziet de rij gewoon nog
+  staan, dus die adopteert of hercreëert 'm nooit). **Negeer-kandidaten**:
+  de admin-bronnenlijst-projectie (`SourceListService`) berekent per bron —
+  goedkoop, vier gebatchte tellingen ongeacht het aantal bronnen, geen
+  aparte tabel — of die na ≥2 voltooide scans nog steeds niets heeft
+  opgeleverd (0 `Change`, 0 claims via `ClaimSource`, 0 clarify-mining-
+  rulings via `Correction.Provenance`); zo'n bron krijgt een hint ("levert
+  niets op — negeren?") in de lijst. De beheerder beslist altijd zelf — geen
+  automatisch negeren. *Route* `/admin` (bronnentabel + genegeerd-chip) ·
+  *endpoints* `GET /api/admin/sources`,
+  `POST /api/admin/sources/{id}/ignore|unignore`.
 - **Temporele precedentie** (#168) — naast gezag (`TrustTier`) telt nu ook
   wanneer iets gepubliceerd/bijgewerkt is. `Source.PublishedAt` (uit de
   bron-feed-artikeldatum) en `Source.UpdatedAt` (detectiemoment van een
@@ -819,8 +843,10 @@ apart in §6.
   "opnieuw evalueren"-actie die de opmerking bewaart en de hybride poort
   her-toetst (#184). *Endpoints* `/api/admin/knowledge/*`,
   `/api/admin/corrections/*` (incl. `/reevaluate`).
-- **Bronnenbeheer** — bronnen met trust/rank toevoegen/verwijderen.
-  *Endpoints* `/api/admin/sources`, `/api/admin/sources/{id}`.
+- **Bronnenbeheer** — bronnen met trust/rank toevoegen/verwijderen/negeren
+  (zie "Bronnen negeren met reden" in §4.1). *Endpoints*
+  `GET/POST /api/admin/sources`, `PATCH/DELETE /api/admin/sources/{id}`,
+  `POST /api/admin/sources/{id}/ignore|unignore`.
 
 ### 4.6 Platform, accounts & PWA
 

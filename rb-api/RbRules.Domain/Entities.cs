@@ -61,6 +61,22 @@ public class Source
     /// consensus-poort van de patch-notes-retractie bovendien als menselijke
     /// bevestiging). Null zolang <see cref="ContentKind"/> zelf null is.</summary>
     public string? ContentKindSource { get; set; }
+    /// <summary>Negeren met reden (#180): een BEWUSTE beoordeling dat deze
+    /// bron niets aan het systeem toevoegt (merch/toernooi-/preorder-
+    /// artikelen die de feed-crawl toch als trust-1 registreert) — nadrukkelijk
+    /// iets anders dan <see cref="Enabled"/> ("tijdelijk uit"): een genegeerde
+    /// bron kan <see cref="Enabled"/> op true laten staan, de scan-lus
+    /// (<see cref="RbRules.Infrastructure.IngestService"/>) slaat 'm sowieso
+    /// over. Null = niet genegeerd. Negeren is geen delete: bestaande
+    /// Document/Change-rijen blijven onaangeroerd, en net als de #167-
+    /// tombstone voor een verwijderde feed-bron blijft de rij zelf bestaan
+    /// zodat FeedCrawlService 'm nooit stilzwijgend heradopteert of
+    /// hercreëert (de known-URL-dedup ziet de rij gewoon nog staan).</summary>
+    public DateTimeOffset? IgnoredAt { get; set; }
+    /// <summary>Vrije tekst, alleen zinvol samen met <see cref="IgnoredAt"/>
+    /// (null zolang die null is) — bv. "merch/preorder-artikel, geen
+    /// regelbron" of "levert na meerdere scans niets op".</summary>
+    public string? IgnoreReason { get; set; }
 }
 
 /// <summary>Bron-feed (#167): een index-pagina die periodiek wordt afgespeurd
