@@ -242,9 +242,24 @@ apart in §6.
   (embedding-uitval degradeert naar een genormaliseerde exacte-tekst-toets).
   De eerste scan van een **FAQ-/clarificatie**-bron krijgt ook meteen een
   sjabloon-`Change` (type "clarification") zodat de aankomst zelf al in de
-  wijzigingen-feed verschijnt (er is dan nog geen vorige versie om te diffen);
-  patch-notes-bronnen krijgen dat sjabloon sinds #185 níét — hun duiding komt
-  vanaf hun tweede scan gewoon via de normale voor/na-diff. *Job* `clarify`
+  wijzigingen-feed verschijnt (er is dan nog geen vorige versie om te diffen).
+  **Patch-notes-bronnen (#205, herziening van #185)**: een terugkerende
+  patch-notes-pagina (core-rules-patch-notes) blijft zonder sjabloon — haar
+  duiding komt via de normale voor/na-diff vanaf de tweede scan, precies
+  zoals #185 bedoelde. Maar een per-set patch-notes-ARTIKEL (bv. "Core
+  Rules: Vendetta Patch Notes") is one-shot: het verandert na publicatie
+  nooit meer, dus die tweede-scan-diff komt er nooit en de regelwijzigingen
+  bleven daardoor structureel onzichtbaar. Guard i.p.v. "eerste scan": heeft
+  een patch-notes-bron nog GEEN niet-editoriale `Change`, dan behandelt de
+  scan de volledige inhoud als delta (lege "voor"-versie, dezelfde
+  classificatie/samenvatting als een echte diff — `ChangeType` uit de
+  classifier, niet hardcoded). Dat dekt ook de BACKFILL van een bron die
+  vóór deze fix al zonder Change gescand was (`PatchNotesOneShotChange`,
+  Domain). Editorial sidebar-ruis (de "Related Articles"-carousel op
+  playriftbound-artikelen, die van scan tot scan verandert zodra elders een
+  nieuw artikel verschijnt) telt niet als "al verwerkt" én wordt sinds #205
+  bovendien uit de hash/diff gestript (`TextUtils.StripBoilerplate`, zelfde
+  patroon als de Rules Hub-flip-flop-suppressie). *Job* `clarify`
   (handmatig of nachtelijk via `ScanScheduler`) · *endpoints*
   `/api/admin/jobs/clarify`, `/api/admin/corrections/{id}/reject`.
   **Bron, opmerking en her-evaluatie in de reviewqueue** (#184): elk

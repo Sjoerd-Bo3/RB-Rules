@@ -804,13 +804,30 @@ Kernpunten (`AskService.cs`):
 
 ### 6.2 De scan-pipeline
 
-`IngestService.ScanAsync`: per bron fetch → boilerplate-strip → hash →
-bron-type-classificatie (#188 increment 2, alleen trust-1-bronnen zonder
-LLM-classificatie of met een heuristische; een "admin"-override wordt nooit
-geherclassificeerd — `ClassifyContentKindAsync`, `SourceContentKind`) →
-diff → AI-classify → store + `run_log`, met
+`IngestService.ScanAsync`: eerst de geplande bronnenlijst filteren op
+`Enabled && IgnoredAt == null` (#180) — **`Enabled`** is "tijdelijk uit",
+**`IgnoredAt`** (+ `IgnoreReason`) is een bewuste, blijvende beoordeling
+("dit levert niets op"); beide slaan de scan-lus over, maar zijn
+onafhankelijke velden (een genegeerde bron mag `Enabled = true` houden). Een
+gerichte handmatige rescan via `sourceId` bypasst dit filter net zoals hij
+`Enabled` al bypaste. Per bron dan: fetch → boilerplate-strip (incl. de
+playriftbound "Related Articles"-carousel sinds #205, `TextUtils.
+StripBoilerplate`) → hash → bron-type-classificatie (#188 increment 2,
+alleen trust-1-bronnen zonder LLM-classificatie of met een heuristische; een
+"admin"-override wordt nooit geherclassificeerd — `ClassifyContentKindAsync`,
+`SourceContentKind`) → diff → AI-classify → store + `run_log`, met
 flip-flop-suppressie en een naclassificatie-ronde (#58) voor changes die
-eerder zonder classificatie zijn opgeslagen. De `ScanScheduler`
+eerder zonder classificatie zijn opgeslagen. **One-shot patch-notes-Change
+(#205):** heeft een trust-1 patch-notes-bron nog GEEN niet-editoriale
+`Change` (`PatchNotesOneShotChange.IsCandidate`, Domain), dan behandelt de
+scan de volledige inhoud als delta — óók als de hash ongewijzigd is t.o.v.
+`LastHash` (de vroege "unchanged"-kortsluiting wijkt daarvoor), want een
+per-set patch-notes-artikel is one-shot en verandert na publicatie nooit
+meer. Dat dekt zowel een gloednieuwe bron als de backfill van een bron die
+vóór deze fix al zonder Change gescand was; een terugkerende patch-notes-
+pagina (core-rules-patch-notes) raakt deze tak na haar eigen eerste scan
+nooit meer, want die heeft dan al een niet-editoriale Change. De
+`ScanScheduler`
 (BackgroundService) draait elk uur een scan van
 de bronnen die aan de beurt zijn (cadence), stuurt web-push bij high-severity,
 her-indexeert regels en bans bij nieuwe/gewijzigde documenten, checkt de

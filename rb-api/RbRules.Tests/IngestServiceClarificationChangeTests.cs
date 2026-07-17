@@ -17,11 +17,12 @@ namespace RbRules.Tests;
 /// gewone nieuwe bron blijft ongemoeid (bestaand gedrag,
 /// IngestServiceUpdatedAtTests).
 ///
-/// #185: patch notes zijn UIT ClarificationSources.IsMatch gehaald, dus dit
-/// sjabloon vuurt sindsdien niet meer op hun eerste scan — hun echte duiding
-/// komt vanaf de tweede scan gewoon via de normale ingest-diff (voor/na),
-/// zie ScanAsync_EersteScanVanPatchNotesBron_MaaktGeenClarificationChange en
-/// ScanAsync_TweedeScanVanPatchNotesBron_MaaktGewoneDiffChange hieronder.</summary>
+/// #185 gaf patch-notes-bronnen bij hun eerste scan bewust GEEN Change (hun
+/// duiding kwam via de normale tweede-scan-diff). #205 herzag dat: een
+/// per-set patch-notes-artikel (Vendetta) is ONE-SHOT — het verandert na
+/// publicatie nooit meer, dus die tweede-scan-diff komt er nooit. Zie
+/// ScanAsync_EersteScanVanPatchNotesBron_MaaktInhoudelijkeChange en de
+/// backfill-/guard-tests onderaan dit bestand.</summary>
 public class IngestServiceClarificationChangeTests
 {
     private const string FaqUrl =
@@ -72,17 +73,21 @@ public class IngestServiceClarificationChangeTests
     }
 
     [Fact]
-    public async Task ScanAsync_EersteScanVanPatchNotesBron_MaaktGeenClarificationChange()
+    public async Task ScanAsync_EersteScanVanPatchNotesBron_MaaktInhoudelijkeChange()
     {
-        // #185: patch notes matchen niet meer op ClarificationSources.IsMatch,
-        // dus deze tak (het #177-sjabloon) vuurt niet meer op hun eerste
-        // scan — een patch-notes-bron gedraagt zich nu als elke andere
-        // gewone bron: "new" zonder Change (er is nog niets om te diffen).
+        // #205: een patch-notes-bron is vaak one-shot (een per-set-artikel
+        // zoals Vendetta verandert na publicatie nooit meer) — de #185-
+        // beslissing om de eerste scan zonder Change te laten, liet zo'n
+        // artikel PERMANENT zonder duiding. De volledige inhoud is nu de
+        // delta (lege "voor"-versie): dezelfde classificatiepijplijn als een
+        // echte diff, dus ChangeType komt uit de classifier (hier "unknown"
+        // — de AI-stub in dit testbestand faalt bewust, #58-degradatiepad),
+        // niet het oude hardcoded "clarification"-sjabloon.
         using var db = NewDb();
         db.Sources.Add(new Source
         {
-            Id = "core-rules-patch-notes", Name = "Core Rules Patch Notes (officieel)",
-            Url = "https://playriftbound.com/en-us/news/rules-and-releases/riftbound-core-rules-patch-notes/",
+            Id = "core-rules-vendetta-patch-notes", Name = "Core Rules: Vendetta Patch Notes",
+            Url = "https://playriftbound.com/en-us/news/announcements/core-rules-vendetta-patch-notes/",
             Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
         });
         await db.SaveChangesAsync();
@@ -91,20 +96,26 @@ public class IngestServiceClarificationChangeTests
         var results = await svc.ScanAsync(onlyDue: false);
 
         Assert.Equal("new", Assert.Single(results).Status);
-        Assert.Empty(await db.Changes.ToListAsync());
+        var change = await db.Changes.SingleAsync();
+        Assert.NotEqual("clarification", change.ChangeType); // geen #177-sjabloon
+        Assert.Equal("unknown", change.ChangeType); // AI down in de stub → #58-fallback
+        Assert.NotNull(change.Diff);
+        Assert.Contains("Legion is a dependent keyword", change.Diff);
         var src = await db.Sources.SingleAsync();
-        Assert.Null(src.UpdatedAt); // net ontdekt, geen wijziging gezien
+        Assert.NotNull(src.UpdatedAt);
     }
 
     [Fact]
     public async Task ScanAsync_TweedeScanVanPatchNotesBron_MaaktGewoneDiffChange()
     {
-        // De echte duiding van een patch-notes-wijziging komt sinds #185
-        // alleen nog via de normale ingest-diff (voor/na) — niet als losse
-        // ruling. Deze test bewijst dat het pad wérkt: content-wijziging op
-        // een patch-notes-bron levert een gewone Change op, exact zoals elke
-        // andere bron (IngestServiceUpdatedAtTests.
-        // ScanAsync_RealContentChange_SetsUpdatedAt).
+        // Een TERUGKERENDE patch-notes-pagina (core-rules-patch-notes, i.t.t.
+        // een one-shot per-set-artikel) krijgt sinds #205 ook bij haar eerste
+        // scan al een Change (de one-shot-tak) — daarna blijft haar gedrag
+        // exact zoals vóór #205: de tweede scan levert een gewone diff-Change
+        // op via de normale ingest-diff (IngestServiceUpdatedAtTests.
+        // ScanAsync_RealContentChange_SetsUpdatedAt), en de one-shot-guard
+        // vuurt niet opnieuw omdat de bron dan al een niet-editoriale Change
+        // heeft (de eerste-scan-Change zelf).
         using var db = NewDb();
         db.Sources.Add(new Source
         {
@@ -115,17 +126,144 @@ public class IngestServiceClarificationChangeTests
         await db.SaveChangesAsync();
         var content = "Legion is a dependent keyword.";
         var svc = NewIngest(db, _ => Html(content));
-        await svc.ScanAsync(onlyDue: false); // eerste fetch: "new", geen change-item
+        await svc.ScanAsync(onlyDue: false); // eerste fetch: "new" + one-shot Change (#205)
 
         content = "Legion is a dependent keyword. CLARIFIED: activated abilities with Legion trigger only once per turn.";
         var results = await svc.ScanAsync(onlyDue: false); // échte wijziging
 
         Assert.Equal("changed", Assert.Single(results).Status);
-        var change = await db.Changes.SingleAsync();
-        Assert.NotEqual("clarification", change.ChangeType); // geen #177-sjabloon meer
-        Assert.NotNull(change.Diff);
+        // Twee Changes nu: de one-shot uit de eerste scan + de diff uit de tweede.
+        var changes = await db.Changes.OrderBy(c => c.Id).ToListAsync();
+        Assert.Equal(2, changes.Count);
+        var diffChange = changes[1];
+        Assert.NotEqual("clarification", diffChange.ChangeType);
+        Assert.NotNull(diffChange.Diff);
+        Assert.Contains("CLARIFIED", diffChange.Diff);
         var src = await db.Sources.SingleAsync();
         Assert.NotNull(src.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task ScanAsync_BackfillVanBestaandeVendettaBron_MaaktAlsnogChange()
+    {
+        // #205 backfill-scenario: de bestaande Vendetta-bron werd vóór deze
+        // fix al gescand (een Document staat er al, ContentKind is al
+        // "patch-notes" via een eerdere LLM-classificatie) maar heeft nog
+        // GEEN inhoudelijke Change. De inhoud verandert nooit meer (one-shot
+        // artikel) — zonder deze backfill zou de bron voor altijd zonder
+        // duiding blijven, want de hash blijft exact gelijk aan LastHash
+        // (vroege "unchanged"-return) en er komt dus nooit een normale diff.
+        using var db = NewDb();
+        var raw = RawHtml("Legion is a dependent keyword.");
+        var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
+        var hash = TextUtils.Sha256(text);
+        db.Sources.Add(new Source
+        {
+            Id = "core-rules-vendetta-patch-notes", Name = "Core Rules: Vendetta Patch Notes",
+            Url = "https://playriftbound.com/en-us/news/announcements/core-rules-vendetta-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
+            ContentKind = SourceContentKind.PatchNotes, ContentKindSource = SourceContentKind.LlmOrigin,
+            LastHash = hash, LastChecked = DateTimeOffset.UtcNow.AddDays(-7),
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = "core-rules-vendetta-patch-notes", Content = text, ContentHash = hash,
+            RetrievedAt = DateTimeOffset.UtcNow.AddDays(-7),
+        });
+        await db.SaveChangesAsync();
+        // Geen Change op deze bron — dat is precies het bug-scenario.
+        Assert.Empty(await db.Changes.ToListAsync());
+        var svc = NewIngest(db, _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(raw) });
+
+        var results = await svc.ScanAsync(onlyDue: false);
+
+        var result = Assert.Single(results);
+        Assert.Equal("changed", result.Status);
+        Assert.Contains("backfill", result.Detail);
+        var change = await db.Changes.SingleAsync();
+        Assert.NotNull(change.Diff);
+        Assert.Contains("Legion is a dependent keyword", change.Diff);
+        var src = await db.Sources.SingleAsync();
+        Assert.NotNull(src.UpdatedAt);
+        // De hash blijft ongewijzigd (de inhoud IS ongewijzigd) — alleen de
+        // Change is nieuw.
+        Assert.Equal(hash, src.LastHash);
+    }
+
+    [Fact]
+    public async Task ScanAsync_PatchNotesBronMetBestaandeNietEditorialeChange_HerhaaltOneShotNiet()
+    {
+        // Guard tegen dubbelwerk: heeft de bron al EEN niet-editoriale
+        // Change (ongeacht of die uit een normale diff of een eerdere
+        // one-shot kwam), dan vuurt de one-shot-tak niet opnieuw — ook niet
+        // als de hash toevallig weer exact hetzelfde is.
+        using var db = NewDb();
+        var raw = RawHtml("Legion is a dependent keyword.");
+        var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
+        var hash = TextUtils.Sha256(text);
+        db.Sources.Add(new Source
+        {
+            Id = "core-rules-vendetta-patch-notes", Name = "Core Rules: Vendetta Patch Notes",
+            Url = "https://playriftbound.com/en-us/news/announcements/core-rules-vendetta-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
+            ContentKind = SourceContentKind.PatchNotes, ContentKindSource = SourceContentKind.LlmOrigin,
+            LastHash = hash,
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = "core-rules-vendetta-patch-notes", Content = text, ContentHash = hash,
+        });
+        db.Changes.Add(new Change
+        {
+            SourceId = "core-rules-vendetta-patch-notes", ChangeType = "core-rule", Severity = "high",
+            Summary = "al eerder verwerkt", Diff = "…",
+        });
+        await db.SaveChangesAsync();
+        var svc = NewIngest(db, _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(raw) });
+
+        var results = await svc.ScanAsync(onlyDue: false);
+
+        Assert.Equal("unchanged", Assert.Single(results).Status);
+        Assert.Single(await db.Changes.ToListAsync()); // nog steeds maar 1 — geen dubbele
+    }
+
+    [Fact]
+    public async Task ScanAsync_PatchNotesBronMetAlleenEditorialeChange_MaaktAlsnogOneShotChange()
+    {
+        // #205: de editorial sidebar-ruis ("volgorde van aankondigingen
+        // gewijzigd") is precies het scenario uit de bug — een editorial
+        // Change telt NIET als "al verwerkt", dus de one-shot-tak vuurt hier
+        // alsnog en levert de ontbrekende inhoudelijke Change op.
+        using var db = NewDb();
+        var raw = RawHtml("Legion is a dependent keyword.");
+        var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
+        var hash = TextUtils.Sha256(text);
+        db.Sources.Add(new Source
+        {
+            Id = "core-rules-vendetta-patch-notes", Name = "Core Rules: Vendetta Patch Notes",
+            Url = "https://playriftbound.com/en-us/news/announcements/core-rules-vendetta-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
+            ContentKind = SourceContentKind.PatchNotes, ContentKindSource = SourceContentKind.LlmOrigin,
+            LastHash = hash,
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = "core-rules-vendetta-patch-notes", Content = text, ContentHash = hash,
+        });
+        db.Changes.Add(new Change
+        {
+            SourceId = "core-rules-vendetta-patch-notes", ChangeType = "editorial", Severity = "low",
+            Summary = "volgorde van aankondigingen gewijzigd", Diff = "…",
+        });
+        await db.SaveChangesAsync();
+        var svc = NewIngest(db, _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(raw) });
+
+        var results = await svc.ScanAsync(onlyDue: false);
+
+        Assert.Equal("changed", Assert.Single(results).Status);
+        var changes = await db.Changes.ToListAsync();
+        Assert.Equal(2, changes.Count); // de bestaande editorial-rij + de nieuwe one-shot-Change
+        Assert.Contains(changes, c => c.ChangeType != "editorial" && c.Diff!.Contains("Legion"));
     }
 
     [Fact]
@@ -151,9 +289,11 @@ public class IngestServiceClarificationChangeTests
 
     // --- testinfra (zelfde patroon als IngestServiceUpdatedAtTests) -------
 
+    private static string RawHtml(string text) => $"<html><body><p>{text}</p></body></html>";
+
     private static HttpResponseMessage Html(string text) => new(HttpStatusCode.OK)
     {
-        Content = new StringContent($"<html><body><p>{text}</p></body></html>"),
+        Content = new StringContent(RawHtml(text)),
     };
 
     private static IngestService NewIngest(

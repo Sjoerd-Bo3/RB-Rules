@@ -238,8 +238,25 @@ public class IngestService(
                 && (src.ContentKind is null || src.ContentKindSource == SourceContentKind.HeuristicOrigin))
                 await ClassifyContentKindAsync(src, text, ct);
 
+            var effectiveKind = SourceContentKind.Resolve(src.ContentKind, src.Id, src.Url, src.Name);
+
             var hash = TextUtils.Sha256(text);
-            if (src.LastHash == hash) return new(src.Id, "unchanged");
+            if (src.LastHash == hash)
+            {
+                // #205 backfill: de inhoud is ongewijzigd (vandaar de vroege
+                // "unchanged" hieronder), maar als deze patch-notes-bron nog
+                // NOOIT een niet-editoriale Change kreeg (bv. de Vendetta-
+                // bron: al gescand vóórdat deze fix bestond, dus alleen een
+                // Document, geen Change) mag de al opgeslagen inhoud alsnog
+                // als delta verwerkt worden — voor een one-shot-artikel is
+                // dit de enige kans, want de inhoud verandert per definitie
+                // nooit meer.
+                if (await IsPatchNotesOneShotCandidateAsync(src, effectiveKind, ct)
+                    && await TryAddOneShotPatchNotesChangeAsync(src, text, ct))
+                    return new(src.Id, "changed",
+                        "patch notes: alsnog een inhoudelijke Change gemaakt (backfill, #205)");
+                return new(src.Id, "unchanged");
+            }
 
             // Flip-flop-suppressie: sommige pagina's (Rules Hub) wisselen per
             // request de volgorde van gerelateerde-artikellinks. Is deze exacte
@@ -291,8 +308,21 @@ public class IngestService(
                 // Change.DetectedAt elders in deze pipeline).
                 src.UpdatedAt = DateTimeOffset.UtcNow;
             }
-            else if (src.TrustTier == 1
-                     && SourceContentKind.Resolve(src.ContentKind, src.Id, src.Url, src.Name) == SourceContentKind.Faq)
+            else if (await IsPatchNotesOneShotCandidateAsync(src, effectiveKind, ct))
+            {
+                // #205: een gloednieuwe patch-notes-bron (isNew, dus normaal
+                // gesproken niets om te diffen) — de volledige inhoud IS de
+                // delta voor een one-shot per-set-artikel (zie
+                // PatchNotesOneShotChange voor de volledige motivatie). Dit is
+                // de opvolger van de #185-beslissing om patch notes hier
+                // NIET te raken: dat bleef correct voor een terugkerende
+                // pagina (core-rules-patch-notes, die na haar eigen eerste
+                // scan allang niet-editoriale Changes heeft en dus deze tak
+                // nooit meer raakt), maar liet een one-shot-artikel
+                // (Vendetta) permanent zonder inhoudelijke Change achter.
+                await TryAddOneShotPatchNotesChangeAsync(src, text, ct);
+            }
+            else if (src.TrustTier == 1 && effectiveKind == SourceContentKind.Faq)
             {
                 // #177: een FAQ-/clarificatie-artikel heeft bij zijn
                 // allereerste scan geen vorige versie om te diffen (isNew),
@@ -314,18 +344,12 @@ public class IngestService(
                 // bron, maar nu ook correct voor een bron die de LLM als
                 // "faq" herkent zonder de magische woorden in zijn slug.
                 //
-                // #185: patch-notes-bronnen matchen niet op "faq", dus deze
-                // tak vuurt niet op hun allereerste scan — een patch-notes-
-                // artikel heeft dan gewoon "new"-status zonder Change, exact
-                // zoals elke andere gewone bron (er is nog niets om te
-                // diffen). Bewust geen vervangende templated Change voor
-                // patch notes: hun ÉCHTE duiding komt vanaf hun TWEEDE scan
-                // gewoon via de normale diff hierboven (voor/na), en die is
-                // inhoudelijk beter dan een sjabloonzin zonder regeltekst.
-                // Voor FAQ-/clarificatie-bronnen blijft dit sjabloon wél
-                // zinvol: die krijgen NOOIT een diff-Change (elke scan mint
-                // dezelfde soort inhoud opnieuw als losse rulings, niet als
-                // delta), dus zonder dit sjabloon zou hun aankomst permanent
+                // #205: patch-notes-bronnen krijgen sinds #205 hun eigen tak
+                // hierboven (one-shot delta) in plaats van niets — dit
+                // sjabloon blijft alleen voor FAQ-/clarificatie-bronnen: die
+                // krijgen NOOIT een diff-Change (elke scan mint dezelfde
+                // soort inhoud opnieuw als losse rulings, niet als delta),
+                // dus zonder dit sjabloon zou hun aankomst permanent
                 // onzichtbaar blijven in de wijzigingen-feed.
                 db.Changes.Add(new Change
                 {
@@ -395,6 +419,44 @@ public class IngestService(
         if (string.IsNullOrWhiteSpace(diff)) return null;
         var raw = await ai.AskAsync(Classifier.BuildPrompt(sourceName, diff), Classifier.SystemPrompt, ct: ct);
         return raw is null ? null : Classifier.Parse(raw);
+    }
+
+    /// <summary>#205: cheap-eerst guard — de trustTier/kind-check gebeurt vóór
+    /// de (enige) DB-query, zodat een gewone bron (verreweg de meeste scans)
+    /// nooit de Changes-tabel raakt voor deze beslissing.</summary>
+    private async Task<bool> IsPatchNotesOneShotCandidateAsync(
+        Source src, string effectiveKind, CancellationToken ct)
+    {
+        if (src.TrustTier != 1 || effectiveKind != SourceContentKind.PatchNotes) return false;
+        var hasNonEditorialChange = await db.Changes
+            .AnyAsync(c => c.SourceId == src.Id && c.ChangeType != "editorial", ct);
+        return PatchNotesOneShotChange.IsCandidate(src.TrustTier, effectiveKind, hasNonEditorialChange);
+    }
+
+    /// <summary>#205: bouwt de one-shot Change voor een patch-notes-bron
+    /// zonder niet-editoriale Change — de volledige inhoud is de delta (lege
+    /// "voor"-versie), dezelfde AI-classificatie/samenvatting als een echte
+    /// diff (ChangeType uit de classifier, niet hardcoded). True als er een
+    /// Change is toegevoegd; false bij een lege diff (leeg document — niets
+    /// te classificeren, de bron blijft dan ongemoeid zoals elke andere lege
+    /// bron zou blijven).</summary>
+    private async Task<bool> TryAddOneShotPatchNotesChangeAsync(Source src, string text, CancellationToken ct)
+    {
+        var diff = DiffUtils.LineDiff("", text);
+        if (string.IsNullOrWhiteSpace(diff)) return false;
+
+        var cls = await ClassifyAsync(src.Name, diff, ct);
+        db.Changes.Add(new Change
+        {
+            SourceId = src.Id,
+            ChangeType = cls?.ChangeType ?? "unknown",
+            Severity = cls?.Severity ?? "medium",
+            Summary = cls?.Summary,
+            Meaning = cls?.Meaning,
+            Diff = diff,
+        });
+        src.UpdatedAt = DateTimeOffset.UtcNow;
+        return true;
     }
 
     /// <summary>#188 increment 2: bron-type-classificatie via rb-ai ("faq" |

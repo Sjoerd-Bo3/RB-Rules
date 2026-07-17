@@ -20,6 +20,19 @@ public static partial class TextUtils
         var text = html;
         foreach (var tag in new[] { "nav", "header", "footer", "aside" })
             text = Regex.Replace(text, $@"<{tag}[\s\S]*?</{tag}>", " ", RegexOptions.IgnoreCase);
+        // #205: playriftbound-artikelen tonen een "Related Articles"-carousel
+        // in een gewone <section id="related-articles"> (dus niet gevangen
+        // door de aside-strip hierboven, want het is geen <aside>) die van
+        // scan tot scan verandert zodra elders op de site een nieuw artikel
+        // verschijnt — geen echte regelwijziging, maar wel editorial-ruis in
+        // de wijzigingen-feed. Zelfde aanpak als hierboven: het hele blok
+        // eruit vóór hash/diff. Niet-greedy is hier veilig: deze CMS nest
+        // geen <section> in een andere <section>, dus de eerstvolgende
+        // sluit-tag hoort altijd bij dít blok (zelfde aanname als de
+        // nav/header/footer/aside-strip hierboven).
+        text = Regex.Replace(
+            text, @"<section\b[^>]*\bid=""related-articles""[^>]*>[\s\S]*?</section>", " ",
+            RegexOptions.IgnoreCase);
         return text;
     }
 
