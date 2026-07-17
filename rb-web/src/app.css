@@ -1,24 +1,110 @@
 /* Ontwerptokens — één bron voor kleur, typografie en vormtaal.
-   Donker, rustig en zakelijk: geen emoji's, status via kleur en tekst. */
+   Richting "Domains, eigentijds" (design-proof, ongemerged): modern,
+   koel-neutraal; domeinkleuren zijn de enige echte kleur in de UI, geel is
+   uitsluitend het actie-accent (nooit een goud-op-zwart sfeerkleurtje).
+   Licht is de standaard; donker is koele graphite — geen zwart. Geen
+   emoji's, status blijft altijd kleur + tekst. */
 :root {
-	--bg: #0d1420;
-	--surface: #151f31;
-	--surface-deep: #0a111d;
-	--border: #263650;
-	--border-strong: #3a5178;
-	--text: #e8eefb;
-	--muted: #93a5c4;
-	--accent: #d98a4e;
-	--accent-soft: #d98a4e22;
-	--accent-ink: #1a1206;
-	--ok: #4fbf8b;
-	--ok-soft: #4fbf8b1c;
-	--warn: #e0a32e;
-	--warn-soft: #e0a32e1c;
+	/* Neutralen — licht (standaard) */
+	--bg: #f6f7f9;
+	--surface: #ffffff;
+	--surface-deep: #f0f2f5;
+	--border: rgba(20, 24, 40, 0.10);
+	--border-strong: rgba(20, 24, 40, 0.20);
+	--text: #1b1e26;
+	--muted: #606673;
+
+	/* Actie/merk-accent: geel, uitsluitend voor primaire acties (CTA-knoppen,
+	   actieve nav) — geen decoratief gebruik binnen nieuw werk. */
+	--accent: #f5c518;
+	--accent-soft: #f5c51822;
+	--accent-ink: #20190a;
+
+	/* Semantiek (los van domein/merk) */
+	--ok: #2ea36a;
+	--ok-soft: #2ea36a1c;
+	--warn: #9a6700;
+	--warn-soft: #9a67001c;
 	--err: #e5484d;
 	--err-soft: #e5484d1c;
+
 	--radius: 10px;
-	--radius-lg: 14px;
+	--radius-lg: 13px;
+
+	/* Kaartschaduw — licht: zacht; donker (hieronder): platte kaarten. */
+	--shadow-card: 0 1px 2px rgba(20, 24, 40, 0.04);
+	/* Voor grote panelen (nog niet in gebruik in deze proef). */
+	--shadow-panel-lg: 0 24px 60px -34px rgba(20, 24, 40, 0.45);
+
+	/* Domein-tokens (#domains-proof): canonieke Riftbound-domeinen, gelijk in
+	   licht en donker — dit is de ENE plek om een hue te wijzigen. Sjoerds
+	   voorlopige mapping; Order deelt hier bewust (of per ongeluk — ter
+	   beoordeling) exact dezelfde hex als --accent, zie PR-notitie. */
+	--dom-fury: #e5484d;
+	--dom-body: #ef7a35;
+	--dom-mind: #3e7bfa;
+	--dom-calm: #2ea36a;
+	--dom-chaos: #b05fd6;
+	--dom-order: #f5c518;
+	--dom-colorless: #8b91a0;
+}
+
+/* Donker: koele graphite, geen zwart. Volgt OS-voorkeur... */
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #131519;
+		--surface: #1b1e24;
+		--surface-deep: #20242b;
+		--border: rgba(255, 255, 255, 0.10);
+		--border-strong: rgba(255, 255, 255, 0.20);
+		--text: #e9ebf1;
+		--muted: #9aa0ad;
+
+		--warn: #e3b341;
+		--warn-soft: #e3b34122;
+		--err: #ff6169;
+		--err-soft: #ff616922;
+
+		--shadow-card: none;
+		--shadow-panel-lg: none;
+	}
+}
+
+/* ...maar een expliciete data-theme wint altijd, in beide richtingen (bv.
+   een toekomstige thema-schakelaar of, voor deze proef, Playwright). */
+:root[data-theme='dark'] {
+	--bg: #131519;
+	--surface: #1b1e24;
+	--surface-deep: #20242b;
+	--border: rgba(255, 255, 255, 0.10);
+	--border-strong: rgba(255, 255, 255, 0.20);
+	--text: #e9ebf1;
+	--muted: #9aa0ad;
+
+	--warn: #e3b341;
+	--warn-soft: #e3b34122;
+	--err: #ff6169;
+	--err-soft: #ff616922;
+
+	--shadow-card: none;
+	--shadow-panel-lg: none;
+}
+:root[data-theme='light'] {
+	--bg: #f6f7f9;
+	--surface: #ffffff;
+	--surface-deep: #f0f2f5;
+	--border: rgba(20, 24, 40, 0.10);
+	--border-strong: rgba(20, 24, 40, 0.20);
+	--text: #1b1e26;
+	--muted: #606673;
+
+	--warn: #9a6700;
+	--warn-soft: #9a67001c;
+	--err: #e5484d;
+	--err-soft: #e5484d1c;
+
+	--shadow-card: 0 1px 2px rgba(20, 24, 40, 0.04);
+	--shadow-panel-lg: 0 24px 60px -34px rgba(20, 24, 40, 0.45);
 }
 
 * { box-sizing: border-box; }
@@ -84,6 +170,12 @@ a { color: inherit; }
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-card);
+}
+
+/* Cijfers die moeten uitlijnen (datums, tellers) — vormtaal-eis "Domains". */
+.tnum {
+	font-variant-numeric: tabular-nums;
 }
 
 .status-dot {

@@ -71,3 +71,23 @@ export function formatChangeWhen(iso: string): string {
 export function formatChangeDate(iso: string): string {
 	return new Date(iso).toLocaleDateString('nl-NL');
 }
+
+/** Domein → CSS-kleurvariabele (app.css --dom-*), voor de randstreep en het
+ *  domein-chipje op ChangeCard (design-proof "Domains"). Canonieke
+ *  Riftbound-domeinen; onbekend of ontbrekend domein valt terug op
+ *  Colorless-neutraal. Eén plek voor de hele mapping — een nieuw domein of
+ *  hue-wijziging hoeft alleen hier (en in app.css) aangepast te worden. */
+const DOMAIN_VARS: Record<string, string> = {
+	Fury: '--dom-fury',
+	Body: '--dom-body',
+	Mind: '--dom-mind',
+	Calm: '--dom-calm',
+	Chaos: '--dom-chaos',
+	Order: '--dom-order',
+	Colorless: '--dom-colorless'
+};
+
+export function domainColorVar(domain: string | null | undefined): string {
+	const token = (domain && DOMAIN_VARS[domain]) || DOMAIN_VARS.Colorless;
+	return `var(${token})`;
+}

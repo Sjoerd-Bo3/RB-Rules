@@ -160,7 +160,7 @@
 				<button class="chip clear" onclick={() => { sevFilter = null; typeFilter = null; srcFilter = null; }}>Wis filters</button>
 			{/if}
 		</div>
-		<p class="meta count">{changes.length} van {data.changes.length} wijzigingen</p>
+		<p class="meta count tnum">{changes.length} van {data.changes.length} wijzigingen</p>
 
 		{#each changes as c (c.id)}
 			{#if data.isAdmin}
