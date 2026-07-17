@@ -30,6 +30,7 @@ public class ChangeFeedServiceTests
         db.Changes.Add(new Change
         {
             SourceId = "mobalytics", ChangeType = "ban", Summary = "Community: Viktor banned.",
+            Meaning = "Deck lists must drop Viktor.", Diff = "- Viktor legal\n+ Viktor banned",
             DetectedAt = new DateTimeOffset(2026, 7, 16, 6, 51, 0, TimeSpan.Zero),
             ConsolidatedWithId = primary.Id,
         });
@@ -43,6 +44,70 @@ public class ChangeFeedServiceTests
         var confirmation = Assert.Single(item.ConfirmedBy);
         Assert.Equal("mobalytics", confirmation.SourceId);
         Assert.Equal("Community: Viktor banned.", confirmation.Summary);
+        // Review-fix finding 3: de secundaire details (duiding + voor/na)
+        // blijven ná consolidatie inspecteerbaar via de bevestiging zelf.
+        Assert.Equal("Deck lists must drop Viktor.", confirmation.Meaning);
+        Assert.Equal("- Viktor legal\n+ Viktor banned", confirmation.Diff);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_Primaire_VerwijdertOokHaarSecundairen()
+    {
+        // Review-fix finding 9: zonder cascade zou de FK-SetNull de
+        // secundaire als losse kaart laten herrijzen — terwijl de beheerder
+        // net "dit event weg uit de feed" besloot.
+        using var db = NewDb();
+        db.Sources.AddRange(Source("rules-hub", official: true), Source("mobalytics", official: false));
+        var primary = new Change { SourceId = "rules-hub", ChangeType = "ban", Summary = "Viktor banned." };
+        db.Changes.Add(primary);
+        await db.SaveChangesAsync();
+        db.Changes.Add(new Change
+        {
+            SourceId = "mobalytics", ChangeType = "ban", Summary = "Community: Viktor banned.",
+            ConsolidatedWithId = primary.Id,
+        });
+        await db.SaveChangesAsync();
+
+        var r = await new ChangeFeedService(db).DeleteAsync(primary.Id);
+
+        Assert.True(r.Found);
+        Assert.Equal(1, r.RemovedConfirmations);
+        Assert.Empty(await db.Changes.ToListAsync());
+    }
+
+    [Fact]
+    public async Task DeleteAsync_Secundaire_LaatDePrimaireStaan()
+    {
+        using var db = NewDb();
+        db.Sources.AddRange(Source("rules-hub", official: true), Source("mobalytics", official: false));
+        var primary = new Change { SourceId = "rules-hub", ChangeType = "ban", Summary = "Viktor banned." };
+        db.Changes.Add(primary);
+        await db.SaveChangesAsync();
+        var secondary = new Change
+        {
+            SourceId = "mobalytics", ChangeType = "ban", Summary = "Community: Viktor banned.",
+            ConsolidatedWithId = primary.Id,
+        };
+        db.Changes.Add(secondary);
+        await db.SaveChangesAsync();
+
+        var r = await new ChangeFeedService(db).DeleteAsync(secondary.Id);
+
+        Assert.True(r.Found);
+        Assert.Equal(0, r.RemovedConfirmations);
+        var remaining = Assert.Single(await db.Changes.ToListAsync());
+        Assert.Equal(primary.Id, remaining.Id);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_OnbekendId_GeeftNotFound()
+    {
+        using var db = NewDb();
+
+        var r = await new ChangeFeedService(db).DeleteAsync(999);
+
+        Assert.False(r.Found);
+        Assert.Equal(0, r.RemovedConfirmations);
     }
 
     [Fact]
