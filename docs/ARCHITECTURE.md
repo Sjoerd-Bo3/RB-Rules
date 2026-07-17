@@ -471,6 +471,24 @@ afronding altijd een `run_log`-regel (Kind="job", Ref=naam, Status=ok/error,
 Detail) — ongeacht of `work` een gewone job of een heel pad is, want beide
 hebben exact dezelfde functiehandtekening.
 
+**Per-item budget telt alleen nieuw werk (#200).** `ClaimMiningService`/
+`ClarificationMiningService.RunAsync` verhogen de per-run-teller
+(`processed`, getoetst aan `maxClaims`/`maxItems`) alléén voor uitkomsten die
+écht nieuw werk deden — een gloednieuwe rij (`New`/`Rejected`/`Conflict`/
+`Corroborated` resp. `NewVerified`/`NewPending`) of een reële mislukte
+poging (`Failed`, embedding-/LLM-call gedaan maar zonder resultaat). Een
+dedupe-treffer (`Seen` resp. `Updated`/`RejectedKept`/`Skipped` — hetzelfde
+item kwam al eens langs uit dezelfde bron) telt bewust NIET mee: vóór #200
+verbrandde een her-run van een document met méér items dan de cap zijn hele
+budget aan het opnieuw dedupen van al-opgeslagen items en kwam het nooit
+voorbij de eerdere strandingsplek. `ClarificationMiningService.StoreAsync`
+controleert sindsdien ook de genormaliseerd-exacte dedupe-treffer vóór de
+embedding-call (niet erna) — die treffer heeft geen vector nodig om te
+herkennen, dus een herhaald item kost geen Ollama-call meer (de
+embedding-poort voor parafrases, `NearestWithin`, verandert niet).
+`CapHit`/`Drained` hierboven blijven ongewijzigd: met de nieuwe telling
+betekent CapHit nog steeds "er ligt vers werk klaar voor een volgende run".
+
 `JobPaths` (Infrastructure, naast `JobCatalog`) is de padencatalogus: een
 `PathDefinition(Name, Steps)` is een geordende lijst `PathStep(JobName,
 Drain = false, MaxRepeats = 10)` die elk naar een bestaande `JobCatalog`-naam

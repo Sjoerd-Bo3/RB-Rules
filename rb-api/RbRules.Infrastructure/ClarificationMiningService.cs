@@ -245,19 +245,41 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
                         extractionComplete = false;
                         break;
                     }
-                    processed++;
                     var (outcome, failure) = await StoreAsync(src, ec, doc.Content, anchors, ct);
+                    // #200: processed telt alleen uitkomsten die écht nieuw
+                    // werk deden — anders verbrandt een her-run van een groot
+                    // document (méér items dan de cap) zijn hele budget aan
+                    // het opnieuw dedupen van al-opgeslagen items en komt het
+                    // nooit voorbij de eerdere strandingsplek. Per uitkomst:
                     switch (outcome)
                     {
-                        case ClarifyOutcome.NewVerified: verified++; srcVerified++; break;
-                        case ClarifyOutcome.NewPending: pending++; srcPending++; break;
-                        case ClarifyOutcome.Updated: updated++; break;
+                        // Persisteert een gloednieuwe Correction-rij — reëel
+                        // werk, en idempotent: een volgende run op ditzelfde
+                        // item vindt de rij al bestaand (dedupe op Provenance+
+                        // Scope+Ref) en levert dan Updated op, dus geen
+                        // dubbele telling.
+                        case ClarifyOutcome.NewVerified: verified++; srcVerified++; processed++; break;
+                        case ClarifyOutcome.NewPending: pending++; srcPending++; processed++; break;
+                        // Een echte, bekostigde poging (embedding-/LLM-call)
+                        // die mislukte — reëel verbruikte capaciteit, dus telt
+                        // mee (het document blijft toch al staan omdat
+                        // itemFailures.Count > 0).
                         case ClarifyOutcome.Failed:
                             failed++;
                             itemFailures.Add(failure ?? "onbekende fout");
+                            processed++;
                             break;
-                        // RejectedKept/Skipped: bewust geen teller — de menselijke
-                        // afwijzing/al-bekend-status is gerespecteerd, geen ruis.
+                        // Updated/RejectedKept/Skipped: stuk voor stuk dedupe-
+                        // treffers BINNEN dezelfde bron (Provenance is per-bron,
+                        // dus een match hier is altijd "dit item kwam al eens
+                        // langs uit dit artikel", nooit cross-bron-bewijs zoals
+                        // ClaimMiningService.Corroborated) — geen nieuwe rij,
+                        // geen statuswijziging die niet al zo was. Updated telt
+                        // bewust NIET mee tegen het budget (#200, de kern van
+                        // de fix); RejectedKept/Skipped hadden dat al niet (de
+                        // menselijke afwijzing/al-bekend-status wordt
+                        // gerespecteerd, geen ruis).
+                        case ClarifyOutcome.Updated: updated++; break;
                     }
                 }
             }
@@ -435,7 +457,12 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
     /// conceptniveau. Degradeert bij Ollama-uitval naar de genormaliseerde
     /// exacte-tekst-toets: een re-run dupliceert dan nog steeds niet, maar
     /// een écht nieuw concept wacht op een run met werkende embeddings (nooit
-    /// een ruling zonder embedding, #100).</summary>
+    /// een ruling zonder embedding, #100). De exacte-tekst-toets loopt sinds
+    /// #200 vóór de embedding-call (niet erna): een dedupe-treffer heeft geen
+    /// vector nodig om te herkennen, en de aanroeper (RunAsync) telt zo'n
+    /// treffer (Updated) ook niet meer tegen het per-run-budget — samen
+    /// voorkomt dat een document met meer items dan de cap voor altijd
+    /// strandt op de eerste keer dat het budget werd geraakt.</summary>
     private async Task<(ClarifyOutcome Outcome, string? Failure)> StoreAsync(
         Source src, ExtractedClarification ec, string docContent,
         ClaimTopicMapper anchors, CancellationToken ct)
@@ -491,6 +518,20 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
                             || c.ReviewNote != null))
             .ToListAsync(ct);
 
+        // Cheap-vóór-duur (#200, issue-richting 2): een genormaliseerd-exacte
+        // dedupe-treffer heeft geen embedding nodig — de tekst is ongewijzigd,
+        // dus elke bestaande vector blijft even accuraat. Vóór deze fix werd
+        // de embedding sowieso eerst berekend en dan alsnog weggegooid voor
+        // precies deze Updated/RejectedKept-uitkomsten — de grootste
+        // kostenpost per herhaald item bij een her-run van een groot document
+        // (elk al bekend item betaalde opnieuw een Ollama-call). De
+        // embedding-poort zelf (NearestWithin, hieronder) verandert niet —
+        // die blijft parafrases vangen.
+        var exactMatch = siblings.FirstOrDefault(
+            c => ClaimMiner.NormalizeStatement(ClarificationOf(c.Text)) == normClarification);
+        if (exactMatch is not null)
+            return await ApplyMatchAsync(exactMatch, src, ec, verifies, reason, freshEmbedding: null, ct);
+
         Pgvector.Vector vec;
         try
         {
@@ -504,67 +545,17 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Ollama weg: geen embedding om mee te vergelijken én geen om op te
-            // slaan. Val terug op de genormaliseerde exacte-tekst-toets zodat
-            // een her-run niet dupliceert; is het concept écht nieuw, dan telt
-            // het als faal (document blijft staan voor een volgende run).
-            var known = siblings.Any(c => ClaimMiner.NormalizeStatement(ClarificationOf(c.Text)) == normClarification);
-            return known ? (ClarifyOutcome.Skipped, null) : (ClarifyOutcome.Failed, $"embedding mislukt (Ollama): {ex.Message}");
+            // Geen exacte match (al gecheckt, hierboven) en geen embedding
+            // beschikbaar: dit is een écht nieuw concept, dat wacht op een run
+            // met werkende embeddings (nooit een ruling zonder embedding, #100).
+            return (ClarifyOutcome.Failed, $"embedding mislukt (Ollama): {ex.Message}");
         }
 
-        // Match: genormaliseerd-gelijk (snelle, deterministische weg) of
-        // binnen de embedding-poort (parafrase van dezelfde verduidelijking).
-        var match = siblings.FirstOrDefault(
-            c => ClaimMiner.NormalizeStatement(ClarificationOf(c.Text)) == normClarification)
-            ?? NearestWithin(siblings, vec, DedupeGateDistance);
-
-        if (match is not null)
-        {
-            // Afgewezen blijft afgewezen (#177): een beheerder-afwijzing
-            // (rejected tombstone) mag een volgende run niet heropenen.
-            if (match.Status == "rejected") return (ClarifyOutcome.RejectedKept, null);
-
-            // Bijwerken i.p.v. dupliceren: de nieuwste formulering + citaat +
-            // embedding winnen. Nooit degraderen: een al geverifieerde ruling
-            // blijft verified, ook als een flaky her-extractie de poort niet
-            // haalt; een pending item upgradet zodra een latere run grounded +
-            // anchored is.
-            // Beheerder-opmerking (#184) maakt dit item beheerder-eigendom: een
-            // volgende her-mine mag de status én het anker (Scope/Ref + het
-            // Question-label) die de beheerder achterliet niet stilzwijgend
-            // terugdraaien — óók niet als een anker-correctie dit item naar een
-            // ander (Scope, Ref) verplaatste (de cross-bucket-redding hierboven
-            // vindt het juist dáárom terug). Alleen de bron-afgeleide
-            // tekst/citaat/embedding verversen met de nieuwste extractie.
-            if (!string.IsNullOrWhiteSpace(match.ReviewNote))
-            {
-                match.Text = BuildText(ec);
-                match.SourceRef = src.Url;
-                match.Embedding = vec;
-                await db.SaveChangesAsync(ct);
-                return (ClarifyOutcome.Updated, null);
-            }
-
-            match.Text = BuildText(ec);
-            match.Question = QuestionLabelFor(ec);
-            match.SourceRef = src.Url;
-            match.Embedding = vec;
-
-            if (match.Status == "verified" || verifies)
-            {
-                match.Status = "verified";
-                match.StatusReason = null;
-                match.VerifiedAt ??= DateTimeOffset.UtcNow;
-            }
-            else
-            {
-                match.Status = "unverified";
-                match.StatusReason = reason;
-                match.VerifiedAt = null;
-            }
-            await db.SaveChangesAsync(ct);
-            return (ClarifyOutcome.Updated, null);
-        }
+        // Binnen de embedding-poort (parafrase van dezelfde verduidelijking) —
+        // de exacte-tekst-weg is hierboven al geprobeerd.
+        var near = NearestWithin(siblings, vec, DedupeGateDistance);
+        if (near is not null)
+            return await ApplyMatchAsync(near, src, ec, verifies, reason, freshEmbedding: vec, ct);
 
         db.Corrections.Add(new Correction
         {
@@ -581,6 +572,63 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         });
         await db.SaveChangesAsync(ct);
         return (verifies ? ClarifyOutcome.NewVerified : ClarifyOutcome.NewPending, null);
+    }
+
+    /// <summary>Een gevonden dedupe-match (exact óf embedding-nabij)
+    /// afhandelen — gedeeld door beide paden in <see cref="StoreAsync"/>.
+    /// <paramref name="freshEmbedding"/> is null voor een exacte-tekst-match
+    /// (#200: de embedding-call is overgeslagen omdat de tekst ongewijzigd
+    /// is, dus de bestaande vector blijft gewoon staan) en de nieuw berekende
+    /// vector voor een parafrase-match (NearestWithin), waar de verse
+    /// embedding wél de moeite waard is.</summary>
+    private async Task<(ClarifyOutcome Outcome, string? Failure)> ApplyMatchAsync(
+        Correction match, Source src, ExtractedClarification ec,
+        bool verifies, string? reason, Pgvector.Vector? freshEmbedding, CancellationToken ct)
+    {
+        // Afgewezen blijft afgewezen (#177): een beheerder-afwijzing
+        // (rejected tombstone) mag een volgende run niet heropenen.
+        if (match.Status == "rejected") return (ClarifyOutcome.RejectedKept, null);
+
+        // Bijwerken i.p.v. dupliceren: de nieuwste formulering + citaat +
+        // embedding winnen. Nooit degraderen: een al geverifieerde ruling
+        // blijft verified, ook als een flaky her-extractie de poort niet
+        // haalt; een pending item upgradet zodra een latere run grounded +
+        // anchored is.
+        // Beheerder-opmerking (#184) maakt dit item beheerder-eigendom: een
+        // volgende her-mine mag de status én het anker (Scope/Ref + het
+        // Question-label) die de beheerder achterliet niet stilzwijgend
+        // terugdraaien — óók niet als een anker-correctie dit item naar een
+        // ander (Scope, Ref) verplaatste (de cross-bucket-redding in
+        // StoreAsync vindt het juist dáárom terug). Alleen de bron-afgeleide
+        // tekst/citaat/embedding verversen met de nieuwste extractie.
+        if (!string.IsNullOrWhiteSpace(match.ReviewNote))
+        {
+            match.Text = BuildText(ec);
+            match.SourceRef = src.Url;
+            if (freshEmbedding is not null) match.Embedding = freshEmbedding;
+            await db.SaveChangesAsync(ct);
+            return (ClarifyOutcome.Updated, null);
+        }
+
+        match.Text = BuildText(ec);
+        match.Question = QuestionLabelFor(ec);
+        match.SourceRef = src.Url;
+        if (freshEmbedding is not null) match.Embedding = freshEmbedding;
+
+        if (match.Status == "verified" || verifies)
+        {
+            match.Status = "verified";
+            match.StatusReason = null;
+            match.VerifiedAt ??= DateTimeOffset.UtcNow;
+        }
+        else
+        {
+            match.Status = "unverified";
+            match.StatusReason = reason;
+            match.VerifiedAt = null;
+        }
+        await db.SaveChangesAsync(ct);
+        return (ClarifyOutcome.Updated, null);
     }
 
     /// <summary>Leesbare reden dat de hybride poort een item pending laat, voor
