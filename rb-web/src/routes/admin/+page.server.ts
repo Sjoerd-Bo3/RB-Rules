@@ -7,10 +7,10 @@ export const load: PageServerLoad = async ({ cookies }) => {
 	if (!authed(cookies))
 		return {
 			authed: false, sources: [], status: null, corrections: [],
-			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: []
+			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], drift: null
 		};
 	try {
-		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds, paths] =
+		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds, paths, drift] =
 			await Promise.all([
 				// Bronnenlijst (#180): admin-endpoint i.p.v. het publieke
 				// /api/sources — dat laatste verbergt genegeerde bronnen nu
@@ -30,16 +30,23 @@ export const load: PageServerLoad = async ({ cookies }) => {
 				// /admin/overview/feeds.
 				adminApi<unknown[]>('/api/admin/overview/feeds').catch(() => []),
 				// Paden (#190): geordende jobs die vanzelf doorstromen.
-				adminApi<unknown[]>('/api/admin/paths').catch(() => [])
+				adminApi<unknown[]>('/api/admin/paths').catch(() => []),
+				// Graph-drift (#214 overzicht): loopt de Neo4j-projectie achter op
+				// Postgres? Zelfde bron als het kennis-gaten-rapport; hier alleen de
+				// drift-tak voor de Overzicht-tabel. Parallel opgehaald, dus geen
+				// extra wachttijd; AI/graph weg = null en de tabel degradeert netjes.
+				adminApi<{ drift: unknown }>('/api/admin/overview/gaps')
+					.then((g) => g.drift)
+					.catch(() => null)
 			]);
 		return {
 			authed: true, sources, status, corrections, askTraces,
-			knowledge, mechanics, upcoming, feeds, paths, apiDown: false
+			knowledge, mechanics, upcoming, feeds, paths, drift, apiDown: false
 		};
 	} catch {
 		return {
 			authed: true, sources: [], status: null, corrections: [],
-			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], apiDown: true
+			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], drift: null, apiDown: true
 		};
 	}
 };
