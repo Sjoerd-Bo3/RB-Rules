@@ -720,6 +720,41 @@ een bottom-sheet opent** waarin de chips wrappen (Reset + "Toon N") —
 `documentElement` en bewaart de keuze in `localStorage`; een inline-script in
 `app.html` zet het thema vóór de eerste verf (FOUC-vrij).
 
+**Rail-patroon op de long-tail-routes (#214).** De rail-store wordt sinds de
+design-refresh op de hele publieke long-tail toegepast. Lijstpagina's leveren
+een **filter-rail** (`kind:'filters'`, mobiel de bottom-sheet met teller):
+`/rules` (bron-chips per `TocSource`, alleen gemount bij >1 bron; de boom
+filtert client-side), `/rulings` (onderwerp-type-filter, verhuisd uit de
+inline chip-rij) en `/decks` (domein- + sorteerfilter als `.filter-form`,
+gelijk aan `/cards`) — het actieve filter blijft als verwijderbare chip in de
+content. Leespagina's leveren een **contextuele rail** (`kind:'context'`):
+`/cards/[id]` ("Op deze pagina" met ankers naar de aanwezige dossier-secties +
+een domein-blok) en `/primer` ("Concepten", met een rustiger/bredere
+leeskolom). Kaart- en deckdetail dragen bovendien een **domein-tint** (3px
+domein-rand/-streep via `domainColorVar`, chips getint via `--dom-*` +
+`color-mix`). Alles op bestaande `app.css`-tokens — geen nieuwe tokens.
+
+**Beheer-console (#214).** De `/admin`-routes draaien in een **eigen shell**:
+`admin/+layout.svelte` vervangt de publieke chrome binnen het beheer door een
+console-zijbalk ("← naar de site", merk "Riftbound [beheer]", nav met
+tel-badges, Gevarenzone in rood, thema-schakelaar onderaan; mobiel <760px een
+eigen bovenbalk + slide-over drawer met scrim). De publieke chrome wordt
+**onderdrukt zonder `+layout.svelte` te wijzigen**: `onMount` zet `admin-shell`
+op `<html>` (weg bij `onDestroy`), en `:global`-regels gated op
+`html.admin-shell` verbergen de publieke `.sidebar`/`.topbar`/`.site-footer` en
+zetten het `.shell`-grid op één kolom — de onderdrukking lekt zo nooit buiten
+het beheer (terug naar `/` herstelt de publieke zijbalk). `admin/+layout.server.ts`
+levert alleen `{ authed }` (volle nav bij ingelogd, anders alleen merk-chrome
+rond het login-scherm). De **tel-badges** komen uit de al geladen `page.data`
+(`status.counts.openCorrections` → Reviewqueue, `sources.length` → Bronnen) —
+geen extra fetch, geen badge waar die data ontbreekt (nette degradatie); de
+thema-schakelaar hergebruikt de bestaande `useShell()`-store. Het
+Overzicht-dashboard voegt in `admin/+page.server.ts` één extra **parallelle**
+fetch toe aan de bestaande `Promise.all`: graph-drift
+(`/api/admin/overview/gaps` → `.drift`, `.catch(() => null)`) voor de
+drift-tabel — alle overige data-bindings en alle form-actions zijn 1-op-1
+behouden.
+
 Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 `RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `ChangeCard.svelte`,
 `markdown.ts` + `rbtokens.ts` (sanitize + icoon-injectie vóór `{@html}`),
@@ -743,8 +778,9 @@ canonieke **domein-kleurtaal** `--dom-fury|body|mind|calm|chaos|order|colorless`
 — gelijk in beide thema's, één plek om een hue te wijzigen; gebruikt door de
 kaarttekst-runen (`:rb_fury:` …) en de ChangeCard-randstreep/chips. De
 iOS-16px-formfix en de horizontale-overflow-vangrail blijven ongemoeid.
-_(De per-route layout-uitrol over de hele site staat nog open — de tokens en de
-change→domein-afleiding zijn layout-onafhankelijk en al gefundeerd.)_
+_(De per-route layout-uitrol dekt sinds #214 de hele publieke site én het
+beheer — zie de rail- en console-alinea's hierboven; de tokens en de
+change→domein-afleiding zijn layout-onafhankelijk gefundeerd.)_
 
 **Change→domein-afleiding (#214).** De feed kleurt elke wijziging met het
 domein van de geraakte kaart(en). `ChangeDomains` (Infrastructure) leidt dit
