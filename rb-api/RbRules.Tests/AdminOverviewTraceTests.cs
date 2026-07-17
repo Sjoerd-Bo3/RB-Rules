@@ -26,7 +26,7 @@ public class AdminOverviewTraceTests
             forced);
         await db.SaveChangesAsync();
 
-        var items = await new AdminOverviewService(db).AskTracesAsync();
+        var items = await new AdminOverviewService(db, new ChangeFeedService(db)).AskTracesAsync();
 
         Assert.Equal(["nieuwe vraag", "oude vraag"], items.Select(t => t.Question));
         // Route-metadata blijft aanwezig in de lijst.
@@ -46,7 +46,7 @@ public class AdminOverviewTraceTests
         db.AskTraces.Add(trace);
         await db.SaveChangesAsync();
 
-        var detail = await new AdminOverviewService(db).AskTraceAsync(trace.Id);
+        var detail = await new AdminOverviewService(db, new ChangeFeedService(db)).AskTraceAsync(trace.Id);
 
         Assert.NotNull(detail);
         Assert.Equal("**Oordeel:** Ja. [1]", detail!.Answer);
@@ -59,7 +59,7 @@ public class AdminOverviewTraceTests
     public async Task AskTraceAsync_OnbekendId_GeeftNull()
     {
         using var db = NewDb();
-        Assert.Null(await new AdminOverviewService(db).AskTraceAsync(999));
+        Assert.Null(await new AdminOverviewService(db, new ChangeFeedService(db)).AskTraceAsync(999));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class AdminOverviewTraceTests
         db.AskTraces.Add(trace);
         await db.SaveChangesAsync();
 
-        var detail = await new AdminOverviewService(db).AskTraceAsync(trace.Id);
+        var detail = await new AdminOverviewService(db, new ChangeFeedService(db)).AskTraceAsync(trace.Id);
 
         // Het antwoord blijft zichtbaar; alleen het gesprek valt weg.
         Assert.Equal("antwoord", detail!.Answer);

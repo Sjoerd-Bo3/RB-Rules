@@ -57,8 +57,9 @@ public static class JobPaths
         return
         [
             // Ingest-pad: nieuwe/gewijzigde bronnen volledig verwerken —
-            // scan → classificatie-backfill → mechaniek/claims/clarify-
-            // mining (de gecapte miners gedraineerd) → embeddings → graph.
+            // scan → classificatie-backfill → changeconsolidatie →
+            // mechaniek/claims/clarify-mining (de gecapte miners
+            // gedraineerd) → embeddings → graph.
             new PathDefinition("ingest",
             [
                 new("scan"),
@@ -67,6 +68,15 @@ public static class JobPaths
                 // items futiel herkauwen. Geen Drain; failures komen bij de
                 // volgende pad-run of scheduler-tick vanzelf terug.
                 new("classify"),
+                // Changeconsolidatie (#206): ná classify (ChangeType/Summary
+                // moeten al ingevuld zijn om kandidaat-paren te kunnen
+                // beoordelen), vóór de kennis-mining hieronder — de volgorde
+                // is geen harde afhankelijkheid daarmee, maar wel de
+                // logische plek (de feed is dan meteen geconsolideerd zodra
+                // deze pad-run klaar is). Ook ongecapt: het aantal
+                // ongekoppelde changes binnen het venster is klein, geen
+                // Drain nodig (zelfde afweging als classify hierboven).
+                new("consolidatechanges"),
                 new("mine", Drain: true),
                 new("claims", Drain: true),
                 new("clarify", Drain: true),

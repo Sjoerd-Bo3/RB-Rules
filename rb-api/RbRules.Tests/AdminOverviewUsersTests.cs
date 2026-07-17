@@ -34,7 +34,7 @@ public class AdminOverviewUsersTests
                 escalatedBy: "user"));
         await db.SaveChangesAsync();
 
-        var overview = await new AdminOverviewService(db).UsersAsync("7d", page: 1);
+        var overview = await new AdminOverviewService(db, new ChangeFeedService(db)).UsersAsync("7d", page: 1);
 
         var a = overview.Items.Single(u => u.Email == "a@example.com");
         Assert.Equal(46_000, a.InputTokens);
@@ -71,7 +71,7 @@ public class AdminOverviewUsersTests
         db.AskMetrics.Add(Metric(userId: null, model: null, input: null, output: null, hadImage: true));
         await db.SaveChangesAsync();
 
-        var overview = await new AdminOverviewService(db).UsersAsync("7d", page: 1);
+        var overview = await new AdminOverviewService(db, new ChangeFeedService(db)).UsersAsync("7d", page: 1);
 
         var path = Assert.Single(overview.Paths);
         Assert.Equal("hard", path.Path);

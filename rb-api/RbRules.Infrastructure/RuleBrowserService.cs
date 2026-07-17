@@ -239,7 +239,12 @@ public class RuleBrowserService(
                 .ToList();
             if (changeIds.Count > 0)
                 changes = await db.Changes.AsNoTracking()
-                    .Where(c => changeIds.Contains(c.Id))
+                    // #206 (review-fix finding 8): alleen primaire changes —
+                    // een geconsolideerd paar raakt dezelfde sectie en zou
+                    // hier anders alsnog dubbel verschijnen (de graph
+                    // projecteert bewust álle changes, zie ARCHITECTURE §6.3;
+                    // de mensen-lijst filtert, net als de feed).
+                    .Where(c => changeIds.Contains(c.Id) && c.ConsolidatedWithId == null)
                     .OrderByDescending(c => c.DetectedAt)
                     .Take(DossierChanges)
                     .Select(c => new SectionChangeEvent(

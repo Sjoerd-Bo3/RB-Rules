@@ -215,6 +215,20 @@ async function promoteNote(
 // "opnieuw evalueren" bewaart de opmerking en triggert de deterministische
 // her-toets van de hybride poort voor dit ene item (rb-api: /reevaluate).
 export const actions: Actions = {
+	// Ontkoppelen van een foute consolidatie (#206, review-fix finding 1):
+	// op de secundaire change; rb-api zet ConsolidatedWithId terug op null
+	// én schrijft een sticky pair-memo zodat de eerstvolgende
+	// consolidatie-run het paar niet meteen weer merget.
+	unconsolidateChange: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/changes/${form.get('id')}/unconsolidate`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
 	verifyCorrection: async ({ request, cookies }) => {
 		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
 		const form = await request.formData();

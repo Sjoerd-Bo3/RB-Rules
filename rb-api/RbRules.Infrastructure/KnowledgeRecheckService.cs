@@ -56,6 +56,11 @@ public class KnowledgeRecheckService(RbRulesDbContext db, ClaimMiningService cla
         // "unknown" wacht op de naclassificatie (#58) die hiervóór draait: de
         // mapper kan er nog geen doelen uit afleiden en het type kan alsnog
         // ban/errata/core-rule worden — dus niet afvinken.
+        // Bewust GEEN roots-only-filter (#206): de hertoets moet élke echte
+        // detectie zien — ook een geconsolideerde secundaire is een reële
+        // observatie die kennis kan raken; consolidatie is alleen
+        // feed-presentatie, en het change:{id}-grootboek voorkomt al dubbel
+        // werk per rij.
         var candidates = await db.Changes.AsNoTracking()
             .Where(c => c.DetectedAt >= since && c.DetectedAt < before
                         && c.ChangeType != "unknown")

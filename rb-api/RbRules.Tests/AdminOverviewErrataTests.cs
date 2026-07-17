@@ -31,7 +31,7 @@ public class AdminOverviewErrataTests
         });
         await db.SaveChangesAsync();
 
-        var overview = await new AdminOverviewService(db).ErrataAsync();
+        var overview = await new AdminOverviewService(db, new ChangeFeedService(db)).ErrataAsync();
 
         var oud = overview.Single(e => e.Id == 1);
         var nieuw = overview.Single(e => e.Id == 2);
@@ -51,7 +51,7 @@ public class AdminOverviewErrataTests
         });
         await db.SaveChangesAsync();
 
-        var overview = await new AdminOverviewService(db).ErrataAsync();
+        var overview = await new AdminOverviewService(db, new ChangeFeedService(db)).ErrataAsync();
 
         Assert.Null(Assert.Single(overview).SupersededByErratumId);
     }
@@ -74,7 +74,7 @@ public class AdminOverviewErrataTests
         });
         await db.SaveChangesAsync();
 
-        var overview = await new AdminOverviewService(db).ErrataAsync();
+        var overview = await new AdminOverviewService(db, new ChangeFeedService(db)).ErrataAsync();
 
         Assert.All(overview, e => Assert.Null(e.SupersededByErratumId));
     }

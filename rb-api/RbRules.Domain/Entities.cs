@@ -127,6 +127,17 @@ public class Change
     public string? Meaning { get; set; }
     public string? Diff { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Changeconsolidatie (#206): verwijst naar de PRIMAIRE change
+    /// als dit item hetzelfde gebeurtenis vanuit een andere bron bevestigt
+    /// (bv. een community-melding van dezelfde ban die de Rules Hub al
+    /// meldde). Null = dit item is zelf geen bevestiging (ofwel de primaire
+    /// van een geconsolideerd paar, ofwel (nog) ongekoppeld). Wijst ALTIJD
+    /// naar de wortel-primaire, nooit naar een andere secundaire — er
+    /// ontstaan bewust geen ketens (<see cref="ChangeConsolidationService"/>).
+    /// Beide rijen blijven bestaan (herleidbaarheid); consolidatie is een
+    /// presentatie-koppeling, geen inhoudelijke waarheid (die blijft bij de
+    /// structured BanEntry-/errata-precedentie, #168).</summary>
+    public long? ConsolidatedWithId { get; set; }
 }
 
 public class Conflict

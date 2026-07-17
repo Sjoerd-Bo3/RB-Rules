@@ -116,6 +116,12 @@ met quota en rate-limiting.
   URL-vorm heeft; zit er ergens in de groep een letterlijk-gelijk paar
   tussen, dan blijft de hele groep ongemoeid — anders eet een toevallige
   http/https- of www-variant per ongeluk een bewust-gedeelde bron op.
+- Tie-break-richting is context-afhankelijk (#206): `Precedence.Compare`
+  (#168) laat bij gelijk gezag de RECENTSTE datum winnen (welke tekst geldt
+  NU) — changeconsolidatie (#206, `ChangeConsolidationPrimary.Wins`) wil bij
+  gelijke trust juist de VROEGSTE detectie (wie meldde het gebeurtenis het
+  eerst). Niet klakkeloos `Precedence.Compare` hergebruiken voor een nieuwe
+  "wie wint"-vraag zonder te checken of de tie-break-richting ook klopt.
 
 ## Waar het werk staat
 - Roadmap: **docs/PRD.md §6** (uit de open issues, in-flight PR's

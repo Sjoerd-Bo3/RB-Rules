@@ -71,6 +71,13 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.ToTable("change");
             e.HasIndex(x => x.DetectedAt);
             e.HasOne(x => x.Source).WithMany().HasForeignKey(x => x.SourceId);
+            // Changeconsolidatie (#206): zelf-verwijzende, nullable FK naar de
+            // primaire change. SetNull (Source.FeedId-patroon): verdwijnt de
+            // primaire rij ooit (bv. handmatige feed-curatie), dan wordt de
+            // secundaire gewoon weer een op zichzelf staand item in plaats
+            // van een wees-verwijzing.
+            e.HasOne<Change>().WithMany().HasForeignKey(x => x.ConsolidatedWithId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         b.Entity<Conflict>(e =>

@@ -66,6 +66,12 @@ public static class JobCatalog
             // type "unknown" alsnog classificeren — de scan-retry pakt alleen
             // de laatste 14 dagen. Best-effort: wat mislukt blijft staan.
             new("classify", ClassifyAsync),
+            // Changeconsolidatie (#206): changes die hetzelfde event vanuit
+            // meerdere bronnen melden (bv. een officiële én een
+            // community-ban-update) samenvoegen tot één primaire kaart met
+            // bevestiging(en) — draait ná "classify" (ChangeType/Summary
+            // moeten al ingevuld zijn) in het ingest-pad.
+            new("consolidatechanges", ConsolidateChangesAsync),
             // Kennislaag 2 (#50): claims destilleren uit community-bronnen in
             // het register (trust >= 3), met corroboratie en officiële toets.
             new("claims", ClaimsAsync),
@@ -307,6 +313,13 @@ public static class JobCatalog
         return new(
             $"{r.Classified} changes alsnog geclassificeerd, {r.Failed} mislukt, {r.Remaining} resterend",
             Drained: r.Remaining - r.Failed <= 0);
+    }
+
+    private static async Task<JobOutcome> ConsolidateChangesAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<ChangeConsolidationService>().RunAsync(progress: report, ct: ct);
+        return new(r.Message);
     }
 
     private static async Task<JobOutcome> ClaimsAsync(

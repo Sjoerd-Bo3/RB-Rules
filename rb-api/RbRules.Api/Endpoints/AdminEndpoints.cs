@@ -194,7 +194,11 @@ public static class AdminEndpoints
                     Sources = await db.Sources.CountAsync(s => s.Enabled),
                     // Bron-feeds (#167): index-pagina's die op nieuwe artikelen worden afgespeurd.
                     Feeds = await db.SourceFeeds.CountAsync(f => f.Enabled),
-                    Changes = await db.Changes.CountAsync(),
+                    // #206 (review-fix finding 10): roots-only, zodat de
+                    // tegel hetzelfde telt als de lijst waarheen hij linkt
+                    // (AdminOverviewService.ChangesAsync filtert secundaire
+                    // changes uit en nest ze onder hun primaire).
+                    Changes = await db.Changes.CountAsync(c => c.ConsolidatedWithId == null),
                     Cards = await db.Cards.CountAsync(),
                     CardsEmbedded = await db.Cards.CountAsync(c => c.Embedding != null),
                     CardsMined = await db.Cards.CountAsync(c => c.Mechanics != null),
@@ -361,15 +365,31 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
-        // Feed-curatie: ruis (bijv. oude flip-flop-spam) handmatig kunnen opruimen.
-        admin.MapDelete("/changes/{id:long}", async (long id, RbRulesDbContext db) =>
+        // Feed-curatie: ruis (bijv. oude flip-flop-spam) handmatig kunnen
+        // opruimen. Een primaire verwijderen neemt haar secundairen mee
+        // (#206 review-fix, finding 9) — de kale FK-SetNull zou de kaart
+        // anders meteen laten herrijzen vanuit de andere bron.
+        admin.MapDelete("/changes/{id:long}", async (long id, ChangeFeedService feed) =>
         {
-            var c = await db.Changes.FindAsync(id);
-            if (c is null) return Results.NotFound();
-            db.Changes.Remove(c);
-            await db.SaveChangesAsync();
-            return Results.Ok(new { ok = true });
+            var r = await feed.DeleteAsync(id);
+            return r.Found
+                ? Results.Ok(new { ok = true, removedConfirmations = r.RemovedConfirmations })
+                : Results.NotFound();
         });
+
+        // Ontkoppelen van een foute consolidatie (#206 review-fix, finding 1):
+        // op de SECUNDAIRE change; zet ConsolidatedWithId terug op null én
+        // schrijft een sticky pair-memo zodat de eerstvolgende run het paar
+        // niet meteen weer merget.
+        admin.MapPost("/changes/{id:long}/unconsolidate", async (
+            long id, ChangeConsolidationService consolidation) =>
+            await consolidation.UnconsolidateAsync(id) switch
+            {
+                UnconsolidateOutcome.Applied => Results.Ok(new { ok = true }),
+                UnconsolidateOutcome.NotConsolidated => Results.BadRequest(
+                    new { error = "deze change is geen secundaire van een geconsolideerd paar" }),
+                _ => Results.NotFound(),
+            });
 
         // Primer-kennisdocs (kennislaag 1, #49): reviewen en goedkeuren.
         admin.MapGet("/knowledge", async (RbRulesDbContext db) =>

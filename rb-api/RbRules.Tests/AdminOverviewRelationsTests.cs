@@ -23,7 +23,7 @@ public class AdminOverviewRelationsTests
         var accept = Voorstel(db, "concept:g", "concept:h", recommendation: "accept");
         await db.SaveChangesAsync();
 
-        var overview = await new AdminOverviewService(db).RelationsAsync(status: null, page: 1);
+        var overview = await new AdminOverviewService(db, new ChangeFeedService(db)).RelationsAsync(status: null, page: 1);
 
         Assert.Equal(
             new[] { accept.Id, reject.Id, unsure.Id, untriaged.Id },
@@ -38,7 +38,7 @@ public class AdminOverviewRelationsTests
         r.RecommendationReason = "The context confirms it (refs: 402.3)";
         await db.SaveChangesAsync();
 
-        var item = Assert.Single((await new AdminOverviewService(db).RelationsAsync(null, 1)).Items);
+        var item = Assert.Single((await new AdminOverviewService(db, new ChangeFeedService(db)).RelationsAsync(null, 1)).Items);
 
         Assert.Equal("accept", item.Recommendation);
         Assert.Equal("The context confirms it (refs: 402.3)", item.RecommendationReason);
@@ -56,7 +56,7 @@ public class AdminOverviewRelationsTests
         Voorstel(db, "concept:g", "concept:h", recommendation: null);
         await db.SaveChangesAsync();
 
-        var overview = await new AdminOverviewService(db).RelationsAsync(null, 1);
+        var overview = await new AdminOverviewService(db, new ChangeFeedService(db)).RelationsAsync(null, 1);
 
         var accept = overview.RecommendationCounts.Single(c => c.Recommendation == "accept");
         Assert.Equal(2, accept.Count);

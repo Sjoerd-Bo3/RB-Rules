@@ -29,7 +29,7 @@ public class AdminOverviewCorrectionsTests
         });
         await db.SaveChangesAsync();
 
-        var items = await new AdminOverviewService(db).CorrectionsAsync();
+        var items = await new AdminOverviewService(db, new ChangeFeedService(db)).CorrectionsAsync();
 
         var item = Assert.Single(items);
         Assert.Equal("Unleashed Rules FAQ", item.SourceName);
@@ -51,7 +51,7 @@ public class AdminOverviewCorrectionsTests
         });
         await db.SaveChangesAsync();
 
-        var item = Assert.Single(await new AdminOverviewService(db).CorrectionsAsync());
+        var item = Assert.Single(await new AdminOverviewService(db, new ChangeFeedService(db)).CorrectionsAsync());
 
         Assert.Null(item.SourceName);
         Assert.False(item.SourceRefSafe); // geen SourceRef ⇒ niets om te linken
@@ -75,7 +75,7 @@ public class AdminOverviewCorrectionsTests
         });
         await db.SaveChangesAsync();
 
-        var items = await new AdminOverviewService(db).CorrectionsAsync();
+        var items = await new AdminOverviewService(db, new ChangeFeedService(db)).CorrectionsAsync();
 
         Assert.All(items, i => Assert.False(i.SourceRefSafe));
     }
@@ -92,7 +92,7 @@ public class AdminOverviewCorrectionsTests
         });
         await db.SaveChangesAsync();
 
-        var item = Assert.Single(await new AdminOverviewService(db).CorrectionsAsync());
+        var item = Assert.Single(await new AdminOverviewService(db, new ChangeFeedService(db)).CorrectionsAsync());
 
         Assert.Equal("onderwerp niet herkend", item.StatusReason);
         Assert.Equal("dit is eigenlijk mechanic:Legion", item.ReviewNote);

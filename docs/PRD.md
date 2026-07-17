@@ -126,6 +126,28 @@ apart in §6.
   wijzigingen (bans, errata, regelupdates, set-releases) met bron, severity,
   voor/na-diff en een menselijke samenvatting/betekenis. Flip-flop-suppressie
   onderdrukt ruis van bronnen die per request de volgorde wisselen.
+  **Changeconsolidatie (#206)**: meldt een officiële en een community-bron
+  hetzelfde event (bv. dezelfde ban-update binnen 72 uur, met overlappende
+  kaart-/sectiereferenties — een deterministische poort, `ChangeConsolidationGate`),
+  dan toetst een LLM-call ("zelfde gebeurtenis?") of ze echt samenvallen; zo ja,
+  dan wordt de meest gezaghebbende bron (hoogste TrustTier, bij gelijke trust de
+  vroegste detectie) de primaire kaart en verdwijnt de andere uit de hoofdlijst
+  als genestelde "bevestigd door {bron}"-badge — uitklapbaar naar de
+  samenvatting, duiding én voor/na-diff van de bevestigende bron. Beide
+  `Change`-rijen blijven bestaan (`Change.ConsolidatedWithId`) — dit is
+  presentatie, geen inhoudelijke waarheid (die blijft bij de structured
+  ban-/errata-precedentie, #168). Draait idempotent als jobstap
+  `consolidatechanges` in het ingest-pad én uurlijks automatisch via de
+  scheduler; een "nee"-oordeel wordt per paar onthouden (pair-memo in
+  run_log), dus elk paar wordt hooguit één keer aan de LLM voorgelegd. Een
+  foute koppeling is herstelbaar: "Ontkoppel" in het admin-overzicht maakt
+  de secundaire weer een losse kaart en blokkeert her-consolidatie van dat
+  paar blijvend. "Verwijder uit feed" op een primaire verwijdert ook haar
+  bevestigingen (zelfde event; de UI-confirm meldt het aantal).
+  Editorial-changes ("volgorde gewijzigd; inhoud ongewijzigd") verschijnen
+  nooit als zelfstandige kaart op de publieke pagina (#207, read-time
+  gefilterd; "unknown" blijft zichtbaar en een editorial als bevestiging
+  van een echt event blijft werken) — het admin-overzicht toont ze wél.
   *Route* `/` · *endpoints* `/api/changes`, `/api/sources`, `/api/bans`,
   `/api/sets/upcoming`.
 - **Regels-browser** — hoofdstuk-hiërarchie van de Core/Tournament Rules met
@@ -591,8 +613,9 @@ apart in §6.
 
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
   (scan, feeds, cards, embed, mine, rules, bans, graph, primer, interactions,
-  scout, classify, claims, clarify, relations, relationtriage, setrelease,
-  decks, benchmark, benchmarksweep, regenerateknowledge) draaien via
+  scout, classify, consolidatechanges, claims, clarify, relations,
+  relationtriage, setrelease, decks, benchmark, benchmarksweep,
+  regenerateknowledge) draaien via
   `JobRunner` met live-voortgang en run_log. *Route* `/admin` · *endpoints*
   `/api/admin/jobs/{name}`, `/api/admin/status`, `/api/admin/logs`.
 - **Paden** (#190) — geordende ketens van bestaande jobs die vanzelf
@@ -601,7 +624,9 @@ apart in §6.
   `JobRunner`-run onder de padnaam (dezelfde éénjob-gate, dezelfde
   live-Progress, dezelfde run_log-afronding als een losse job — de padnaam
   verschijnt zo vanzelf op `/api/admin/status`). Vier paden: **Ingest-pad**
-  (scan → classify → mine → claims → clarify → embed → graph), **Kaart-pad**
+  (scan → classify → consolidatechanges → mine → claims → clarify → embed →
+  graph — `consolidatechanges` #206: koppelt changes die hetzelfde event
+  vanuit meerdere bronnen melden), **Kaart-pad**
   (cards → embed → graph), **Kennis-pad** (claims → clarify → relations →
   relationtriage → graph) en **Volledige regeneratie** (primer + het
   Kennis-pad — bewust ZONDER de wipe, die blijft de losse Gevarenzone-actie
@@ -619,8 +644,9 @@ apart in §6.
   (zojuist gefaalde items tellen NIET als resterend werk — een directe
   herhaling faalt vrijwel zeker opnieuw): claims/clarify/relations/relationtriage/decks
   via hun `CapHit`-veld (bij claims telt ook een hertoets-backlog groter dan het
-  per-run-venster mee), mine via `Remaining − Failed`. Classify draait
-  bewust zónder Drain: die job is ongecapt (één run = de hele backlog), dus
+  per-run-venster mee), mine via `Remaining − Failed`. Classify en
+  consolidatechanges (#206) draaien bewust zónder Drain: beide zijn ongecapt
+  (één run verwerkt de hele backlog/het hele kandidaten-venster), dus
   draineren zou alleen failures herkauwen. Geen string-matching op de
   detailtekst. Faalt een stap, dan stopt het pad netjes (status error); de
   al-gedraaide stappen blijven staan (de onderliggende jobs zijn zelf
@@ -694,9 +720,15 @@ apart in §6.
   trigger binnen. *Route* `/admin/overview/decks` · *endpoint*
   `/api/admin/overview/decks`.
 - **Aanklikbare status-tegels** — elke teller opent een overzichtspagina.
-  *Route* `/admin/overview/[kind]` · *endpoints* `/api/admin/overview/{cards,
+  De wijzigingen-tegel telt roots-only (#206): hetzelfde aantal als de
+  lijst waarheen hij linkt; het wijzigingen-overzicht toont bevestigingen
+  genest onder hun primaire, met per bevestiging een "Ontkoppel"-actie
+  (herstelpad voor een foute consolidatie — het paar wordt daarna nooit
+  meer automatisch gemerged). *Route* `/admin/overview/[kind]` · *endpoints*
+  `/api/admin/overview/{cards,
   rulechunks, bans, errata, interactions, changes, claims, proposals, relations,
-  users, gaps, setcoverage, benchmark, feeds}`.
+  users, gaps, setcoverage, benchmark, feeds}`,
+  `/api/admin/changes/{id}/unconsolidate`.
 - **Set-dekking** — tegel + overzichtspagina: per set het basistotaal,
   aanwezige én exact ontbrekende kaartnummers (compacte reeksweergave,
   bv. "12, 45–47, 203"), dekking %, variantentelling, afwijkende
