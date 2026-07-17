@@ -133,8 +133,11 @@ public class KnowledgeGapsService(RbRulesDbContext db, BrainGraphService graph)
             .Select(g => new { g.Key, Last = g.Max(c => c.DetectedAt) })
             .ToDictionaryAsync(g => g.Key, g => g.Last, ct);
 
+        // IgnoredAt (#180): een genegeerde bron is een bewuste beoordeling
+        // ("levert niets op") — die hoort niet als signaal/aandachtspunt in
+        // het gaten-rapport terug te komen.
         var sources = (await db.Sources.AsNoTracking()
-                .Where(s => s.Enabled)
+                .Where(s => s.Enabled && s.IgnoredAt == null)
                 .OrderBy(s => s.TrustTier).ThenBy(s => s.Id)
                 .ToListAsync(ct))
             .Select(s => new GapSourceStatus(
@@ -171,8 +174,10 @@ public class KnowledgeGapsService(RbRulesDbContext db, BrainGraphService graph)
     private async Task<IReadOnlyList<GapSourceProcessingSignal>> BuildSourceProcessingAsync(
         CancellationToken ct)
     {
+        // IgnoredAt (#180): zelfde bereik als de bronnenlijst hierboven — een
+        // genegeerde bron mag geen "onvolledig/nooit gescand"-signaal geven.
         var sources = await db.Sources.AsNoTracking()
-            .Where(s => s.Enabled)
+            .Where(s => s.Enabled && s.IgnoredAt == null)
             .Select(s => new { s.Id, s.Name, s.TrustTier })
             .ToListAsync(ct);
         if (sources.Count == 0) return [];

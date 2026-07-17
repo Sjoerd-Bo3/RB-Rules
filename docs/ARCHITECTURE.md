@@ -416,7 +416,15 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `CardDetailService.DossierAsync`/#127: herkomst via `FeedId`, opbrengst
   via `SourceId` — Document/RuleChunk/Change — en genormaliseerde `SourceUrl`
   — BanEntry/Erratum/Correction — plus claims via de `ClaimSource`-FK, en
-  verwerkingsstatus uit `run_log`), `ReviewNoteService` (#124, beheerder-
+  verwerkingsstatus uit `run_log`), `SourceListService` (#180, de admin-
+  bronnenlijst-projectie: dezelfde bronnen als `/api/sources` — incl.
+  genegeerde, de UI filtert client-side — plus de negeer-kandidaat-vlag.
+  Bewust LICHTER dan `SourceDossierService`: vier gebatchte tellingen
+  (`run_log` "scan"-regels met status ≠ error, `Change`, `ClaimSource`,
+  `Correction.Provenance` op het `clarify-mining:{sourceId}`-prefix) over
+  de HELE lijst in plaats van een query per bron — geen N+1. De pure
+  drempelbeslissing (`SourceIgnoreCandidacy.Evaluate`, Domain) zit los van
+  de I/O), `ReviewNoteService` (#124, beheerder-
   notitie → geverifieerde ruling), `ChatRulingService` (#166, in-chat-ruling →
   verified/pending naar autoriteit), `DeckBrowserService` (#15 fase 3 spoor A:
   read-only projectie boven op de Piltover Archive-decks — lijst/facetten/
@@ -796,13 +804,71 @@ Kernpunten (`AskService.cs`):
 
 ### 6.2 De scan-pipeline
 
-`IngestService.ScanAsync`: per bron fetch → boilerplate-strip → hash →
-bron-type-classificatie (#188 increment 2, alleen trust-1-bronnen zonder
-LLM-classificatie of met een heuristische; een "admin"-override wordt nooit
-geherclassificeerd — `ClassifyContentKindAsync`, `SourceContentKind`) →
-diff → AI-classify → store + `run_log`, met
-flip-flop-suppressie en een naclassificatie-ronde (#58) voor changes die
-eerder zonder classificatie zijn opgeslagen. De `ScanScheduler`
+`IngestService.ScanAsync`: eerst de geplande bronnenlijst filteren op
+`Enabled && IgnoredAt == null` (#180) — **`Enabled`** is "tijdelijk uit",
+**`IgnoredAt`** (+ `IgnoreReason`) is een bewuste, blijvende beoordeling
+("dit levert niets op"); beide slaan de scan-lus over, maar zijn
+onafhankelijke velden (een genegeerde bron mag `Enabled = true` houden). Een
+gerichte handmatige rescan via `sourceId` bypasst dit filter net zoals hij
+`Enabled` al bypaste. **Bereik van "genegeerd"** (#180-review, finding 7):
+dezelfde `IgnoredAt == null`-poort zit ook in de verwerkende consumers —
+claims-mining (`ClaimMiningService`), clarify-mining
+(`ClarificationMiningService`), ban-/errata-extractie
+(`BanErrataSyncService`), regelsectie-indexering (`RuleChunkPipeline`) en
+het kennis-gaten-rapport (`KnowledgeGapsService`, beide bronsignalen) —
+geen LLM-/embed-kosten en geen aandachtssignalen meer voor een bron die per
+beoordeling niets oplevert. Bewust NIET gefilterd: alle weergave-/lookup-
+plekken (dossier, overzichten, joins), de dedupe-sets van scout en
+feed-crawl (een genegeerde bron moet juist bekend blijven zodat hij nooit
+opnieuw wordt voorgesteld of aangemaakt), de graph-projectie (Source-knopen
+dragen provenance van bestaande claims/rulings), de patch-notes-retractie
+(datahygiëne op bestaande corrections) en de Rules Hub-bans-extractie (vaste
+seed-bron). De near-duplicaat-samenvoeging
+(`FeedCrawlService.MergeNearDuplicateSourcesAsync`) slaat een groep met een
+genegeerde rij erin volledig over (run_log-melding, zelfde
+veiligste-variant als de #175-uitzondering) — een merge zou de bewuste
+negeer-beslissing stil ongedaan kunnen maken. Per bron dan: fetch →
+boilerplate-strip (incl. de playriftbound "Related Articles"-carousel sinds
+#205, `TextUtils.StripBoilerplate`) → hash → bron-type-classificatie (#188
+increment 2, alleen trust-1-bronnen zonder LLM-classificatie of met een
+heuristische; een "admin"-override wordt nooit geherclassificeerd —
+`ClassifyContentKindAsync`, `SourceContentKind`) → diff → AI-classify →
+store + `run_log`, met flip-flop-suppressie en een naclassificatie-ronde
+(#58) voor changes die eerder zonder classificatie zijn opgeslagen.
+**Strip-versionering + stille rebaseline** (#205-review, findings 1/3):
+`TextUtils.BoilerplateVersion` (const, historie in de docstring) versioneert
+het strip-gedrag; `Source.StripVersion` legt vast met welke versie
+`LastHash` berekend is. Elke strip-wijziging verandert de gestripte tekst —
+en dus de hash — van élke bron tegelijk; zonder versionering zou één
+verbetering een golf junk-"changes" over het hele register geven (de diff
+toont alleen de weggevallen boilerplate). Wijkt `StripVersion` af (null =
+rij van vóór het veld), dan REBASELINET de scan stil: verse Document-rij
+met de opnieuw gestripte inhoud (mining-markers `ClaimsMinedAt`/`ClarifiedAt`
+reizen mee van de vorige versie — inhoudelijk hetzelfde artikel, dus geen
+her-mine-kosten), `LastHash` + `StripVersion` bijgewerkt, run_log-detail
+"boilerplate-rebaseline v{n}", en GÉÉN diff/Change. Elke bron rebaselinet zo
+exact één keer, automatisch, ongeacht wie de eerste scan triggert. Een échte
+inhoudelijke wijziging rond de bump komt via "rebaseline eerst, diff daarna"
+binnen (twee scans, gedocumenteerd); valt hij exact in het ene
+rebaseline-venster, dan absorbeert de baseline hem — hash-only kan
+strip-ruis niet van echte delta scheiden binnen één scan, en dat venster is
+één scan-tick. **One-shot patch-notes-Change (#205):** heeft een trust-1
+patch-notes-bron nog GEEN niet-editoriale `Change` én nog geen
+one-shot-memo (`PatchNotesOneShotChange.IsCandidate`, Domain), dan behandelt
+de scan de volledige inhoud als delta — op het gewone pad óók als de hash
+ongewijzigd is t.o.v. `LastHash` (de vroege "unchanged"-kortsluiting wijkt
+daarvoor), en óók op het rebaseline-pad (de Vendetta-backfill valt anders
+precies in dat gat: haar eerste post-deploy-scan is meteen haar rebaseline).
+Het minten schrijft een **run_log-memo** (kind `oneshot-patchnotes`, Ref =
+sourceId — zelfde grootboek-idioom als `SetReleaseService`) dat de guard
+sluit onder zijn eigen output (#205-review, findings 4/5/9): wordt de
+geminte Change (meteen of via de #58-naclassificatie later) als "editorial"
+gelabeld, dan blokkeert het memo een eeuwige her-mint-lus. Dat dekt zowel
+een gloednieuwe bron als de backfill van een bron die vóór deze fix al
+zonder Change gescand was; een terugkerende patch-notes-pagina
+(core-rules-patch-notes) raakt deze tak na haar eigen eerste scan nooit
+meer, want die heeft dan al een niet-editoriale Change. De
+`ScanScheduler`
 (BackgroundService) draait elk uur een scan van
 de bronnen die aan de beurt zijn (cadence), stuurt web-push bij high-severity,
 her-indexeert regels en bans bij nieuwe/gewijzigde documenten, checkt de

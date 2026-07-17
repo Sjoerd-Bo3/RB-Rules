@@ -110,6 +110,29 @@ public class ClaimMiningServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_GenegeerdeBron_WordtNietGemined()
+    {
+        // #180-review (finding 7): genegeerd gate't niet alleen de scan-lus
+        // maar ook de mining-consumers — geen LLM-kosten meer aan een bron
+        // die per beoordeling niets oplevert. Bestaande claims blijven staan
+        // (negeren is geen delete); hier: het ongeminede document blijft
+        // gewoon onaangeroerd liggen.
+        using var db = NewDb();
+        var doc = await SeedCommunityDocAsync(db);
+        var src = await db.Sources.SingleAsync(s => s.Id == SourceId);
+        src.IgnoredAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+        var svc = new ClaimMiningService(db, Ai(() => OneClaimAnswer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Documents);
+        Assert.Equal(0, r.NewClaims);
+        Assert.Null(doc.ClaimsMinedAt);
+        Assert.Empty(await db.Claims.ToListAsync());
+    }
+
+    [Fact]
     public async Task RunAsync_GeslaagdeExtractie_MarkeertDocument_EnSlaatClaimOp()
     {
         using var db = NewDb();

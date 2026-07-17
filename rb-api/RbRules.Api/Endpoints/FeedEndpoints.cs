@@ -8,8 +8,12 @@ public static class FeedEndpoints
     public static void MapFeedEndpoints(this IEndpointRouteBuilder app)
     {
         // ── Publiek ────────────────────────────────────────────────────
+        // Genegeerde bronnen (#180) horen niet in de standaard bronnenlijst —
+        // het beheer gebruikt voor het volledige (incl. genegeerd) overzicht
+        // /api/admin/sources (SourceListService, met de negeer-kandidaat-vlag).
         app.MapGet("/api/sources", async (RbRulesDbContext db) =>
             await db.Sources
+                .Where(s => s.IgnoredAt == null)
                 .OrderBy(s => s.TrustTier).ThenByDescending(s => s.Rank)
                 .ToListAsync());
 

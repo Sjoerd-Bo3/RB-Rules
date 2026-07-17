@@ -60,6 +60,42 @@ public class BoilerplateTests
             $"<nav>menu-v2 <a href='/x'>nieuw</a></nav>{content}")));
         Assert.Equal(v1, v2);
     }
+
+    // #205: playriftbound-artikelen (bv. de Vendetta patch notes) tonen een
+    // "Related Articles"-carousel in een gewone <section id="related-articles">
+    // (dus NIET in een <aside>) die van scan tot scan verandert zodra elders
+    // op de site een nieuw artikel verschijnt — editorial-ruis in de
+    // wijzigingen-feed. Fixture spiegelt de echte markup-vorm (data-testid +
+    // andere attributen vóór id, zoals playriftbound.com die rendert).
+    private static string RelatedArticlesSection(string relatedTitle) =>
+        "<section data-testid=\"article-card-carousel\" layout=\"3up\" id=\"related-articles\" class=\"blade\">"
+        + "<div class=\"header\"><h2>Related Articles</h2></div>"
+        + $"<a href=\"/en-us/news/announcements/related-slug\">{relatedTitle}</a>"
+        + "</section>";
+
+    [Fact]
+    public void StripBoilerplate_RemovesRelatedArticlesCarousel()
+    {
+        var html = "<main>Core Rules: Vendetta Patch Notes. Legion is a dependent keyword.</main>"
+                   + RelatedArticlesSection("July Ban List Updates");
+
+        var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(html));
+
+        Assert.Contains("Legion is a dependent keyword", text);
+        Assert.DoesNotContain("Related Articles", text);
+        Assert.DoesNotContain("July Ban List Updates", text);
+    }
+
+    [Fact]
+    public void StripBoilerplate_RelatedArticlesChangeDoesNotChangeHash()
+    {
+        const string content = "<main>Legion is a dependent keyword.</main>";
+        var v1 = TextUtils.Sha256(TextUtils.HtmlToText(TextUtils.StripBoilerplate(
+            content + RelatedArticlesSection("July Ban List Updates"))));
+        var v2 = TextUtils.Sha256(TextUtils.HtmlToText(TextUtils.StripBoilerplate(
+            content + RelatedArticlesSection("August Set Release"))));
+        Assert.Equal(v1, v2);
+    }
 }
 
 public class SchedulingTests

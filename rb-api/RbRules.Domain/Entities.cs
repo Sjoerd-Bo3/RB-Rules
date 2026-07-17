@@ -61,6 +61,35 @@ public class Source
     /// consensus-poort van de patch-notes-retractie bovendien als menselijke
     /// bevestiging). Null zolang <see cref="ContentKind"/> zelf null is.</summary>
     public string? ContentKindSource { get; set; }
+    /// <summary>Negeren met reden (#180): een BEWUSTE beoordeling dat deze
+    /// bron niets aan het systeem toevoegt (merch/toernooi-/preorder-
+    /// artikelen die de feed-crawl toch als trust-1 registreert) — nadrukkelijk
+    /// iets anders dan <see cref="Enabled"/> ("tijdelijk uit"): een genegeerde
+    /// bron kan <see cref="Enabled"/> op true laten staan, de scan-lus
+    /// (<see cref="RbRules.Infrastructure.IngestService"/>) slaat 'm sowieso
+    /// over. Null = niet genegeerd. Negeren is geen delete: bestaande
+    /// Document/Change-rijen blijven onaangeroerd, en net als de #167-
+    /// tombstone voor een verwijderde feed-bron blijft de rij zelf bestaan
+    /// zodat FeedCrawlService 'm nooit stilzwijgend heradopteert of
+    /// hercreëert (de known-URL-dedup ziet de rij gewoon nog staan).</summary>
+    public DateTimeOffset? IgnoredAt { get; set; }
+    /// <summary>Vrije tekst, alleen zinvol samen met <see cref="IgnoredAt"/>
+    /// (null zolang die null is) — bv. "merch/preorder-artikel, geen
+    /// regelbron" of "levert na meerdere scans niets op".</summary>
+    public string? IgnoreReason { get; set; }
+    /// <summary>Strip-versionering (#205-review): de <see
+    /// cref="TextUtils.BoilerplateVersion"/> waarmee <see cref="LastHash"/>
+    /// (en het bijbehorende laatste Document) is berekend. Elke wijziging
+    /// aan <see cref="TextUtils.StripBoilerplate"/> verandert de gestripte
+    /// tekst — en dus de hash — van élke bron tegelijk; zonder dit veld zou
+    /// zo'n verbetering één golf junk-"changes" over het hele register
+    /// geven (de diff toont dan alleen de weggevallen boilerplate). Wijkt
+    /// dit veld af van de actuele versie, dan doet de scan een STILLE
+    /// rebaseline (nieuwe baseline zonder diff/Change — zie
+    /// <see cref="RbRules.Infrastructure.IngestService"/>). Null (alle
+    /// rijen van vóór dit veld) telt als verouderd: elke bron rebaselinet
+    /// exact één keer, automatisch, bij de eerstvolgende scan.</summary>
+    public int? StripVersion { get; set; }
 }
 
 /// <summary>Bron-feed (#167): een index-pagina die periodiek wordt afgespeurd

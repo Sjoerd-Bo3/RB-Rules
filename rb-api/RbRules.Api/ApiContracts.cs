@@ -13,6 +13,12 @@ public record SourcePatch(
     string? Name, string? Url, short? TrustTier, int? Rank, string? Cadence, bool? Enabled,
     string? ContentKind = null);
 
+/// <summary>Negeren van een bron met reden (#180) — los van <see
+/// cref="SourcePatch.Enabled"/>: negeren is een bewuste, blijvende
+/// beoordeling ("levert niets op"), Enabled is "tijdelijk uit". Reason is
+/// vrije tekst, puur informatief (geen validatie op de inhoud zelf).</summary>
+public record SourceIgnoreRequest(string? Reason);
+
 /// <summary>Beheerder-bewerking van een bron-feed (#167). CategoryFilter leeg
 /// (""), niet null, betekent expliciet "alle categorieën" (het filter uit).</summary>
 public record FeedPatch(

@@ -68,6 +68,26 @@ public class BanErrataSyncServiceTests
     }
 
     [Fact]
+    public async Task SyncAsync_GenegeerdeBron_WordtNietGestructureerd()
+    {
+        // #180-review (finding 7): een genegeerde errata-bron doet niet meer
+        // mee in de extractie — geen LLM-kosten en geen verse errata-rijen
+        // uit een bron die per beoordeling niets oplevert.
+        using var db = NewDb();
+        Seed(db);
+        await db.SaveChangesAsync();
+        var src = await db.Sources.SingleAsync();
+        src.IgnoredAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+        var svc = new BanErrataSyncService(db, Ai(() => ErrataJson("Zou niet mogen landen.")));
+
+        var r = await svc.SyncAsync();
+
+        Assert.Equal(0, r.Errata);
+        Assert.Empty(await db.Errata.ToListAsync());
+    }
+
+    [Fact]
     public async Task SyncAsync_OrphanFromRemovedSource_IsDeleted()
     {
         using var db = NewDb();

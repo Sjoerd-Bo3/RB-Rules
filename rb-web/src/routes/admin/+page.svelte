@@ -10,6 +10,12 @@
 		cadence: string; enabled: boolean; lastChecked: string | null;
 		// Herkomst (#167): welke feed dit artikel ontdekte; null = handmatig/legacy.
 		feedId: string | null;
+		// Negeren met reden (#180): los van `enabled` ("tijdelijk uit") — een
+		// bewuste, blijvende beoordeling dat de bron niets oplevert.
+		// isIgnoreCandidate: berekend signaal (SourceIgnoreCandidacy) — na
+		// meerdere scans nog steeds 0 changes/claims/rulings.
+		ignoredAt: string | null; ignoreReason: string | null;
+		isIgnoreCandidate: boolean;
 	}
 	// Naam + id volstaat voor de "stamt van: …"-koppeling hieronder; het
 	// volledige beheer (toevoegen/bewerken/verwijderen) zit op de eigen
@@ -198,6 +204,14 @@
 	}
 
 	const sources = $derived(data.sources as Source[]);
+	// Negeren (#180): client-side gefilterd, zelfde patroon als de andere
+	// chip-gefilterde lijsten hieronder (openCorrections, mechanicCandidates)
+	// — de admin-endpoint levert bewust alles in één keer.
+	const activeSources = $derived(sources.filter((s) => !s.ignoredAt));
+	const ignoredSources = $derived(sources.filter((s) => s.ignoredAt));
+	let showIgnored = $state(false);
+	// Reden-invoer per bron vóór het negeren (#180) — pas gelezen bij submit.
+	let ignoreReasonDraft = $state<Record<string, string>>({});
 	// Herkomst-lookup (#167): id → naam, voor de "stamt van: …"-koppeling in
 	// de bronnentabel; het volledige feed-beheer zit op de eigen pagina.
 	const feedNames = $derived(
@@ -616,15 +630,25 @@
 		{/if}
 
 		<!-- Bronnen -->
-		<h2>Bronnen <span class="meta">(<a class="meta-link" href="/admin/overview/feeds">bron-feeds beheren</a> — index-pagina's die hier automatisch nieuwe bronnen in zetten)</span></h2>
+		<h2>
+			Bronnen <span class="meta">(<a class="meta-link" href="/admin/overview/feeds">bron-feeds beheren</a> — index-pagina's die hier automatisch nieuwe bronnen in zetten)</span>
+			<button type="button" class="ghost small" onclick={() => (showIgnored = !showIgnored)}>
+				Genegeerd ({ignoredSources.length})
+			</button>
+		</h2>
 		<div class="table-wrap">
 		<table>
-			<thead><tr><th>Bron</th><th>Trust</th><th>Cadans</th><th>Herkomst</th><th>Laatst gecontroleerd</th><th>Actief</th></tr></thead>
+			<thead><tr><th>Bron</th><th>Trust</th><th>Cadans</th><th>Herkomst</th><th>Laatst gecontroleerd</th><th>Actief</th><th>Negeren</th></tr></thead>
 			<tbody>
-				{#each sources as s (s.id)}
+				{#each activeSources as s (s.id)}
 					{@const dossier = sourceDossiers[s.id]}
 					<tr id="bron-{s.id}">
-						<td><strong>{s.name}</strong><br /><a class="meta" href={s.url}>{s.id}</a></td>
+						<td>
+							<strong>{s.name}</strong><br /><a class="meta" href={s.url}>{s.id}</a>
+							{#if s.isIgnoreCandidate}
+								<br /><span class="badge warn-b" title="Meerdere scans, nog steeds geen changes/claims/rulings">levert niets op — negeren?</span>
+							{/if}
+						</td>
 						<td>{s.trustTier}</td>
 						<td>{s.cadence}</td>
 						<td class="meta">
@@ -642,9 +666,20 @@
 								<button class="ghost small">{s.enabled ? 'Aan' : 'Uit'}</button>
 							</form>
 						</td>
+						<td>
+							<form method="POST" action="?/ignoreSource" class="ignore-form" use:enhance>
+								<input type="hidden" name="id" value={s.id} />
+								<input
+									type="text" name="reason" placeholder="reden (optioneel)"
+									value={ignoreReasonDraft[s.id] ?? ''}
+									oninput={(e) => (ignoreReasonDraft[s.id] = e.currentTarget.value)}
+								/>
+								<button class="ghost small" title="Bron blijft geregistreerd (geen delete) — de scan-lus slaat 'm voortaan over">Negeer</button>
+							</form>
+						</td>
 					</tr>
 					<tr class="dossier-row">
-						<td colspan="6" class="dossier-cell">
+						<td colspan="7" class="dossier-cell">
 							<!-- Bron-dossier (#171): wat heeft déze bron opgeleverd, en is dat
 							     compleet verwerkt? Lazy, zelfde uitklap-patroon als de
 							     mechaniek-bewijs hierboven. -->
@@ -759,6 +794,35 @@
 			</tbody>
 		</table>
 		</div>
+
+		{#if showIgnored}
+			<!-- Genegeerde bronnen (#180): apart van de standaardlijst, net als de
+			     archief-chip elders — negeren is geen delete, bestaande
+			     documenten/changes blijven staan; "Terugzetten" wist de
+			     negeer-status weer. -->
+			<div class="table-wrap">
+			<table>
+				<thead><tr><th>Bron</th><th>Reden</th><th>Genegeerd op</th><th></th></tr></thead>
+				<tbody>
+					{#each ignoredSources as s (s.id)}
+						<tr>
+							<td><strong>{s.name}</strong><br /><a class="meta" href={s.url}>{s.id}</a></td>
+							<td class="meta">{s.ignoreReason ?? '—'}</td>
+							<td class="meta">{s.ignoredAt ? new Date(s.ignoredAt).toLocaleString('nl-NL') : '—'}</td>
+							<td>
+								<form method="POST" action="?/unignoreSource" use:enhance>
+									<input type="hidden" name="id" value={s.id} />
+									<button class="ghost small">Terugzetten</button>
+								</form>
+							</td>
+						</tr>
+					{:else}
+						<tr><td colspan="4" class="meta">Geen genegeerde bronnen.</td></tr>
+					{/each}
+				</tbody>
+			</table>
+			</div>
+		{/if}
 
 		<!-- Primer-kennisdocs (#49): spelbegrip reviewen -->
 		{#if knowledge.length}
@@ -997,6 +1061,13 @@
 	}
 	.dossier-list { margin: 4px 0 0; padding-left: 18px; }
 	.dossier-list li { margin-bottom: 4px; line-height: 1.5; overflow-wrap: anywhere; }
+	/* Negeer-form (#180): reden-invoer + knop compact naast elkaar, wrapt op
+	   smalle viewports i.p.v. de tabel breder te duwen (.table-wrap vangt de
+	   rest van de tabel al op met een eigen horizontale scroll). Geen eigen
+	   font-size: de globale iOS-zoom-fix (app.css, input < 740px = 16px)
+	   moet kunnen blijven winnen. */
+	.ignore-form { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+	.ignore-form input[type='text'] { width: 130px; padding: 4px 6px; }
 	table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
 	th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 	th { color: var(--muted); font-size: 0.82rem; font-weight: 600; }

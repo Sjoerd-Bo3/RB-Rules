@@ -305,6 +305,43 @@ public static class AdminEndpoints
                 string id, SourceDossierService dossier, CancellationToken ct) =>
             await dossier.GetAsync(id, ct) is { } d ? Results.Ok(d) : Results.NotFound());
 
+        // Bronnenlijst voor het beheer (#180): incl. genegeerde bronnen (de
+        // UI filtert client-side, zelfde patroon als de andere lijsten op de
+        // admin-pagina) plus de negeer-kandidaat-vlag.
+        admin.MapGet("/sources", async (SourceListService list, CancellationToken ct) =>
+            Results.Ok(await list.ListAsync(ct)));
+
+        // Negeren met reden (#180): apart van Enabled (dat blijft "tijdelijk
+        // uit") — negeren is een bewuste, blijvende beoordeling ("dit levert
+        // niets op"). Genegeerd ⇒ de scan-lus slaat de bron over
+        // (IngestService) en de bron verdwijnt uit de standaard
+        // bronnenlijst/-views tot de beheerder 'm terugzet; bestaande
+        // Document/Change-rijen blijven onaangeroerd (negeren is geen
+        // delete). Herkomst-bescherming tegen de feed-crawl (#175-patroon)
+        // hoeft hier niet apart geregeld: de Source-rij zelf blijft bestaan,
+        // dus FeedCrawlService's known-URL-dedup ziet 'm gewoon nog staan en
+        // adopteert/hercreëert nooit een duplicaat.
+        admin.MapPost("/sources/{id}/ignore", async (
+            string id, SourceIgnoreRequest? body, RbRulesDbContext db) =>
+        {
+            var src = await db.Sources.FindAsync(id);
+            if (src is null) return Results.NotFound();
+            src.IgnoredAt = DateTimeOffset.UtcNow;
+            src.IgnoreReason = string.IsNullOrWhiteSpace(body?.Reason) ? null : body.Reason.Trim();
+            await db.SaveChangesAsync();
+            return Results.Ok(src);
+        });
+
+        admin.MapPost("/sources/{id}/unignore", async (string id, RbRulesDbContext db) =>
+        {
+            var src = await db.Sources.FindAsync(id);
+            if (src is null) return Results.NotFound();
+            src.IgnoredAt = null;
+            src.IgnoreReason = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(src);
+        });
+
         // Bron-feeds (#167): zelf toevoegen/beheren, patroon van de
         // sources-endpoints hierboven. UrlGuard op elke (nieuwe) URL — een
         // feed-URL is net zo goed externe/beheerder-invoer als een bron-URL.

@@ -16,7 +16,12 @@ public class RuleChunkPipeline(RbRulesDbContext db, EmbeddingService embeddings)
         bool force = false, Action<string>? progress = null, CancellationToken ct = default)
     {
         var results = new List<RuleIndexResult>();
-        var sources = await db.Sources.Where(s => s.Enabled).ToListAsync(ct);
+        // IgnoredAt (#180): een genegeerde bron levert per beoordeling niets
+        // op — geen her-indexering/embeddings meer (zelfde bereik-afspraak
+        // als de scan-lus; bestaande rule_chunks blijven gewoon staan).
+        var sources = await db.Sources
+            .Where(s => s.Enabled && s.IgnoredAt == null)
+            .ToListAsync(ct);
 
         foreach (var src in sources)
         {

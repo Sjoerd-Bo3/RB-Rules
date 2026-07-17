@@ -57,7 +57,12 @@ public class IngestService(
             await db.SaveChangesAsync(ct);
         }
 
-        var query = db.Sources.Where(s => s.Enabled);
+        // Genegeerd (#180) ≠ uitgeschakeld: beide slaan de geplande scan-lus
+        // over (geen LLM-kosten voor een bron die niets oplevert), maar een
+        // handmatige rescan van één specifieke bron (sourceId hieronder)
+        // bypasst dit filter net zoals hij Enabled al bypasste — de
+        // beheerder mag een genegeerde bron altijd gericht opnieuw bekijken.
+        var query = db.Sources.Where(s => s.Enabled && s.IgnoredAt == null);
         if (sourceId is not null) query = db.Sources.Where(s => s.Id == sourceId);
         var sources = await query
             .OrderBy(s => s.TrustTier).ThenByDescending(s => s.Rank)
@@ -233,8 +238,45 @@ public class IngestService(
                 && (src.ContentKind is null || src.ContentKindSource == SourceContentKind.HeuristicOrigin))
                 await ClassifyContentKindAsync(src, text, ct);
 
+            var effectiveKind = SourceContentKind.Resolve(src.ContentKind, src.Id, src.Url, src.Name);
+
             var hash = TextUtils.Sha256(text);
-            if (src.LastHash == hash) return new(src.Id, "unchanged");
+
+            // Strip-versionering (#205-review): is de opgeslagen baseline met
+            // een OUDERE StripBoilerplate-versie berekend (null = van vóór
+            // dit veld), dan is elk hash-verschil hier hoogstwaarschijnlijk
+            // de strip-wijziging zelf — een diff zou alleen de weggevallen
+            // boilerplate tonen, over het hele register tegelijk (één golf
+            // junk-changes). Stille rebaseline i.p.v. diffen; een échte
+            // inhoudelijke wijziging die exact in dit ene rebaseline-venster
+            // valt wordt in de nieuwe baseline geabsorbeerd (hash-only kan
+            // strip-ruis niet van echte delta scheiden binnen één scan) —
+            // dat venster is één scan-tick; een wijziging daarná komt bij de
+            // eerstvolgende reguliere scan gewoon als diff-Change binnen
+            // (rebaseline eerst, diff daarna — twee scans, gedocumenteerd
+            // gedrag).
+            if (src.LastHash is not null && src.StripVersion != TextUtils.BoilerplateVersion)
+                return await RebaselineAsync(src, text, hash, fileUrl, effectiveKind, ct);
+
+            // Vanaf hier wordt elke opgeslagen hash met de actuele strip
+            // berekend — ook de allereerste baseline van een nieuwe bron.
+            src.StripVersion = TextUtils.BoilerplateVersion;
+
+            if (src.LastHash == hash)
+            {
+                // #205 backfill: de inhoud is ongewijzigd (vandaar de vroege
+                // "unchanged" hieronder), maar als deze patch-notes-bron nog
+                // NOOIT een niet-editoriale Change kreeg (bv. na een
+                // content-kind-correctie naar patch-notes ná de rebaseline)
+                // mag de al opgeslagen inhoud alsnog als delta verwerkt
+                // worden — voor een one-shot-artikel is dit de enige kans,
+                // want de inhoud verandert per definitie nooit meer.
+                if (await IsPatchNotesOneShotCandidateAsync(src, effectiveKind, ct)
+                    && await TryAddOneShotPatchNotesChangeAsync(src, text, ct))
+                    return new(src.Id, "changed",
+                        "patch notes: alsnog een inhoudelijke Change gemaakt (backfill, #205)");
+                return new(src.Id, "unchanged");
+            }
 
             // Flip-flop-suppressie: sommige pagina's (Rules Hub) wisselen per
             // request de volgorde van gerelateerde-artikellinks. Is deze exacte
@@ -286,8 +328,21 @@ public class IngestService(
                 // Change.DetectedAt elders in deze pipeline).
                 src.UpdatedAt = DateTimeOffset.UtcNow;
             }
-            else if (src.TrustTier == 1
-                     && SourceContentKind.Resolve(src.ContentKind, src.Id, src.Url, src.Name) == SourceContentKind.Faq)
+            else if (await IsPatchNotesOneShotCandidateAsync(src, effectiveKind, ct))
+            {
+                // #205: een gloednieuwe patch-notes-bron (isNew, dus normaal
+                // gesproken niets om te diffen) — de volledige inhoud IS de
+                // delta voor een one-shot per-set-artikel (zie
+                // PatchNotesOneShotChange voor de volledige motivatie). Dit is
+                // de opvolger van de #185-beslissing om patch notes hier
+                // NIET te raken: dat bleef correct voor een terugkerende
+                // pagina (core-rules-patch-notes, die na haar eigen eerste
+                // scan allang niet-editoriale Changes heeft en dus deze tak
+                // nooit meer raakt), maar liet een one-shot-artikel
+                // (Vendetta) permanent zonder inhoudelijke Change achter.
+                await TryAddOneShotPatchNotesChangeAsync(src, text, ct);
+            }
+            else if (src.TrustTier == 1 && effectiveKind == SourceContentKind.Faq)
             {
                 // #177: een FAQ-/clarificatie-artikel heeft bij zijn
                 // allereerste scan geen vorige versie om te diffen (isNew),
@@ -309,18 +364,12 @@ public class IngestService(
                 // bron, maar nu ook correct voor een bron die de LLM als
                 // "faq" herkent zonder de magische woorden in zijn slug.
                 //
-                // #185: patch-notes-bronnen matchen niet op "faq", dus deze
-                // tak vuurt niet op hun allereerste scan — een patch-notes-
-                // artikel heeft dan gewoon "new"-status zonder Change, exact
-                // zoals elke andere gewone bron (er is nog niets om te
-                // diffen). Bewust geen vervangende templated Change voor
-                // patch notes: hun ÉCHTE duiding komt vanaf hun TWEEDE scan
-                // gewoon via de normale diff hierboven (voor/na), en die is
-                // inhoudelijk beter dan een sjabloonzin zonder regeltekst.
-                // Voor FAQ-/clarificatie-bronnen blijft dit sjabloon wél
-                // zinvol: die krijgen NOOIT een diff-Change (elke scan mint
-                // dezelfde soort inhoud opnieuw als losse rulings, niet als
-                // delta), dus zonder dit sjabloon zou hun aankomst permanent
+                // #205: patch-notes-bronnen krijgen sinds #205 hun eigen tak
+                // hierboven (one-shot delta) in plaats van niets — dit
+                // sjabloon blijft alleen voor FAQ-/clarificatie-bronnen: die
+                // krijgen NOOIT een diff-Change (elke scan mint dezelfde
+                // soort inhoud opnieuw als losse rulings, niet als delta),
+                // dus zonder dit sjabloon zou hun aankomst permanent
                 // onzichtbaar blijven in de wijzigingen-feed.
                 db.Changes.Add(new Change
                 {
@@ -390,6 +439,101 @@ public class IngestService(
         if (string.IsNullOrWhiteSpace(diff)) return null;
         var raw = await ai.AskAsync(Classifier.BuildPrompt(sourceName, diff), Classifier.SystemPrompt, ct: ct);
         return raw is null ? null : Classifier.Parse(raw);
+    }
+
+    /// <summary>Stille rebaseline (#205-review): de opgeslagen baseline is met
+    /// een oudere <see cref="TextUtils.BoilerplateVersion"/> berekend — sla de
+    /// opnieuw gestripte inhoud op als verse baseline (nieuwste Document-rij
+    /// voedt de her-indexering) ZONDER diff/Change: het hash-verschil is de
+    /// strip-wijziging zelf, geen regelwijziging. De mining-markers
+    /// (ClaimsMinedAt/ClarifiedAt) reizen mee van de vorige documentversie —
+    /// inhoudelijk is dit hetzelfde artikel (alleen boilerplate weggevallen),
+    /// dus een verse claims-/clarify-mine zou alleen dezelfde LLM-kosten
+    /// herhalen. De one-shot-candidacy (#205) draait daarna wél: de
+    /// Vendetta-backfill valt anders precies in dit gat — haar allereerste
+    /// post-deploy-scan is meteen ook haar rebaseline. De aanroeper
+    /// (ScanAsync) logt het resultaat als gebruikelijk naar run_log (kind
+    /// "scan"), met "boilerplate-rebaseline v{n}" in het detail.</summary>
+    private async Task<IngestResult> RebaselineAsync(
+        Source src, string text, string hash, string? fileUrl, string effectiveKind, CancellationToken ct)
+    {
+        src.StripVersion = TextUtils.BoilerplateVersion;
+
+        if (src.LastHash != hash)
+        {
+            var prevDoc = await db.Documents
+                .Where(d => d.SourceId == src.Id)
+                .OrderByDescending(d => d.RetrievedAt)
+                .FirstOrDefaultAsync(ct);
+            db.Documents.Add(new Document
+            {
+                SourceId = src.Id, Content = text, ContentHash = hash, FileUrl = fileUrl,
+                ClaimsMinedAt = prevDoc?.ClaimsMinedAt, ClarifiedAt = prevDoc?.ClarifiedAt,
+            });
+            src.LastHash = hash;
+        }
+
+        if (await IsPatchNotesOneShotCandidateAsync(src, effectiveKind, ct)
+            && await TryAddOneShotPatchNotesChangeAsync(src, text, ct))
+            return new(src.Id, "changed",
+                $"boilerplate-rebaseline v{TextUtils.BoilerplateVersion} + one-shot "
+                + "patch-notes-Change (backfill, #205)");
+
+        return new(src.Id, "unchanged", $"boilerplate-rebaseline v{TextUtils.BoilerplateVersion}");
+    }
+
+    /// <summary>#205: cheap-eerst guard — de trustTier/kind-check gebeurt vóór
+    /// de twee DB-queries, zodat een gewone bron (verreweg de meeste scans)
+    /// nooit de Changes-/run_log-tabel raakt voor deze beslissing. Het
+    /// run_log-memo (#205-review) sluit de guard onder zijn eigen output:
+    /// ook als de geminte Change (nu of via de #58-naclassificatie later)
+    /// "editorial" gelabeld wordt, komt er nooit een tweede poging.</summary>
+    private async Task<bool> IsPatchNotesOneShotCandidateAsync(
+        Source src, string effectiveKind, CancellationToken ct)
+    {
+        if (src.TrustTier != 1 || effectiveKind != SourceContentKind.PatchNotes) return false;
+        var hasNonEditorialChange = await db.Changes
+            .AnyAsync(c => c.SourceId == src.Id && c.ChangeType != "editorial", ct);
+        var hasOneShotMemo = await db.RunLogs
+            .AnyAsync(l => l.Kind == PatchNotesOneShotChange.LedgerKind && l.Ref == src.Id, ct);
+        return PatchNotesOneShotChange.IsCandidate(
+            src.TrustTier, effectiveKind, hasNonEditorialChange, hasOneShotMemo);
+    }
+
+    /// <summary>#205: bouwt de one-shot Change voor een patch-notes-bron
+    /// zonder niet-editoriale Change — de volledige inhoud is de delta (lege
+    /// "voor"-versie), dezelfde AI-classificatie/samenvatting als een echte
+    /// diff (ChangeType uit de classifier, niet hardcoded). Schrijft in
+    /// dezelfde SaveChanges ook het run_log-memo (<see
+    /// cref="PatchNotesOneShotChange.LedgerKind"/>) dat een tweede poging
+    /// voorgoed blokkeert (#205-review — zonder memo zou een als "editorial"
+    /// geclassificeerde one-shot elke scan opnieuw gemint worden). True als
+    /// er een Change is toegevoegd; false bij een lege diff (leeg document —
+    /// niets te classificeren, geen memo: een latere scan mét inhoud mag
+    /// alsnog minten).</summary>
+    private async Task<bool> TryAddOneShotPatchNotesChangeAsync(Source src, string text, CancellationToken ct)
+    {
+        var diff = DiffUtils.LineDiff("", text);
+        if (string.IsNullOrWhiteSpace(diff)) return false;
+
+        var cls = await ClassifyAsync(src.Name, diff, ct);
+        db.Changes.Add(new Change
+        {
+            SourceId = src.Id,
+            ChangeType = cls?.ChangeType ?? "unknown",
+            Severity = cls?.Severity ?? "medium",
+            Summary = cls?.Summary,
+            Meaning = cls?.Meaning,
+            Diff = diff,
+        });
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = PatchNotesOneShotChange.LedgerKind, Ref = src.Id, Status = "ok",
+            Detail = "one-shot patch-notes-Change gemint (#205) — memo blokkeert een tweede "
+                     + "poging voor deze bron, ongeacht de (her)classificatie van de Change",
+        });
+        src.UpdatedAt = DateTimeOffset.UtcNow;
+        return true;
     }
 
     /// <summary>#188 increment 2: bron-type-classificatie via rb-ai ("faq" |

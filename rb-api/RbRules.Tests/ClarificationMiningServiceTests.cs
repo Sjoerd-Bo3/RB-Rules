@@ -119,6 +119,27 @@ public class ClarificationMiningServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_GenegeerdeBron_WordtNietGemined()
+    {
+        // #180-review (finding 7): genegeerd gate't niet alleen de scan-lus
+        // maar ook de clarify-mining — geen LLM-kosten meer aan een bron die
+        // per beoordeling niets oplevert. Bestaande rulings blijven staan
+        // (negeren is geen delete).
+        using var db = NewDb();
+        var doc = await SeedFaqDocAsync(db);
+        var src = await db.Sources.SingleAsync(s => s.Id == SourceId);
+        src.IgnoredAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+        var svc = new ClarificationMiningService(db, Ai(() => TwoConceptsAnswer), Embeddings(ok: true));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(0, r.Documents);
+        Assert.Null(doc.ClarifiedAt);
+        Assert.Empty(await db.Corrections.ToListAsync());
+    }
+
+    [Fact]
     public async Task RunAsync_GeforceerdeHerRun_ZelfdeExtractie_MaaktGeenDubbeleRuling()
     {
         // Idempotent op conceptniveau — óók als het document opnieuw wordt

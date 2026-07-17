@@ -332,13 +332,36 @@ public class FeedCrawlService(RbRulesDbContext db, HttpClient http)
     public async Task<int> MergeNearDuplicateSourcesAsync(CancellationToken ct = default)
     {
         var sources = await db.Sources.ToListAsync(ct); // getrackt: FeedId/verwijderen wijzigt mee
-        var groups = sources
+        var candidateGroups = sources
             .GroupBy(s => SourceScout.StrongNormalizeUrl(s.Url))
             .Where(g => g.Count() > 1)
             .Where(g => g.Select(s => SourceScout.NormalizeUrl(s.Url))
                 .Distinct(StringComparer.OrdinalIgnoreCase).Count() == g.Count())
             .ToList();
-        if (groups.Count == 0) return 0;
+
+        // IgnoredAt (#180-review, finding 8): een groep met een genegeerde
+        // rij erin blijft ongemoeid — zelfde veiligste-variant als de
+        // letterlijk-gelijke-URL-uitzondering (#175, klasse-doc). Zou de
+        // merge doorgaan, dan kan een niet-genegeerde winnaar een genegeerde
+        // loser opeten en daarmee de bewuste negeer-beslissing stil ongedaan
+        // maken (de pagina "herrijst" in de standaardlijst en de scan-lus).
+        // De beheerder lost het zelf op (loser verwijderen of terugzetten);
+        // de log maakt de botsing zichtbaar zonder er zelf een beslissing
+        // over te nemen.
+        var skipped = candidateGroups.Where(g => g.Any(s => s.IgnoredAt != null)).ToList();
+        foreach (var group in skipped)
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = LedgerKind, Ref = null, Status = "info",
+                Detail = "near-duplicaat-groep overgeslagen: bevat een genegeerde bron (#180) — "
+                         + $"los handmatig op ({string.Join(", ", group.Select(s => s.Id))})",
+            });
+        var groups = candidateGroups.Except(skipped).ToList();
+        if (groups.Count == 0)
+        {
+            if (skipped.Count > 0) await db.SaveChangesAsync(ct);
+            return 0;
+        }
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var merged = 0;

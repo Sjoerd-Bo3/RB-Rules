@@ -242,10 +242,32 @@ apart in §6.
   (embedding-uitval degradeert naar een genormaliseerde exacte-tekst-toets).
   De eerste scan van een **FAQ-/clarificatie**-bron krijgt ook meteen een
   sjabloon-`Change` (type "clarification") zodat de aankomst zelf al in de
-  wijzigingen-feed verschijnt (er is dan nog geen vorige versie om te diffen);
-  patch-notes-bronnen krijgen dat sjabloon sinds #185 níét — hun duiding komt
-  vanaf hun tweede scan gewoon via de normale voor/na-diff. *Job* `clarify`
-  (handmatig of nachtelijk via `ScanScheduler`) · *endpoints*
+  wijzigingen-feed verschijnt (er is dan nog geen vorige versie om te diffen).
+  **Patch-notes-bronnen (#205, herziening van #185)**: een terugkerende
+  patch-notes-pagina (core-rules-patch-notes) blijft zonder sjabloon — haar
+  duiding komt via de normale voor/na-diff vanaf de tweede scan, precies
+  zoals #185 bedoelde. Maar een per-set patch-notes-ARTIKEL (bv. "Core
+  Rules: Vendetta Patch Notes") is one-shot: het verandert na publicatie
+  nooit meer, dus die tweede-scan-diff komt er nooit en de regelwijzigingen
+  bleven daardoor structureel onzichtbaar. Guard i.p.v. "eerste scan": heeft
+  een patch-notes-bron nog GEEN niet-editoriale `Change` én nog geen
+  one-shot-memo (run_log kind `oneshot-patchnotes`, geschreven bij het
+  minten — zo start een later als "editorial" geherclassificeerde one-shot
+  nooit een her-mint-lus), dan behandelt de
+  scan de volledige inhoud als delta (lege "voor"-versie, dezelfde
+  classificatie/samenvatting als een echte diff — `ChangeType` uit de
+  classifier, niet hardcoded). Dat dekt ook de BACKFILL van een bron die
+  vóór deze fix al zonder Change gescand was (`PatchNotesOneShotChange`,
+  Domain). Editorial sidebar-ruis (de "Related Articles"-carousel op
+  playriftbound-artikelen, die van scan tot scan verandert zodra elders een
+  nieuw artikel verschijnt) telt niet als "al verwerkt" én wordt sinds #205
+  bovendien uit de hash/diff gestript (`TextUtils.StripBoilerplate`, zelfde
+  patroon als de Rules Hub-flip-flop-suppressie). Strip-wijzigingen zijn
+  geversioneerd (`TextUtils.BoilerplateVersion` + `Source.StripVersion`):
+  een bron met een verouderde versie rebaselinet stil bij de eerstvolgende
+  scan — nieuwe baseline zonder junk-Change en zonder her-mine-kosten, met
+  de one-shot-candidacy er direct achteraan (ARCHITECTURE §6.2). *Job*
+  `clarify` (handmatig of nachtelijk via `ScanScheduler`) · *endpoints*
   `/api/admin/jobs/clarify`, `/api/admin/corrections/{id}/reject`.
   **Bron, opmerking en her-evaluatie in de reviewqueue** (#184): elk
   correctie-item toont de bron-naam (resolvet voor clarify-mining-items via
@@ -382,6 +404,36 @@ apart in §6.
   bestaande data (#127-patroon) — geen embeddings, geen LLM.
   *Route* `/admin` (uitklap per bron) · *endpoint*
   `GET /api/admin/sources/{id}/dossier`.
+- **Bronnen negeren met reden** (#180) — de feed-crawl (AutoApprove op
+  officiële domeinen) registreert ook merch-/toernooi-/preorder-artikelen als
+  trust-1-bronnen, die niets aan de kennisbank toevoegen. `Source.IgnoredAt`
+  + `IgnoreReason` (nullable) markeren dat bewust en blijvend — nadrukkelijk
+  ANDERS dan `Enabled` (dat blijft "tijdelijk uit"; een genegeerde bron mag
+  `Enabled` gewoon op true laten staan). Genegeerd ⇒ de scan-lus
+  (`IngestService.ScanAsync`) én de verwerkende consumers (claims-/clarify-
+  mining, ban-/errata-extractie, regelsectie-indexering, het kennis-gaten-
+  rapport — #180-review, volledig bereik in ARCHITECTURE §6.2) slaan de bron
+  over (geen HTTP-fetch, geen LLM-kosten, geen aandachtssignalen) en de bron
+  verdwijnt uit de standaard bronnenlijst (het
+  publieke `/api/sources` filtert 'm eruit); een "Genegeerd (N)"-chip in de
+  admin-bronnentabel toont ze alsnog, met reden en een "Terugzetten"-knop.
+  Negeren is GEEN delete: bestaande `Document`/`Change`-rijen blijven staan,
+  en de bron-rij zelf blijft bestaan — dezelfde bescherming tegen
+  stille heraanmaak als de #167/#175-tombstone voor een verwijderde
+  feed-bron (`FeedCrawlService`'s known-URL-dedup ziet de rij gewoon nog
+  staan, dus die adopteert of hercreëert 'm nooit; de near-duplicaat-
+  samenvoeging slaat een groep met een genegeerde rij erin bovendien
+  volledig over, met run_log-melding — een merge zou de negeer-beslissing
+  stil ongedaan kunnen maken). **Negeer-kandidaten**:
+  de admin-bronnenlijst-projectie (`SourceListService`) berekent per bron —
+  goedkoop, vier gebatchte tellingen ongeacht het aantal bronnen, geen
+  aparte tabel — of die na ≥2 voltooide scans nog steeds niets heeft
+  opgeleverd (0 `Change`, 0 claims via `ClaimSource`, 0 clarify-mining-
+  rulings via `Correction.Provenance`); zo'n bron krijgt een hint ("levert
+  niets op — negeren?") in de lijst. De beheerder beslist altijd zelf — geen
+  automatisch negeren. *Route* `/admin` (bronnentabel + genegeerd-chip) ·
+  *endpoints* `GET /api/admin/sources`,
+  `POST /api/admin/sources/{id}/ignore|unignore`.
 - **Temporele precedentie** (#168) — naast gezag (`TrustTier`) telt nu ook
   wanneer iets gepubliceerd/bijgewerkt is. `Source.PublishedAt` (uit de
   bron-feed-artikeldatum) en `Source.UpdatedAt` (detectiemoment van een
@@ -819,8 +871,10 @@ apart in §6.
   "opnieuw evalueren"-actie die de opmerking bewaart en de hybride poort
   her-toetst (#184). *Endpoints* `/api/admin/knowledge/*`,
   `/api/admin/corrections/*` (incl. `/reevaluate`).
-- **Bronnenbeheer** — bronnen met trust/rank toevoegen/verwijderen.
-  *Endpoints* `/api/admin/sources`, `/api/admin/sources/{id}`.
+- **Bronnenbeheer** — bronnen met trust/rank toevoegen/verwijderen/negeren
+  (zie "Bronnen negeren met reden" in §4.1). *Endpoints*
+  `GET/POST /api/admin/sources`, `PATCH/DELETE /api/admin/sources/{id}`,
+  `POST /api/admin/sources/{id}/ignore|unignore`.
 
 ### 4.6 Platform, accounts & PWA
 
