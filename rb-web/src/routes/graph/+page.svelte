@@ -266,7 +266,7 @@
 			<svg viewBox="0 0 {W} {H}" role="img" aria-label="Netwerk rond {g.center.name}">
 				{#each layout.edges as e, i (i)}
 					<line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-						stroke="#263650" stroke-width="1.4"
+						style="stroke: var(--border-strong)" stroke-width="1.4"
 						stroke-dasharray={e.dashed ? '5 5' : undefined} />
 				{/each}
 				<!-- Index-key: dezelfde kaart mag in meerdere groepen voorkomen -->
@@ -274,22 +274,22 @@
 					{#if n.kind === 'mechanic'}
 						<a href="/cards?mechanic={encodeURIComponent(n.label)}">
 							<rect x={n.x - 54} y={n.y - 15} width="108" height="30" rx="15"
-								fill="#151f31" stroke="#4fbf8b" />
-							<text x={n.x} y={n.y + 4} text-anchor="middle" fill="#4fbf8b" font-size="12">{trim(n.label, 15)}</text>
+								style="fill: var(--surface); stroke: var(--ok)" />
+							<text x={n.x} y={n.y + 4} text-anchor="middle" style="fill: var(--ok)" font-size="12">{trim(n.label, 15)}</text>
 						</a>
 					{:else}
 						<a href="/graph?card={n.id}">
-							<circle cx={n.x} cy={n.y} r="8" fill={n.kind === 'interaction' ? '#e0a32e' : '#93a5c4'} />
-							<text x={n.x} y={n.y + 22} text-anchor="middle" fill="#93a5c4" font-size="11">{trim(n.label)}</text>
+							<circle cx={n.x} cy={n.y} r="8" style="fill: {n.kind === 'interaction' ? 'var(--warn)' : 'var(--muted)'}" />
+							<text x={n.x} y={n.y + 22} text-anchor="middle" style="fill: var(--muted)" font-size="11">{trim(n.label)}</text>
 							{#if n.sub}
-								<text x={n.x} y={n.y + 35} text-anchor="middle" fill="#e0a32e" font-size="9">{n.sub}</text>
+								<text x={n.x} y={n.y + 35} text-anchor="middle" style="fill: var(--warn)" font-size="9">{n.sub}</text>
 							{/if}
 						</a>
 					{/if}
 				{/each}
 				<!-- Centrum bovenop -->
-				<circle cx={CX} cy={CY} r="14" fill="#d98a4e" />
-				<text x={CX} y={CY - 24} text-anchor="middle" fill="#e8eefb" font-size="14" font-weight="700">{g.center.name}</text>
+				<circle cx={CX} cy={CY} r="14" style="fill: var(--accent)" />
+				<text x={CX} y={CY - 24} text-anchor="middle" style="fill: var(--text)" font-size="14" font-weight="700">{g.center.name}</text>
 			</svg>
 		</div>
 		<p class="meta legend">

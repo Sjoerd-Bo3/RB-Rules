@@ -258,7 +258,7 @@
 		border-right: 1px solid var(--border);
 	}
 	.brand-side {
-		display: none;
+		display: inline-flex;
 	}
 	.side-search input {
 		width: 100%;

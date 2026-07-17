@@ -122,10 +122,17 @@ apart in §6.
 
 ### 4.1 Regels & bronnen
 
-- **Wijzigingen-feed** — de homepage toont automatisch gedetecteerde
-  wijzigingen (bans, errata, regelupdates, set-releases) met bron, severity,
-  voor/na-diff en een menselijke samenvatting/betekenis. Flip-flop-suppressie
-  onderdrukt ruis van bronnen die per request de volgorde wisselen.
+- **Overzicht-dashboard** (#214) — de homepage `/` is een landingsdashboard:
+  een zoek-hero (Enter → `/ask`), statistiek-tegels (kaarten · geverifieerde
+  rulings · actieve bans · nieuwe wijzigingen, via `GET /api/stats`), een
+  paneel "Recente wijzigingen" (compacte ChangeCards) en "Spring naar"
+  (sectie-links met tellingen). *Route* `/` · *endpoint* `/api/stats`,
+  `/api/changes`.
+- **Wijzigingen-feed** — toont automatisch gedetecteerde wijzigingen (bans,
+  errata, regelupdates, set-releases) met bron, severity, voor/na-diff en een
+  menselijke samenvatting/betekenis; sinds #214 op de eigen route
+  `/wijzigingen` (de root is het dashboard). Flip-flop-suppressie onderdrukt
+  ruis van bronnen die per request de volgorde wisselen.
   **Changeconsolidatie (#206)**: meldt een officiële en een community-bron
   hetzelfde event (bv. dezelfde ban-update binnen 72 uur, met overlappende
   kaart-/sectiereferenties — een deterministische poort, `ChangeConsolidationGate`),
@@ -164,11 +171,14 @@ apart in §6.
   domeinkleur (Fury/Body/Mind/Calm/Chaos/Order, terugval Colorless) plus een
   domein-chip; het domein wordt read-time uit de geraakte kaart(en) afgeleid
   via de gestructureerde ban-/errata-laag (alleen ban/errata dragen een
-  domein, de rest is neutraal). De volledige per-route layout-uitrol over de
-  hele site volgt ná de gekozen layout-richting; de tokens en de
-  change→domein-afleiding zijn al gefundeerd.
-  *Route* `/` · *endpoints* `/api/changes`, `/api/sources`, `/api/bans`,
-  `/api/sets/upcoming`.
+  domein, de rest is neutraal). De redesign rolt uit als een **samengestelde
+  shell** (vaste zijbalk-nav links, content midden, contextuele rechterrail;
+  mobiel: hamburger-drawer + filter-bottom-sheet zonder horizontaal scrollen)
+  over alle publieke kernpagina's (dashboard, feed, regels + detail met
+  leesrail, kaarten met domein-getinte tegels, vraagbaak). De lange staart en
+  het beheer worden in aparte rondes bijgetrokken.
+  *Route* `/wijzigingen` · *endpoints* `/api/changes`, `/api/sources`,
+  `/api/bans`, `/api/sets/upcoming`.
 - **Regels-browser** — hoofdstuk-hiërarchie van de Core/Tournament Rules met
   §-permalinks en PDF-deeplinks (`#page=N`), plus hybride (semantisch +
   full-text) zoeken door de secties.

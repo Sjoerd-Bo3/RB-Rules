@@ -696,13 +696,29 @@ veranderde groep, 400 bij ontbrekende/ongeldige velden
 
 ### rb-web — belangrijkste modules
 
-Paginastructuur (`rb-web/src/routes/`): `/` (wijzigingen-feed), `/rules`
-(+ `/rules/[code]`), `/primer`, `/ask` (+ `/ask/stream`), `/cards`
+Paginastructuur (`rb-web/src/routes/`): `/` (**Overzicht-dashboard**, #214),
+`/wijzigingen` (de volledige wijzigingen-feed, #214 — verhuisd van de root),
+`/rules` (+ `/rules/[code]`), `/primer`, `/ask` (+ `/ask/stream`), `/cards`
 (+ `/cards/[id]` + `explain`), `/decks` (+ `/decks/[id]`, #15 fase 3 spoor A:
 browser + legaliteitsbadge, detail met decklijst per sectie en deep-link naar
 Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
-`/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
-`/admin/overview/[kind]`). Navigatie in `+layout.svelte`.
+`/rulings`, `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
+`/admin/overview/[kind]`).
+
+**Samengestelde shell (#214).** `+layout.svelte` is de globale shell: een
+vaste **zijbalk** links (212px op desktop; merk met domein-mark, globaal
+zoekveld → `/ask?q=`, gegroepeerde nav Actueel/Kennis met decoratieve
+domein-stippen, onderaan Account/Beheer + thema-schakelaar), de **content**
+in het midden, en een **opt-in rechterrail** (vanaf 1080px). Pagina's leveren
+rail-inhoud via een context-store (`$lib/shell.svelte.ts`, `useShell().rail =
+{ snippet, kind, count, title }`) — `kind:'context'` (leespagina's:
+"op deze pagina / bron") of `kind:'filters'` (lijstpagina's). Op **mobiel**
+(<760px) klapt de zijbalk in tot een bovenbalk met **hamburger → slide-over
+drawer** (scrim); filters zitten dan achter een **"Filter"-knop met teller die
+een bottom-sheet opent** waarin de chips wrappen (Reset + "Toon N") —
+**nooit horizontaal filterscrollen**. De thema-schakelaar zet `data-theme` op
+`documentElement` en bewaart de keuze in `localStorage`; een inline-script in
+`app.html` zet het thema vóór de eerste verf (FOUC-vrij).
 
 Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 `RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `ChangeCard.svelte`,
@@ -735,7 +751,10 @@ domein van de geraakte kaart(en). `ChangeDomains` (Infrastructure) leidt dit
 read-time af (geen kolom/migratie) uit de gestructureerde ban-/errata-laag
 (`BanEntry`/`Erratum` → `Card.Domains`): alleen `ban`/`errata` hebben zo'n
 kaart-laag, de rest valt terug op geen domein. Gedeeld door
-`ChangeFeedService` (publiek `/api/changes`) en `AdminOverviewService`
+`PublicStatsService` (#214) voedt de dashboard-tegels via publiek
+`GET /api/stats` (read-time COUNTs: canonieke kaarten, geverifieerde rulings,
+bans, recente wijzigingen — geen migratie). `ChangeFeedService`
+(publiek `/api/changes`) en `AdminOverviewService`
 (`/api/admin/overview/changes`); beide DTO's dragen een `Domain`-veld.
 
 ### Datastores
