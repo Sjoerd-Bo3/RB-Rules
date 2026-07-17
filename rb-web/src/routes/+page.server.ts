@@ -6,7 +6,9 @@ import { adminApi, authed } from '$lib/server/admin';
 /** Bevestiging (#206): een secundaire change (andere bron, zelfde
  *  gebeurtenis) genest onder de primaire — SourceUrl is Source.Url, een
  *  geregistreerde bron-kolom (zelfde vertrouwen als sourceUrl hieronder,
- *  geen aparte UrlGuard-sanitize nodig). */
+ *  geen aparte UrlGuard-sanitize nodig). Meaning + diff (review-fix
+ *  finding 3): de secundaire details blijven ná consolidatie
+ *  inspecteerbaar — zelfde uitklap als de primaire kaart. */
 export interface ChangeConfirmation {
 	id: number;
 	sourceId: string;
@@ -14,6 +16,8 @@ export interface ChangeConfirmation {
 	sourceUrl: string;
 	trustTier: number;
 	summary: string | null;
+	meaning: string | null;
+	diff: string | null;
 	detectedAt: string;
 }
 

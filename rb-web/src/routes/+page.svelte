@@ -191,7 +191,14 @@
 					{#if data.isAdmin}
 						<form method="POST" action="?/delete" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
 							<input type="hidden" name="id" value={c.id} />
-							<button class="del" title="Verwijder uit feed">Verwijder</button>
+							<!-- Delete-cascade (#206, finding 9): een primaire verwijderen
+							     neemt haar bevestigingen mee — het is hetzelfde event. -->
+							<button class="del" title="Verwijder uit feed"
+								onclick={(e) => {
+									if (c.confirmedBy.length > 0 && !confirm(
+										`Dit verwijdert ook ${c.confirmedBy.length} bevestiging(en) uit andere bronnen (zelfde event). Doorgaan?`))
+										e.preventDefault();
+								}}>Verwijder</button>
 						</form>
 					{/if}
 				</header>
@@ -205,12 +212,23 @@
 								title="trust-tier {cb.trustTier}">door {cb.sourceName} ↗</a>
 						{/each}
 					</div>
-					{#if c.confirmedBy.some((cb) => cb.summary)}
+					{#if c.confirmedBy.some((cb) => cb.summary || cb.meaning || cb.diff)}
 						<details>
 							<summary>Bevestiging(en) tonen</summary>
 							{#each c.confirmedBy as cb (cb.id)}
 								{#if cb.summary}
 									<p class="confirmation"><strong>{cb.sourceName}:</strong> {cb.summary}</p>
+								{/if}
+								{#if cb.meaning}<p class="confirmation meaning">{cb.meaning}</p>{/if}
+								<!-- Finding 3: de voor/na van de secundaire blijft ná
+								     consolidatie inspecteerbaar — zelfde diff-weergave
+								     als de primaire kaart. -->
+								{#if cb.diff}
+									<div class="diff">
+										{#each diffLines(cb.diff) as l, i (i)}
+											<div class="dline {l.kind}">{l.text}</div>
+										{/each}
+									</div>
 								{/if}
 							{/each}
 						</details>

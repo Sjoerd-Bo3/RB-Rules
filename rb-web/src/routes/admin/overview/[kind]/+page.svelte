@@ -40,10 +40,13 @@
 	/** Bevestiging (#206): secundaire change (andere bron, zelfde
 	 *  gebeurtenis) genest onder de primaire. sourceUrl is Source.Url — een
 	 *  geregistreerde bron-kolom, geen aparte UrlGuard-Safe-vlag nodig
-	 *  (dat patroon is voor vrije/LLM-tekst-URL's zoals bij correcties/claims). */
+	 *  (dat patroon is voor vrije/LLM-tekst-URL's zoals bij correcties/claims).
+	 *  meaning/diff (review-fix finding 3): de secundaire details blijven ná
+	 *  consolidatie inspecteerbaar. */
 	interface ChangeConfirmationItem {
 		id: number; sourceId: string; sourceName: string; sourceUrl: string;
-		trustTier: number; summary: string | null; detectedAt: string;
+		trustTier: number; summary: string | null; meaning: string | null;
+		diff: string | null; detectedAt: string;
 	}
 	interface ChangeItem {
 		id: number; sourceId: string; sourceName: string; changeType: string;
@@ -766,6 +769,17 @@
 						</p>
 						{#each c.confirmedBy as cb (cb.id)}
 							{#if cb.summary}<p class="meta refs">{cb.sourceName}: {cb.summary}</p>{/if}
+							{#if cb.meaning}<p class="meta refs">{cb.meaning}</p>{/if}
+							<!-- Ontkoppelen (#206, finding 1): op de secundaire; rb-api
+							     schrijft een sticky pair-memo zodat de volgende run het
+							     paar niet meteen weer merget. -->
+							<form method="POST" action="?/unconsolidateChange" use:enhance class="unconsolidate">
+								<input type="hidden" name="id" value={cb.id} />
+								<button class="ghost small"
+									title="Maak de bevestiging van {cb.sourceName} weer een losse feed-kaart; dit paar wordt daarna nooit meer automatisch geconsolideerd">
+									Ontkoppel
+								</button>
+							</form>
 						{/each}
 					{/if}
 				</div>
@@ -1738,6 +1752,8 @@
 		border-radius: 8px; padding: 8px 14px; font-weight: 600; cursor: pointer;
 	}
 	button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+	/* Ontkoppel-knop (#206) compact onder de bevestigingsregel. */
+	form.unconsolidate { display: inline-block; margin: 2px 0 6px; }
 	button.small { padding: 4px 10px; font-size: 0.82rem; }
 	.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 	.chip {
