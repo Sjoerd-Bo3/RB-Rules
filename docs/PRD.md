@@ -250,7 +250,10 @@ apart in §6.
   Rules: Vendetta Patch Notes") is one-shot: het verandert na publicatie
   nooit meer, dus die tweede-scan-diff komt er nooit en de regelwijzigingen
   bleven daardoor structureel onzichtbaar. Guard i.p.v. "eerste scan": heeft
-  een patch-notes-bron nog GEEN niet-editoriale `Change`, dan behandelt de
+  een patch-notes-bron nog GEEN niet-editoriale `Change` én nog geen
+  one-shot-memo (run_log kind `oneshot-patchnotes`, geschreven bij het
+  minten — zo start een later als "editorial" geherclassificeerde one-shot
+  nooit een her-mint-lus), dan behandelt de
   scan de volledige inhoud als delta (lege "voor"-versie, dezelfde
   classificatie/samenvatting als een echte diff — `ChangeType` uit de
   classifier, niet hardcoded). Dat dekt ook de BACKFILL van een bron die
@@ -259,8 +262,12 @@ apart in §6.
   playriftbound-artikelen, die van scan tot scan verandert zodra elders een
   nieuw artikel verschijnt) telt niet als "al verwerkt" én wordt sinds #205
   bovendien uit de hash/diff gestript (`TextUtils.StripBoilerplate`, zelfde
-  patroon als de Rules Hub-flip-flop-suppressie). *Job* `clarify`
-  (handmatig of nachtelijk via `ScanScheduler`) · *endpoints*
+  patroon als de Rules Hub-flip-flop-suppressie). Strip-wijzigingen zijn
+  geversioneerd (`TextUtils.BoilerplateVersion` + `Source.StripVersion`):
+  een bron met een verouderde versie rebaselinet stil bij de eerstvolgende
+  scan — nieuwe baseline zonder junk-Change en zonder her-mine-kosten, met
+  de one-shot-candidacy er direct achteraan (ARCHITECTURE §6.2). *Job*
+  `clarify` (handmatig of nachtelijk via `ScanScheduler`) · *endpoints*
   `/api/admin/jobs/clarify`, `/api/admin/corrections/{id}/reject`.
   **Bron, opmerking en her-evaluatie in de reviewqueue** (#184): elk
   correctie-item toont de bron-naam (resolvet voor clarify-mining-items via
@@ -403,15 +410,21 @@ apart in §6.
   + `IgnoreReason` (nullable) markeren dat bewust en blijvend — nadrukkelijk
   ANDERS dan `Enabled` (dat blijft "tijdelijk uit"; een genegeerde bron mag
   `Enabled` gewoon op true laten staan). Genegeerd ⇒ de scan-lus
-  (`IngestService.ScanAsync`) slaat de bron over (geen HTTP-fetch, geen
-  LLM-kosten) en de bron verdwijnt uit de standaard bronnenlijst (het
+  (`IngestService.ScanAsync`) én de verwerkende consumers (claims-/clarify-
+  mining, ban-/errata-extractie, regelsectie-indexering, het kennis-gaten-
+  rapport — #180-review, volledig bereik in ARCHITECTURE §6.2) slaan de bron
+  over (geen HTTP-fetch, geen LLM-kosten, geen aandachtssignalen) en de bron
+  verdwijnt uit de standaard bronnenlijst (het
   publieke `/api/sources` filtert 'm eruit); een "Genegeerd (N)"-chip in de
   admin-bronnentabel toont ze alsnog, met reden en een "Terugzetten"-knop.
   Negeren is GEEN delete: bestaande `Document`/`Change`-rijen blijven staan,
   en de bron-rij zelf blijft bestaan — dezelfde bescherming tegen
   stille heraanmaak als de #167/#175-tombstone voor een verwijderde
   feed-bron (`FeedCrawlService`'s known-URL-dedup ziet de rij gewoon nog
-  staan, dus die adopteert of hercreëert 'm nooit). **Negeer-kandidaten**:
+  staan, dus die adopteert of hercreëert 'm nooit; de near-duplicaat-
+  samenvoeging slaat een groep met een genegeerde rij erin bovendien
+  volledig over, met run_log-melding — een merge zou de negeer-beslissing
+  stil ongedaan kunnen maken). **Negeer-kandidaten**:
   de admin-bronnenlijst-projectie (`SourceListService`) berekent per bron —
   goedkoop, vier gebatchte tellingen ongeacht het aantal bronnen, geen
   aparte tabel — of die na ≥2 voltooide scans nog steeds niets heeft

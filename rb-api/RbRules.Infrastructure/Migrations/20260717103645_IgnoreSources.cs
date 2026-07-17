@@ -22,6 +22,12 @@ namespace RbRules.Infrastructure.Migrations
                 table: "source",
                 type: "timestamp with time zone",
                 nullable: true);
+
+            migrationBuilder.AddColumn<int>(
+                name: "strip_version",
+                table: "source",
+                type: "integer",
+                nullable: true);
         }
 
         /// <inheritdoc />
@@ -33,6 +39,10 @@ namespace RbRules.Infrastructure.Migrations
 
             migrationBuilder.DropColumn(
                 name: "ignored_at",
+                table: "source");
+
+            migrationBuilder.DropColumn(
+                name: "strip_version",
                 table: "source");
         }
     }

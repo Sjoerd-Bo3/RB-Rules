@@ -115,13 +115,22 @@ met quota en rate-limiting.
   groep daarom alleen mee als élke rij een eigen (zwak-genormaliseerde)
   URL-vorm heeft; zit er ergens in de groep een letterlijk-gelijk paar
   tussen, dan blijft de hele groep ongemoeid — anders eet een toevallige
-  http/https- of www-variant per ongeluk een bewust-gedeelde bron op.
+  http/https- of www-variant per ongeluk een bewust-gedeelde bron op. Een
+  groep met een genegeerde bron erin (#180, `IgnoredAt`) wordt om dezelfde
+  reden overgeslagen: een merge zou de negeer-beslissing stil ongedaan maken.
 - Tie-break-richting is context-afhankelijk (#206): `Precedence.Compare`
   (#168) laat bij gelijk gezag de RECENTSTE datum winnen (welke tekst geldt
   NU) — changeconsolidatie (#206, `ChangeConsolidationPrimary.Wins`) wil bij
   gelijke trust juist de VROEGSTE detectie (wie meldde het gebeurtenis het
   eerst). Niet klakkeloos `Precedence.Compare` hergebruiken voor een nieuwe
   "wie wint"-vraag zonder te checken of de tie-break-richting ook klopt.
+- **`TextUtils.StripBoilerplate` wijzigen? Bump `TextUtils.
+  BoilerplateVersion`** (#205-review) — de gestripte tekst bepaalt de
+  content-hash van élke bron, dus een stille strip-wijziging geeft één golf
+  junk-"changes" over het hele register (de diff toont alleen de weggevallen
+  boilerplate). Met de bump rebaselinet elke bron stil bij de eerstvolgende
+  scan (`Source.StripVersion`-vergelijking in `IngestService`), zonder
+  Change en zonder her-mine-kosten.
 
 ## Waar het werk staat
 - Roadmap: **docs/PRD.md §6** (uit de open issues, in-flight PR's

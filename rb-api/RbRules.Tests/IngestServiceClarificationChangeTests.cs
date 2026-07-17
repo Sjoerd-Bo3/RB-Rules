@@ -146,13 +146,14 @@ public class IngestServiceClarificationChangeTests
     [Fact]
     public async Task ScanAsync_BackfillVanBestaandeVendettaBron_MaaktAlsnogChange()
     {
-        // #205 backfill-scenario: de bestaande Vendetta-bron werd vóór deze
-        // fix al gescand (een Document staat er al, ContentKind is al
-        // "patch-notes" via een eerdere LLM-classificatie) maar heeft nog
-        // GEEN inhoudelijke Change. De inhoud verandert nooit meer (one-shot
-        // artikel) — zonder deze backfill zou de bron voor altijd zonder
-        // duiding blijven, want de hash blijft exact gelijk aan LastHash
-        // (vroege "unchanged"-return) en er komt dus nooit een normale diff.
+        // #205 backfill-scenario zoals het in productie ligt: de bestaande
+        // Vendetta-bron werd vóór deze fix al gescand (een Document staat er
+        // al, ContentKind is al "patch-notes" via een eerdere
+        // LLM-classificatie, StripVersion is nog null — van vóór de
+        // strip-versionering) maar heeft nog GEEN inhoudelijke Change. De
+        // eerstvolgende post-deploy-scan is dan meteen ook haar rebaseline
+        // (#205-review): de one-shot-candidacy draait óók op dat pad, dus de
+        // backfill vuurt gewoon in dezelfde scan.
         using var db = NewDb();
         var raw = RawHtml("Legion is a dependent keyword.");
         var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
@@ -164,6 +165,7 @@ public class IngestServiceClarificationChangeTests
             Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
             ContentKind = SourceContentKind.PatchNotes, ContentKindSource = SourceContentKind.LlmOrigin,
             LastHash = hash, LastChecked = DateTimeOffset.UtcNow.AddDays(-7),
+            StripVersion = null, // productie-stand: rij van vóór de strip-versionering
         });
         db.Documents.Add(new Document
         {
@@ -186,17 +188,23 @@ public class IngestServiceClarificationChangeTests
         var src = await db.Sources.SingleAsync();
         Assert.NotNull(src.UpdatedAt);
         // De hash blijft ongewijzigd (de inhoud IS ongewijzigd) — alleen de
-        // Change is nieuw.
+        // Change is nieuw, en de rebaseline heeft de strip-versie gezet.
         Assert.Equal(hash, src.LastHash);
+        Assert.Equal(TextUtils.BoilerplateVersion, src.StripVersion);
+        // #205-review: het memo is geschreven — nooit een tweede poging.
+        Assert.Single(await db.RunLogs
+            .Where(l => l.Kind == PatchNotesOneShotChange.LedgerKind && l.Ref == src.Id)
+            .ToListAsync());
     }
 
     [Fact]
-    public async Task ScanAsync_PatchNotesBronMetBestaandeNietEditorialeChange_HerhaaltOneShotNiet()
+    public async Task ScanAsync_BackfillViaUnchangedPad_MaaktAlsnogChange()
     {
-        // Guard tegen dubbelwerk: heeft de bron al EEN niet-editoriale
-        // Change (ongeacht of die uit een normale diff of een eerdere
-        // one-shot kwam), dan vuurt de one-shot-tak niet opnieuw — ook niet
-        // als de hash toevallig weer exact hetzelfde is.
+        // Zelfde backfill, maar dan bij een bron die al op de actuele
+        // strip-versie staat (bv. na een content-kind-correctie naar
+        // patch-notes ná de rebaseline): de hash blijft exact gelijk aan
+        // LastHash (vroege "unchanged"-return) — de candidacy-check op dat
+        // pad vangt hem alsnog.
         using var db = NewDb();
         var raw = RawHtml("Legion is a dependent keyword.");
         var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
@@ -207,7 +215,45 @@ public class IngestServiceClarificationChangeTests
             Url = "https://playriftbound.com/en-us/news/announcements/core-rules-vendetta-patch-notes/",
             Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
             ContentKind = SourceContentKind.PatchNotes, ContentKindSource = SourceContentKind.LlmOrigin,
-            LastHash = hash,
+            LastHash = hash, StripVersion = TextUtils.BoilerplateVersion,
+        });
+        db.Documents.Add(new Document
+        {
+            SourceId = "core-rules-vendetta-patch-notes", Content = text, ContentHash = hash,
+        });
+        await db.SaveChangesAsync();
+        var svc = NewIngest(db, _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(raw) });
+
+        var results = await svc.ScanAsync(onlyDue: false);
+
+        var result = Assert.Single(results);
+        Assert.Equal("changed", result.Status);
+        Assert.Contains("backfill", result.Detail);
+        var change = await db.Changes.SingleAsync();
+        Assert.Contains("Legion is a dependent keyword", change.Diff!);
+    }
+
+    [Fact]
+    public async Task ScanAsync_PatchNotesBronMetBestaandeNietEditorialeChange_HerhaaltOneShotNiet()
+    {
+        // Guard tegen dubbelwerk: heeft de bron al EEN niet-editoriale
+        // Change (ongeacht of die uit een normale diff of een eerdere
+        // one-shot kwam), dan vuurt de one-shot-tak niet opnieuw — ook niet
+        // als de hash toevallig weer exact hetzelfde is. StripVersion staat
+        // hier al op de actuele versie zodat de test het unchanged-pad
+        // isoleert (de rebaseline-variant test hetzelfde via haar eigen
+        // candidacy-aanroep).
+        using var db = NewDb();
+        var raw = RawHtml("Legion is a dependent keyword.");
+        var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));
+        var hash = TextUtils.Sha256(text);
+        db.Sources.Add(new Source
+        {
+            Id = "core-rules-vendetta-patch-notes", Name = "Core Rules: Vendetta Patch Notes",
+            Url = "https://playriftbound.com/en-us/news/announcements/core-rules-vendetta-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
+            ContentKind = SourceContentKind.PatchNotes, ContentKindSource = SourceContentKind.LlmOrigin,
+            LastHash = hash, StripVersion = TextUtils.BoilerplateVersion,
         });
         db.Documents.Add(new Document
         {
@@ -228,12 +274,44 @@ public class IngestServiceClarificationChangeTests
     }
 
     [Fact]
+    public async Task ScanAsync_OneShotAlsEditorialGeclassificeerd_MemoBlokkeertTweedePoging()
+    {
+        // #205-review (findings 4/5/9): de geminte one-shot-Change kan (nu of
+        // via de #58-naclassificatie later) als "editorial" gelabeld worden —
+        // dan telt hij niet meer als "niet-editoriale Change" en zou de guard
+        // zonder memo élke scan opnieuw minten. Het run_log-memo sluit dat af.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "core-rules-vendetta-patch-notes", Name = "Core Rules: Vendetta Patch Notes",
+            Url = "https://playriftbound.com/en-us/news/announcements/core-rules-vendetta-patch-notes/",
+            Type = "official", TrustTier = 1, Rank = 99, Parser = "html", Cadence = "weekly",
+        });
+        await db.SaveChangesAsync();
+        var svc = NewIngest(db, _ => Html("Legion is a dependent keyword."));
+
+        await svc.ScanAsync(onlyDue: false); // eerste scan: mint one-shot + memo
+        var minted = await db.Changes.SingleAsync();
+        // Simuleer een (her)classificatie naar "editorial" (#58-pad).
+        minted.ChangeType = "editorial";
+        await db.SaveChangesAsync();
+
+        var results = await svc.ScanAsync(onlyDue: false); // hash ongewijzigd
+
+        Assert.Equal("unchanged", Assert.Single(results).Status);
+        Assert.Single(await db.Changes.ToListAsync()); // géén tweede one-shot
+    }
+
+    [Fact]
     public async Task ScanAsync_PatchNotesBronMetAlleenEditorialeChange_MaaktAlsnogOneShotChange()
     {
         // #205: de editorial sidebar-ruis ("volgorde van aankondigingen
         // gewijzigd") is precies het scenario uit de bug — een editorial
         // Change telt NIET als "al verwerkt", dus de one-shot-tak vuurt hier
         // alsnog en levert de ontbrekende inhoudelijke Change op.
+        // StripVersion blijft hier bewust null (productie-stand: zulke
+        // ruis-rijen dateren van vóór de strip-versionering) — de scan loopt
+        // dan via het rebaseline-pad, dat dezelfde candidacy draait.
         using var db = NewDb();
         var raw = RawHtml("Legion is a dependent keyword.");
         var text = TextUtils.HtmlToText(TextUtils.StripBoilerplate(raw));

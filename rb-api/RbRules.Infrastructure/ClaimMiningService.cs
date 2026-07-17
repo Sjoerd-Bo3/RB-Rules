@@ -56,8 +56,11 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
         Action<string>? progress = null, CancellationToken ct = default)
     {
         maxClaims = Math.Clamp(maxClaims, 1, 300);
+        // IgnoredAt (#180): een genegeerde bron levert per beoordeling niets
+        // op — geen LLM-kosten meer aan besteden (zelfde bereik-afspraak als
+        // de scan-lus; bestaande claims blijven gewoon staan).
         var sources = await db.Sources
-            .Where(s => s.Enabled && s.TrustTier >= 3)
+            .Where(s => s.Enabled && s.IgnoredAt == null && s.TrustTier >= 3)
             .OrderByDescending(s => s.Rank)
             .ToListAsync(ct);
         var officialSourceIds = await db.Sources

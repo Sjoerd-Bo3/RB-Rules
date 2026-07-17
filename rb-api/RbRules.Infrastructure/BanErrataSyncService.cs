@@ -61,8 +61,11 @@ public class BanErrataSyncService(RbRulesDbContext db, RbAiClient ai)
         // (card-errata, trust 3) structureert bewust niet meer mee: de
         // officiële pagina's dekken alle sets en officieel wint altijd.
         var errata = 0;
+        // IgnoredAt (#180): een genegeerde bron levert per beoordeling niets
+        // op — niet meer structureren (zelfde bereik-afspraak als de
+        // scan-lus; bestaande bans/errata blijven gewoon staan).
         var errataSources = await db.Sources.AsNoTracking()
-            .Where(s => s.Enabled && s.TrustTier == 1 && s.Id.Contains("errata"))
+            .Where(s => s.Enabled && s.IgnoredAt == null && s.TrustTier == 1 && s.Id.Contains("errata"))
             .OrderByDescending(s => s.Rank)
             .Select(s => new { s.Id, s.Name, s.Url, s.PublishedAt, s.UpdatedAt })
             .ToListAsync(ct);

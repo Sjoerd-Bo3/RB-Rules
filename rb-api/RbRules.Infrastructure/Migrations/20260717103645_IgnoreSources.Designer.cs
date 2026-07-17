@@ -13,7 +13,7 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    [Migration("20260717092720_IgnoreSources")]
+    [Migration("20260717103645_IgnoreSources")]
     partial class IgnoreSources
     {
         /// <inheritdoc />
@@ -1804,6 +1804,10 @@ namespace RbRules.Infrastructure.Migrations
                     b.Property<int>("Rank")
                         .HasColumnType("integer")
                         .HasColumnName("rank");
+
+                    b.Property<int?>("StripVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("strip_version");
 
                     b.Property<short>("TrustTier")
                         .HasColumnType("smallint")

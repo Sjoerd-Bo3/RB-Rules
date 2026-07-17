@@ -70,6 +70,56 @@ public class SourceNearDuplicateMergeTests
     }
 
     [Fact]
+    public async Task Merge_GroupWithIgnoredSource_IsSkippedWithLog()
+    {
+        // #180-review (finding 8): een merge zou een genegeerde loser kunnen
+        // opeten en daarmee de bewuste negeer-beslissing stil ongedaan maken
+        // (de pagina "herrijst" via de niet-genegeerde winnaar). Veiligste
+        // kleine variant, consistent met de #175-uitzondering: de hele groep
+        // blijft ongemoeid, met een run_log-regel voor de beheerder.
+        using var db = NewDb();
+        var ignored = Src("genegeerd", "https://www.riftbound.gg/judge-faq", rank: 40);
+        ignored.IgnoredAt = DateTimeOffset.UtcNow;
+        ignored.IgnoreReason = "levert niets op";
+        db.Sources.Add(ignored);
+        db.Sources.Add(Src("actief", "https://riftbound.gg/judge-faq", rank: 90));
+        await db.SaveChangesAsync();
+
+        var merged = await Service(db).MergeNearDuplicateSourcesAsync();
+
+        Assert.Equal(0, merged);
+        var sources = await db.Sources.OrderBy(s => s.Id).ToListAsync();
+        Assert.Equal(2, sources.Count); // beide rijen blijven bestaan
+        var survivor = sources.Single(s => s.Id == "genegeerd");
+        Assert.NotNull(survivor.IgnoredAt); // negeer-beslissing intact
+        Assert.Equal("levert niets op", survivor.IgnoreReason);
+        var log = await db.RunLogs.SingleAsync(l => l.Kind == FeedCrawlService.LedgerKind);
+        Assert.Equal("info", log.Status);
+        Assert.Contains("genegeerde bron", log.Detail);
+        Assert.Contains("genegeerd", log.Detail); // de betrokken id's staan erin
+    }
+
+    [Fact]
+    public async Task Merge_OtherGroupsStillMerge_WhenOneGroupHasIgnoredSource()
+    {
+        // De skip is per groep — een genegeerde bron elders in het register
+        // mag de reguliere samenvoegingen niet tegenhouden.
+        using var db = NewDb();
+        var ignored = Src("genegeerd", "https://www.riftbound.gg/judge-faq", rank: 40);
+        ignored.IgnoredAt = DateTimeOffset.UtcNow;
+        db.Sources.Add(ignored);
+        db.Sources.Add(Src("actief", "https://riftbound.gg/judge-faq", rank: 90));
+        db.Sources.Add(Src("http-vorm", "http://playriftbound.com/en-us/news/x", rank: 50));
+        db.Sources.Add(Src("https-vorm", "https://playriftbound.com/en-us/news/x", rank: 50));
+        await db.SaveChangesAsync();
+
+        var merged = await Service(db).MergeNearDuplicateSourcesAsync();
+
+        Assert.Equal(1, merged); // alleen de niet-genegeerde groep
+        Assert.Equal(3, (await db.Sources.ToListAsync()).Count);
+    }
+
+    [Fact]
     public async Task Merge_RepointsDocumentsChangesAndRuleChunksBySourceId()
     {
         using var db = NewDb();

@@ -1809,6 +1809,10 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("rank");
 
+                    b.Property<int?>("StripVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("strip_version");
+
                     b.Property<short>("TrustTier")
                         .HasColumnType("smallint")
                         .HasColumnName("trust_tier");

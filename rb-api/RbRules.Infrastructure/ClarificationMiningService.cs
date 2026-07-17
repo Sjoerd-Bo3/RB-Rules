@@ -152,8 +152,11 @@ public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, Embe
         // verlies) kan hier niet meer optreden; de heuristische
         // null-fallback houdt voor dubbel-keyword-namen het conservatieve
         // #185-gedrag (patch-notes wint ⇒ niet minen).
+        // IgnoredAt (#180): een genegeerde bron levert per beoordeling niets
+        // op — geen LLM-kosten meer aan besteden (zelfde bereik-afspraak als
+        // de scan-lus; bestaande rulings blijven gewoon staan).
         var sources = (await db.Sources.AsNoTracking()
-                .Where(s => s.Enabled && s.TrustTier == 1)
+                .Where(s => s.Enabled && s.IgnoredAt == null && s.TrustTier == 1)
                 .OrderByDescending(s => s.Rank)
                 .ToListAsync(ct))
             .Where(s => SourceContentKind.Resolve(s.ContentKind, s.Id, s.Url, s.Name) == SourceContentKind.Faq)

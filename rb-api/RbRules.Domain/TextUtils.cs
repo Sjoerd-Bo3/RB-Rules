@@ -7,6 +7,18 @@ namespace RbRules.Domain;
 /// <summary>Tekst-hulpfuncties, geport uit de PoP (src/lib/text.ts) met tests.</summary>
 public static partial class TextUtils
 {
+    /// <summary>Versie van <see cref="StripBoilerplate"/> (#205-review).
+    /// VERHOOG DIT NUMMER bij élke gedragswijziging aan de strip — de
+    /// gestripte tekst bepaalt de content-hash van élke bron, dus een
+    /// stille strip-wijziging zou anders één golf junk-"changes" over het
+    /// hele register geven (de diff toont dan alleen de weggevallen
+    /// boilerplate). <see cref="RbRules.Infrastructure.IngestService"/>
+    /// vergelijkt dit nummer met <see cref="Source.StripVersion"/> en
+    /// rebaselinet een verouderde bron stil (nieuwe baseline, geen
+    /// diff/Change). Historie: v1 = nav/header/footer/aside (audit-fix);
+    /// v2 = + de playriftbound "Related Articles"-carousel (#205).</summary>
+    public const int BoilerplateVersion = 2;
+
     public static string Sha256(string input)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));

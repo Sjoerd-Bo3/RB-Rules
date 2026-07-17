@@ -77,6 +77,19 @@ public class Source
     /// (null zolang die null is) — bv. "merch/preorder-artikel, geen
     /// regelbron" of "levert na meerdere scans niets op".</summary>
     public string? IgnoreReason { get; set; }
+    /// <summary>Strip-versionering (#205-review): de <see
+    /// cref="TextUtils.BoilerplateVersion"/> waarmee <see cref="LastHash"/>
+    /// (en het bijbehorende laatste Document) is berekend. Elke wijziging
+    /// aan <see cref="TextUtils.StripBoilerplate"/> verandert de gestripte
+    /// tekst — en dus de hash — van élke bron tegelijk; zonder dit veld zou
+    /// zo'n verbetering één golf junk-"changes" over het hele register
+    /// geven (de diff toont dan alleen de weggevallen boilerplate). Wijkt
+    /// dit veld af van de actuele versie, dan doet de scan een STILLE
+    /// rebaseline (nieuwe baseline zonder diff/Change — zie
+    /// <see cref="RbRules.Infrastructure.IngestService"/>). Null (alle
+    /// rijen van vóór dit veld) telt als verouderd: elke bron rebaselinet
+    /// exact één keer, automatisch, bij de eerstvolgende scan.</summary>
+    public int? StripVersion { get; set; }
 }
 
 /// <summary>Bron-feed (#167): een index-pagina die periodiek wordt afgespeurd
