@@ -472,7 +472,54 @@ paden — Ingest-, Kaart-, Kennis- en het Volledige-regeneratiepad (zie PRD
 §4.5 voor de precieze stappen; bewust GEEN wipe erin, dat blijft
 `regenerateknowledge` als losse Gevarenzone-actie). Het Kennis-pad kreeg met
 #199 v1 een vijfde stap: `relationtriage` (Drain: true), ná `relations` en
-vóór `graph`.
+vóór `graph`. Het Ingest-pad kreeg met #206 een nieuwe stap
+`consolidatechanges` ná `classify` en vóór `mine` (ongecapt, geen Drain —
+zelfde afweging als `classify`: het aantal ongekoppelde changes binnen het
+venster is klein).
+
+**`ChangeConsolidationService`/`ChangeFeedService` (changeconsolidatie,
+#206).** Een officiële en een community-bron die hetzelfde event melden
+(bv. de Rules Hub- en Mobalytics-melding van dezelfde ban-update) staan
+zonder ingrijpen als twee losse `Change`-rijen in de feed. `Change` kreeg
+een nullable zelf-verwijzende FK, `ConsolidatedWithId` (migratie
+`ChangeConsolidation`), naar de PRIMAIRE change van een geconsolideerd
+paar — beide rijen blijven bestaan (herleidbaarheid; consolidatie is een
+presentatie-koppeling, geen inhoudelijke waarheid, die blijft bij de
+structured `BanEntry`-/errata-precedentie #168). `ChangeConsolidationService`
+(Infrastructure, job `consolidatechanges`, Ingest-pad ná `classify`) werkt
+op nog niet-geconsolideerde ("root") changes binnen een terugkijkvenster
+van 30 dagen (ruim boven het kandidaat-venster) en volgt het #188-patroon
+"deterministische poort, LLM-oordeel":
+- `ChangeConsolidationGate.IsCandidate` (Domain, puur/getest): zelfde
+  `ChangeType`, verschillende `SourceId`, `DetectedAt` binnen 72 uur van
+  elkaar, én overlappende geraakte referenties — dezelfde AFFECTS-resolutie
+  als de graph-projectie (`ChangeAffectsMapper.Resolve`, §6.3), geen aparte
+  extractielaag. Geen bruikbare refs aan een van beide kanten ⇒ nooit een
+  kandidaat (liever twee kaarten in de feed dan een fout gekoppeld paar).
+- `ChangeEventJudge` (Domain): één cheap LLM-call ("beschrijven deze twee
+  changes hetzelfde event? ja/nee"), zelfde parser-patroon als `ClaimJudge`
+  (objectvorm-guard vóór `TryGetProperty`, `LlmJson.Candidates`). AI-uitval
+  of onparseerbaar antwoord ⇒ null; de service behandelt het paar dan als
+  NIET geconsolideerd (de veilige kant, met een `run_log`-regel).
+- `ChangeConsolidationPrimary.Wins` (Domain): hoogste bron-trust
+  (laagste `TrustTier`) wint, bij gelijke trust de VROEGSTE detectie — het
+  omgekeerde tie-break-doel van `Precedence` (#168, waar bij gelijk gezag
+  de RECENTSTE datum wint: daar gaat het om welke tekst nu geldt, hier om
+  wie een gebeurtenis het eerst meldde). De verliezer krijgt
+  `ConsolidatedWithId` = de winnaar; bestaande secundairen van de verliezer
+  verhuizen in dezelfde merge mee naar de winnaar (nooit ketens: een
+  secundaire wijst altijd naar de wortel-primaire, ook als een later
+  binnenkomende hogere-trust-bron de bestaande primaire verdringt).
+
+`ChangeFeedService` (Infrastructure) is de gedeelde query achter zowel het
+publieke `GET /api/changes` (`FeedEndpoints`) als het admin-overzicht
+(`AdminOverviewService.ChangesAsync`, `GET /api/admin/overview/changes`):
+alleen primaire changes (`ConsolidatedWithId == null`) tellen mee in de
+lijst/paginering; secundairen komen genest terug als
+`ConfirmedBy`-lijst (bron, URL, TrustTier, samenvatting, detectiemoment)
+op de primaire. rb-web (`/` en `/admin/overview/wijzigingen`) toont dat als
+een "bevestigd door {bron}"-badge met link, uitklapbaar naar de secundaire
+samenvatting.
 
 **`RelationTriageService` (LLM-triage voor relatievoorstellen, #199 v1).**
 Per open `Relation` (Status "unreviewed", `Recommendation == null`,
@@ -737,6 +784,16 @@ Piltover-decks-verversing (#15 fase 3, spoor C: hergebruikt de bestaande
 loopt zo binnen enkele dagen leeg via het run_log-grootboek, waarna hetzelfde
 venster alleen nog nieuwe/gewijzigde decks ophaalt).
 
+Changeconsolidatie (#206, `ChangeConsolidationService`, zie §5) draait
+bewust NIET binnen `ScanAsync` zelf maar als losse jobstap
+`consolidatechanges` ná `classify` in het Ingest-pad — zo blijft `ScanAsync`
+onaangeraakt en is de stap ook los te draaien (bv. terugwerkend op een
+bestaand paar). Bekende beperking: `PushService.NotifyHighSeverityAsync`
+vuurt al binnen de `scan`-job zelf (vóór `consolidatechanges` in het pad),
+dus een net-geconsolideerd paar kan in theorie nog twee pushmeldingen voor
+hetzelfde event opleveren — geen incident, wel een bewuste, niet
+opgeloste follow-up (feed-presentatie raakt hier de meldingen-laag niet).
+
 ### 6.3 De graph-sync
 
 `GraphSyncService.SyncAsync` projecteert Postgres naar Neo4j binnen **één
@@ -758,6 +815,14 @@ dezelfde ABOUT-resolutie als `Claim` (`RulingTopicMapper`, Scope→topic via
 herkomst. Elke knoop draagt een `ref`-property volgens de
 `BrainRef`-conventie. Wees-opruiming verwijdert kaarten/facetten die geen
 canonieke printing meer zijn (#57).
+
+Changeconsolidatie (#206) is bewust NIET in deze projectie verwerkt: de
+`Change`-query hierboven selecteert nog steeds ALLE rijen, dus zowel een
+primaire als een geconsolideerde secundaire krijgen elk hun eigen `Change`-
+knoop + `AFFECTS`-edges, en `Change.ConsolidatedWithId` wordt geen
+graph-property. Consolidatie is feed-presentatie (welke kaart de gebruiker
+ziet), geen kennisrelatie — de graph blijft de volledige, ongefilterde
+brontrail tonen.
 
 ---
 
