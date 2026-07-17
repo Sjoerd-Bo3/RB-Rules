@@ -47,6 +47,8 @@
 		severity: string; summary: string | null; meaning: string | null; detectedAt: string;
 		/** #206: leeg tenzij andere bronnen hetzelfde gebeurtenis bevestigden. */
 		confirmedBy: ChangeConfirmation[];
+		/** #214: read-time afgeleid domein (of null = Colorless-neutraal). */
+		domain: string | null;
 	}
 	interface CorrectionItem {
 		id: number; scope: string; ref: string; text: string; question: string | null;

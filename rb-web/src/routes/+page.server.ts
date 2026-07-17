@@ -21,6 +21,9 @@ export interface Change {
 	trustTier: number;
 	/** #206: leeg tenzij andere bronnen hetzelfde gebeurtenis bevestigden. */
 	confirmedBy: ChangeConfirmation[];
+	/** #214: read-time uit de geraakte kaart(en) afgeleid domein (of null =
+	 *  Colorless-neutraal). Kleurt de domein-randstreep op de ChangeCard. */
+	domain: string | null;
 }
 
 /** Aankomende set (#52): bekend via de releasedatum uit de kaart-sync. */
