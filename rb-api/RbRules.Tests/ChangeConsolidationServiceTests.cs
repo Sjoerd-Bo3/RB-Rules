@@ -56,7 +56,7 @@ public class ChangeConsolidationServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_LlmNee_BlijftOngekoppeld()
+    public async Task RunAsync_LlmNee_BlijftOngekoppeld_SchrijftPairMemo()
     {
         using var db = NewDb();
         await SeedCardAsync(db, "ogn-001", "Viktor");
@@ -68,6 +68,37 @@ public class ChangeConsolidationServiceTests
 
         Assert.Equal(0, r.Merged);
         Assert.Equal(1, r.Judged);
+        Assert.Equal(1, r.Rejected);
+        Assert.Null(a.ConsolidatedWithId);
+        Assert.Null(b.ConsolidatedWithId);
+
+        // Pair-memo (review-fix findings 2+6): het "nee" is per paar
+        // vastgelegd in het run_log-grootboek (SetReleaseService-idioom).
+        var memo = await db.RunLogs.SingleAsync(l =>
+            l.Kind == ChangeConsolidationService.LedgerKind && l.Status == "rejected");
+        Assert.Equal(ChangeConsolidationService.PairRef(a.Id, b.Id), memo.Ref);
+    }
+
+    [Fact]
+    public async Task RunAsync_AfgewezenPaar_WordtNooitOpnieuwGejudged()
+    {
+        // De ratchet (review-fix findings 2+6): zonder memo zou dit
+        // overlevende paar tot 30 dagen lang élke run opnieuw aan de LLM
+        // worden voorgelegd — met elke run een nieuwe false-positive-kans.
+        // Mét memo is de paar-judge éénmalig: run 2 doet nul LLM-calls, ook
+        // al staat die op "ja".
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Viktor");
+        var a = await SeedChangeAsync(db, "rules-hub", official: true, RulesHubDetectedAt, "Viktor banned.");
+        var b = await SeedChangeAsync(db, "mobalytics", official: false, RulesHubDetectedAt.AddMinutes(5), "Viktor banned.");
+        await new ChangeConsolidationService(db, Ai(() => DifferentAnswer)).RunAsync();
+
+        var calls = 0;
+        var again = await new ChangeConsolidationService(
+            db, Ai(() => { calls++; return SameAnswer; })).RunAsync();
+
+        Assert.Equal(0, calls);
+        Assert.Equal(0, again.Merged);
         Assert.Null(a.ConsolidatedWithId);
         Assert.Null(b.ConsolidatedWithId);
     }
@@ -112,6 +143,10 @@ public class ChangeConsolidationServiceTests
         Assert.Null(b.ConsolidatedWithId);
         var error = await db.RunLogs.SingleAsync(l => l.Kind == "consolidatechanges" && l.Status == "error");
         Assert.Contains("rb-ai niet beschikbaar", error.Detail);
+        // Transiënte uitval krijgt bewust GEEN pair-memo (uitval ≠ "nee") —
+        // anders zou één rb-ai-storing een paar permanent blokkeren.
+        Assert.False(await db.RunLogs.AnyAsync(l =>
+            l.Kind == "consolidatechanges" && l.Status == "rejected"));
 
         // Transiënt: de volgende run pakt hetzelfde paar gewoon weer op.
         var again = await new ChangeConsolidationService(db, Ai(() => SameAnswer)).RunAsync();
@@ -137,6 +172,9 @@ public class ChangeConsolidationServiceTests
         var error = await db.RunLogs.SingleAsync(l => l.Kind == "consolidatechanges" && l.Status == "error");
         Assert.Contains("LLM-antwoord onbruikbaar", error.Detail);
         Assert.Contains("Respons (afgekapt): I cannot judge this, sorry!", error.Detail);
+        // Onparseerbaar is óók transiënt — geen pair-memo (onbruikbaar ≠ "nee").
+        Assert.False(await db.RunLogs.AnyAsync(l =>
+            l.Kind == "consolidatechanges" && l.Status == "rejected"));
     }
 
     [Fact]
@@ -209,6 +247,92 @@ public class ChangeConsolidationServiceTests
         Assert.Equal(0, r.Merged);
         Assert.Equal(0, calls);
         Assert.Contains("minder dan twee", r.Message);
+    }
+
+    [Fact]
+    public async Task RunAsync_EffectiefPaarNaMerge_WordtBinnenDeRunMaarEenKeerGejudged()
+    {
+        // Binnen-run-dedupe (review-fix findings 4+7): drie roots A/B/C over
+        // dezelfde kaart. (A,B) merget (B → A); (A,C) wordt "nee". De derde
+        // combinatie (B,C) collapsed via de root-hermapping tot hetzelfde
+        // effectieve paar (A,C) — die mag NIET nogmaals naar de LLM (dubbele
+        // call, tweede flip-kans). Totaal dus precies 2 calls.
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Viktor");
+        var a = await SeedChangeAsync(db, "rules-hub", official: true, RulesHubDetectedAt, "Viktor banned.");
+        var b = await SeedChangeAsync(db, "mobalytics", official: false, RulesHubDetectedAt.AddMinutes(5), "Viktor banned.");
+        var c = await SeedChangeAsync(db, "riftcodex-community", official: false, RulesHubDetectedAt.AddMinutes(10), "Viktor banned.");
+        var calls = 0;
+        var svc = new ChangeConsolidationService(
+            db, Ai(() => ++calls == 1 ? SameAnswer : DifferentAnswer));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(2, calls);
+        Assert.Equal(1, r.Merged);
+        Assert.Equal(1, r.Rejected);
+        Assert.Equal(a.Id, b.ConsolidatedWithId);
+        Assert.Null(c.ConsolidatedWithId);
+        // Het "nee" op het effectieve paar (A,C) staat één keer in het memo.
+        var memo = await db.RunLogs.SingleAsync(l =>
+            l.Kind == ChangeConsolidationService.LedgerKind && l.Status == "rejected");
+        Assert.Equal(ChangeConsolidationService.PairRef(a.Id, c.Id), memo.Ref);
+    }
+
+    [Fact]
+    public async Task UnconsolidateAsync_Ontkoppelt_EnIsStickyVoorDeVolgendeRun()
+    {
+        // Herstelpad voor een foute merge (review-fix finding 1): ontkoppelen
+        // zet ConsolidatedWithId terug op null én schrijft een sticky
+        // pair-memo — anders zou de eerstvolgende run (LLM zegt nog steeds
+        // "ja") de handmatige correctie meteen terugdraaien.
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Viktor");
+        var a = await SeedChangeAsync(db, "rules-hub", official: true, RulesHubDetectedAt, "Viktor banned.");
+        var b = await SeedChangeAsync(db, "mobalytics", official: false, RulesHubDetectedAt.AddMinutes(5), "Viktor banned.");
+        await new ChangeConsolidationService(db, Ai(() => SameAnswer)).RunAsync();
+        Assert.Equal(a.Id, b.ConsolidatedWithId);
+
+        var outcome = await new ChangeConsolidationService(db, Ai(() => null))
+            .UnconsolidateAsync(b.Id);
+
+        Assert.Equal(UnconsolidateOutcome.Applied, outcome);
+        Assert.Null(b.ConsolidatedWithId);
+        var memo = await db.RunLogs.SingleAsync(l =>
+            l.Kind == ChangeConsolidationService.LedgerKind && l.Status == "rejected");
+        Assert.Equal(ChangeConsolidationService.PairRef(a.Id, b.Id), memo.Ref);
+        Assert.Contains("handmatig ontkoppeld", memo.Detail);
+
+        // Sticky: de volgende run merget dit paar niet opnieuw — er gaat
+        // zelfs geen LLM-call meer overheen.
+        var calls = 0;
+        var again = await new ChangeConsolidationService(
+            db, Ai(() => { calls++; return SameAnswer; })).RunAsync();
+        Assert.Equal(0, again.Merged);
+        Assert.Equal(0, calls);
+        Assert.Null(b.ConsolidatedWithId);
+    }
+
+    [Fact]
+    public async Task UnconsolidateAsync_NietGeconsolideerdeChange_GeeftNotConsolidated()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Viktor");
+        var a = await SeedChangeAsync(db, "rules-hub", official: true, RulesHubDetectedAt, "Viktor banned.");
+        var svc = new ChangeConsolidationService(db, Ai(() => null));
+
+        Assert.Equal(UnconsolidateOutcome.NotConsolidated, await svc.UnconsolidateAsync(a.Id));
+        // Geen memo voor een no-op — er is geen paar om te blokkeren.
+        Assert.False(await db.RunLogs.AnyAsync(l => l.Status == "rejected"));
+    }
+
+    [Fact]
+    public async Task UnconsolidateAsync_OnbekendId_GeeftNotFound()
+    {
+        using var db = NewDb();
+        var svc = new ChangeConsolidationService(db, Ai(() => null));
+
+        Assert.Equal(UnconsolidateOutcome.NotFound, await svc.UnconsolidateAsync(999));
     }
 
     // --- testinfra (patroon RelationTriageServiceTests) --------------------
