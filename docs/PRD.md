@@ -157,6 +157,16 @@ apart in §6.
   blok) → voet (bevestigd-badges, voor/na-uitklap, admin-acties in een
   Svelte 5 snippet-slot: Verwijder op de feed, Ontkoppel per bevestiging in
   het admin-overzicht).
+  **Design-refresh + domein-kleurcodering (#214)**: nieuwe visuele richting
+  ("Domains, eigentijds") — koel-neutrale ontwerptokens, licht als standaard
+  met een koele-graphite donker-variant (theme-aware `app.css`), geel puur als
+  actie-accent. De ChangeCard krijgt een domein-randstreep in de canonieke
+  domeinkleur (Fury/Body/Mind/Calm/Chaos/Order, terugval Colorless) plus een
+  domein-chip; het domein wordt read-time uit de geraakte kaart(en) afgeleid
+  via de gestructureerde ban-/errata-laag (alleen ban/errata dragen een
+  domein, de rest is neutraal). De volledige per-route layout-uitrol over de
+  hele site volgt ná de gekozen layout-richting; de tokens en de
+  change→domein-afleiding zijn al gefundeerd.
   *Route* `/` · *endpoints* `/api/changes`, `/api/sources`, `/api/bans`,
   `/api/sets/upcoming`.
 - **Regels-browser** — hoofdstuk-hiërarchie van de Core/Tournament Rules met

@@ -715,6 +715,29 @@ optioneel admin-actieslot via Svelte 5 snippets (`actions`,
 `confirmationActions`) en een `compact`-prop voor dichte contexten — het
 patroon voor toekomstige herbruikbare kaarten (i.p.v. per-route duplicatie).
 
+**Ontwerptokens: theme-aware (#214).** Sinds de design-refresh is `app.css`
+licht-standaard mét een koele-graphite donker-variant. De neutralen
+(`--bg`/`--surface`/`--surface-deep`/`--text`/`--muted`/`--border`) en de
+semantische tokens worden op drie niveaus gezet: `:root` (licht),
+`@media (prefers-color-scheme: dark)` (volgt de OS-voorkeur) en een expliciete
+`:root[data-theme='dark'|'light']`-override die in béíde richtingen wint (voor
+een latere thema-schakelaar en voor Playwright). Geel (`--accent`) is
+uitsluitend het actie-/merk-accent, nooit een sfeerkleur. Nieuw is een
+canonieke **domein-kleurtaal** `--dom-fury|body|mind|calm|chaos|order|colorless`
+— gelijk in beide thema's, één plek om een hue te wijzigen; gebruikt door de
+kaarttekst-runen (`:rb_fury:` …) en de ChangeCard-randstreep/chips. De
+iOS-16px-formfix en de horizontale-overflow-vangrail blijven ongemoeid.
+_(De per-route layout-uitrol over de hele site staat nog open — de tokens en de
+change→domein-afleiding zijn layout-onafhankelijk en al gefundeerd.)_
+
+**Change→domein-afleiding (#214).** De feed kleurt elke wijziging met het
+domein van de geraakte kaart(en). `ChangeDomains` (Infrastructure) leidt dit
+read-time af (geen kolom/migratie) uit de gestructureerde ban-/errata-laag
+(`BanEntry`/`Erratum` → `Card.Domains`): alleen `ban`/`errata` hebben zo'n
+kaart-laag, de rest valt terug op geen domein. Gedeeld door
+`ChangeFeedService` (publiek `/api/changes`) en `AdminOverviewService`
+(`/api/admin/overview/changes`); beide DTO's dragen een `Domain`-veld.
+
 ### Datastores
 
 - **Postgres + pgvector** — source of truth. Getypeerde `vector(1024)` met
