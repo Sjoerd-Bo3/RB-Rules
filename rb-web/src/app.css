@@ -21,6 +21,11 @@
 	--accent-soft: #f5c51822;
 	--accent-ink: #20190a;
 
+	/* Focusring (#214-review): geel zakt weg op de lichte standaard (~1.6:1,
+	   onder WCAG 3:1), dus een eigen focus-hue die in beide thema's contrasteert
+	   — het mind-blauw haalt ≥3:1 op zowel wit als graphite. */
+	--focus: var(--dom-mind);
+
 	/* Semantiek (los van domein/merk) */
 	--ok: #2ea36a;
 	--ok-soft: #2ea36a1c;
@@ -130,7 +135,7 @@ img { max-width: 100%; height: auto; }
    thema's. Alleen bij toetsenbord-/programmatische focus (:focus-visible),
    dus geen ring op muisklik. */
 :focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 2px solid var(--focus);
 	outline-offset: 2px;
 	border-radius: 4px;
 }

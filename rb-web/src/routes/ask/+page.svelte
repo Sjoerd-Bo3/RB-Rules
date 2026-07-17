@@ -958,7 +958,7 @@
 	.approach-opt input {
 		position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0;
 	}
-	.approach-opt:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+	.approach-opt:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
 	.approach-hint { margin: 6px 0 0; }
 	/* Terugmelding (#153): keuze niet gehonoreerd — status als kleur + tekst. */
 	.approach-notice {

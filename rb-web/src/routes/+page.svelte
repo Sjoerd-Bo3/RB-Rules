@@ -105,7 +105,7 @@
 		flex: 1; min-width: 0; background: var(--surface); color: var(--text);
 		border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 1rem;
 	}
-	.hero-search input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+	.hero-search input:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
 	.hero-search button {
 		background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px;
 		padding: 0 20px; font-weight: 700; cursor: pointer; white-space: nowrap;

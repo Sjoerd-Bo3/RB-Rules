@@ -29,18 +29,27 @@ export class ShellStore {
 	sheetOpen = $state(false);
 	/** Actief thema; null zolang niet expliciet gekozen (volgt dan het OS). */
 	theme = $state<Theme | null>(null);
+	/** OS-voorkeur (prefers-color-scheme: dark). Reactief, zodat het label van
+	 *  de thema-schakelaar meeschakelt als de bezoeker zonder eigen keuze zijn
+	 *  OS-thema wisselt (#214-review). */
+	systemDark = $state(false);
 
 	/** Effectief donker? Voor het label van de thema-schakelaar. */
 	get isDark(): boolean {
 		if (this.theme) return this.theme === 'dark';
-		if (typeof window === 'undefined') return false;
-		return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+		return this.systemDark;
 	}
 
 	initTheme() {
 		if (typeof document === 'undefined') return;
 		const attr = document.documentElement.dataset.theme;
 		this.theme = attr === 'light' || attr === 'dark' ? attr : null;
+		if (typeof window !== 'undefined' && window.matchMedia) {
+			const mq = window.matchMedia('(prefers-color-scheme: dark)');
+			this.systemDark = mq.matches;
+			// De shell leeft de hele sessie; één listener, geen teardown nodig.
+			mq.addEventListener('change', (e) => (this.systemDark = e.matches));
+		}
 	}
 
 	setTheme(theme: Theme | null) {

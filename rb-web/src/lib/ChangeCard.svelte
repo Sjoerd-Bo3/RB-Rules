@@ -66,9 +66,7 @@
 					{:else}
 						<span class="src">{change.sourceName}</span>
 					{/if}
-					{#if trust?.tone === 'official'}
-						<span class="status-dot ok" title="Officiële bron"></span>
-					{:else if trust}
+					{#if trust}
 						<span class="trust trust-{trust.tone}">{trust.label}</span>
 					{/if}
 				</span>
@@ -219,6 +217,9 @@
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
+	}
+	.trust-official {
+		color: var(--ok);
 	}
 	.trust-community {
 		color: var(--warn);
