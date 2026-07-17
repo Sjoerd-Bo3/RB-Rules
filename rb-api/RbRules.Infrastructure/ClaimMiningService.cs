@@ -145,19 +145,46 @@ public class ClaimMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingSer
                         extractionComplete = false;
                         break;
                     }
-                    processed++;
                     var (outcome, failure) = await ProcessClaimAsync(src, ec, officialSourceIds, ct);
+                    // #200: processed telt alleen uitkomsten die écht nieuw
+                    // werk deden — anders verbrandt een her-run van een groot
+                    // document (méér items dan de cap) zijn hele budget aan
+                    // het opnieuw dedupen van al-opgeslagen items en komt het
+                    // nooit voorbij de eerdere strandingsplek (item #cap blijft
+                    // dan voor altijd de laatste). Per uitkomst:
                     switch (outcome)
                     {
-                        case ClaimOutcome.New: newClaims++; srcNew++; break;
-                        case ClaimOutcome.Corroborated: corroborated++; srcCorroborated++; break;
-                        case ClaimOutcome.Rejected: rejected++; srcNew++; break;
-                        case ClaimOutcome.Conflict: conflicts++; srcNew++; break;
+                        // Persisteert een gloednieuwe Claim-rij — reëel werk,
+                        // en idempotent: een volgende run op ditzelfde item
+                        // vindt de claim al bestaand (exacte-tekst-sneltoets)
+                        // en levert dan Seen op, dus geen dubbele telling.
+                        case ClaimOutcome.New: newClaims++; srcNew++; processed++; break;
+                        // Persisteert een nieuwe ClaimSource-rij (onafhankelijk
+                        // cross-bron-bewijs voor een bestaande claim) — ook dit
+                        // is een gloednieuwe, idempotente schrijfactie: een
+                        // volgende run vindt dezelfde bron al aangehecht
+                        // (alreadyAttached) en levert dan Seen op.
+                        case ClaimOutcome.Corroborated: corroborated++; srcCorroborated++; processed++; break;
+                        // Nieuwe Claim-rij, alleen met status "rejected" —
+                        // net zo goed nieuw gepersisteerd werk als New.
+                        case ClaimOutcome.Rejected: rejected++; srcNew++; processed++; break;
+                        // Nieuwe Claim-rij + een Conflict-rij — idem.
+                        case ClaimOutcome.Conflict: conflicts++; srcNew++; processed++; break;
+                        // Een echte, bekostigde poging (embedding-/LLM-call)
+                        // die mislukte — reëel verbruikte capaciteit, dus telt
+                        // mee (en het document blijft toch al staan omdat
+                        // claimFailures.Count > 0, dus geen risico op stilstand
+                        // door deze telling).
                         case ClaimOutcome.Failed:
                             failed++;
                             claimFailures.Add(failure ?? "onbekende fout");
+                            processed++;
                             break;
-                        case ClaimOutcome.Seen: break; // zelfde bron, al bekend
+                        // Seen: dezelfde bron had deze claim al (dedupe-
+                        // treffer, stap 1 van ProcessClaimAsync) — geen nieuwe
+                        // rij, geen nieuwe LLM-/embedding-kost. Telt bewust
+                        // NIET mee tegen het budget (#200, de kern van de fix).
+                        case ClaimOutcome.Seen: break;
                     }
                 }
             }
