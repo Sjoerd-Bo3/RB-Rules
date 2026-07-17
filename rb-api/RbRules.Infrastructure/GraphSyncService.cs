@@ -96,6 +96,9 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             .Select(e => new { e.Id, e.CardName, e.CardRiftboundId })
             .ToListAsync(ct);
 
+        // Bewust ALLE changes, ook geconsolideerde secundairen (#206): de
+        // graph is de volledige, ongefilterde brontrail — consolidatie is
+        // feed-presentatie, geen kennisrelatie (ARCHITECTURE §6.3).
         var changes = await db.Changes.AsNoTracking()
             .Select(c => new { c.Id, c.ChangeType, c.Severity, c.DetectedAt, c.Summary, c.Meaning, c.Diff })
             .ToListAsync(ct);

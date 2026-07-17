@@ -57,7 +57,10 @@ public class ChangeClassificationService(RbRulesDbContext db, RbAiClient ai)
 
     // Zelfde predicaat voor todo én Remaining. Bewust inline (niet via
     // Classifier.NeedsClassification): eigen methodes vertalen niet in
-    // EF-expression-trees.
+    // EF-expression-trees. Bewust GEEN roots-only-filter (#206): ook een
+    // geconsolideerde secundaire verdient een classificatie — haar
+    // Summary/Meaning blijven zichtbaar in de ConfirmedBy-uitklap van de
+    // primaire kaart.
     private IQueryable<Change> Pending() =>
         db.Changes.Where(c =>
             c.Diff != null && c.Diff != "" &&

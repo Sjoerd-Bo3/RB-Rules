@@ -103,6 +103,11 @@ public class SourceDossierService(RbRulesDbContext db)
             .FirstOrDefaultAsync(ct);
         var ruleChunks = await db.RuleChunks.AsNoTracking().CountAsync(c => c.SourceId == id, ct);
 
+        // Bewust GEEN roots-only-filter (#206): het bron-dossier toont wat
+        // DEZE bron detecteerde (herleidbaarheid per bron) — een
+        // geconsolideerd paar is per definitie cross-source, dus binnen één
+        // bron-dossier kan het paar nooit dubbel verschijnen; de secundaire
+        // wegfilteren zou juist een echte detectie van deze bron verbergen.
         var changesTotal = await db.Changes.AsNoTracking().CountAsync(c => c.SourceId == id, ct);
         var changes = await db.Changes.AsNoTracking()
             .Where(c => c.SourceId == id)

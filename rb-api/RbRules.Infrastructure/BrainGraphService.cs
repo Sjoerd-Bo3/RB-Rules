@@ -62,8 +62,10 @@ public class BrainGraphService(IDriver driver)
     /// (whitelist, al gevalideerd), kind (#116: property-waarde, alleen als
     /// parameter — leeg = geen filter) en richting. Null = knoop niet in de
     /// graph (404 bij het endpoint — de graph-job is dan mogelijk nog niet
-    /// gedraaid).</summary>
-    public async Task<IReadOnlyList<BrainNeighbor>?> NeighborsAsync(
+    /// gedraaid). Virtual als test-seam (docs/CONVENTIONS.md: pas een seam
+    /// als die nodig is — RuleBrowserDossierTests stubt hiermee de
+    /// AFFECTS-buren zonder Neo4j).</summary>
+    public virtual async Task<IReadOnlyList<BrainNeighbor>?> NeighborsAsync(
         string label, string refValue, string[] edgeFilter, string kind,
         BrainDirection direction, int take, CancellationToken ct = default)
     {
