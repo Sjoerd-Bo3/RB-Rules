@@ -1330,6 +1330,26 @@ kan rb-api eerder starten dan Postgres klaar is.
   door. De isolatietest (`AskServiceBenchmarkIsolationTests`) blijft ongewijzigd
   van toepassing: `Model` verandert niets aan welke tabellen wel/niet
   geschreven worden, alleen welk model het antwoord genereert.
+- **Eval-harness-scaffold (nog niet bedraad)** (#231, brein-epic #223, Fase 7) —
+  een losstaand, dependency-vrij fundament voor het meten van
+  brein-hallucinatie als per-release-getal, bewust nog zónder retrieval/graaf,
+  DB of endpoint. Pure Domain-bouwstenen: `EvalCase` (de meeteenheid — vraag +
+  `EvalQueryType` (Factoid/Inference/Comparison/Temporal) + `GoldSupport`
+  (recall-noemer) + `ExpectedCitations` + `ForbiddenClaims` + levenscyclus),
+  `EvalRunResult` (geabstraheerde run-uitkomst: opgehaalde/geciteerde/
+  geproduceerde ids — géén graaf-koppeling), `EvalScoringService` (pure
+  Relevancy/Recall/F1/CitationPrecision/ContradictionRecall) en
+  `EvalGateEvaluator` (de Ring-A-poort). Twee Kritiek-mitigaties zijn hier al
+  ingebakken: **cold-start-shadow** (een `EvalStatus.Shadow`-case scoort en
+  wordt gerapporteerd maar blokkeert de gate nooit — een half-gereviewde
+  nieuwe set breekt de CI van `main` niet, B4) en **errata-invalidatie** op
+  twee niveaus (case-niveau `SupersededByErratum`/`ValidUntil` → overslaan;
+  claim-niveau `ForbiddenClaim.SupersededByErratum` → een door een erratum
+  waar-geworden claim telt niet meer als contradictie, C). De voorbeeld-
+  gouden-set staat als seed in `docs/eval/poracle-eval-seed.json` (5
+  illustratieve cases, via `EvalSeed.Parse`); het echte corpus komt later in
+  Postgres `eval_case` met rb-ai-kandidaten uit set/errata-diffs. Nog niets
+  hiervan draait in CI of een endpoint — dit is enkel het reviewbare skelet.
 
 ---
 
