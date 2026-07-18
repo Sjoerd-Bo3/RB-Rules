@@ -469,7 +469,7 @@
 	};
 </script>
 
-<svelte:head><title>Vraag een ruling — RB Rules</title></svelte:head>
+<svelte:head><title>Vraag een ruling — Poracle</title></svelte:head>
 
 <main>
 	<h1>Vraag een <span>ruling</span></h1>

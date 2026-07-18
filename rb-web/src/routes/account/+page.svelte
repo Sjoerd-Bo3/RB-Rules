@@ -101,7 +101,7 @@
 	}
 </script>
 
-<svelte:head><title>Account — RB Rules</title></svelte:head>
+<svelte:head><title>Account — Poracle</title></svelte:head>
 
 <main>
 	<h1>Account</h1>

@@ -63,7 +63,7 @@
 	});
 </script>
 
-<svelte:head><title>{c.name} — RB Rules</title></svelte:head>
+<svelte:head><title>{c.name} — Poracle</title></svelte:head>
 
 {#snippet rail()}
 	{#if onThisPage.length}

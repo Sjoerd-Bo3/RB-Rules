@@ -395,7 +395,7 @@
 	];
 </script>
 
-<svelte:head><title>Beheer — RB Rules</title></svelte:head>
+<svelte:head><title>Beheer — Poracle</title></svelte:head>
 
 {#if !data.authed}
 	<div class="login-wrap">

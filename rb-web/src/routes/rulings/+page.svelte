@@ -71,7 +71,7 @@
 </script>
 
 <svelte:head>
-	<title>Rulings — RB Rules</title>
+	<title>Rulings — Poracle</title>
 	<meta
 		name="description"
 		content="Doorzoekbare databank van geverifieerde Riftbound-rulings en officieel bevestigde community-inzichten, met bronnen en regelverwijzingen."

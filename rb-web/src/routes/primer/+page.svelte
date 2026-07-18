@@ -20,7 +20,7 @@
 	});
 </script>
 
-<svelte:head><title>Spelbegrip — RB Rules</title></svelte:head>
+<svelte:head><title>Spelbegrip — Poracle</title></svelte:head>
 
 {#snippet rail()}
 	<nav class="rail-nav">

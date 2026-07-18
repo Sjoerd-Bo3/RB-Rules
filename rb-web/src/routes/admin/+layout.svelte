@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { afterNavigate } from '$app/navigation';
 	import { onMount } from 'svelte';
+	import PoroMark from '$lib/PoroMark.svelte';
 	import { useShell } from '$lib/shell.svelte';
 
 	let { data, children } = $props();
@@ -78,12 +79,12 @@
 		>
 			<span></span><span></span><span></span>
 		</button>
-		<span class="sbrand"><span class="mark"></span>Riftbound<span class="tagb">beheer</span></span>
+		<span class="sbrand"><PoroMark size={20} />Poracle<span class="tagb">beheer</span></span>
 	</header>
 
 	<aside class="asidebar" class:open={drawerOpen} aria-label="Beheernavigatie">
 		<a class="back" href="/">&larr; naar de site</a>
-		<span class="sbrand"><span class="mark"></span>Riftbound<span class="tagb">beheer</span></span>
+		<span class="sbrand"><PoroMark size={20} />Poracle<span class="tagb">beheer</span></span>
 
 		{#if authed}
 			<nav class="anav">
@@ -155,22 +156,6 @@
 		letter-spacing: -0.01em;
 		color: var(--text);
 		white-space: nowrap;
-	}
-	.mark {
-		width: 20px;
-		height: 20px;
-		border-radius: 6px;
-		flex: none;
-		background: conic-gradient(
-			from 210deg,
-			var(--dom-fury),
-			var(--dom-body),
-			var(--dom-order),
-			var(--dom-calm),
-			var(--dom-mind),
-			var(--dom-chaos),
-			var(--dom-fury)
-		);
 	}
 	.tagb {
 		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
