@@ -1,227 +1,159 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import ChangeCard from '$lib/ChangeCard.svelte';
 
 	let { data } = $props();
 
-	// Web-push (#28): meldingen bij belangrijke wijzigingen (bans/errata).
-	let pushState = $state<'unavailable' | 'off' | 'on' | 'busy'>('unavailable');
-	$effect(() => {
-		(async () => {
-			if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-			const vapid = await fetch('/push');
-			if (!vapid.ok) return; // server heeft geen VAPID-keys
-			const reg = await navigator.serviceWorker.ready;
-			pushState = (await reg.pushManager.getSubscription()) ? 'on' : 'off';
-		})().catch(() => {});
-	});
-
-	function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
-		const pad = '='.repeat((4 - (b64.length % 4)) % 4);
-		const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
-		const bytes = new Uint8Array(new ArrayBuffer(raw.length));
-		for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-		return bytes;
+	let q = $state('');
+	function ask(e: Event) {
+		e.preventDefault();
+		const query = q.trim();
+		goto(query ? `/ask?q=${encodeURIComponent(query)}` : '/ask');
 	}
 
-	async function togglePush() {
-		const prev = pushState;
-		pushState = 'busy';
-		try {
-			const reg = await navigator.serviceWorker.ready;
-			if (prev === 'on') {
-				const sub = await reg.pushManager.getSubscription();
-				if (sub) {
-					await fetch('/push', {
-						method: 'POST',
-						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({ action: 'unsubscribe', endpoint: sub.endpoint })
-					});
-					await sub.unsubscribe();
-				}
-				pushState = 'off';
-				return;
-			}
-			if ((await Notification.requestPermission()) !== 'granted') { pushState = 'off'; return; }
-			const { publicKey } = await (await fetch('/push')).json();
-			const sub = await reg.pushManager.subscribe({
-				userVisibleOnly: true,
-				applicationServerKey: b64ToBytes(publicKey)
-			});
-			const raw = sub.toJSON();
-			const res = await fetch('/push', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					action: 'subscribe',
-					endpoint: sub.endpoint,
-					p256dh: raw.keys?.p256dh,
-					auth: raw.keys?.auth
-				})
-			});
-			if (!res.ok) {
-				// Server heeft de registratie niet — browser-abonnement terugdraaien.
-				await sub.unsubscribe().catch(() => {});
-				pushState = 'off';
-				return;
-			}
-			pushState = 'on';
-		} catch {
-			pushState = prev === 'busy' ? 'off' : prev;
-		}
-	}
+	const tiles = $derived([
+		{ label: 'Kaarten', value: data.stats.cards, href: '/cards', dom: 'fury' },
+		{ label: 'Geverifieerde rulings', value: data.stats.verifiedRulings, href: '/rulings', dom: 'calm' },
+		{ label: 'Actieve bans', value: data.stats.bans, href: '/wijzigingen', dom: 'fury' },
+		{ label: 'Nieuwe wijzigingen', value: data.stats.recentChanges, href: '/wijzigingen', dom: 'mind', note: 'laatste 14 dagen' }
+	]);
 
-	let sevFilter = $state<string | null>(null);
-	let typeFilter = $state<string | null>(null);
-	let srcFilter = $state<string | null>(null);
-
-	const changes = $derived(
-		data.changes.filter(
-			(c) =>
-				(!sevFilter || c.severity === sevFilter) &&
-				(!typeFilter || c.changeType === typeFilter) &&
-				(!srcFilter || c.sourceId === srcFilter)
-		)
-	);
-	const severities = $derived([...new Set(data.changes.map((c) => c.severity))]);
-	const types = $derived([...new Set(data.changes.map((c) => c.changeType))]);
-	const sources = $derived(
-		[...new Map(data.changes.map((c) => [c.sourceId, c.sourceName])).entries()]
-	);
-
-	// Aankomende set (#52): releasedatum → "31 juli 2026 (over 20 dagen)".
-	function fmtRelease(publishedOn: string): string {
-		const d = new Date(publishedOn);
-		const days = Math.ceil((d.getTime() - Date.now()) / 86_400_000);
-		const date = d.toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' });
-		return days === 1 ? `${date} (morgen)` : `${date} (over ${days} dagen)`;
-	}
+	// "Spring naar" — de kennisbronnen met een telling waar zinvol.
+	const jumps = $derived([
+		{ href: '/wijzigingen', label: 'Wijzigingen', desc: 'Bans, errata en regelupdates', count: data.stats.recentChanges, dom: 'mind' },
+		{ href: '/rules', label: 'Regels', desc: 'Core & Tournament Rules met §-permalinks', dom: 'order' },
+		{ href: '/cards', label: 'Kaarten', desc: 'Semantisch zoeken en bladeren', count: data.stats.cards, dom: 'fury' },
+		{ href: '/rulings', label: 'Rulings', desc: 'Geverifieerde beslissingen', count: data.stats.verifiedRulings, dom: 'calm' },
+		{ href: '/decks', label: 'Decks', desc: 'Piltover Archive-decks', dom: 'body' },
+		{ href: '/graph', label: 'Brein', desc: 'De kennisgraaf verkennen', dom: 'chaos' }
+	]);
 </script>
 
-<svelte:head>
-	<title>Riftbound Rules Companion</title>
-</svelte:head>
+<svelte:head><title>Riftbound Rules Companion</title></svelte:head>
 
 <main>
-	<div class="hero">
-		<div>
-			<h1>Riftbound <span>Rules Companion</span></h1>
-			<p class="subtitle">Wat is er veranderd in de regels, bans en errata — automatisch bijgehouden.</p>
-		</div>
-		{#if pushState !== 'unavailable'}
-			<button class="push-toggle" class:on={pushState === 'on'} disabled={pushState === 'busy'} onclick={togglePush}>
-				{pushState === 'on' ? 'Meldingen aan' : pushState === 'busy' ? 'Bezig…' : 'Meldingen bij belangrijke wijzigingen'}
-			</button>
-		{/if}
-	</div>
+	<section class="hero">
+		<h1>Riftbound <span>Rules Companion</span></h1>
+		<p class="subtitle">
+			Regels, bans, errata, rulings en kaarten — automatisch bijgehouden, met een AI-vraagbaak.
+		</p>
+		<form class="hero-search" onsubmit={ask}>
+			<input
+				type="search"
+				bind:value={q}
+				placeholder="Stel een regelvraag, bijv. 'werkt Deflect tijdens een showdown?'"
+				aria-label="Stel een regelvraag"
+			/>
+			<button type="submit">Vraag</button>
+		</form>
+	</section>
 
-	<!-- Aankomende-set-signaal (#52): zichtbaar zodra de kaart-sync een
-	     releasedatum in de toekomst kent; kaarten zijn tot die dag niet legaal. -->
-	{#each data.upcoming as s (s.setId)}
-		<aside class="upcoming">
-			<span class="badge up-badge">aankomende set</span>
-			<strong>{s.name}{s.name !== s.setId ? ` (${s.setId})` : ''}</strong>
-			<span class="up-when">
-				release {fmtRelease(s.publishedOn)}{s.cardCount ? ` · ${s.cardCount} kaarten` : ''}
-				— tot de release niet legaal in constructed
-			</span>
-		</aside>
-	{/each}
-
-	{#if data.apiDown}
-		<p class="warn">rb-api is niet bereikbaar.</p>
-	{:else if data.changes.length === 0}
-		<p class="empty">Nog geen wijzigingen geregistreerd.</p>
-	{:else}
-		<!-- Filters -->
-		<div class="filters">
-			<div class="fgroup">
-				{#each severities as s (s)}
-					<button class="chip sev-{s}" class:on={sevFilter === s}
-						onclick={() => (sevFilter = sevFilter === s ? null : s)}>{s}</button>
-				{/each}
-			</div>
-			<div class="fgroup">
-				{#each types as t (t)}
-					<button class="chip" class:on={typeFilter === t}
-						onclick={() => (typeFilter = typeFilter === t ? null : t)}>{t}</button>
-				{/each}
-			</div>
-			{#if sources.length > 1}
-				<div class="fgroup">
-					{#each sources as [id, name] (id)}
-						<button class="chip" class:on={srcFilter === id}
-							onclick={() => (srcFilter = srcFilter === id ? null : id)}>{name}</button>
-					{/each}
-				</div>
-			{/if}
-			{#if sevFilter || typeFilter || srcFilter}
-				<button class="chip clear" onclick={() => { sevFilter = null; typeFilter = null; srcFilter = null; }}>Wis filters</button>
-			{/if}
-		</div>
-		<p class="meta count">{changes.length} van {data.changes.length} wijzigingen</p>
-
-		{#each changes as c (c.id)}
-			{#if data.isAdmin}
-				<ChangeCard change={c}>
-					{#snippet actions()}
-						<form method="POST" action="?/delete" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
-							<input type="hidden" name="id" value={c.id} />
-							<!-- Delete-cascade (#206, finding 9): een primaire verwijderen
-							     neemt haar bevestigingen mee — het is hetzelfde event. -->
-							<button class="del" title="Verwijder uit feed"
-								onclick={(e) => {
-									if (c.confirmedBy.length > 0 && !confirm(
-										`Dit verwijdert ook ${c.confirmedBy.length} bevestiging(en) uit andere bronnen (zelfde event). Doorgaan?`))
-										e.preventDefault();
-								}}>Verwijder</button>
-						</form>
-					{/snippet}
-				</ChangeCard>
-			{:else}
-				<ChangeCard change={c} />
-			{/if}
+	<section class="tiles">
+		{#each tiles as t (t.label)}
+			<a class="tile" href={t.href} style="--tile: var(--dom-{t.dom})">
+				<span class="tile-value tnum">{t.value}</span>
+				<span class="tile-label">{t.label}</span>
+				{#if t.note}<span class="tile-note">{t.note}</span>{/if}
+			</a>
 		{/each}
-	{/if}
+	</section>
+
+	<div class="cols">
+		<section class="recent">
+			<div class="sec-head">
+				<h2>Recente wijzigingen</h2>
+				<a class="more" href="/wijzigingen">Alle wijzigingen →</a>
+			</div>
+			{#if data.recent.length === 0}
+				<p class="meta">Nog geen wijzigingen geregistreerd.</p>
+			{:else}
+				{#each data.recent as c (c.id)}
+					<ChangeCard change={c} compact />
+				{/each}
+			{/if}
+		</section>
+
+		<section class="jump">
+			<h2>Spring naar</h2>
+			<div class="jump-list">
+				{#each jumps as j (j.href)}
+					<a class="jump-item" href={j.href}>
+						<span class="jump-dot" style="background: var(--dom-{j.dom})"></span>
+						<span class="jump-body">
+							<span class="jump-label">
+								{j.label}
+								{#if j.count !== undefined}<span class="jump-count tnum">{j.count}</span>{/if}
+							</span>
+							<span class="jump-desc">{j.desc}</span>
+						</span>
+					</a>
+				{/each}
+			</div>
+		</section>
+	</div>
 </main>
 
 <style>
-	main { max-width: 860px; margin: 0 auto; padding: 24px 20px; }
+	main { max-width: 1000px; margin: 0 auto; padding: 24px 20px; }
+
+	.hero { margin-bottom: 22px; }
+	h1 { margin: 0 0 6px; }
 	h1 span { color: var(--accent); }
-	.hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
-	.push-toggle {
-		background: transparent; color: var(--muted); border: 1px solid var(--border);
-		border-radius: 999px; padding: 7px 14px; font-size: 0.82rem; cursor: pointer;
-		margin-top: 14px; white-space: nowrap;
+	.subtitle { color: var(--muted); margin: 0 0 16px; max-width: 62ch; }
+	.hero-search { display: flex; gap: 8px; }
+	.hero-search input {
+		flex: 1; min-width: 0; background: var(--surface); color: var(--text);
+		border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 1rem;
 	}
-	.push-toggle.on { color: var(--ok); border-color: var(--ok); }
-	.push-toggle:disabled { opacity: 0.5; }
-	.subtitle, .meta, .empty { color: var(--muted); }
-	.upcoming {
-		display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
-		background: var(--accent-soft); border: 1px solid var(--accent);
-		border-radius: var(--radius); padding: 10px 14px; margin: 14px 0 4px;
+	.hero-search input:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
+	.hero-search button {
+		background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px;
+		padding: 0 20px; font-weight: 700; cursor: pointer; white-space: nowrap;
 	}
-	.up-badge { background: var(--accent); color: var(--accent-ink); }
-	.up-when { color: var(--muted); font-size: 0.88rem; }
-	.filters { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 4px; }
-	.fgroup { display: flex; flex-wrap: wrap; gap: 6px; }
-	.chip {
-		background: var(--surface); color: var(--muted); border: 1px solid var(--border);
-		border-radius: 999px; padding: 3px 12px; font-size: 0.8rem; cursor: pointer;
+
+	.tiles {
+		display: grid; gap: 12px; margin-bottom: 24px;
+		grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 	}
-	.chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
-	.chip.clear { border-style: dashed; }
-	.chip.sev-high { color: var(--err); }
-	.chip.sev-medium { color: var(--warn); }
-	.count { font-size: 0.8rem; margin: 4px 0 12px; }
-	.warn { color: var(--err); }
-	/* Delete-knop (#206, admin-actieslot): compact, rustig totdat je hem
-	   nodig hebt — pas bij hover valt hij op als destructieve actie. */
-	.del {
-		background: none; border: 1px solid var(--border); border-radius: 6px;
-		color: var(--muted); cursor: pointer; font-size: 0.75rem; padding: 2px 8px; opacity: 0.7;
+	.tile {
+		display: flex; flex-direction: column; gap: 2px;
+		background: var(--surface); border: 1px solid var(--border);
+		border-radius: var(--radius-lg); padding: 16px 16px 16px 18px;
+		text-decoration: none; color: inherit; position: relative; overflow: hidden;
+		box-shadow: var(--shadow-card);
 	}
-	.del:hover { opacity: 1; border-color: var(--err); color: var(--err); }
+	/* Domein-accent als smalle linkerstreep — dezelfde taal als de ChangeCard. */
+	.tile::before {
+		content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+		background: var(--tile);
+	}
+	.tile:hover { border-color: var(--border-strong); }
+	.tile-value { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+	.tile-label { color: var(--muted); font-size: 0.9rem; }
+	.tile-note { color: var(--muted); font-size: 0.74rem; }
+
+	.cols { display: grid; gap: 22px; grid-template-columns: 1fr; }
+	@media (min-width: 900px) {
+		.cols { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); align-items: start; }
+	}
+	.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+	h2 { font-size: 1.05rem; margin: 0 0 12px; }
+	.more { color: var(--accent); text-decoration: none; font-size: 0.85rem; font-weight: 600; white-space: nowrap; }
+	.meta { color: var(--muted); }
+
+	.jump-list { display: flex; flex-direction: column; gap: 6px; }
+	.jump-item {
+		display: flex; align-items: flex-start; gap: 10px;
+		background: var(--surface); border: 1px solid var(--border);
+		border-radius: var(--radius); padding: 11px 13px; text-decoration: none; color: inherit;
+	}
+	.jump-item:hover { border-color: var(--border-strong); }
+	.jump-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; }
+	.jump-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+	.jump-label { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+	.jump-count {
+		font-size: 0.72rem; font-weight: 700; color: var(--muted);
+		background: var(--surface-deep); border-radius: 999px; padding: 1px 8px;
+	}
+	.jump-desc { color: var(--muted); font-size: 0.85rem; }
 </style>

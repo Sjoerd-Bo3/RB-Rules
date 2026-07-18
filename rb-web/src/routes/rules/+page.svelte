@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { navigating } from '$app/state';
+	import { useShell } from '$lib/shell.svelte';
 
 	let { data } = $props();
+	const shell = useShell();
 
 	// Schrijfbaar afgeleid (Svelte 5.25+): typen filtert de boom live, en bij
 	// navigatie (form GET → nieuwe ?q=) reset de invoer naar de URL-waarde —
@@ -49,9 +51,49 @@
 	function sourceName(id: string): string {
 		return data.toc.find((s) => s.sourceId === id)?.sourceName ?? id;
 	}
+
+	// Bron-filter (feed-patroon #214): op lijstpagina's wonen filters in de
+	// rechterrail (desktop) / bottom-sheet (mobiel), nooit een horizontaal
+	// scrollende chip-rij. De boom hierboven filtert client-side op bron.
+	let srcFilter = $state<string | null>(null);
+	const sourceList = $derived(data.toc.map((s) => ({ id: s.sourceId, name: s.sourceName })));
+	const visibleToc = $derived(
+		srcFilter ? data.toc.filter((s) => s.sourceId === srcFilter) : data.toc
+	);
+	const activeCount = $derived(srcFilter ? 1 : 0);
+
+	// Rail alleen zinvol bij meerdere bronnen; bij één bron valt er niets te
+	// filteren en centreert de pagina gewoon.
+	$effect(() => {
+		if (sourceList.length <= 1) return;
+		shell.rail = { snippet: filters, kind: 'filters', count: activeCount, title: 'Filters' };
+		return () => (shell.rail = null);
+	});
 </script>
 
 <svelte:head><title>Regels — RB Rules</title></svelte:head>
+
+{#snippet filters()}
+	<div class="fgroup">
+		<p class="fglabel">Bron</p>
+		<div class="chips">
+			{#each sourceList as src (src.id)}
+				<button
+					type="button"
+					class="chip"
+					class:on={srcFilter === src.id}
+					onclick={() => (srcFilter = srcFilter === src.id ? null : src.id)}>{src.name}</button
+				>
+			{/each}
+		</div>
+	</div>
+	<div class="filter-actions">
+		<button type="button" class="link-btn" onclick={() => (srcFilter = null)} disabled={activeCount === 0}
+			>Reset</button
+		>
+		<button type="button" class="apply" onclick={() => (shell.sheetOpen = false)}>Toon regels</button>
+	</div>
+{/snippet}
 
 <main>
 	<h1>Officiële <span>regels</span></h1>
@@ -71,6 +113,14 @@
 			/>
 			<button type="submit" disabled={busy}>{busy ? 'Zoeken…' : 'Zoek'}</button>
 		</form>
+
+		{#if activeCount > 0}
+			<div class="active-chips">
+				<button type="button" class="active-chip" onclick={() => (srcFilter = null)}
+					>bron: {sourceName(srcFilter!)} ✕</button
+				>
+			</div>
+		{/if}
 
 		{#if data.searchFailed}
 			<p class="warn">Zoeken is even niet beschikbaar — de boom hieronder werkt gewoon.</p>
@@ -102,7 +152,7 @@
 			</section>
 		{/if}
 
-		{#each data.toc as src (src.sourceId)}
+		{#each visibleToc as src (src.sourceId)}
 			{@const visible = src.sections.filter(matches)}
 			{#if visible.length}
 				<h2>{src.sourceName} <span class="meta">({visible.length} secties)</span></h2>
@@ -137,15 +187,15 @@
 	.subtitle, .meta, .preview { color: var(--muted); }
 	.preview { font-size: 0.85rem; }
 	.search { display: flex; gap: 8px; margin: 10px 0 18px; }
-	input {
+	.search input {
 		flex: 1; min-width: 0; box-sizing: border-box; background: var(--surface-deep); color: var(--text);
 		border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 1rem;
 	}
-	button {
+	.search button {
 		background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px;
 		padding: 10px 16px; font-weight: 600; cursor: pointer; flex-shrink: 0;
 	}
-	button:disabled { opacity: 0.6; cursor: wait; }
+	.search button:disabled { opacity: 0.6; cursor: wait; }
 	h2 { color: var(--accent); font-size: 1.05rem; margin: 22px 0 8px; }
 	.results { margin-bottom: 22px; }
 	.results h2 { margin-top: 0; }
@@ -153,7 +203,7 @@
 	.hits li {
 		display: flex; align-items: center; gap: 10px;
 		background: var(--surface); border: 1px solid var(--border);
-		border-radius: 10px; padding: 10px 14px;
+		border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow-card);
 	}
 	.hit { flex: 1; min-width: 0; display: block; }
 	.hit-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
@@ -164,8 +214,8 @@
 	}
 	.pdf { flex-shrink: 0; color: var(--accent); font-size: 0.85rem; }
 	details {
-		background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-		padding: 8px 14px; margin-bottom: 8px;
+		background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+		padding: 8px 14px; margin-bottom: 8px; box-shadow: var(--shadow-card);
 	}
 	summary { cursor: pointer; }
 	.chapter-title { margin-left: 8px; font-weight: 600; color: var(--text); text-decoration: none; }
@@ -178,4 +228,35 @@
 	a { color: var(--text); text-decoration: none; font-weight: 600; }
 	a:hover { color: var(--accent); }
 	.warn { color: var(--err); }
+
+	/* Actieve filters als verwijderbare chips (feed-patroon). */
+	.active-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+	.active-chip {
+		background: var(--surface-deep); color: var(--text); border: 1px solid var(--border);
+		border-radius: 999px; padding: 4px 12px; font-size: 0.8rem; cursor: pointer; font-weight: 400;
+	}
+	.active-chip:hover { border-color: var(--border-strong); }
+
+	/* Filter-inhoud (gedeeld door rail + bottom-sheet) */
+	.fgroup { margin-bottom: 14px; }
+	.fglabel {
+		margin: 0 0 6px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+		letter-spacing: 0.05em; color: var(--muted);
+	}
+	.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+	.chip {
+		background: var(--surface); color: var(--muted); border: 1px solid var(--border);
+		border-radius: 999px; padding: 5px 12px; font-size: 0.8rem; cursor: pointer; font-weight: 400;
+	}
+	.chip:hover { border-color: var(--border-strong); color: var(--text); }
+	.chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+	.filter-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
+	.link-btn {
+		background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 0.85rem; padding: 6px 4px;
+	}
+	.link-btn:disabled { opacity: 0.4; cursor: default; }
+	.apply {
+		background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px;
+		padding: 9px 16px; font-weight: 700; cursor: pointer;
+	}
 </style>

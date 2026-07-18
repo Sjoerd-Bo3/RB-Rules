@@ -27,6 +27,10 @@ public static class FeedEndpoints
         app.MapGet("/api/bans", async (RbRulesDbContext db) =>
             await db.BanEntries.OrderBy(b => b.Kind).ThenBy(b => b.Name).ToListAsync());
 
+        // Overzicht-dashboard (#214): publieke telstanden voor de statistiek-
+        // tegels. Read-time, geen migratie.
+        app.MapGet("/api/stats", async (PublicStatsService stats) => await stats.GetAsync());
+
         // Aankomende-set-signaal (#52): sets met een bekende releasedatum in
         // de toekomst (SetLegality: upcoming). Voedt de banner in de feed en
         // het beheer — spelers zien wanneer nieuwe kaarten legaal worden.

@@ -1,24 +1,116 @@
 /* Ontwerptokens — één bron voor kleur, typografie en vormtaal.
-   Donker, rustig en zakelijk: geen emoji's, status via kleur en tekst. */
+   Richting "Domains, eigentijds" (design-proof, ongemerged): modern,
+   koel-neutraal; domeinkleuren zijn de enige echte kleur in de UI, geel is
+   uitsluitend het actie-accent (nooit een goud-op-zwart sfeerkleurtje).
+   Licht is de standaard; donker is koele graphite — geen zwart. Geen
+   emoji's, status blijft altijd kleur + tekst. */
 :root {
-	--bg: #0d1420;
-	--surface: #151f31;
-	--surface-deep: #0a111d;
-	--border: #263650;
-	--border-strong: #3a5178;
-	--text: #e8eefb;
-	--muted: #93a5c4;
-	--accent: #d98a4e;
-	--accent-soft: #d98a4e22;
-	--accent-ink: #1a1206;
-	--ok: #4fbf8b;
-	--ok-soft: #4fbf8b1c;
-	--warn: #e0a32e;
-	--warn-soft: #e0a32e1c;
+	/* Neutralen — licht (standaard). Exacte waarden uit de goedgekeurde
+	   mockup (scratchpad/rb-designs.html). */
+	--bg: #f6f7f9;
+	--surface: #ffffff;
+	--surface-deep: #eef0f3;
+	--border: rgba(20, 24, 40, 0.11);
+	--border-strong: rgba(20, 24, 40, 0.20);
+	--text: #1b1e26;
+	--muted: #606673;
+
+	/* Actie/merk-accent: geel, uitsluitend voor primaire acties (CTA-knoppen,
+	   actieve nav) — geen decoratief gebruik binnen nieuw werk. */
+	--accent: #f5c518;
+	--accent-soft: #f5c51822;
+	--accent-ink: #20190a;
+
+	/* Focusring (#214-review): geel zakt weg op de lichte standaard (~1.6:1,
+	   onder WCAG 3:1), dus een eigen focus-hue die in beide thema's contrasteert
+	   — het mind-blauw haalt ≥3:1 op zowel wit als graphite. */
+	--focus: var(--dom-mind);
+
+	/* Semantiek (los van domein/merk) */
+	--ok: #2ea36a;
+	--ok-soft: #2ea36a1c;
+	--warn: #9a6700;
+	--warn-soft: #9a67001c;
 	--err: #e5484d;
 	--err-soft: #e5484d1c;
+
 	--radius: 10px;
-	--radius-lg: 14px;
+	--radius-lg: 13px;
+
+	/* Kaartschaduw — licht: zacht; donker (hieronder): platte kaarten. */
+	--shadow-card: 0 1px 2px rgba(20, 24, 40, 0.04);
+	/* Voor grote panelen (nog niet in gebruik in deze proef). */
+	--shadow-panel-lg: 0 24px 60px -34px rgba(20, 24, 40, 0.45);
+
+	/* Domein-tokens (#domains-proof): canonieke Riftbound-domeinen, gelijk in
+	   licht en donker — dit is de ENE plek om een hue te wijzigen. Sjoerds
+	   voorlopige mapping; Order deelt hier bewust (of per ongeluk — ter
+	   beoordeling) exact dezelfde hex als --accent, zie PR-notitie. */
+	--dom-fury: #e5484d;
+	--dom-body: #ef7a35;
+	--dom-mind: #3e7bfa;
+	--dom-calm: #2ea36a;
+	--dom-chaos: #b05fd6;
+	--dom-order: #f5c518;
+	--dom-colorless: #8b91a0;
+}
+
+/* Donker: koele graphite, geen zwart. Volgt OS-voorkeur... */
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #0f1114;
+		--surface: #181b21;
+		--surface-deep: #20242b;
+		--border: rgba(255, 255, 255, 0.10);
+		--border-strong: rgba(255, 255, 255, 0.20);
+		--text: #e9ebf1;
+		--muted: #9aa0ad;
+
+		--warn: #e3b341;
+		--warn-soft: #e3b34122;
+		--err: #ff6169;
+		--err-soft: #ff616922;
+
+		--shadow-card: none;
+		--shadow-panel-lg: none;
+	}
+}
+
+/* ...maar een expliciete data-theme wint altijd, in beide richtingen (bv.
+   een toekomstige thema-schakelaar of, voor deze proef, Playwright). */
+:root[data-theme='dark'] {
+	--bg: #0f1114;
+	--surface: #181b21;
+	--surface-deep: #20242b;
+	--border: rgba(255, 255, 255, 0.10);
+	--border-strong: rgba(255, 255, 255, 0.20);
+	--text: #e9ebf1;
+	--muted: #9aa0ad;
+
+	--warn: #e3b341;
+	--warn-soft: #e3b34122;
+	--err: #ff6169;
+	--err-soft: #ff616922;
+
+	--shadow-card: none;
+	--shadow-panel-lg: none;
+}
+:root[data-theme='light'] {
+	--bg: #f6f7f9;
+	--surface: #ffffff;
+	--surface-deep: #eef0f3;
+	--border: rgba(20, 24, 40, 0.11);
+	--border-strong: rgba(20, 24, 40, 0.20);
+	--text: #1b1e26;
+	--muted: #606673;
+
+	--warn: #9a6700;
+	--warn-soft: #9a67001c;
+	--err: #e5484d;
+	--err-soft: #e5484d1c;
+
+	--shadow-card: 0 1px 2px rgba(20, 24, 40, 0.04);
+	--shadow-panel-lg: 0 24px 60px -34px rgba(20, 24, 40, 0.45);
 }
 
 * { box-sizing: border-box; }
@@ -38,6 +130,28 @@ body {
 }
 
 img { max-width: 100%; height: auto; }
+
+/* Toegankelijke focus (#214): zichtbaar op elk interactief element, in beide
+   thema's. Alleen bij toetsenbord-/programmatische focus (:focus-visible),
+   dus geen ring op muisklik. */
+:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+	border-radius: 4px;
+}
+
+/* Respecteer prefers-reduced-motion (#214): animaties en transitions vrijwel
+   uit voor wie dat aangeeft. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+		scroll-behavior: auto !important;
+	}
+}
 
 /* iOS zoomt in op form-controls met font-size < 16px (#56) — op smalle
    schermen dus altijd minimaal 16px. */
@@ -84,6 +198,12 @@ a { color: inherit; }
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-card);
+}
+
+/* Cijfers die moeten uitlijnen (datums, tellers) — vormtaal-eis "Domains". */
+.tnum {
+	font-variant-numeric: tabular-nums;
 }
 
 .status-dot {
@@ -156,14 +276,19 @@ a { color: inherit; }
 	border: 1px solid rgba(0, 0, 0, 0.45);
 	margin: 0 3px;
 }
-.tok-rune-fury { background: #e5484d; }
-.tok-rune-calm { background: #4fbf8b; }
-.tok-rune-mind { background: #5b9dd9; }
-.tok-rune-body { background: #d98a4e; }
-.tok-rune-order { background: #e0c66e; }
-.tok-rune-chaos { background: #a86fd1; }
+/* Domein-runen in kaarttekst (:rb_fury: …) delen nu de canonieke domein-
+   tokens (#214) — één plek voor elke domeinkleur, gelijk aan de randstreep
+   en chips op de ChangeCard. */
+.tok-rune-fury { background: var(--dom-fury); }
+.tok-rune-calm { background: var(--dom-calm); }
+.tok-rune-mind { background: var(--dom-mind); }
+.tok-rune-body { background: var(--dom-body); }
+.tok-rune-order { background: var(--dom-order); }
+.tok-rune-chaos { background: var(--dom-chaos); }
 .tok-rune-rainbow {
-	background: conic-gradient(#e5484d, #e0c66e, #4fbf8b, #5b9dd9, #a86fd1, #e5484d);
+	background: conic-gradient(
+		var(--dom-fury), var(--dom-order), var(--dom-calm),
+		var(--dom-mind), var(--dom-chaos), var(--dom-fury));
 }
 
 /* Markdown-weergave (rulings) */

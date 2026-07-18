@@ -47,6 +47,8 @@
 		severity: string; summary: string | null; meaning: string | null; detectedAt: string;
 		/** #206: leeg tenzij andere bronnen hetzelfde gebeurtenis bevestigden. */
 		confirmedBy: ChangeConfirmation[];
+		/** #214: read-time afgeleid domein (of null = Colorless-neutraal). */
+		domain: string | null;
 	}
 	interface CorrectionItem {
 		id: number; scope: string; ref: string; text: string; question: string | null;
@@ -324,6 +326,9 @@
 	}
 	const acceptGroup = $derived(recommendationGroup('accept'));
 	const rejectGroup = $derived(recommendationGroup('reject'));
+	// "Twijfel"-groep (#199): puur informatief in de aanbevelingsstrip — er is
+	// bewust geen bulk-actie voor (die vragen een menselijke blik per stuk).
+	const unsureGroup = $derived(recommendationGroup('unsure'));
 	// Bulk-uitkomst bij de juiste knop: het resultaat (succes-telling of de
 	// 409-fence-/foutmelding) van de laatste bulk-actie, getypeerd — de
 	// ActionData-union laat zich in de template niet netjes narrowen.
@@ -519,6 +524,17 @@
 			     hetzelfde universum zijn) en mét de TOCTOU-fence (expectedCount +
 			     asOf): is de groep intussen veranderd — bv. door een gelijktijdige
 			     triage-run — dan weigert rb-api met 409 en is er niets beslist. -->
+			<!-- Triage-aanbevelingen (#199): de machine sorteert voor, de mens
+			     beslist. Informatieve strip (geen filter — rb-api filtert op status,
+			     niet op aanbeveling) boven de bulk-acties; alléén in de
+			     te-reviewen-weergave, waar telling en actie-scope samenvallen. -->
+			{#if relationBulkActionsVisible(data.filter) && (acceptGroup || rejectGroup || unsureGroup)}
+				<div class="rec-strip" aria-label="Triage-aanbevelingen">
+					<span class="rec-tab acc">Aanbevolen: accepteren <span class="c tnum">{acceptGroup?.count ?? 0}</span></span>
+					<span class="rec-tab rej">verwerpen <span class="c tnum">{rejectGroup?.count ?? 0}</span></span>
+					<span class="rec-tab uns">twijfel <span class="c tnum">{unsureGroup?.count ?? 0}</span></span>
+				</div>
+			{/if}
 			{#if relationBulkActionsVisible(data.filter) && acceptGroup}
 				<form
 					method="POST"
@@ -537,14 +553,16 @@
 							await invalidateAll();
 						};
 					}}
-					class="archive-all"
+					class="bulkbar acc"
 				>
 					<input type="hidden" name="recommendation" value="accept" />
 					<input type="hidden" name="decision" value="accept" />
 					<input type="hidden" name="expectedCount" value={acceptGroup.count} />
 					<input type="hidden" name="asOf" value={acceptGroup.asOf} />
-					<button class="small" title="Bevestigt alle voorstellen met aanbeveling 'accepteren' in één keer">
-						Accepteer alle {acceptGroup.count} met aanbeveling accept
+					<span class="bt">Accepteer alle {acceptGroup.count} met aanbeveling "accepteren"</span>
+					<span class="fencenote">groep ongewijzigd sinds laden</span>
+					<button class="cta small" title="Bevestigt alle voorstellen met aanbeveling 'accepteren' in één keer">
+						Accepteer {acceptGroup.count}
 					</button>
 					{#if bulkForm?.bulkDecision === 'accept' && bulkForm.bulkApplied !== undefined}
 						<span class="meta">{bulkForm.bulkApplied} {bulkForm.bulkApplied === 1 ? 'voorstel' : 'voorstellen'} geaccepteerd.</span>
@@ -573,14 +591,16 @@
 							await invalidateAll();
 						};
 					}}
-					class="archive-all"
+					class="bulkbar rej"
 				>
 					<input type="hidden" name="recommendation" value="reject" />
 					<input type="hidden" name="decision" value="reject" />
 					<input type="hidden" name="expectedCount" value={rejectGroup.count} />
 					<input type="hidden" name="asOf" value={rejectGroup.asOf} />
+					<span class="bt">Verwerp alle {rejectGroup.count} met aanbeveling "verwerpen"</span>
+					<span class="fencenote">groep ongewijzigd sinds laden</span>
 					<button class="ghost small" title="Verwerpt alle voorstellen met aanbeveling 'verwerpen' in één keer">
-						Verwerp alle {rejectGroup.count} met aanbeveling reject
+						Verwerp {rejectGroup.count}
 					</button>
 					{#if bulkForm?.bulkDecision === 'reject' && bulkForm.bulkApplied !== undefined}
 						<span class="meta">{bulkForm.bulkApplied} {bulkForm.bulkApplied === 1 ? 'voorstel' : 'voorstellen'} verworpen.</span>
@@ -1783,6 +1803,45 @@
 	/* Neutrale badge (archief): geen oordeel, alleen zicht-status. */
 	.badge.mute { background: var(--surface-deep); color: var(--muted); border: 1px solid var(--border); }
 	.archive-all { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 14px; }
+	/* Triage-aanbevelingen (#199): informatieve strip — status = kleur + tekst,
+	   nooit alleen kleur. Wrapt op smal, scrolt nooit horizontaal. */
+	.rec-strip { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+	.rec-tab {
+		display: inline-flex; align-items: center; gap: 8px;
+		border: 1px solid var(--border); border-radius: 999px;
+		padding: 5px 12px; font-size: 0.82rem; color: var(--muted);
+	}
+	.rec-tab .c {
+		background: var(--surface-deep); border-radius: 999px;
+		padding: 1px 7px; font-size: 0.76rem;
+	}
+	.rec-tab.acc { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+	.rec-tab.acc .c { background: var(--ok-soft); }
+	.rec-tab.rej { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--border)); }
+	.rec-tab.rej .c { background: var(--err-soft); }
+	.rec-tab.uns { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
+	.rec-tab.uns .c { background: var(--warn-soft); }
+	/* Bulk-balk per aanbevelingsgroep (#199): telling + fence-noot + knop,
+	   wrapt netjes op 390px. De fence is server-afgedwongen (asOf/expectedCount);
+	   de noot maakt hem zichtbaar. */
+	.bulkbar {
+		display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap;
+		border-radius: var(--radius-lg); padding: 11px 14px; margin: 0 0 12px;
+	}
+	.bulkbar.acc {
+		background: color-mix(in srgb, var(--ok) 8%, var(--surface));
+		border: 1px solid color-mix(in srgb, var(--ok) 30%, var(--border));
+	}
+	.bulkbar.rej {
+		background: color-mix(in srgb, var(--err) 8%, var(--surface));
+		border: 1px solid color-mix(in srgb, var(--err) 30%, var(--border));
+	}
+	.bulkbar .bt { font-size: 0.88rem; font-weight: 600; }
+	.bulkbar .fencenote {
+		font-size: 0.72rem; color: var(--muted);
+		font-family: ui-monospace, Menlo, Consolas, monospace; margin-left: auto;
+	}
+	.bulkbar .warn, .bulkbar .meta { flex-basis: 100%; margin: 0; }
 	.refs { margin: 6px 0 0; }
 	/* Lange bron-URL's mogen op 390px nooit horizontale overflow geven. */
 	.proposal-url { overflow-wrap: anywhere; }

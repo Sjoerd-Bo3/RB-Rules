@@ -696,13 +696,64 @@ veranderde groep, 400 bij ontbrekende/ongeldige velden
 
 ### rb-web — belangrijkste modules
 
-Paginastructuur (`rb-web/src/routes/`): `/` (wijzigingen-feed), `/rules`
-(+ `/rules/[code]`), `/primer`, `/ask` (+ `/ask/stream`), `/cards`
+Paginastructuur (`rb-web/src/routes/`): `/` (**Overzicht-dashboard**, #214),
+`/wijzigingen` (de volledige wijzigingen-feed, #214 — verhuisd van de root),
+`/rules` (+ `/rules/[code]`), `/primer`, `/ask` (+ `/ask/stream`), `/cards`
 (+ `/cards/[id]` + `explain`), `/decks` (+ `/decks/[id]`, #15 fase 3 spoor A:
 browser + legaliteitsbadge, detail met decklijst per sectie en deep-link naar
 Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
-`/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
-`/admin/overview/[kind]`). Navigatie in `+layout.svelte`.
+`/rulings`, `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
+`/admin/overview/[kind]`).
+
+**Samengestelde shell (#214).** `+layout.svelte` is de globale shell: een
+vaste **zijbalk** links (212px op desktop; merk met domein-mark, globaal
+zoekveld → `/ask?q=`, gegroepeerde nav Actueel/Kennis met decoratieve
+domein-stippen, onderaan Account/Beheer + thema-schakelaar), de **content**
+in het midden, en een **opt-in rechterrail** (vanaf 1080px). Pagina's leveren
+rail-inhoud via een context-store (`$lib/shell.svelte.ts`, `useShell().rail =
+{ snippet, kind, count, title }`) — `kind:'context'` (leespagina's:
+"op deze pagina / bron") of `kind:'filters'` (lijstpagina's). Op **mobiel**
+(<760px) klapt de zijbalk in tot een bovenbalk met **hamburger → slide-over
+drawer** (scrim); filters zitten dan achter een **"Filter"-knop met teller die
+een bottom-sheet opent** waarin de chips wrappen (Reset + "Toon N") —
+**nooit horizontaal filterscrollen**. De thema-schakelaar zet `data-theme` op
+`documentElement` en bewaart de keuze in `localStorage`; een inline-script in
+`app.html` zet het thema vóór de eerste verf (FOUC-vrij).
+
+**Rail-patroon op de long-tail-routes (#214).** De rail-store wordt sinds de
+design-refresh op de hele publieke long-tail toegepast. Lijstpagina's leveren
+een **filter-rail** (`kind:'filters'`, mobiel de bottom-sheet met teller):
+`/rules` (bron-chips per `TocSource`, alleen gemount bij >1 bron; de boom
+filtert client-side), `/rulings` (onderwerp-type-filter, verhuisd uit de
+inline chip-rij) en `/decks` (domein- + sorteerfilter als `.filter-form`,
+gelijk aan `/cards`) — het actieve filter blijft als verwijderbare chip in de
+content. Leespagina's leveren een **contextuele rail** (`kind:'context'`):
+`/cards/[id]` ("Op deze pagina" met ankers naar de aanwezige dossier-secties +
+een domein-blok) en `/primer` ("Concepten", met een rustiger/bredere
+leeskolom). Kaart- en deckdetail dragen bovendien een **domein-tint** (3px
+domein-rand/-streep via `domainColorVar`, chips getint via `--dom-*` +
+`color-mix`). Alles op bestaande `app.css`-tokens — geen nieuwe tokens.
+
+**Beheer-console (#214).** De `/admin`-routes draaien in een **eigen shell**:
+`admin/+layout.svelte` vervangt de publieke chrome binnen het beheer door een
+console-zijbalk ("← naar de site", merk "Riftbound [beheer]", nav met
+tel-badges, Gevarenzone in rood, thema-schakelaar onderaan; mobiel <760px een
+eigen bovenbalk + slide-over drawer met scrim). De publieke chrome wordt
+**onderdrukt zonder `+layout.svelte` te wijzigen**: `onMount` zet `admin-shell`
+op `<html>` (weg bij `onDestroy`), en `:global`-regels gated op
+`html.admin-shell` verbergen de publieke `.sidebar`/`.topbar`/`.site-footer` en
+zetten het `.shell`-grid op één kolom — de onderdrukking lekt zo nooit buiten
+het beheer (terug naar `/` herstelt de publieke zijbalk). `admin/+layout.server.ts`
+levert alleen `{ authed }` (volle nav bij ingelogd, anders alleen merk-chrome
+rond het login-scherm). De **tel-badges** komen uit de al geladen `page.data`
+(`status.counts.openCorrections` → Reviewqueue, `sources.length` → Bronnen) —
+geen extra fetch, geen badge waar die data ontbreekt (nette degradatie); de
+thema-schakelaar hergebruikt de bestaande `useShell()`-store. Het
+Overzicht-dashboard voegt in `admin/+page.server.ts` één extra **parallelle**
+fetch toe aan de bestaande `Promise.all`: graph-drift
+(`/api/admin/overview/gaps` → `.drift`, `.catch(() => null)`) voor de
+drift-tabel — alle overige data-bindings en alle form-actions zijn 1-op-1
+behouden.
 
 Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 `RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `ChangeCard.svelte`,
@@ -714,6 +765,33 @@ Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 optioneel admin-actieslot via Svelte 5 snippets (`actions`,
 `confirmationActions`) en een `compact`-prop voor dichte contexten — het
 patroon voor toekomstige herbruikbare kaarten (i.p.v. per-route duplicatie).
+
+**Ontwerptokens: theme-aware (#214).** Sinds de design-refresh is `app.css`
+licht-standaard mét een koele-graphite donker-variant. De neutralen
+(`--bg`/`--surface`/`--surface-deep`/`--text`/`--muted`/`--border`) en de
+semantische tokens worden op drie niveaus gezet: `:root` (licht),
+`@media (prefers-color-scheme: dark)` (volgt de OS-voorkeur) en een expliciete
+`:root[data-theme='dark'|'light']`-override die in béíde richtingen wint (voor
+een latere thema-schakelaar en voor Playwright). Geel (`--accent`) is
+uitsluitend het actie-/merk-accent, nooit een sfeerkleur. Nieuw is een
+canonieke **domein-kleurtaal** `--dom-fury|body|mind|calm|chaos|order|colorless`
+— gelijk in beide thema's, één plek om een hue te wijzigen; gebruikt door de
+kaarttekst-runen (`:rb_fury:` …) en de ChangeCard-randstreep/chips. De
+iOS-16px-formfix en de horizontale-overflow-vangrail blijven ongemoeid.
+_(De per-route layout-uitrol dekt sinds #214 de hele publieke site én het
+beheer — zie de rail- en console-alinea's hierboven; de tokens en de
+change→domein-afleiding zijn layout-onafhankelijk gefundeerd.)_
+
+**Change→domein-afleiding (#214).** De feed kleurt elke wijziging met het
+domein van de geraakte kaart(en). `ChangeDomains` (Infrastructure) leidt dit
+read-time af (geen kolom/migratie) uit de gestructureerde ban-/errata-laag
+(`BanEntry`/`Erratum` → `Card.Domains`): alleen `ban`/`errata` hebben zo'n
+kaart-laag, de rest valt terug op geen domein. Gedeeld door
+`PublicStatsService` (#214) voedt de dashboard-tegels via publiek
+`GET /api/stats` (read-time COUNTs: canonieke kaarten, geverifieerde rulings,
+bans, recente wijzigingen — geen migratie). `ChangeFeedService`
+(publiek `/api/changes`) en `AdminOverviewService`
+(`/api/admin/overview/changes`); beide DTO's dragen een `Domain`-veld.
 
 ### Datastores
 

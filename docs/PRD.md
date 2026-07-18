@@ -122,10 +122,17 @@ apart in §6.
 
 ### 4.1 Regels & bronnen
 
-- **Wijzigingen-feed** — de homepage toont automatisch gedetecteerde
-  wijzigingen (bans, errata, regelupdates, set-releases) met bron, severity,
-  voor/na-diff en een menselijke samenvatting/betekenis. Flip-flop-suppressie
-  onderdrukt ruis van bronnen die per request de volgorde wisselen.
+- **Overzicht-dashboard** (#214) — de homepage `/` is een landingsdashboard:
+  een zoek-hero (Enter → `/ask`), statistiek-tegels (kaarten · geverifieerde
+  rulings · actieve bans · nieuwe wijzigingen, via `GET /api/stats`), een
+  paneel "Recente wijzigingen" (compacte ChangeCards) en "Spring naar"
+  (sectie-links met tellingen). *Route* `/` · *endpoint* `/api/stats`,
+  `/api/changes`.
+- **Wijzigingen-feed** — toont automatisch gedetecteerde wijzigingen (bans,
+  errata, regelupdates, set-releases) met bron, severity, voor/na-diff en een
+  menselijke samenvatting/betekenis; sinds #214 op de eigen route
+  `/wijzigingen` (de root is het dashboard). Flip-flop-suppressie onderdrukt
+  ruis van bronnen die per request de volgorde wisselen.
   **Changeconsolidatie (#206)**: meldt een officiële en een community-bron
   hetzelfde event (bv. dezelfde ban-update binnen 72 uur, met overlappende
   kaart-/sectiereferenties — een deterministische poort, `ChangeConsolidationGate`),
@@ -157,8 +164,27 @@ apart in §6.
   blok) → voet (bevestigd-badges, voor/na-uitklap, admin-acties in een
   Svelte 5 snippet-slot: Verwijder op de feed, Ontkoppel per bevestiging in
   het admin-overzicht).
-  *Route* `/` · *endpoints* `/api/changes`, `/api/sources`, `/api/bans`,
-  `/api/sets/upcoming`.
+  **Design-refresh + domein-kleurcodering (#214)**: nieuwe visuele richting
+  ("Domains, eigentijds") — koel-neutrale ontwerptokens, licht als standaard
+  met een koele-graphite donker-variant (theme-aware `app.css`), geel puur als
+  actie-accent. De ChangeCard krijgt een domein-randstreep in de canonieke
+  domeinkleur (Fury/Body/Mind/Calm/Chaos/Order, terugval Colorless) plus een
+  domein-chip; het domein wordt read-time uit de geraakte kaart(en) afgeleid
+  via de gestructureerde ban-/errata-laag (alleen ban/errata dragen een
+  domein, de rest is neutraal). De redesign rolt uit als een **samengestelde
+  shell** (vaste zijbalk-nav links, content midden, contextuele rechterrail;
+  mobiel: hamburger-drawer + filter-bottom-sheet zonder horizontaal scrollen)
+  over alle publieke kernpagina's (dashboard, feed, regels + detail met
+  leesrail, kaarten met domein-getinte tegels, vraagbaak). De **publieke
+  long-tail** volgt sinds #214 hetzelfde patroon: `/rules` (filter-rail met
+  bron-chips), `/rulings` (filter-rail met onderwerp-type) en `/decks`
+  (filter-rail met domein + sortering) leveren hun filters via de
+  rail/bottom-sheet met het actieve filter als verwijderbare chip; `/cards/[id]`
+  en `/primer` krijgen een contextuele leesrail ("Op deze pagina" /
+  "Concepten"), en kaart- én deckdetail een domein-tint. Het **beheer** is naar
+  dezelfde taal herbouwd (eigen console-shell, zie §4.5).
+  *Route* `/wijzigingen` · *endpoints* `/api/changes`, `/api/sources`,
+  `/api/bans`, `/api/sets/upcoming`.
 - **Regels-browser** — hoofdstuk-hiërarchie van de Core/Tournament Rules met
   §-permalinks en PDF-deeplinks (`#page=N`), plus hybride (semantisch +
   full-text) zoeken door de secties.
@@ -672,6 +698,19 @@ apart in §6.
 
 ### 4.5 Beheer (`/admin`)
 
+- **Beheer-console** (#214) — `/admin` heeft een **eigen console-shell**, los
+  van de publieke zijbalk: een beheer-zijbalk met "← naar de site", nav met
+  tel-badges (open correcties → Reviewqueue, aantal bronnen → Bronnen),
+  Gevarenzone in rood en een thema-schakelaar; mobiel een bovenbalk + drawer.
+  De publieke chrome wordt binnen `/admin` onderdrukt en bij terugkeer naar de
+  site meteen hersteld. Drie kernschermen zijn naar het "Domains"-design
+  herbouwd — **Overzicht** (dashboard met "Nu bezig"-voortgang, pad-knoppen,
+  telling-tegels, rapport-links, een graph-drift-tabel en recente runs),
+  **Reviewqueue** (relatie-aanbevelingsstrip + gekleurde bulk-balken, zie
+  "Reviewqueues") en **Bronnen** (bron-cards met trust-badge, cadans-chip,
+  negeer-kandidaat-hint en negeren-met-reden) — met álle bestaande jobs,
+  form-acties en data-bindings ongewijzigd. *Route* `/admin`
+  (+ `/admin/overview/[kind]`).
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
   (scan, feeds, cards, embed, mine, rules, bans, graph, primer, interactions,
   scout, classify, consolidatechanges, claims, clarify, relations,

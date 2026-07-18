@@ -31,7 +31,11 @@ public record ChangeFeedItem(
     long Id, string SourceId, string ChangeType, string Severity,
     string? Summary, string? Meaning, string? Diff, DateTimeOffset DetectedAt,
     string SourceName, string SourceUrl, short TrustTier,
-    IReadOnlyList<ChangeFeedConfirmation> ConfirmedBy);
+    IReadOnlyList<ChangeFeedConfirmation> ConfirmedBy,
+    // Domein-kleurcodering (#214): read-time afgeleid uit de geraakte kaart(en)
+    // via de ban-/errata-laag (zie ChangeDomains). Null = geen/ambigu domein
+    // → Colorless-neutraal in de UI.
+    string? Domain);
 
 /// <summary>Changeconsolidatie-presentatie (#206): gedeeld tussen het
 /// publieke <c>/api/changes</c>-endpoint en het admin-overzicht
@@ -82,11 +86,14 @@ public class ChangeFeedService(RbRulesDbContext db)
 
         var confirmations = await ConfirmationsByPrimaryIdAsync(
             [.. primaries.Select(p => p.Id)], ct);
+        var domains = await ChangeDomains.ResolveAsync(db,
+            [.. primaries.Select(p => new ChangeTextRow(p.Id, p.ChangeType, p.Summary, p.Diff, p.Meaning))], ct);
 
         return [.. primaries.Select(p => new ChangeFeedItem(
             p.Id, p.SourceId, p.ChangeType, p.Severity, p.Summary, p.Meaning, p.Diff, p.DetectedAt,
             p.SourceName, p.SourceUrl, p.TrustTier,
-            confirmations.GetValueOrDefault(p.Id, [])))];
+            confirmations.GetValueOrDefault(p.Id, []),
+            domains.GetValueOrDefault(p.Id)))];
     }
 
     /// <summary>Bevestigingen per primaire change-id, oplopend gesorteerd op

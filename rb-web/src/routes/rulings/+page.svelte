@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { navigating } from '$app/state';
 	import RbText from '$lib/RbText.svelte';
+	import { useShell } from '$lib/shell.svelte';
 	import type { RulingsItem } from './+page.server';
 
 	let { data } = $props();
+	const shell = useShell();
 
 	// Schrijfbaar afgeleid: typen behoudt de invoer, navigatie (form GET →
 	// nieuwe ?q=) reset naar de URL-waarde (route-hergebruik, zelfde patroon
@@ -18,6 +20,7 @@
 		{ key: 'concept', label: 'Concept' },
 		{ key: 'answer', label: 'Vraag & antwoord' }
 	];
+	const topicLabel = $derived(TOPICS.find((t) => t.key === data.topic)?.label ?? data.topic);
 
 	/** Filter-/paginalinks behouden de rest van de querystring. */
 	function href(params: { topic?: string; page?: number }): string {
@@ -53,6 +56,18 @@
 	const isHttp = (url: string) => /^https?:\/\//.test(url);
 
 	const lastPage = $derived(Math.max(1, Math.ceil(data.total / data.pageSize)));
+
+	// Onderwerp-filter in de rechterrail (desktop) / bottom-sheet (mobiel) —
+	// feed-patroon #214, nooit een horizontaal scrollende chip-rij.
+	$effect(() => {
+		shell.rail = {
+			snippet: filters,
+			kind: 'filters',
+			count: data.topic ? 1 : 0,
+			title: 'Filters'
+		};
+		return () => (shell.rail = null);
+	});
 </script>
 
 <svelte:head>
@@ -62,6 +77,18 @@
 		content="Doorzoekbare databank van geverifieerde Riftbound-rulings en officieel bevestigde community-inzichten, met bronnen en regelverwijzingen."
 	/>
 </svelte:head>
+
+{#snippet filters()}
+	<div class="fgroup">
+		<p class="fglabel">Onderwerp-type</p>
+		<div class="chips">
+			<a class="chip" class:on={!data.topic} href={href({ topic: '' })}>Alles</a>
+			{#each TOPICS as t (t.key)}
+				<a class="chip" class:on={data.topic === t.key} href={href({ topic: t.key })}>{t.label}</a>
+			{/each}
+		</div>
+	</div>
+{/snippet}
 
 <main>
 	<h1>Rulings<span>databank</span></h1>
@@ -84,14 +111,11 @@
 			<button type="submit" disabled={busy}>{busy ? 'Zoeken…' : 'Zoek'}</button>
 		</form>
 
-		<nav class="filters" aria-label="Filter op onderwerp-type">
-			<a class="chip" class:active={!data.topic} href={href({ topic: '' })}>Alles</a>
-			{#each TOPICS as t (t.key)}
-				<a class="chip" class:active={data.topic === t.key} href={href({ topic: t.key })}>
-					{t.label}
-				</a>
-			{/each}
-		</nav>
+		{#if data.topic}
+			<div class="active-chips">
+				<a class="active-chip" href={href({ topic: '' })}>type: {topicLabel} ✕</a>
+			</div>
+		{/if}
 
 		{#if data.degraded}
 			<p class="meta small">
@@ -112,7 +136,7 @@
 				</p>
 			{/if}
 		{:else}
-			<p class="meta count">
+			<p class="meta count tnum">
 				{#if data.searching}
 					{data.items.length} resultaten voor "{data.q}"
 				{:else}
@@ -122,7 +146,7 @@
 
 			<div class="items">
 				{#each data.items as item (item.ref)}
-					<article class="item" id={anchor(item.ref)}>
+					<article class="item panel" id={anchor(item.ref)}>
 						<header>
 							<span class="badge {item.kind}">
 								{item.kind === 'ruling' ? 'Geverifieerde ruling' : 'Bevestigde claim'}
@@ -136,7 +160,7 @@
 								{/if}
 							{/if}
 							<a class="perma" href="#{anchor(item.ref)}" aria-label="Link naar dit item">#</a>
-							<time class="meta" datetime={item.date}>
+							<time class="meta tnum" datetime={item.date}>
 								{new Date(item.date).toLocaleDateString('nl-NL')}
 							</time>
 						</header>
@@ -215,26 +239,17 @@
 		color: var(--text); border: 1px solid var(--border); border-radius: 10px;
 		padding: 10px 14px; font-size: 1rem;
 	}
-	button {
+	.search button {
 		background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px;
 		padding: 10px 16px; font-weight: 600; cursor: pointer; flex-shrink: 0;
 	}
-	button:disabled { opacity: 0.6; cursor: wait; }
-	.filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
-	.chip {
-		display: inline-block; background: var(--surface); border: 1px solid var(--border);
-		border-radius: 999px; padding: 3px 12px; font-size: 0.85rem;
-		color: var(--muted); text-decoration: none;
-	}
-	.chip:hover { border-color: var(--accent); color: var(--text); }
-	.chip.active { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+	.search button:disabled { opacity: 0.6; cursor: wait; }
 	.meta { color: var(--muted); }
 	.small { font-size: 0.8rem; }
 	.count { font-size: 0.85rem; margin: 0 0 10px; }
 	.items { display: grid; gap: 12px; }
 	.item {
-		background: var(--surface); border: 1px solid var(--border);
-		border-radius: var(--radius, 12px); padding: 14px 16px;
+		padding: 14px 16px;
 		/* Ankerdoel: niet onder de sticky header verdwijnen. */
 		scroll-margin-top: 70px;
 	}
@@ -254,7 +269,12 @@
 	.text { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.trust { font-size: 0.8rem; margin: 4px 0; }
 	.refs { margin: 8px 0 0; }
-	.chip.rule { color: var(--ok); margin: 0 6px 6px 0; }
+	.chip.rule {
+		display: inline-block; background: var(--ok-soft); color: var(--ok);
+		border: 1px solid transparent; border-radius: 999px; padding: 2px 10px;
+		font-size: 0.8rem; text-decoration: none; margin: 0 6px 6px 0;
+	}
+	.chip.rule:hover { border-color: var(--ok); }
 	.source { border-left: 2px solid var(--border); padding-left: 10px; margin-top: 8px; }
 	.source blockquote {
 		margin: 0 0 2px; color: var(--muted); font-style: italic; font-size: 0.9rem;
@@ -266,4 +286,27 @@
 	.pager a { color: var(--text); text-decoration: none; font-weight: 600; }
 	.pager a:hover { color: var(--accent); }
 	.warn { color: var(--err); }
+
+	/* Actieve filters als verwijderbare chips (feed-patroon). */
+	.active-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+	.active-chip {
+		background: var(--surface-deep); color: var(--text); border: 1px solid var(--border);
+		border-radius: 999px; padding: 4px 12px; font-size: 0.8rem; text-decoration: none;
+	}
+	.active-chip:hover { border-color: var(--border-strong); }
+
+	/* Filter-inhoud (gedeeld door rail + bottom-sheet) */
+	.fgroup { margin-bottom: 14px; }
+	.fglabel {
+		margin: 0 0 6px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+		letter-spacing: 0.05em; color: var(--muted);
+	}
+	.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+	.chip {
+		display: inline-block; background: var(--surface); color: var(--muted);
+		border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
+		font-size: 0.8rem; text-decoration: none;
+	}
+	.chip:hover { border-color: var(--border-strong); color: var(--text); }
+	.chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
 </style>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { applyAction, deserialize, enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import { page } from '$app/state';
 	import RbText from '$lib/RbText.svelte';
 	import AnswerView from '$lib/AnswerView.svelte';
 	import AskHistoryPanel from '$lib/AskHistoryPanel.svelte';
@@ -54,6 +55,12 @@
 			: 'Eerste metingen lopen nog — dit kan even duren.'
 	);
 	let question = $state('');
+	// Prefill vanuit de globale zoekbalk / dashboard-hero (#214): /ask?q=…
+	// vult de vraag in (niet auto-versturen — de bezoeker houdt de controle).
+	$effect(() => {
+		const q = page.url.searchParams.get('q')?.trim();
+		if (q) question = q;
+	});
 	let correcting = $state(false);
 	let followUp = $state('');
 	// Ruling vastleggen vanuit dit gesprek (#166) — alleen ingelogd/admin.
@@ -910,7 +917,7 @@
 </main>
 
 <style>
-	main { max-width: 860px; margin: 0 auto; padding: 24px 20px; }
+	main { max-width: 760px; margin: 0 auto; padding: 24px 20px; }
 	h1 span { color: var(--accent); }
 	.subtitle, .meta { color: var(--muted); }
 	.examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 14px; }
@@ -951,7 +958,7 @@
 	.approach-opt input {
 		position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0;
 	}
-	.approach-opt:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+	.approach-opt:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
 	.approach-hint { margin: 6px 0 0; }
 	/* Terugmelding (#153): keuze niet gehonoreerd — status als kleur + tekst. */
 	.approach-notice {

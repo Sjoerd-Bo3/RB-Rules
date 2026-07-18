@@ -40,4 +40,11 @@ export interface ChangeCardData {
 	trustTier?: number | null;
 	diff?: string | null;
 	confirmedBy?: ChangeConfirmation[];
+	/** Domein-proef (design-proof-branch, NIET nog uit rb-api afgeleid): kleurt
+	 *  de linker-randstreep van de kaart. Canoniek: Fury/Body/Mind/Calm/Chaos/
+	 *  Order/Colorless (zie app.css --dom-*). Onbekend/ontbrekend valt terug op
+	 *  Colorless-neutraal — dit veld komt voorlopig alleen uit stub-data; het
+	 *  echt afleiden uit de geraakte kaart/structured-ban-laag is een
+	 *  rb-api-follow-up ná goedkeuring van de richting. */
+	domain?: string | null;
 }

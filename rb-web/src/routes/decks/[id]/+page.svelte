@@ -1,6 +1,10 @@
 <script lang="ts">
+	import { domainColorVar } from '$lib/changeCard';
+
 	let { data } = $props();
 	const deck = $derived(data.deck);
+	// Domein-tint (#214): het deck krijgt de kleur van zijn eerste domein.
+	const deckDom = $derived(domainColorVar(deck.domains[0]));
 
 	const LEGALITY_LABEL: Record<string, string> = {
 		legal: 'Legaal',
@@ -29,9 +33,10 @@
 
 <svelte:head><title>{deck.name ?? 'Deck'} — RB Rules</title></svelte:head>
 
-<main>
+<main style="--card-dom: {deckDom}">
 	<a href="/decks" class="back">← Alle decks</a>
 
+	<span class="dom-bar" aria-hidden="true"></span>
 	<header class="head">
 		<h1>{deck.name ?? '(naamloos deck)'}</h1>
 		<span class="badge {LEGALITY_BADGE[deck.legality.status]}">
@@ -112,12 +117,21 @@
 	.back:hover {
 		color: var(--accent);
 	}
+	/* Domein-streep: 3px domein-accent boven de decktitel. */
+	.dom-bar {
+		display: block;
+		width: 34px;
+		height: 3px;
+		border-radius: 3px;
+		background: var(--card-dom);
+		margin: 14px 0 0;
+	}
 	.head {
 		display: flex;
 		align-items: baseline;
 		gap: 10px;
 		flex-wrap: wrap;
-		margin-top: 10px;
+		margin-top: 8px;
 	}
 	h1 {
 		margin: 0;

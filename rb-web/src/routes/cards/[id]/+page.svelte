@@ -1,11 +1,36 @@
 <script lang="ts">
 	import RbText from '$lib/RbText.svelte';
+	import { domainColorVar } from '$lib/changeCard';
+	import { useShell } from '$lib/shell.svelte';
 
 	let { data } = $props();
 	const c = $derived(data.card);
+	const shell = useShell();
+	// Domein-tint (#214): de kaart krijgt de kleur van haar eerste domein
+	// (--dom-*), zoals de tegels in de kaartbrowser — één bron voor de mapping.
+	const cardDom = $derived(domainColorVar(c.domains[0]));
 	// Bronverwijzing (#166) is URL of vrije citatie — alleen linken als het
 	// er echt een is, anders gewoon (geëscapete) tekst.
 	const isHttp = (url: string) => /^https?:\/\//.test(url);
+
+	// "Op deze pagina" (leesrail): alleen de dossier-secties die echt inhoud
+	// hebben — zelfde patroon als de regel-leespagina.
+	const onThisPage = $derived(
+		[
+			c.errataText || c.textPlain ? { id: 'tekst', label: 'Kaarttekst' } : null,
+			c.mechanics?.length ? { id: 'mechanieken', label: 'Mechanieken' } : null,
+			{ id: 'in-decks', label: 'In decks' },
+			data.interactions.length ? { id: 'interacties', label: 'Interacties' } : null,
+			data.rules.errata.length || data.rules.relevantRules.length
+				? { id: 'regels', label: 'Regels en errata' }
+				: null,
+			data.dossier.rulings.length ? { id: 'rulings', label: 'Rulings' } : null,
+			data.dossier.claims.length ? { id: 'claims', label: 'Community-inzichten' } : null,
+			data.dossier.relations.length ? { id: 'relaties', label: 'Relaties in het brein' } : null,
+			data.dossier.banHistory.length ? { id: 'ban-historie', label: 'Ban-historie' } : null,
+			data.similar.length ? { id: 'vergelijkbaar', label: 'Vergelijkbare kaarten' } : null
+		].filter((x) => x !== null)
+	);
 
 	// LLM-uitleg per vergelijkbaar paar (#30), lazy en server-side gecachet.
 	let explanations = $state<Record<string, string>>({});
@@ -30,11 +55,36 @@
 			explaining = null;
 		}
 	}
+
+	// Contextuele rechterrail (desktop) / onder de content (mobiel).
+	$effect(() => {
+		shell.rail = { snippet: rail, kind: 'context', title: 'Op deze pagina' };
+		return () => (shell.rail = null);
+	});
 </script>
 
 <svelte:head><title>{c.name} — RB Rules</title></svelte:head>
 
-<main>
+{#snippet rail()}
+	{#if onThisPage.length}
+		<nav class="rail-nav">
+			{#each onThisPage as item (item.id)}
+				<a href="#{item.id}">{item.label}</a>
+			{/each}
+		</nav>
+	{/if}
+	<div class="rail-block">
+		<p class="rail-h">Domein</p>
+		<div class="rail-doms">
+			{#each c.domains as d (d)}
+				<span class="rail-dom" style="--dc: {domainColorVar(d)}">{d}</span>
+			{/each}
+			{#if c.domains.length === 0}<span class="rail-dom" style="--dc: var(--dom-colorless)">Colorless</span>{/if}
+		</div>
+	</div>
+{/snippet}
+
+<main style="--card-dom: {cardDom}">
 	<a href="/cards" class="back">← Kaarten</a>
 
 	<div class="detail">
@@ -67,7 +117,7 @@
 
 			<p class="stats">
 				{#each c.domains as d (d)}
-					<a class="chip domain" href="/cards?domain={encodeURIComponent(d)}">{d}</a>
+					<a class="chip domain" style="--dc: {domainColorVar(d)}" href="/cards?domain={encodeURIComponent(d)}">{d}</a>
 				{/each}
 				{#if c.energy !== null}<span class="chip stat"><span class="k">Energy</span>{c.energy}</span>{/if}
 				{#if c.might !== null}<span class="chip stat"><span class="k">Might</span>{c.might}</span>{/if}
@@ -75,7 +125,7 @@
 			</p>
 
 			{#if c.errataText}
-				<section>
+				<section id="tekst">
 					<h2>Actuele tekst (errata)</h2>
 					<p class="oracle errata"><RbText text={c.errataText} /></p>
 					{#if c.textPlain}
@@ -86,14 +136,14 @@
 					{/if}
 				</section>
 			{:else if c.textPlain}
-				<section>
+				<section id="tekst">
 					<h2>Kaarttekst</h2>
 					<p class="oracle"><RbText text={c.textPlain} /></p>
 				</section>
 			{/if}
 
 			{#if c.mechanics?.length}
-				<section>
+				<section id="mechanieken">
 					<h2>Mechanieken</h2>
 					<p>
 						{#each c.mechanics as m (m)}
@@ -177,7 +227,7 @@
 	</section>
 
 	{#if data.interactions.length}
-		<section>
+		<section id="interacties">
 			<h2>Interacties (geverifieerd)</h2>
 			{#each data.interactions as x (x.otherId + x.kind)}
 				<div class="interaction">
@@ -190,7 +240,7 @@
 	{/if}
 
 	{#if data.rules.errata.length || data.rules.relevantRules.length}
-		<section>
+		<section id="regels">
 			<h2>Regels en errata voor deze kaart</h2>
 			{#each data.rules.errata as e, i (e.detectedAt)}
 				<div class="rulebox errata-box">
@@ -302,7 +352,7 @@
 	{/if}
 
 	{#if data.similar.length}
-		<section>
+		<section id="vergelijkbaar">
 			<h2>Vergelijkbare kaarten <a class="graph-link" href="/graph?card={c.riftboundId}">Bekijk in graph →</a></h2>
 			<div class="grid">
 				{#each data.similar as s (s.riftboundId)}
@@ -313,7 +363,7 @@
 						</a>
 						<span class="why">
 							{#each s.sharedMechanics as m (m)}<span class="chip mech sm">{m}</span>{/each}
-							{#each s.sharedDomains as d (d)}<span class="chip domain sm">{d}</span>{/each}
+							{#each s.sharedDomains as d (d)}<span class="chip domain sm" style="--dc: {domainColorVar(d)}">{d}</span>{/each}
 							{#if s.sameType}<span class="chip sm">zelfde type</span>{/if}
 						</span>
 						{#if explanations[s.riftboundId]}
@@ -336,7 +386,9 @@
 	.back { color: var(--muted); text-decoration: none; }
 	.detail { display: grid; grid-template-columns: minmax(220px, 320px) 1fr; gap: 24px; margin-top: 16px; }
 	@media (max-width: 640px) { .detail { grid-template-columns: 1fr; } }
-	.art { width: 100%; border-radius: var(--radius-lg); border: 1px solid var(--border); }
+	/* Domein-getint: 3px domein-rand boven de kaartafbeelding, zelfde taal als
+	   de tegels in de kaartbrowser. */
+	.art { width: 100%; border-radius: var(--radius-lg); border: 1px solid var(--border); border-top: 3px solid var(--card-dom); }
 	h1 { margin: 0 0 4px; }
 	h2 { font-size: 1rem; color: var(--accent); margin: 18px 0 6px; }
 	.meta { color: var(--muted); }
@@ -347,7 +399,14 @@
 		text-decoration: none;
 	}
 	a.chip:hover { border-color: var(--accent); }
-	.chip.domain { color: var(--warn); }
+	/* Domein-chip: getint met de eigen domeinkleur (--dc, gezet per chip via
+	   domainColorVar) — color-mix zodat er één bron (het token) is. */
+	.chip.domain {
+		color: var(--dc, var(--dom-colorless));
+		background: color-mix(in srgb, var(--dc, var(--dom-colorless)) 12%, transparent);
+		border-color: color-mix(in srgb, var(--dc, var(--dom-colorless)) 45%, transparent);
+	}
+	a.chip.domain:hover { border-color: var(--dc, var(--dom-colorless)); }
 	.chip.mech { color: var(--ok); }
 	.chip.tag { color: var(--muted); }
 	.chip.stat .k {
@@ -422,4 +481,24 @@
 	.chip.unreviewed { color: var(--muted); font-size: 0.72rem; }
 	.deckpct { font-size: 1.05rem; }
 	.deckpct strong { color: var(--accent); font-size: 1.3rem; }
+
+	/* Contextuele rail ("Op deze pagina") — zelfde vormtaal als de regel-
+	   leespagina. */
+	.rail-nav { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
+	.rail-nav a {
+		color: var(--muted); text-decoration: none; font-size: 0.88rem;
+		padding: 5px 8px; border-radius: 6px; border-left: 2px solid var(--border); font-weight: 400;
+	}
+	.rail-nav a:hover { color: var(--text); border-left-color: var(--accent); background: var(--surface-deep); }
+	.rail-block { border-top: 1px solid var(--border); padding-top: 12px; }
+	.rail-h {
+		font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+		color: var(--muted); margin: 0 0 8px;
+	}
+	.rail-doms { display: flex; flex-wrap: wrap; gap: 6px; }
+	.rail-dom {
+		font-size: 0.78rem; font-weight: 700; border-radius: 999px; padding: 2px 10px;
+		color: var(--dc); background: color-mix(in srgb, var(--dc) 14%, transparent);
+		border: 1px solid color-mix(in srgb, var(--dc) 45%, transparent);
+	}
 </style>

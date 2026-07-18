@@ -190,15 +190,15 @@
 
 		<h2>Gebruik vandaag</h2>
 		<div class="panel block">
-			<p>
+			<p class="tnum">
 				<strong>{account.questionsToday}</strong> van {account.dailyQuota} vragen gebruikt
 				<span class="meta">({quotaLeft} over)</span>
 			</p>
-			<p>
+			<p class="tnum">
 				<strong>{account.photosToday}</strong> van {account.dailyPhotoQuota} foto-vragen gebruikt
 				<span class="meta">({photoLeft} over)</span>
 			</p>
-			<p>
+			<p class="tnum">
 				<strong>{account.agenticToday}</strong> van {account.dailyAgenticQuota} Grondig-vragen gebruikt
 				<span class="meta">({agenticLeft} over)</span>
 			</p>

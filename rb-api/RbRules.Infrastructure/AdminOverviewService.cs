@@ -41,7 +41,10 @@ public record InteractionOverviewItem(
 public record ChangeOverviewItem(
     long Id, string SourceId, string SourceName, string ChangeType, string Severity,
     string? Summary, string? Meaning, DateTimeOffset DetectedAt,
-    IReadOnlyList<ChangeFeedConfirmation> ConfirmedBy);
+    IReadOnlyList<ChangeFeedConfirmation> ConfirmedBy,
+    // Domein-kleurcodering (#214): zelfde read-time afleiding als de publieke
+    // feed (ChangeDomains). Null = geen/ambigu domein → Colorless-neutraal.
+    string? Domain);
 
 /// <summary>UrlSafe (#184): server-side UrlGuard.Check op de bewijs-URL —
 /// de UI rendert alleen een klikbare link als dit true is (sanitize vóór
@@ -780,14 +783,16 @@ public class AdminOverviewService(RbRulesDbContext db, ChangeFeedService changeF
             .Select(c => new
             {
                 c.Id, c.SourceId, SourceName = c.Source!.Name, c.ChangeType, c.Severity,
-                c.Summary, c.Meaning, c.DetectedAt,
+                c.Summary, c.Meaning, c.Diff, c.DetectedAt,
             })
             .ToListAsync();
 
         var confirmations = await changeFeed.ConfirmationsByPrimaryIdAsync([.. rows.Select(r => r.Id)]);
+        var domains = await ChangeDomains.ResolveAsync(db,
+            [.. rows.Select(r => new ChangeTextRow(r.Id, r.ChangeType, r.Summary, r.Diff, r.Meaning))]);
         var items = rows.Select(r => new ChangeOverviewItem(
             r.Id, r.SourceId, r.SourceName, r.ChangeType, r.Severity, r.Summary, r.Meaning, r.DetectedAt,
-            confirmations.GetValueOrDefault(r.Id, []))).ToList();
+            confirmations.GetValueOrDefault(r.Id, []), domains.GetValueOrDefault(r.Id))).ToList();
         return new(total, page, PageSize, items);
     }
 

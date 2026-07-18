@@ -1,8 +1,10 @@
 <script lang="ts">
 	import ChangeCard from '$lib/ChangeCard.svelte';
+	import { useShell } from '$lib/shell.svelte';
 
 	let { data } = $props();
 	const s = $derived(data.section);
+	const shell = useShell();
 
 	// Broodkruimel: 601.2.d → [601, 601.2, 601.2.d]
 	const crumbs = $derived.by(() => {
@@ -18,6 +20,16 @@
 		return null;
 	});
 
+	// "Op deze pagina" (rail): alleen de dossier-secties die echt inhoud hebben.
+	const onThisPage = $derived(
+		[
+			data.dossier.explains.length ? { id: 'uitleg', label: 'Uitleg in het spelbegrip' } : null,
+			data.dossier.cards.length ? { id: 'kaarten', label: 'Kaarten die hierop leunen' } : null,
+			data.dossier.claims.length ? { id: 'claims', label: 'Community-inzichten' } : null,
+			data.dossier.changes.length ? { id: 'wijzigingen', label: 'Wijzigingen' } : null
+		].filter((x) => x !== null)
+	);
+
 	let copied = $state(false);
 	async function copyLink() {
 		try {
@@ -28,9 +40,37 @@
 			/* clipboard niet beschikbaar */
 		}
 	}
+
+	// Contextuele rechterrail (desktop) / onder de content (mobiel).
+	$effect(() => {
+		shell.rail = { snippet: rail, kind: 'context', title: 'Op deze pagina' };
+		return () => (shell.rail = null);
+	});
 </script>
 
 <svelte:head><title>§ {s.code} — {s.sourceName} — RB Rules</title></svelte:head>
+
+{#snippet rail()}
+	{#if onThisPage.length}
+		<nav class="rail-nav">
+			{#each onThisPage as item (item.id)}
+				<a href="#{item.id}">{item.label}</a>
+			{/each}
+		</nav>
+	{/if}
+	<div class="rail-block">
+		<p class="rail-h">Bron</p>
+		<p class="rail-src">{s.sourceName}</p>
+		{#if dateLabel}<p class="rail-meta">{dateLabel}</p>{/if}
+		{#if s.pdfUrl}
+			<a class="rail-link" href="{s.pdfUrl}{s.page ? `#page=${s.page}` : ''}" target="_blank" rel="noopener"
+				>Officiële PDF{s.page ? ` — pagina ${s.page}` : ''} ↗</a
+			>
+		{:else}
+			<a class="rail-link" href={s.sourceUrl} target="_blank" rel="noopener">Officiële bron ↗</a>
+		{/if}
+	</div>
+{/snippet}
 
 <main>
 	<nav class="crumbs">
@@ -49,7 +89,6 @@
 	{#if dateLabel}<p class="meta small">{dateLabel}</p>{/if}
 
 	{#if s.parents.length}
-		<!-- Bovenliggende regels als context boven de subregel -->
 		<div class="parents">
 			{#each s.parents as par (par.code)}
 				<p class="parent">
@@ -84,8 +123,7 @@
 		{/if}
 	</div>
 
-	<!-- Sectie-dossier (#127): de levende geschiedenis van deze regel.
-	     Lege hoofdstukken worden verborgen. -->
+	<!-- Sectie-dossier (#127): de levende geschiedenis van deze regel. -->
 	{#if data.dossier.explains.length}
 		<section id="uitleg">
 			<h2>Uitleg in het spelbegrip</h2>
@@ -133,18 +171,18 @@
 			{#each data.dossier.changes as ch (ch.id)}
 				<ChangeCard change={ch} compact />
 			{/each}
-			<p class="meta small">Uit de wijzigingen-feed, gekoppeld via de kennisgraaf — <a href="/">bekijk alle wijzigingen</a>.</p>
+			<p class="meta small">Uit de wijzigingen-feed, gekoppeld via de kennisgraaf — <a href="/wijzigingen">bekijk alle wijzigingen</a>.</p>
 		</section>
 	{/if}
 </main>
 
 <style>
-	main { max-width: 860px; margin: 0 auto; padding: 24px 20px; }
-	.crumbs { color: #9fb0cc; display: flex; gap: 8px; flex-wrap: wrap; font-size: 0.9rem; }
-	.crumbs a { color: #9fb0cc; text-decoration: none; }
-	.crumbs a:hover { color: #d98a4e; }
+	main { max-width: 760px; margin: 0 auto; padding: 24px 20px; }
+	.crumbs { color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; font-size: 0.9rem; }
+	.crumbs a { color: var(--muted); text-decoration: none; }
+	.crumbs a:hover { color: var(--accent); }
 	h1 { margin: 10px 0 14px; }
-	.src { color: #d98a4e; font-size: 1rem; font-weight: 600; margin-left: 10px; }
+	.src { color: var(--accent); font-size: 1rem; font-weight: 600; margin-left: 10px; }
 	.parents {
 		border-left: 2px solid var(--border);
 		padding-left: 12px; margin-bottom: 12px;
@@ -154,21 +192,19 @@
 	.parent a:hover { color: var(--accent); }
 	.card {
 		background: var(--surface); border: 1px solid var(--border);
-		border-radius: 12px; padding: 18px 20px;
+		border-radius: var(--radius-lg); padding: 18px 20px; box-shadow: var(--shadow-card);
 	}
 	.text { white-space: pre-wrap; margin: 0; line-height: 1.65; }
-	/* Wrap op smal: knop + lange PDF-link passen niet altijd naast elkaar. */
 	.actions { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; margin: 14px 0; }
 	button {
-		background: #d98a4e; color: #1a1206; border: 0; border-radius: 8px;
+		background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px;
 		padding: 8px 14px; font-weight: 600; cursor: pointer;
 	}
-	.ext { color: #9fb0cc; }
+	.ext { color: var(--muted); }
 	.pager { display: flex; justify-content: space-between; margin-top: 18px; }
-	.pager a { color: #e7eefc; text-decoration: none; font-weight: 600; }
-	.pager a:hover { color: #d98a4e; }
-	/* Sectie-dossier (#127) — ontwerptokens, ankerdoelen vrij van de header. */
-	section[id] { scroll-margin-top: 70px; }
+	.pager a { color: var(--text); text-decoration: none; font-weight: 600; }
+	.pager a:hover { color: var(--accent); }
+	section[id] { scroll-margin-top: 20px; }
 	h2 { font-size: 1rem; color: var(--accent); margin: 22px 0 8px; }
 	.meta { color: var(--muted); }
 	.small { font-size: 0.8rem; }
@@ -186,4 +222,20 @@
 	}
 	.statement { margin: 4px 0; overflow-wrap: anywhere; }
 	section .meta a { color: var(--muted); }
+
+	/* Rail-inhoud */
+	.rail-nav { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
+	.rail-nav a {
+		color: var(--muted); text-decoration: none; font-size: 0.88rem;
+		padding: 5px 8px; border-radius: 6px; border-left: 2px solid var(--border);
+	}
+	.rail-nav a:hover { color: var(--text); border-left-color: var(--accent); background: var(--surface-deep); }
+	.rail-block { border-top: 1px solid var(--border); padding-top: 12px; }
+	.rail-h {
+		font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+		color: var(--muted); margin: 0 0 6px;
+	}
+	.rail-src { margin: 0 0 2px; font-weight: 600; }
+	.rail-meta { margin: 0 0 8px; color: var(--muted); font-size: 0.82rem; }
+	.rail-link { color: var(--accent); text-decoration: none; font-size: 0.88rem; font-weight: 600; }
 </style>
