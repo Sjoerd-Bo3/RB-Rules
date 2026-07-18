@@ -128,6 +128,15 @@ de oude domein-rainbow-`mark` in de publieke shell, de beheer-shell en de
 hero; geel (`--accent`) blijft het actie-accent en kleurt de app-tegel
 (favicon/PWA-icons) — niet de kuif van de poro.
 
+**Subtiele poro-animaties (#220).** `PoroMark` kent een opt-in `animate`-prop
+(`false` standaard → statisch, dus bestaande gebruiken onveranderd): `'idle'`
+(rustig ademen/bobben + af en toe knipperen — de merk-poro in de shell) en
+`'wink'` (iets levendiger, met knipoog + lichte wiebel — de 404-illustratie).
+De brand-link in de shell geeft de poro bij hover/focus een korte micro-bounce.
+Alle beweging is klein en langzaam en staat **volledig stil bij
+`prefers-reduced-motion: reduce`** (component-eigen `animation: none`, niet enkel
+de globale duur-vangrail).
+
 ### 4.1 Regels & bronnen
 
 - **Overzicht-dashboard** (#214) — de homepage `/` is een landingsdashboard:
