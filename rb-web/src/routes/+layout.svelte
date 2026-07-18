@@ -71,12 +71,12 @@
 		>
 			<span></span><span></span><span></span>
 		</button>
-		<a class="brand" href="/"><PoroMark size={22} />Poracle</a>
+		<a class="brand" href="/"><PoroMark size={30} />Poracle</a>
 	</header>
 
 	<!-- Zijbalk: vast op desktop, slide-over drawer op mobiel. -->
 	<aside class="sidebar" class:open={shell.drawerOpen} aria-label="Hoofdnavigatie">
-		<a class="brand brand-side" href="/"><PoroMark size={22} />Poracle</a>
+		<a class="brand brand-side" href="/"><PoroMark size={30} />Poracle</a>
 
 		<form class="side-search" onsubmit={onSearch} role="search">
 			<input
@@ -185,7 +185,9 @@
 		align-items: center;
 		gap: 8px;
 		font-weight: 750;
-		font-size: 1.02rem;
+		/* Groter merk in de header (#218); de balkhoogte blijft gelijk omdat de
+		   40px-hamburger de topbar-hoogte bepaalt en de poro (30px) daaronder blijft. */
+		font-size: 1.2rem;
 		color: var(--text);
 		text-decoration: none;
 		letter-spacing: -0.01em;
