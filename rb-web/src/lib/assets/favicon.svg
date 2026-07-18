@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-	<title>Riftbound Rules</title>
-	<rect width="512" height="512" rx="96" fill="#0d1420"/>
-	<rect x="16" y="16" width="480" height="480" rx="84" fill="none" stroke="#263650" stroke-width="8"/>
-	<text x="256" y="352" font-family="Georgia, 'Times New Roman', serif" font-size="300" font-weight="700" fill="#d98a4e" text-anchor="middle">&#167;</text>
-</svg>
