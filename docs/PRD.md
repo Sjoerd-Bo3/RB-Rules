@@ -128,6 +128,15 @@ de oude domein-rainbow-`mark` in de publieke shell, de beheer-shell en de
 hero; geel (`--accent`) blijft het actie-accent en kleurt de app-tegel
 (favicon/PWA-icons) — niet de kuif van de poro.
 
+**Subtiele poro-animaties (#220).** `PoroMark` kent een opt-in `animate`-prop
+(`false` standaard → statisch, dus bestaande gebruiken onveranderd): `'idle'`
+(rustig ademen/bobben + af en toe knipperen — de merk-poro in de shell) en
+`'wink'` (iets levendiger, met knipoog + lichte wiebel — de 404-illustratie).
+De brand-link in de shell geeft de poro bij hover/focus een korte micro-bounce.
+Alle beweging is klein en langzaam en staat **volledig stil bij
+`prefers-reduced-motion: reduce`** (component-eigen `animation: none`, niet enkel
+de globale duur-vangrail).
+
 ### 4.1 Regels & bronnen
 
 - **Overzicht-dashboard** (#214) — de homepage `/` is een landingsdashboard:
@@ -958,6 +967,14 @@ hero; geel (`--accent`) blijft het actie-accent en kleurt de app-tegel
   `/api/auth/passkeys`.
 - **Mobile-first** — layout getest op 390/768/1280px; de iOS-auto-zoom op
   form-controls (< 16px) is opgelost via `app.css`.
+- **Foutpagina met poro (#219)** — een globale `+error.svelte` binnen de shell.
+  Bij een **404** een vriendelijke, "zoekende" poro (`animate="wink"`), de kop
+  "404 — deze pagina bestaat niet (meer)", een korte regel en terug-links naar
+  `/` (Overzicht) en `/ask` (vraag het de poro). Bij elke **andere** status een
+  nette generieke variant (kop = `status + boodschap`), zelfde opzet. Gecentreerd,
+  licht+dark, 0 horizontale overflow op 390/768/1280, toegankelijke links met
+  `:focus-visible`. De status → tekst-afbeelding leeft als pure, geteste functie
+  (`$lib/errorCopy`).
 
 ### 4.7 Decks (Piltover Archive)
 

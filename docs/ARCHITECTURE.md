@@ -703,7 +703,11 @@ Paginastructuur (`rb-web/src/routes/`): `/` (**Overzicht-dashboard**, #214),
 browser + legaliteitsbadge, detail met decklijst per sectie en deep-link naar
 Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
 `/rulings`, `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
-`/admin/overview/[kind]`).
+`/admin/overview/[kind]`). Een globale **`+error.svelte`** (#219) rendert binnen
+de shell: bij 404 een "zoekende" poro + terug-links naar `/` en `/ask`, bij
+elke andere status een generieke variant (kop = `status + boodschap`). De
+status → tekst-logica staat als pure, unit-geteste functie in
+`$lib/errorCopy.ts`; de component is puur presentatie.
 
 **Samengestelde shell (#214).** `+layout.svelte` is de globale shell: een
 vaste **zijbalk** links (212px op desktop; merk met poro-mascotte +
@@ -725,7 +729,12 @@ een bottom-sheet opent** waarin de chips wrappen (Reset + "Toon N") —
 `rb-web/src/lib/PoroMark.svelte` (viewBox `0 0 120 124`, `size`-prop,
 crème lijf via `--poro-*`-CSS-vars zodat 'm op elk oppervlak crème blijft in
 licht én donker) — ingezet in de publieke shell, de beheer-shell en de
-home-hero. De favicon/PWA-iconen zijn een afgeronde **gele** tegel (`#f5c518`)
+home-hero. Een opt-in **`animate`-prop** (#220, `false`/`'idle'`/`'wink'`; default
+`false` → statisch, bestaande gebruiken onveranderd) legt subtiele beweging op een
+binnen-`<g>` en de oog-groepen (de buiten-`<svg>` blijft vrij voor de
+brand-link-hover-bounce). Alles bevriest bij `prefers-reduced-motion: reduce` via
+een component-eigen `animation: none` (de globale `app.css`-vangrail zet enkel de
+duur op ~0, niet de animation-name). De favicon/PWA-iconen zijn een afgeronde **gele** tegel (`#f5c518`)
 met de poro in donkere lijn (`#20190a`): `static/favicon.svg` + `static/icon.svg`
 (SVG, letterlijke kleuren) en de daaruit gerenderde `static/icon-192.png`,
 `static/icon-512.png` en `static/apple-touch-icon.png`. `app.html` linkt

@@ -71,12 +71,12 @@
 		>
 			<span></span><span></span><span></span>
 		</button>
-		<a class="brand" href="/"><PoroMark size={30} />Poracle</a>
+		<a class="brand" href="/"><PoroMark size={30} animate="idle" />Poracle</a>
 	</header>
 
 	<!-- Zijbalk: vast op desktop, slide-over drawer op mobiel. -->
 	<aside class="sidebar" class:open={shell.drawerOpen} aria-label="Hoofdnavigatie">
-		<a class="brand brand-side" href="/"><PoroMark size={30} />Poracle</a>
+		<a class="brand brand-side" href="/"><PoroMark size={30} animate="idle" />Poracle</a>
 
 		<form class="side-search" onsubmit={onSearch} role="search">
 			<input
@@ -192,6 +192,25 @@
 		text-decoration: none;
 		letter-spacing: -0.01em;
 		white-space: nowrap;
+	}
+	/* Micro-bounce (#220): de merk-poro veert kort op bij hover/focus van de
+	   brand-link. De idle-animatie leeft op de binnen-groep, dus deze transform
+	   op de buiten-svg botst er niet mee. */
+	.brand :global(svg.poro) {
+		transition: transform 0.16s ease;
+	}
+	.brand:hover :global(svg.poro),
+	.brand:focus-visible :global(svg.poro) {
+		transform: translateY(-2px) scale(1.07);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.brand :global(svg.poro) {
+			transition: none;
+		}
+		.brand:hover :global(svg.poro),
+		.brand:focus-visible :global(svg.poro) {
+			transform: none;
+		}
 	}
 
 	/* Mobiele bovenbalk */
