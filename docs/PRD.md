@@ -967,6 +967,14 @@ de globale duur-vangrail).
   `/api/auth/passkeys`.
 - **Mobile-first** — layout getest op 390/768/1280px; de iOS-auto-zoom op
   form-controls (< 16px) is opgelost via `app.css`.
+- **Foutpagina met poro (#219)** — een globale `+error.svelte` binnen de shell.
+  Bij een **404** een vriendelijke, "zoekende" poro (`animate="wink"`), de kop
+  "404 — deze pagina bestaat niet (meer)", een korte regel en terug-links naar
+  `/` (Overzicht) en `/ask` (vraag het de poro). Bij elke **andere** status een
+  nette generieke variant (kop = `status + boodschap`), zelfde opzet. Gecentreerd,
+  licht+dark, 0 horizontale overflow op 390/768/1280, toegankelijke links met
+  `:focus-visible`. De status → tekst-afbeelding leeft als pure, geteste functie
+  (`$lib/errorCopy`).
 
 ### 4.7 Decks (Piltover Archive)
 

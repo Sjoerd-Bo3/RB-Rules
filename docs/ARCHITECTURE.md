@@ -703,7 +703,11 @@ Paginastructuur (`rb-web/src/routes/`): `/` (**Overzicht-dashboard**, #214),
 browser + legaliteitsbadge, detail met decklijst per sectie en deep-link naar
 Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
 `/rulings`, `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
-`/admin/overview/[kind]`).
+`/admin/overview/[kind]`). Een globale **`+error.svelte`** (#219) rendert binnen
+de shell: bij 404 een "zoekende" poro + terug-links naar `/` en `/ask`, bij
+elke andere status een generieke variant (kop = `status + boodschap`). De
+status → tekst-logica staat als pure, unit-geteste functie in
+`$lib/errorCopy.ts`; de component is puur presentatie.
 
 **Samengestelde shell (#214).** `+layout.svelte` is de globale shell: een
 vaste **zijbalk** links (212px op desktop; merk met poro-mascotte +
