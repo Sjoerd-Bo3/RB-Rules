@@ -59,7 +59,13 @@ public static class OntologyValidationService
         TripleContext? context = null)
     {
         var ctx = context ?? new TripleContext();
-        var relation = OntologySchema.Relations[relationType];
+        // TryGetValue i.p.v. de indexer: een toekomstige enum-waarde zonder
+        // registratie degradeert zo gracieus tot UnknownRelation (zelfde
+        // resultaat als het string-pad) i.p.v. een KeyNotFoundException-crash.
+        if (!OntologySchema.Relations.TryGetValue(relationType, out var relation))
+            return OntologyValidationResult.Fail(new OntologyViolation(
+                OntologyViolationCode.UnknownRelation,
+                $"Relatie {relationType} is niet in het ontologie-register geregistreerd."));
         var violations = new List<OntologyViolation>();
 
         // SUBCLASS_OF is de TBox-meta-relatie: bewaak acycliciteit en
@@ -72,7 +78,10 @@ public static class OntologyValidationService
 
         // Gekwalificeerde relatie: een kale edge is verboden. Alleen de
         // gereïficeerde vorm (via een Interaction) is toegestaan; de
-        // rol-/conditie-edges daarvan worden apart gevalideerd.
+        // rol-/conditie-edges daarvan worden apart gevalideerd. v0-keuze
+        // (bewust): bij Reified=true keuren we hier alleen de kale-edge-dwang
+        // goed — de HAS_ROLE/REQUIRES_CONDITION-edges van de Interaction
+        // krijgen hun eigen validatie zodra die relaties gemodelleerd zijn.
         if (relation.MustReify)
         {
             if (!ctx.Reified)
@@ -96,7 +105,10 @@ public static class OntologyValidationService
                 $"({string.Join("/", relation.Range)})."));
 
         // Kardinaliteit: functioneel/max — een nieuwe edge mag de bovengrens niet
-        // overschrijden gegeven wat er al vanuit het subject uitgaat.
+        // overschrijden gegeven wat er al vanuit het subject uitgaat. v0-keuze
+        // (bewust): alleen de bovengrens is triple-lokaal toetsbaar; MinCardinality
+        // (1..*) is een completeness-eis over de héle knoop en wordt hier niet
+        // afgedwongen — dat hoort bij een latere graaf-brede validatie.
         if (relation.MaxCardinality is int max && ctx.ExistingOutgoingCount >= max)
             violations.Add(new(OntologyViolationCode.CardinalityExceeded,
                 $"{relation.EdgeName} staat ten hoogste {max} uitgaande edge(s) per subject toe " +
@@ -172,8 +184,12 @@ public static class OntologyValidationService
         if (string.IsNullOrWhiteSpace(relationName)) return null;
         var trimmed = relationName.Trim();
         if (OntologySchema.RelationByEdgeName(trimmed) is { } byEdge) return byEdge.Type;
+        // UITSLUITEND een exacte enum-naam: TryParse slikt óók kale getallen
+        // ("5") en OR-combinaties ("Invokes,HasKeyword" → Invokes → stil geldig);
+        // de naam-gelijkheids-guard verwerpt die als UnknownRelation.
         if (Enum.TryParse<RelationType>(trimmed, ignoreCase: true, out var t)
-            && OntologySchema.Relations.ContainsKey(t)) return t;
+            && OntologySchema.Relations.ContainsKey(t)
+            && t.ToString().Equals(trimmed, StringComparison.OrdinalIgnoreCase)) return t;
         return null;
     }
 

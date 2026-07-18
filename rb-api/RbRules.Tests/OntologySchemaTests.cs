@@ -292,6 +292,52 @@ public class OntologySchemaTests
         Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownRelation);
     }
 
+    // ── Enum-poort verwerpt numeriek/combo (#224 review-fix) ──────────────────
+    // Enum.TryParse slikt óók kale getallen ("5" → Gear) en OR-combinaties
+    // ("Card,Unit" → Unit): dat zou malformed rb-ai-output (gelekte index/id,
+    // aan-elkaar-geplakte labels) stil laten passeren i.p.v. Unknown* te geven.
+
+    [Theory]
+    [InlineData("5")]     // numeriek → zou anders Gear worden
+    [InlineData("3")]     // numeriek → zou anders Battlefield worden
+    [InlineData("Card,Unit")]   // OR-combinatie → zou anders Unit worden
+    [InlineData("0")]
+    public void ParseEntityType_NumeriekOfCombo_IsNull(string raw)
+    {
+        Assert.Null(OntologySchema.ParseEntityType(raw));
+    }
+
+    [Fact]
+    public void ParseEntityType_ExacteNaamHoofdletterongevoelig_Resolvet()
+    {
+        // De guard mag legitieme (case-insensitieve) namen niet breken.
+        Assert.Equal(EntityType.Gear, OntologySchema.ParseEntityType("gear"));
+        Assert.Equal(EntityType.Unit, OntologySchema.ParseEntityType("  Unit  "));
+    }
+
+    [Theory]
+    [InlineData("5")]                     // numeriek → zou anders Invokes (index) worden
+    [InlineData("Invokes,HasKeyword")]    // OR-combinatie → zou anders Invokes worden
+    public void ValidateTriple_NumeriekOfComboRelatie_GeeftUnknownRelation(string relation)
+    {
+        var r = OntologyValidationService.ValidateTriple("Keyword", relation, "Mechanic");
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownRelation);
+        // Cruciaal: het mag NIET stil als geldig of als domain/range-mismatch passeren.
+        Assert.DoesNotContain(r.Violations, v =>
+            v.Code is OntologyViolationCode.DomainMismatch or OntologyViolationCode.RangeMismatch);
+    }
+
+    [Fact]
+    public void ValidateTriple_NumeriekType_GeeftUnknownEntityType()
+    {
+        var r = OntologyValidationService.ValidateTriple("5", "HAS_KEYWORD", "Keyword");
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownEntityType);
+    }
+
     // ── Register-integriteit (de ÉNE bron) ───────────────────────────────────
 
     [Fact]
@@ -354,5 +400,31 @@ public class OntologySchemaTests
         Assert.True(OntologySchema.IsA(EntityType.Ruling, EntityType.NormativeSource));
         Assert.True(OntologySchema.IsA(EntityType.Erratum, EntityType.NormativeSource));
         Assert.False(OntologySchema.IsA(EntityType.Claim, EntityType.NormativeSource));
+    }
+
+    [Fact]
+    public void Schema_ElkeRelationTypeIsGeregistreerd()
+    {
+        // Borgt Defect 2 (#224) toekomstbestendig, analoog aan de EntityType-dekking
+        // in Schema_KlassenhiërarchieIsAcyclisch: een nieuwe enum-waarde zonder
+        // registratie faalt hier, niet pas met een KeyNotFoundException op de hot-path.
+        foreach (var rel in Enum.GetValues<RelationType>())
+            Assert.True(OntologySchema.Relations.ContainsKey(rel),
+                $"{rel} ontbreekt in het relatie-register.");
+    }
+
+    [Fact]
+    public void Schema_GeenKlasseErftBeideZijdenVanEenDisjointPaar()
+    {
+        // Onvervulbare-klasse-check: als een klasse via overerving zowel A als B
+        // van een disjoint paar {A,B} zou zijn, is ze leeg (onvervulbaar). Nu
+        // schoon; beschermt toekomstige uitbreidingen van de hiërarchie.
+        foreach (var type in Enum.GetValues<EntityType>())
+        {
+            var closure = new HashSet<EntityType>(OntologySchema.Ancestors(type)) { type };
+            foreach (var (a, b) in OntologySchema.DisjointPairs)
+                Assert.False(closure.Contains(a) && closure.Contains(b),
+                    $"{type} erft zowel {a} als disjuncte {b} → onvervulbare klasse.");
+        }
     }
 }

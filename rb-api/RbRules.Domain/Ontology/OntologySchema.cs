@@ -240,10 +240,18 @@ public static class OntologySchema
 
     /// <summary>Parse een klassenaam (enum-naam, hoofdletterongevoelig).
     /// Retourneert <c>null</c> bij een onbekende naam — de deterministische
-    /// poort geeft dan een UnknownEntityType-schending in plaats van te gokken.</summary>
-    public static EntityType? ParseEntityType(string name) =>
-        !string.IsNullOrWhiteSpace(name)
-            && Enum.TryParse<EntityType>(name.Trim(), ignoreCase: true, out var t)
+    /// poort geeft dan een UnknownEntityType-schending in plaats van te gokken.
+    /// Accepteert UITSLUITEND een exacte enum-naam: <see cref="Enum.TryParse{T}(string,bool,out T)"/>
+    /// slikt óók kale getallen ("5" → Gear) en OR-combinaties ("Card,Unit" →
+    /// Unit), wat malformed rb-ai-output (gelekte index/id, aan-elkaar-geplakte
+    /// labels) stil zou laten passeren; de naam-gelijkheids-guard verwerpt dat.</summary>
+    public static EntityType? ParseEntityType(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var trimmed = name.Trim();
+        return Enum.TryParse<EntityType>(trimmed, ignoreCase: true, out var t)
             && Classes.ContainsKey(t)
+            && t.ToString().Equals(trimmed, StringComparison.OrdinalIgnoreCase)
             ? t : null;
+    }
 }
