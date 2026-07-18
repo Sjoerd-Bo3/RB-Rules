@@ -120,6 +120,14 @@ Alles hieronder staat op `origin/main` en draait live. Per feature: wat het doet
 en waar het leeft (route in rb-web / endpoint in rb-api). In-flight werk staat
 apart in §6.
 
+**Merk & identiteit (#216).** Het product heet **Poracle** — een poro-mascotte
+(gestileerde, crème poro; het herbruikbare `PoroMark`-component) plus het
+woordmerk "Poracle". De site blijft inhoudelijk een Riftbound-companion (de
+omschrijving en disclaimer noemen Riftbound onverkort). Het merkteken vervangt
+de oude domein-rainbow-`mark` in de publieke shell, de beheer-shell en de
+hero; geel (`--accent`) blijft het actie-accent en kleurt de app-tegel
+(favicon/PWA-icons) — niet de kuif van de poro.
+
 ### 4.1 Regels & bronnen
 
 - **Overzicht-dashboard** (#214) — de homepage `/` is een landingsdashboard:

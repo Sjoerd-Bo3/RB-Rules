@@ -71,7 +71,7 @@
 	});
 </script>
 
-<svelte:head><title>Regels — RB Rules</title></svelte:head>
+<svelte:head><title>Regels — Poracle</title></svelte:head>
 
 {#snippet filters()}
 	<div class="fgroup">

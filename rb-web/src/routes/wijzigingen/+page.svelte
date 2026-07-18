@@ -118,7 +118,7 @@
 </script>
 
 <svelte:head>
-	<title>Wijzigingen — Riftbound Rules Companion</title>
+	<title>Wijzigingen — Poracle</title>
 </svelte:head>
 
 {#snippet chipGroup(label: string, options: string[], current: string | null, set: (v: string | null) => void)}

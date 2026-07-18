@@ -31,7 +31,7 @@
 	}
 </script>
 
-<svelte:head><title>{deck.name ?? 'Deck'} — RB Rules</title></svelte:head>
+<svelte:head><title>{deck.name ?? 'Deck'} — Poracle</title></svelte:head>
 
 <main style="--card-dom: {deckDom}">
 	<a href="/decks" class="back">← Alle decks</a>

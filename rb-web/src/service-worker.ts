@@ -33,7 +33,7 @@ sw.addEventListener('fetch', (event) => {
 });
 
 sw.addEventListener('push', (event) => {
-	let data = { title: 'Riftbound Rules', body: 'Er is een wijziging.', url: '/' };
+	let data = { title: 'Poracle', body: 'Er is een wijziging.', url: '/' };
 	try {
 		data = { ...data, ...event.data?.json() };
 	} catch {

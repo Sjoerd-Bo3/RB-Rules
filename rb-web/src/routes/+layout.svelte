@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import favicon from '$lib/assets/favicon.svg';
+	import PoroMark from '$lib/PoroMark.svelte';
 	import { provideShell } from '$lib/shell.svelte';
 
 	let { children } = $props();
@@ -60,10 +60,6 @@
 	}
 </script>
 
-<svelte:head>
-	<link rel="icon" href={favicon} />
-</svelte:head>
-
 <div class="shell">
 	<!-- Mobiele bovenbalk: hamburger + merk (desktop verborgen). -->
 	<header class="topbar">
@@ -75,12 +71,12 @@
 		>
 			<span></span><span></span><span></span>
 		</button>
-		<a class="brand" href="/"><span class="mark"></span>Riftbound <span class="accent">Rules</span></a>
+		<a class="brand" href="/"><PoroMark size={22} />Poracle</a>
 	</header>
 
 	<!-- Zijbalk: vast op desktop, slide-over drawer op mobiel. -->
 	<aside class="sidebar" class:open={shell.drawerOpen} aria-label="Hoofdnavigatie">
-		<a class="brand brand-side" href="/"><span class="mark"></span>Riftbound <span class="accent">Rules</span></a>
+		<a class="brand brand-side" href="/"><PoroMark size={22} />Poracle</a>
 
 		<form class="side-search" onsubmit={onSearch} role="search">
 			<input
@@ -194,27 +190,6 @@
 		text-decoration: none;
 		letter-spacing: -0.01em;
 		white-space: nowrap;
-	}
-	.brand .accent {
-		color: var(--accent);
-	}
-	/* Domein-mark: de canonieke palet-rainbow als merkteken. */
-	.mark {
-		display: inline-block;
-		width: 20px;
-		height: 20px;
-		border-radius: 6px;
-		flex: none;
-		background: conic-gradient(
-			from 210deg,
-			var(--dom-fury),
-			var(--dom-body),
-			var(--dom-order),
-			var(--dom-calm),
-			var(--dom-mind),
-			var(--dom-chaos),
-			var(--dom-fury)
-		);
 	}
 
 	/* Mobiele bovenbalk */

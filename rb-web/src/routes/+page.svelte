@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import ChangeCard from '$lib/ChangeCard.svelte';
+	import PoroMark from '$lib/PoroMark.svelte';
 
 	let { data } = $props();
 
@@ -29,13 +30,14 @@
 	]);
 </script>
 
-<svelte:head><title>Riftbound Rules Companion</title></svelte:head>
+<svelte:head><title>Poracle — Riftbound-regels & vraagbaak</title></svelte:head>
 
 <main>
 	<section class="hero">
-		<h1>Riftbound <span>Rules Companion</span></h1>
+		<h1><PoroMark size={40} /><span>Poracle</span></h1>
 		<p class="subtitle">
-			Regels, bans, errata, rulings en kaarten — automatisch bijgehouden, met een AI-vraagbaak.
+			Riftbound-regels &amp; vraagbaak — regels, bans, errata, rulings en kaarten, automatisch
+			bijgehouden.
 		</p>
 		<form class="hero-search" onsubmit={ask}>
 			<input
@@ -97,7 +99,7 @@
 	main { max-width: 1000px; margin: 0 auto; padding: 24px 20px; }
 
 	.hero { margin-bottom: 22px; }
-	h1 { margin: 0 0 6px; }
+	h1 { margin: 0 0 6px; display: flex; align-items: center; gap: 12px; }
 	h1 span { color: var(--accent); }
 	.subtitle { color: var(--muted); margin: 0 0 16px; max-width: 62ch; }
 	.hero-search { display: flex; gap: 8px; }

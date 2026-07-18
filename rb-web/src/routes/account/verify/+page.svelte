@@ -4,7 +4,7 @@
 	let { data, form } = $props();
 </script>
 
-<svelte:head><title>Inloggen bevestigen — RB Rules</title></svelte:head>
+<svelte:head><title>Inloggen bevestigen — Poracle</title></svelte:head>
 
 <main>
 	<h1>Inloggen bevestigen</h1>

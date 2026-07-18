@@ -204,7 +204,7 @@
 	};
 </script>
 
-<svelte:head><title>Brein-verkenner — RB Rules</title></svelte:head>
+<svelte:head><title>Brein-verkenner — Poracle</title></svelte:head>
 
 <main>
 	<h1>Brein-<span>verkenner</span></h1>

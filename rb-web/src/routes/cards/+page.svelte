@@ -51,7 +51,7 @@
 	});
 </script>
 
-<svelte:head><title>Kaarten — RB Rules</title></svelte:head>
+<svelte:head><title>Kaarten — Poracle</title></svelte:head>
 
 {#snippet filters()}
 	<!-- GET-form: de zoekterm reist mee als verborgen veld zodat filteren de

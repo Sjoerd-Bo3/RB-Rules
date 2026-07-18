@@ -452,7 +452,7 @@
 	}
 </script>
 
-<svelte:head><title>{meta.title} — Beheer — RB Rules</title></svelte:head>
+<svelte:head><title>{meta.title} — Beheer — Poracle</title></svelte:head>
 
 <main>
 	<nav class="crumb"><a href="/admin">Beheer</a> / {meta.title}</nav>

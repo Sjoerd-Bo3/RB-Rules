@@ -52,7 +52,7 @@
 </script>
 
 <svelte:head>
-	<title>Decks — RB Rules</title>
+	<title>Decks — Poracle</title>
 	<meta
 		name="description"
 		content="Community-decks van Piltover Archive, doorzoekbaar met legaliteitscheck tegen de actuele sets en banlijst — met attributie en deep-link terug."

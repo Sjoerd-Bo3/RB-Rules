@@ -48,7 +48,7 @@
 	});
 </script>
 
-<svelte:head><title>§ {s.code} — {s.sourceName} — RB Rules</title></svelte:head>
+<svelte:head><title>§ {s.code} — {s.sourceName} — Poracle</title></svelte:head>
 
 {#snippet rail()}
 	{#if onThisPage.length}

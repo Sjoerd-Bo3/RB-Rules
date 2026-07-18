@@ -706,7 +706,8 @@ Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
 `/admin/overview/[kind]`).
 
 **Samengestelde shell (#214).** `+layout.svelte` is de globale shell: een
-vaste **zijbalk** links (212px op desktop; merk met domein-mark, globaal
+vaste **zijbalk** links (212px op desktop; merk met poro-mascotte +
+woordmerk "Poracle" (#216), globaal
 zoekveld → `/ask?q=`, gegroepeerde nav Actueel/Kennis met decoratieve
 domein-stippen, onderaan Account/Beheer + thema-schakelaar), de **content**
 in het midden, en een **opt-in rechterrail** (vanaf 1080px). Pagina's leveren
@@ -719,6 +720,18 @@ een bottom-sheet opent** waarin de chips wrappen (Reset + "Toon N") —
 **nooit horizontaal filterscrollen**. De thema-schakelaar zet `data-theme` op
 `documentElement` en bewaart de keuze in `localStorage`; een inline-script in
 `app.html` zet het thema vóór de eerste verf (FOUC-vrij).
+
+**Merk-assets (#216).** De poro-mascotte leeft in één herbruikbaar component
+`rb-web/src/lib/PoroMark.svelte` (viewBox `0 0 120 124`, `size`-prop,
+crème lijf via `--poro-*`-CSS-vars zodat 'm op elk oppervlak crème blijft in
+licht én donker) — ingezet in de publieke shell, de beheer-shell en de
+home-hero. De favicon/PWA-iconen zijn een afgeronde **gele** tegel (`#f5c518`)
+met de poro in donkere lijn (`#20190a`): `static/favicon.svg` + `static/icon.svg`
+(SVG, letterlijke kleuren) en de daaruit gerenderde `static/icon-192.png`,
+`static/icon-512.png` en `static/apple-touch-icon.png`. `app.html` linkt
+`rel="icon"` (svg) + `rel="apple-touch-icon"` (png); `manifest.webmanifest`
+(`name`/`short_name` "Poracle", `theme_color:#f5c518`,
+`background_color:#f6f7f9`) somt de icon-set op.
 
 **Rail-patroon op de long-tail-routes (#214).** De rail-store wordt sinds de
 design-refresh op de hele publieke long-tail toegepast. Lijstpagina's leveren
@@ -736,7 +749,7 @@ domein-rand/-streep via `domainColorVar`, chips getint via `--dom-*` +
 
 **Beheer-console (#214).** De `/admin`-routes draaien in een **eigen shell**:
 `admin/+layout.svelte` vervangt de publieke chrome binnen het beheer door een
-console-zijbalk ("← naar de site", merk "Riftbound [beheer]", nav met
+console-zijbalk ("← naar de site", merk poro + "Poracle [beheer]" (#216), nav met
 tel-badges, Gevarenzone in rood, thema-schakelaar onderaan; mobiel <760px een
 eigen bovenbalk + slide-over drawer met scrim). De publieke chrome wordt
 **onderdrukt zonder `+layout.svelte` te wijzigen**: `onMount` zet `admin-shell`
