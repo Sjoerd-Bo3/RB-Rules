@@ -148,6 +148,64 @@ public static class OntologyValidationService
         return ValidateTriple(subject.Value, relation.Value, obj.Value, context);
     }
 
+    /// <summary>Eén conditie-as van een gereïficeerde interactie (fase 2, #226),
+    /// al opgelost naar het schema: op welk concept-type de voorwaarde slaat
+    /// (Window/Status/Cost) — de range waartegen §3.1 het qualifier-lexicon sluit.</summary>
+    public sealed record ReifiedCondition(EntityType OnConceptType);
+
+    /// <summary>De reïficatie-vorm-poort (fase 2, #226, §2.3): valideert een
+    /// gereïficeerde, gekwalificeerde <c>Interaction</c> i.p.v. een kale triple.
+    /// Dwingt af (a) dat <paramref name="kind"/> een gereïficeerd-VERPLICHTE
+    /// relatie is (COUNTERS/MODIFIES/GRANTS/REQUIRES) — een niet-gekwalificeerde
+    /// relatie hoort NIET via een Interaction; (b) dat agent én patient een Card
+    /// of Keyword zijn (de HAS_ROLE-range van §2.3); en (c) dat elke conditie op
+    /// een geldig concept-type (Window/Status/Cost) slaat. Bewust de tegenpool van
+    /// de kale-edge-poort: <see cref="ValidateTriple(EntityType,RelationType,EntityType,TripleContext)"/>
+    /// weigert een kale COUNTERS-edge, deze keurt de gereïficeerde vorm ervan goed.</summary>
+    public static OntologyValidationResult ValidateReifiedInteraction(
+        EntityType agentType, EntityType patientType, RelationType kind,
+        IReadOnlyCollection<ReifiedCondition>? conditions = null)
+    {
+        var violations = new List<OntologyViolation>();
+
+        if (!OntologySchema.Relations.TryGetValue(kind, out var relation))
+        {
+            violations.Add(new(OntologyViolationCode.UnknownRelation,
+                $"Relatie {kind} is niet in het ontologie-register geregistreerd."));
+            return Result(violations);
+        }
+
+        // (a) Alleen een gekwalificeerde (reïficatie-verplichte) relatie hoort via
+        // een Interaction. Een kale relatie reïficeren zou de kale-edge-poort
+        // omzeilen — dat is net zo goed structuurverlies-omgekeerd.
+        if (!relation.MustReify)
+            violations.Add(new(OntologyViolationCode.ReificationRequired,
+                $"{relation.EdgeName} is geen gekwalificeerde relatie en hoort niet via een " +
+                "Interaction gereïficeerd te worden; gebruik de kale edge."));
+
+        // (b) HAS_ROLE-range (§2.3): agent en patient zijn een Card of Keyword.
+        if (!IsRoleFiller(agentType))
+            violations.Add(new(OntologyViolationCode.RangeMismatch,
+                $"Agent-rol {agentType} valt buiten de HAS_ROLE-range (Card/Keyword)."));
+        if (!IsRoleFiller(patientType))
+            violations.Add(new(OntologyViolationCode.RangeMismatch,
+                $"Patient-rol {patientType} valt buiten de HAS_ROLE-range (Card/Keyword)."));
+
+        // (c) Condities slaan op een gesloten concept-lexicon (Window/Status/Cost).
+        foreach (var c in conditions ?? [])
+            if (c.OnConceptType is not (EntityType.Window or EntityType.Status or EntityType.Cost))
+                violations.Add(new(OntologyViolationCode.RangeMismatch,
+                    $"Conditie op {c.OnConceptType} valt buiten het qualifier-lexicon " +
+                    "(Window/Status/Cost)."));
+
+        return Result(violations);
+    }
+
+    /// <summary>Een geldige HAS_ROLE-filler (§2.3): een Card (elke kaartsubklasse)
+    /// of een Keyword.</summary>
+    private static bool IsRoleFiller(EntityType type) =>
+        OntologySchema.IsA(type, EntityType.Card) || OntologySchema.IsA(type, EntityType.Keyword);
+
     /// <summary>Valideert de labels op één knoop (multi-label in Neo4j): geen
     /// twee (effectief) disjuncte klassen tegelijk. Vangt bv. een knoop die
     /// zowel Keyword als Mechanic gelabeld is, of zowel Unit als Spell.</summary>

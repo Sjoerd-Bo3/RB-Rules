@@ -27,6 +27,16 @@ public enum BrainRefKind
     /// <summary>Provenance-tak (fase 0a, #233): gereïficeerd feit-met-herkomst.
     /// Wél een graph-knoop (:Assertion), doel van WAS_GENERATED_BY/DERIVED_FROM.</summary>
     Assertion,
+    /// <summary>Reïficatie-tak (fase 2, #226): gereïficeerde, gekwalificeerde
+    /// n-aire relatie (:Interaction) — de canonieke opslagvorm van elk
+    /// COUNTERS/MODIFIES/GRANTS/REQUIRES-feit. Subject van de bijbehorende
+    /// <see cref="BrainRefKind.Assertion"/> en van gekwalificeerde
+    /// <see cref="BrainRefKind.Condition"/>-knopen.</summary>
+    Interaction,
+    /// <summary>Reïficatie-tak (fase 2, #226): een gereïficeerde voorwaarde op
+    /// een <see cref="BrainRefKind.Interaction"/> (window/status/cost). Wél een
+    /// graph-knoop (:Condition).</summary>
+    Condition,
 }
 
 /// <summary>Eén canonieke, tekstuele referentie voor alles wat het brein kent
@@ -56,6 +66,8 @@ public readonly record struct BrainRef(BrainRefKind Kind, string Key)
     public static BrainRef Relation(long id) => new(BrainRefKind.Relation, id.ToString());
     public static BrainRef MiningRun(string ulid) => new(BrainRefKind.MiningRun, ulid);
     public static BrainRef Assertion(string ulid) => new(BrainRefKind.Assertion, ulid);
+    public static BrainRef Interaction(long id) => new(BrainRefKind.Interaction, id.ToString());
+    public static BrainRef Condition(long id) => new(BrainRefKind.Condition, id.ToString());
 
     public string Format() => $"{Prefix(Kind)}:{Key}";
 
@@ -98,6 +110,8 @@ public readonly record struct BrainRef(BrainRefKind Kind, string Key)
         BrainRefKind.Relation => "relation",
         BrainRefKind.MiningRun => "run",
         BrainRefKind.Assertion => "assertion",
+        BrainRefKind.Interaction => "interaction",
+        BrainRefKind.Condition => "condition",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "onbekende BrainRefKind"),
     };
 
@@ -118,6 +132,8 @@ public readonly record struct BrainRef(BrainRefKind Kind, string Key)
         "relation" => BrainRefKind.Relation,
         "run" => BrainRefKind.MiningRun,
         "assertion" => BrainRefKind.Assertion,
+        "interaction" => BrainRefKind.Interaction,
+        "condition" => BrainRefKind.Condition,
         _ => null,
     };
 }

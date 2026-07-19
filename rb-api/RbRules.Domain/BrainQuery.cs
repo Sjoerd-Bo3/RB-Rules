@@ -151,6 +151,10 @@ public static class BrainQuery
         BrainRefKind.Domain => "Domain",
         BrainRefKind.Tag => "Tag",
         BrainRefKind.Ruling => "Ruling",
+        // Reïficatie-tak (fase 2, #226): de gereïficeerde interactie is een
+        // eigen knoop (:Interaction), de conditie eveneens (:Condition).
+        BrainRefKind.Interaction => "Interaction",
+        BrainRefKind.Condition => "Condition",
         _ => null,
     };
 
