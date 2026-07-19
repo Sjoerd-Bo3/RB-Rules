@@ -968,7 +968,10 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
   gedocumenteerd schaal-pad voor het lexicale entity-resolution-signaal (de
   fase-1-scorer draait in-memory en gate-consistent). Sinds fase 4 (#228) het
   immutable `answer_trace` (+ `answer_trace_support`, cascade) — het GraphRAG-
-  auditspoor per /ask-antwoord (§6/#236, migratie `AnswerTrace228`).
+  auditspoor per /ask-antwoord (§6/#236, migratie `AnswerTrace228`). Sinds fase 5
+  (#229) `mechanic_predicate` — de getypeerde mechanic-predicaten
+  (triggers_on/prevents/grants/requires_target) die de abductieve hypothese-motor
+  voeden (migratie `MechanicPredicates229`).
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
@@ -1443,6 +1446,36 @@ kan rb-api eerder starten dan Postgres klaar is.
   `IGraphRetriever` in `RetrievalContracts.cs`) waarvan de Infrastructure-
   adapters een bewuste **integratie-follow-up** zijn (Neo4j/GDS draaien niet in
   CI). Fase 4 bouwt nog géén hypothese-motor (fase 5).
+- **Hypothese-motor & trust-vector** (fase 5, #229 — `RbRules.Domain/*`,
+  `RbRules.Domain/GraphRag/TrustConflict.cs`). De kandidaatgeneratie voor
+  interacties gaat van LEXICALE overlap (fase 3) naar GETYPEERD property-
+  antagonisme. Elke mechanic/keyword (`CanonicalEntity`) draagt gemined+gereviewde
+  `MechanicPredicateAssertion`'s (`triggers_on`/`prevents`/`grants`/
+  `requires_target`; extractie-vorm `MechanicPredicateExtraction`, tool-forced als
+  fase 2). De `HypothesisEngine` indexeert die predicaten geïnverteerd op
+  (predicaat, token) en past alléén complementair-vervullende paren
+  (`triggers_on(X,exhaust) ∧ prevents(Y,exhaust) ⇒ nonbo(X,Y)`) — O(n·k) i.p.v.
+  blind N², met `deck_domain_compatible` als prune. Elke `InteractionHypothesis`
+  draagt haar deterministische bewijs (regel-id + antecedent-tuples) en gaat naar
+  GERICHTE LLM-verificatie; `HypothesisPromotion` koppelt haar aan de ONVERANDERDE
+  fase-2-poort, zodat een positief verdict ZONDER onafhankelijke lexicale/consensus-
+  steun in `model_hypothesized_unruled` (cold-start) landt — nooit een stille
+  promotie op enkel structuur+LLM (rode draad #236). `HypothesisYield` maakt de
+  precisie-/kostenwinst MEETBAAR uit de data (blinde N²-baseline vs. werkelijk
+  kandidaataantal, precisie tegen een gouden set — geen verzonnen vaste factor,
+  kritiek B7). Een BEGRENSD residueel embedding-cosine-kanaal
+  (`ResidualInteractionChannel`, laag-prioriteit, cosine-vloer + top-K + hard
+  budgetplafond) pikt interacties zónder structurele signatuur op zonder terug te
+  vallen in de N²-scan. De trust-vector wordt afgerond: `ProvenanceCluster` leidt de
+  idee-niveau onafhankelijkheids-sleutel (thread ≻ auteur ≻ site) af die
+  `Corroboration.NoisyOr` compleet maakt (echo-kamer-dedup), en
+  `TrustConflictResolver` beslecht conflicten CONTEXT-afhankelijk (cross-tier →
+  authority-veto; within-tier-temporeel → recentste-gezaghebbende via SUPERSEDES;
+  detectie-botsing → vroegste-detectie via ALIAS_OF — bewust de #168/#206-precedentie
+  met de per-context juiste tie-break-richting), elk met een expliciete
+  `TrustDecision`. **Al deze logica is PUUR en getest**; de live rb-ai-mining, de
+  Neo4j-projectie en de persistentie van de Decision-knopen zijn een bewuste
+  integratie-follow-up. Fase 5 bouwt nog géén governance/eval (fase 6/7).
 - **Degradatiepaden** — AI-uitval is een verwacht pad: `RbAiClient` geeft null,
   de aanroeper degradeert (`docs/CONVENTIONS.md`, `AskService`, `RbAiClient`).
   Neo4j-uitval maakt `neighbors`/`path` een nette Problem-response terwijl de
@@ -1787,6 +1820,11 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | GraphRAG | Retrieval waarbij de getypeerde graaf de index is: entity-linking → β(q)-router → Local/Global/Path/Drift-modi → trust-gating → bundeling (fase 4, #228) |
 | β(q)-router | Weegt het graph- vs. community-kanaal: entity-dicht → graph, abstract → community (`BetaRouter`) |
 | AnswerTrace | Immutable auditspoor per /ask: welke subgraaf/paden/trust-gewichten-toen het antwoord droegen (§6/#236) |
+| Mechanic-predicaat | Getypeerde mechanic-eigenschap (triggers_on/prevents/grants/requires_target) op een `CanonicalEntity`; het structurele signaal voor de hypothese-motor (fase 5, #229) |
+| Hypothese-motor | Abductieve kandidaatgeneratie: complementair property-antagonisme ⇒ gerichte interactie-hypothese (O(n·k) i.p.v. blind N²), naar LLM-verificatie (`HypothesisEngine`, fase 5) |
+| Cold-start (model_hypothesized_unruled) | Tier voor een emergente card×card-hypothese die de LLM bevestigt maar die geen officiële/onafhankelijke steun heeft — geparkeerd voor micro-review, nooit stil weg (fase 2/5) |
+| Residueel kanaal | Begrensd, laag-prioriteit embedding-cosine-kanaal voor interacties zonder structurele signatuur (cosine-vloer + top-K + budgetplafond, `ResidualInteractionChannel`, fase 5) |
+| TrustDecision | Expliciete, context-afhankelijke conflict-resolutie-knoop (cross-tier-veto / supersede / alias) met memo — nooit een hard-delete (`TrustConflictResolver`, fase 5) |
 | RRF | Reciprocal Rank Fusion; fuseert vector- en full-text-ranglijsten |
 | bge-m3 | Meertalig embeddingmodel (1024-dim) dat lokaal via Ollama draait |
 | Canonieke printing | De naamloze basis-printing van een kaart; alt-arts zijn varianten (#57) |

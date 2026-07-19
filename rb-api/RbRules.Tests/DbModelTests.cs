@@ -38,6 +38,8 @@ public class DbModelTests
     // Provenance-ruggengraat (fase 0a, #233).
     [InlineData(typeof(MiningRun), "mining_run")]
     [InlineData(typeof(Assertion), "assertion")]
+    // Getypeerde mechanic-predicaten (fase 5, #229).
+    [InlineData(typeof(MechanicPredicateAssertion), "mechanic_predicate")]
     public void TableNames_MatchPopSchema(Type entity, string expectedTable)
     {
         using var db = CreateContext();
