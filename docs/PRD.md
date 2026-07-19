@@ -940,6 +940,24 @@ de globale duur-vangrail).
   (zie "Bronnen negeren met reden" in §4.1). *Endpoints*
   `GET/POST /api/admin/sources`, `PATCH/DELETE /api/admin/sources/{id}`,
   `POST /api/admin/sources/{id}/ignore|unignore`.
+- **Brein-verkenner & inspectie** (#236) — een read-only subsectie **Brein**
+  in de beheer-console die het Poracle-brein doorzoekbaar en inspecteerbaar
+  maakt: een **overzicht** met tegels per brein-tabel (assertions, canonieke
+  entiteiten, interacties, conflicts, mining-runs, eval-baselines,
+  answertraces) en observability-rollups (mining-precisie, canonieke drift &
+  duplicatie-schuld, interactie-tiers, conflict-kanalen); een **entiteiten**-
+  verkenner (canoniek label + alias-lexicon + merge-status, filterbaar op
+  kind/status); een **interacties**-verkenner (gereïficeerde interacties met
+  condities, tier-badge en de doorklikbare provenance-keten
+  WAS_GENERATED_BY/DERIVED_FROM/VERIFIED_BY per feit); een **conflicts**-
+  verkenner (reasoning-tegenspraken met hun routering, incl. het
+  misvattingen-kanaal); en een **AnswerTrace-viewer** (herspeelbaar antwoord:
+  de dragende subgraaf/paden met trust-waarde-toen en de epoch-stempels).
+  Read-only en additief: niets is bewerkbaar, geen mining/reasoner draait
+  vanuit deze schermen. De **Brein**-nav toont een tel-badge; lege staten zijn
+  netjes ("nog geen brein-data — draai de brein-jobs"). *Route* `/admin/brein`
+  (+ `entities`/`interactions`/`conflicts`/`answertrace`) · *endpoints*
+  `GET /api/admin/brein/{overzicht,entities,interactions,assertions/{ref},conflicts,answertraces,answertrace/{id},observability}`.
 
 ### 4.6 Platform, accounts & PWA
 
