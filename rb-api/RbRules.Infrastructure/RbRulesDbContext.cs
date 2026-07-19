@@ -66,6 +66,12 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<AnswerTrace> AnswerTraces => Set<AnswerTrace>();
     public DbSet<AnswerTraceSupport> AnswerTraceSupports => Set<AnswerTraceSupport>();
 
+    // Governance & levenscyclus (fase 6, #230): geversioneerde ontologie, staging-
+    // voorstellen en het geconsolideerde levenscyclus-gebeurtenis-log.
+    public DbSet<Domain.Ontology.OntologyVersionRecord> OntologyVersions => Set<Domain.Ontology.OntologyVersionRecord>();
+    public DbSet<Domain.Ontology.SchemaProposal> SchemaProposals => Set<Domain.Ontology.SchemaProposal>();
+    public DbSet<LifecycleEvent> LifecycleEvents => Set<LifecycleEvent>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.HasPostgresExtension("vector");
@@ -556,6 +562,40 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // "Verantwoord dit antwoord"-query (§6): welke antwoorden leunden op een
             // feit dat inmiddels deprecated/getombstoned is.
             e.HasIndex(x => x.SubjectRef);
+        });
+
+        // Governance & levenscyclus (fase 6, #230, §6). Postgres = SoT; de ontologie
+        // is een geversioneerd, herbouwbaar artefact. De has-pending-ontology-poort
+        // zelf is PUUR (code vs. checked-in baseline) — deze tabellen dragen de
+        // runtime-historie en de reviewqueue, niet de CI-gate.
+        b.Entity<Domain.Ontology.OntologyVersionRecord>(e =>
+        {
+            e.ToTable("ontology_version");
+            e.HasKey(x => x.Id);
+            // Eén rij per vastgelegde versie — de service sorteert semver in-memory
+            // (string-sort ≠ semver-sort), de index borgt uniciteit hard.
+            e.HasIndex(x => x.Version).IsUnique();
+            e.HasIndex(x => x.AppliedAt);
+        });
+
+        b.Entity<Domain.Ontology.SchemaProposal>(e =>
+        {
+            e.ToTable("schema_proposal");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Status);
+            // Eén open voorstel per (soort, naam): de service dedupet, de index borgt
+            // het hard tegen dubbele staging-voorstellen voor hetzelfde type.
+            e.HasIndex(x => new { x.Kind, x.ProposedName }).IsUnique();
+        });
+
+        b.Entity<LifecycleEvent>(e =>
+        {
+            e.ToTable("lifecycle_event");
+            e.HasKey(x => x.Id);
+            // "Wat is er met dit feit gebeurd" (het geconsolideerde tombstone-spoor).
+            e.HasIndex(x => new { x.SubjectRef, x.CreatedAt });
+            e.HasIndex(x => x.ToState);
+            e.HasIndex(x => x.Reverted);
         });
     }
 
