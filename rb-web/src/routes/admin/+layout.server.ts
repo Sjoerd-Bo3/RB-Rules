@@ -1,5 +1,5 @@
 import type { LayoutServerLoad } from './$types';
-import { authed } from '$lib/server/admin';
+import { adminApi, authed } from '$lib/server/admin';
 
 // Beheer-shell (#214 redesign): de admin-routes krijgen een eigen shell
 // (admin/+layout.svelte) los van de publieke zijbalk. De layout hoeft alleen
@@ -7,5 +7,18 @@ import { authed } from '$lib/server/admin';
 // de merk-chrome rond het login-scherm. Tel-badges komen uit de al geladen
 // page-data (status.counts / sources), niet uit een extra fetch hier.
 export const load: LayoutServerLoad = async ({ cookies }) => {
-	return { authed: authed(cookies) };
+	const isAuthed = authed(cookies);
+	// Brein-nav-badge (#236): het aantal gereïficeerde interacties als maat voor
+	// de brein-omvang. Eén goedkope count-call, alleen als ingelogd; brein-uitval
+	// (nog geen data / rb-api down) laat de badge stil weg (nette degradatie).
+	let breinBadge: number | undefined;
+	if (isAuthed) {
+		try {
+			const o = await adminApi<{ interactions: number }>('/api/admin/brein/overzicht');
+			breinBadge = o.interactions;
+		} catch {
+			breinBadge = undefined;
+		}
+	}
+	return { authed: isAuthed, breinBadge };
 };

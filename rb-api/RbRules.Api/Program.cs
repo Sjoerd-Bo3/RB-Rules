@@ -130,6 +130,9 @@ builder.Services.AddScoped<KnowledgeRecheckService>();
 // Neo4j-kant (neighbors/path) gescheiden — degradatie per koppelvlak.
 builder.Services.AddScoped<BrainService>();
 builder.Services.AddScoped<BrainGraphService>();
+// Brein-verkenner & inspectie (#236): read-only projecties over de brein-
+// tabellen voor de admin-console. Puur leesbaar, geen live-Neo4j.
+builder.Services.AddScoped<BrainExplorerService>();
 // Publieke rulings-databank (#127).
 builder.Services.AddScoped<RulingsService>();
 // Accounts + per-gebruiker-quota (#42); passkey-login (#109).
@@ -296,6 +299,7 @@ app.MapAuthEndpoints();
 app.MapFeedEndpoints();
 app.MapPushEndpoints();
 app.MapAdminEndpoints();
+app.MapBrainAdminEndpoints();
 
 app.Run();
 

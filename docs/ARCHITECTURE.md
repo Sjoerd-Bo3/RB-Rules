@@ -448,7 +448,9 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `CardEmbeddingPipeline`, `EmbeddingService` (Ollama), `AskService`,
   `AskHistoryService` (eigen ask-geschiedenis op user_id/ip_hash, #157),
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`
-  (Neo4j), `BrainService`, `MechanicMiningService`, `ClaimMiningService`,
+  (Neo4j), `BrainService`, `BrainExplorerService` (read-only inspectie-laag over
+  de brein-tabellen voor de admin-Brein-verkenner, #236 — puur Postgres, geen
+  live-Neo4j), `MechanicMiningService`, `ClaimMiningService`,
   `ClarificationMiningService` (#177, job "clarify" — concept-extractie uit
   officiële FAQ-/clarificatie-artikelen naar `Correction`s met eigen gefocuste
   embedding en onderwerp-anker. Hybride autoriteitspoort: alleen `verified` als
@@ -812,7 +814,21 @@ als `POST /jobs/{name}`, de padnaam verschijnt vanzelf op `/status`; relaties,
 transactie, hergebruikt hetzelfde pad per item, alleen unreviewed én
 niet-gearchiveerd; TOCTOU-gefenced op `expectedCount`+`asOf` → 409 bij een
 veranderde groep, 400 bij ontbrekende/ongeldige velden
-(`RelationBulkDecideRequest.ValidationError`), alles-of-niets).
+(`RelationBulkDecideRequest.ValidationError`), alles-of-niets);
+Brein-verkenner (#236, `BrainAdminEndpoints` → `BrainExplorerService`, alle
+GET, read-only, admin-gated): `/brein/overzicht` (tegel-tellingen per
+brein-tabel), `/brein/entities` (canonieke entiteiten + alt-labels +
+merge-status, `kind`/`status`/`page`), `/brein/interactions` (gereïficeerde
+interacties + condities + tier + provenance-anker, `status`/`page`),
+`/brein/assertions/{**ref}` (de provenance-keten van een feit-ref:
+WAS_GENERATED_BY/DERIVED_FROM/VERIFIED_BY — catch-all zodat section-/card-refs
+met slash meekomen), `/brein/conflicts` (reasoning-tegenspraken + routering,
+`status`/`page`), `/brein/answertraces` + `/brein/answertrace/{id}` (lijst +
+herspeelbaar detail: dragende subgraaf/paden + trust-toen + epoch-stempels),
+`/brein/observability` (fase-7 rollups: mining-precisie + canonieke drift +
+duplicatie-schuld + tier-verdelingen; de Neo4j/GDS-delen blijven leeg tot de
+graph-jobs draaien — nette lege staat). Puur additief: raakt geen bestaande
+endpoint/service/flow, leest bestaande tabellen (geen migratie).
 
 ### rb-ai — belangrijkste modules
 
@@ -848,7 +864,12 @@ Paginastructuur (`rb-web/src/routes/`): `/` (**Overzicht-dashboard**, #214),
 browser + legaliteitsbadge, detail met decklijst per sectie en deep-link naar
 Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
 `/rulings`, `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
-`/admin/overview/[kind]`). Een globale **`+error.svelte`** (#219) rendert binnen
+`/admin/overview/[kind]`, en de read-only **Brein-verkenner** `/admin/brein`
+met sub-routes `entities`/`interactions`/`conflicts`/`answertrace`, #236 — eigen
+`+layout` met tab-nav + auth-guard, server-loads proxyen de `/api/admin/brein/*`-
+endpoints; de interacties- en answertrace-pagina laden hun provenance-keten
+resp. herspeelbaar detail server-side via `?sel=`/`?id=`, geen client-fetch).
+Een globale **`+error.svelte`** (#219) rendert binnen
 de shell: bij 404 een "zoekende" poro + terug-links naar `/` en `/ask`, bij
 elke andere status een generieke variant (kop = `status + boodschap`). De
 status → tekst-logica staat als pure, unit-geteste functie in
@@ -912,9 +933,11 @@ op `<html>` (weg bij `onDestroy`), en `:global`-regels gated op
 zetten het `.shell`-grid op één kolom — de onderdrukking lekt zo nooit buiten
 het beheer (terug naar `/` herstelt de publieke zijbalk). `admin/+layout.server.ts`
 levert alleen `{ authed }` (volle nav bij ingelogd, anders alleen merk-chrome
-rond het login-scherm). De **tel-badges** komen uit de al geladen `page.data`
-(`status.counts.openCorrections` → Reviewqueue, `sources.length` → Bronnen) —
-geen extra fetch, geen badge waar die data ontbreekt (nette degradatie); de
+rond het login-scherm; sinds #236 doet het bij ingelogd één goedkope
+`/api/admin/brein/overzicht`-fetch voor de **Brein**-nav-badge — brein-uitval
+laat de badge stil weg). De **tel-badges** komen verder uit de al geladen
+`page.data` (`status.counts.openCorrections` → Reviewqueue, `sources.length` →
+Bronnen) — geen badge waar die data ontbreekt (nette degradatie); de
 thema-schakelaar hergebruikt de bestaande `useShell()`-store. Het
 Overzicht-dashboard voegt in `admin/+page.server.ts` één extra **parallelle**
 fetch toe aan de bestaande `Promise.all`: graph-drift
