@@ -72,6 +72,11 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<Domain.Ontology.SchemaProposal> SchemaProposals => Set<Domain.Ontology.SchemaProposal>();
     public DbSet<LifecycleEvent> LifecycleEvents => Set<LifecycleEvent>();
 
+    // Eval-industrialisatie (fase 7, #231): de per-klasse-baseline waartegen de
+    // baseline-diff-gate diff't, en de rollup-samenvatting per harness-gate-run.
+    public DbSet<EvalBaselineRecord> EvalBaselines => Set<EvalBaselineRecord>();
+    public DbSet<EvalRunRecord> EvalRuns => Set<EvalRunRecord>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.HasPostgresExtension("vector");
@@ -596,6 +601,32 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.HasIndex(x => new { x.SubjectRef, x.CreatedAt });
             e.HasIndex(x => x.ToState);
             e.HasIndex(x => x.Reverted);
+        });
+
+        // Eval-industrialisatie (fase 7, #231, spec §7). De baseline-diff-gate zelf is
+        // PUUR (code vs. vastgelegde baseline); deze tabellen dragen de runtime-
+        // baseline en de run-historie, niet de CI-gate-logica.
+        b.Entity<EvalBaselineRecord>(e =>
+        {
+            e.ToTable("eval_baseline");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Ring).HasMaxLength(8);
+            e.Property(x => x.QueryType).HasMaxLength(32);
+            e.Property(x => x.Metric).HasMaxLength(48);
+            // Eén actieve baseline per (ring × question_class × metric) — de gate
+            // diff't tegen precies één cel; de index borgt dat hard.
+            e.HasIndex(x => new { x.Ring, x.QueryType, x.Metric }).IsUnique();
+        });
+
+        b.Entity<EvalRunRecord>(e =>
+        {
+            e.ToTable("eval_run");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(Domain.Ulid.Length);
+            e.Property(x => x.Ring).HasMaxLength(8);
+            // "Sluipende degradatie over runs" — sorteren op tijd, filteren op uitslag.
+            e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => new { x.Ring, x.Passed });
         });
     }
 
