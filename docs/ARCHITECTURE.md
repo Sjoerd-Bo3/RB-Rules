@@ -404,6 +404,39 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   tool-forcing vereist een rb-ai-uitbreiding — de promotie-pipeline + structuur
   staan er). EF-migratie `ReifiedInteractions226`; getest in
   `ReifiedInteractionTests` (30 tests).
+- **`RbRules.Domain/Reasoning/*` + `ReasoningService` — de redeneer-laag (fase 3,
+  #227, §5).** VASTGELEGDE BESLISSING: **één engine, Neo4j-native** — Cypher voor
+  monotone inferentie, contradictie via bounded `WHERE NOT EXISTS`, **géén apart
+  C#-Datalog** en geen OWL-runtime in de hot-path. `InferenceRuleRegistry` genereert
+  de inferentie-regels DETERMINISTISCH uit de ontologie (de ÉNE schema-bron, geen
+  losse regel-lijst ernaast): **isa-closure** (GOVERNED_BY-overerving over de
+  type-lattice uit `OntologySchema.Ancestors`), **property-chain** (ketens die uit de
+  relatie-domain/range in een GOVERNED_BY→RuleSection uitkomen, bv.
+  `HAS_KEYWORD ∘ INVOKES ∘ GOVERNED_BY` — een Deflect-vraag bereikt §7.4 in één hop),
+  **symmetrische sluiting** (uit de `Symmetric`-trait: INTERACTS_WITH/CONTRADICTS) en
+  **subproperty-collapse** (alias-kind → canonieke super-property uit
+  `OntologySchema.RelatesToKindSubProperties`, v0 leeg). De denorm-cache RELATES_TO en
+  de kennis-loze INTERACTS_WITH-hint zijn geen inferentie-hop (uit een niet-bron leid
+  je geen kennis af). Elke afgeleide edge draagt verplicht `derived=true` +
+  `derivedByRule` + run-provenance (`DerivedEdgeProvenance`, inzicht #236); afgeleide
+  edges zijn **nooit bron** — ze worden bij elke run gewist en opnieuw
+  gematerialiseerd, nooit als Postgres-feit gepersisteerd (SoT = de basisfeiten).
+  `ContradictionDetector` bouwt bounded read-only patronen — **claim-contradicts-
+  official** (community-claim tegen een RuleSection zonder officiële dekking →
+  misvattingen-kanaal), **ruling-collision** (botsende geverifieerde rulings →
+  escalatie) en, gegenereerd uit `OntologySchema.AreDisjoint`, één **disjointness-
+  violation**-patroon per effectief disjunct labelpaar (`:Unit:Spell` vangt kaart-sync-
+  schade à la #150 → reviewqueue). Treffers worden via `ConflictRouter` gerouteerd en
+  door `ToConflict` naar **`ReasoningConflict`**-rijen (Postgres = SoT ook hier, eigen
+  tabel naast bron-niveau `Conflict`) vertaald, idempotent op een dedupe-sleutel.
+  `ReasoningService` (job `reason`, ná `graph`) hangt de Cypher-executie eromheen —
+  best-effort, want Neo4j zit niet in CI/lokaal; **live-Cypher-executie is
+  integratie-follow-up** (zoals de fase-2-projectie), de pure regel-/patroon-generatie
+  en de conflict-vertaling zijn wél getest (`InferenceRuleRegistryTests`,
+  `ContradictionDetectorTests`). `OntologyConsistencyAudit` (job `owlaudit`, optioneel,
+  nooit in "alles") is de **OWL2-RL-nachtaudit-skeleton**: een pure zelf-toets van de
+  afgedwongen schema-bron (acyclisch, disjointness vervulbaar, geen dangling
+  domain/range) — geen OWL-runtime. EF-migratie `Reasoner227`.
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
@@ -1191,6 +1224,42 @@ graph-property. Consolidatie is feed-presentatie (welke kaart de gebruiker
 ziet), geen kennisrelatie — de graph blijft de volledige, ongefilterde
 brontrail tonen.
 
+### 6.4 De reasoner (redeneer-run)
+
+`ReasoningService.RunAsync` (job `reason`, logisch ná `graph`) geeft Neo4j zijn
+eerste echte lees-reden: hij *leidt af* i.p.v. *op te slaan* (fase 3, #227, §5).
+VASTGELEGDE BESLISSING: **één engine, Neo4j-native** (Cypher; géén C#-Datalog). De
+run opent met een deterministische `MiningRun` (kind "reasoning", geen LLM/embedding)
+als provenance-anker, en verloopt in drie stappen. **(1)** Afgeleide edges opruimen:
+`MATCH ()-[r]->() WHERE r.derived = true DELETE r` — afgeleide edges zijn nooit bron,
+ze worden elke run herberekend (basisfeiten blijven ongemoeid). **(2)** Monotone
+inferentie: elke regel uit `InferenceRuleRegistry.All` draait als idempotente,
+batched Cypher-MERGE (dictionaries-only params) die de afgeleide edge tagt met
+`derived=true`, `derivedByRule=<regel-id>` en de run-provenance
+(`runId`/`model='deterministic'`/`derivedAt`). **(3)** Bounded contradictie-detectie:
+elk read-only `ContradictionDetector`-patroon RETURNt treffers; die worden via
+`ConflictRouter` naar het juiste kanaal (misvattingen/reviewqueue/escalatie) en door
+`ToConflict` naar `ReasoningConflict`-rijen in Postgres vertaald — idempotent op de
+`patternId|subject|counter`-dedupe-sleutel, zodat een herhaalde run geen dubbele
+rijen maakt.
+
+Neo4j-uitval is een verwacht pad: de graaf-stappen zijn best-effort
+(`Neo4jException`/driver-fout → de run doet niets en meldt "graph niet beschikbaar"),
+Postgres blijft leidend en de afgeleide edges zijn bij de volgende run herberekenbaar.
+Net als de fase-2-reïficatie-projectie is de **live-Cypher-executie nog niet tegen een
+draaiende Neo4j geverifieerd** (geen lokale instance): de regel- en patroon-generatie
+uit de ontologie, de derived-edge-tagging en de treffer→conflict-vertaling zijn puur
+en getest (`InferenceRuleRegistryTests`, `ContradictionDetectorTests`), de executie is
+integratie-follow-up. Sommige inferentie-regels (isa-overerving, property-chains)
+veronderstellen bron-edges die de huidige projectie nog niet materialiseert
+(bv. `Mechanic-[:GOVERNED_BY]->RuleSection`, class-anchor-labels) — die projectie-
+uitbreiding hoort bij dezelfde follow-up; de regels staan er al, correct getagd.
+
+De **OWL2-RL-nachtaudit** (`OntologyConsistencyAudit`, job `owlaudit`) is per beslissing
+een **skeleton**: geen OWL/Turtle-runtime, maar een pure zelf-toets van de afgedwongen
+schema-bron (`OntologySchema`) op acycliciteit, vervulbare disjointness en
+niet-danglende domain/range. Optioneel en nooit in de "alles"-keten.
+
 ---
 
 ## 7. Deploymentzicht
@@ -1579,6 +1648,34 @@ follow-up afgesplitst — de vorm staat in `InteractionExtraction`, de pipeline 
 `InteractionPromotionGate.cs`, `InteractionProjection.cs`,
 `InteractionExtraction.cs`, `InteractionPromotionService`.
 
+### ADR-13 — Redeneer-laag: één engine, Neo4j-native; afgeleide edges nooit bron (#227)
+
+**Context.** De graaf moest *leesbaar* worden — inheritance, property-chains en
+tegenspraken afleiden i.p.v. alles apart minen. De lenzen botsten op de techniek
+(stratified Datalog vs. Cypher vs. OWL-RL). **Besluit.** **Één engine, Neo4j-native:**
+Cypher-MERGE voor monotone inferentie, bounded `WHERE NOT EXISTS` voor contradictie —
+**géén apart C#-Datalog** en **geen OWL-runtime in de hot-path** (onze edges zijn
+gekwalificeerd; OWL zou reïficatie/blank-nodes afdwingen → structuurverlies, en
+.NET-OWL-tooling is dun). De inferentie-regels worden DETERMINISTISCH uit de ontologie
+gegenereerd (`InferenceRuleRegistry` uit `OntologySchema` — de ÉNE schema-bron): geen
+met-de-hand-lijst die uit sync raakt. Drie harde regels: (a) **afgeleide edges zijn
+nooit bron** — ze dragen `derived=true`+`derivedByRule`+run-provenance en worden bij
+elke run gewist en opnieuw gematerialiseerd, nooit als Postgres-feit gepersisteerd
+(SoT = de basisfeiten); (b) een reasoner-regel draagt **nooit een LLM-oordeel** — puur
+deterministisch (`model='deterministic'`); (c) een gedetecteerde tegenspraak levert
+**geen edge maar een `ReasoningConflict`-rij** (Postgres = SoT), gerouteerd naar
+misvattingen-kanaal/reviewqueue/escalatie en idempotent op een dedupe-sleutel — een
+beslissing levert nooit onzichtbare state (rode draad #236). OWL2-RL blijft als
+**optionele nachtaudit-skeleton** (`OntologyConsistencyAudit`) die de afgedwongen
+schema-bron zelf toetst. **Gevolg.** "Welke regels gelden voor deze Deflect-kaart?"
+wordt één graaf-hop; een `:Unit:Spell`-knoop (kaart-sync-schade à la #150) valt op als
+disjointness-tegenspraak. Neo4j zit niet in CI — de live-Cypher-executie is
+integratie-follow-up (best-effort, degradeerbaar), de pure regel-/patroon-generatie en
+conflict-vertaling zijn getest. EF-migratie `Reasoner227`.
+`RbRules.Domain/Reasoning/*` (`InferenceRuleRegistry`, `DerivedEdgeProvenance`,
+`ContradictionDetector`, `ReasoningConflict`, `OntologyConsistencyAudit`),
+`ReasoningService`.
+
 ---
 
 ## 10. Kwaliteitsscenario's
@@ -1617,6 +1714,13 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 - **Neo4j is jong als lees-consument.** Pas sinds #104/#105 wordt de graph
   gelezen (brein-API); drift tussen Postgres en Neo4j wordt gemeten, niet
   vermeden (`KnowledgeGapsService`).
+- **Reasoner-executie nog niet live geverifieerd (#227).** De fase-3-inferentie-
+  regels + contradictie-patronen zijn puur getest, maar de Cypher draaide nog niet
+  tegen een echte Neo4j (geen CI/lokale instance) — zelfde schuld als de fase-2-
+  projectie. Bovendien veronderstellen enkele regels (isa-overerving, property-
+  chains) bron-edges/class-anchor-labels die `GraphSyncService` nog niet
+  materialiseert; die projectie-uitbreiding + een integratietest tegen een echte
+  Neo4j is de openstaande follow-up (`ReasoningService`, `InferenceRuleRegistry`).
 - **Openstaande architectuurrakende issues.** O.a. #122 (periodieke
   zelfverrijking in de scheduler), #121 (echte token-metering), #124/#125
   (reviewqueue-/misvattingen-laag), #127 (publieke databank), #15 (decks:
@@ -1654,6 +1758,9 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Reïficatie | Een gekwalificeerde relatie als eigen knoop (`Interaction`) i.p.v. kale edge, zodat condities niet verloren gaan (fase 2, #226) |
 | `model_hypothesized_unruled` | Cold-start-trust-tier: emergente card×card-hypothese zonder officiële/community-steun — geparkeerd, niet weggegooid |
 | RejectionTombstone | Grafsteen op een verworpen interactie die stil-heropenen blokkeert; opheffen is een expliciete beheerdersactie (herstelpad) |
+| Reasoner / redeneer-laag | Neo4j-native inferentie-run (fase 3, #227): leidt edges af (isa-closure, property-chain, symmetrie, subproperty-collapse) en detecteert tegenspraken — één engine, Cypher, geen Datalog |
+| Afgeleide edge | Een door de reasoner gematerialiseerde edge (`derived=true`+`derivedByRule`+provenance); nooit bron van waarheid, elke run herberekend |
+| `ReasoningConflict` | Postgres-rij voor een door de reasoner gedetecteerde tegenspraak (claim↔officieel, botsende rulings, disjointness), gerouteerd naar misvattingen/reviewqueue/escalatie |
 
 ---
 
