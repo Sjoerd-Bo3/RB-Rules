@@ -228,16 +228,19 @@ test("collectAnswer: sawOutput blijft false bij alleen systeemberichten (dode wa
 // heel ai.ts precies één call-site die een permit verwerft, en die zit in
 // askClaude (de functie die zowel het koude pad als een warme claim gate't)
 // — dus per constructie NOOIT in bootWarmCheapSession/de WarmPool-boot.
-test("prewarm-boot raakt de concurrency-cap niet aan: precies één acquire-call-site, en die zit in askClaude", () => {
+test("prewarm-boot raakt de concurrency-cap niet aan: acquire zit alleen in de echte LLM-run-functies, nooit in de warme-boot", () => {
   const src = readFileSync(fileURLToPath(new URL("./ai.ts", import.meta.url)), "utf8");
   const acquireCalls = src.match(/aiSemaphore\.acquire\(/g) ?? [];
-  assert.equal(
-    acquireCalls.length,
-    1,
-    "er hoort precies één plek te zijn die een permit verwerft — anders raakt de boot van de warme pool de cap aan",
+  // Elke permit-verwervende functie is een echte LLM-run onder de cap: askClaude
+  // (koud pad + warme claim) en extractWithTool (#226, tool-forced extractie). De
+  // boot van de warme pool hoort er NOOIT bij — dat is de invariant hieronder. Het
+  // aantal call-sites is dus het aantal run-functies, niet vast op 1.
+  assert.ok(
+    acquireCalls.length >= 1,
+    "er hoort ten minste één plek te zijn die een permit verwerft",
   );
   const askClaudeStart = src.indexOf("export async function askClaude");
-  const acquireIndex = src.indexOf("aiSemaphore.acquire(");
+  const acquireIndex = src.indexOf("aiSemaphore.acquire(", askClaudeStart);
   assert.ok(askClaudeStart >= 0 && acquireIndex > askClaudeStart, "de acquire-call moet in askClaude staan");
   const bootFnStart = src.indexOf("function bootWarmCheapSession");
   const bootFnEnd = src.indexOf("\nexport const warmPool", bootFnStart);

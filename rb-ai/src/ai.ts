@@ -118,6 +118,97 @@ export function createBrainMcpServer(onStep?: (step: string) => void) {
   });
 }
 
+// Brein-extractie (#226, §3.1): tool-forced structured output. Eén beurt om de
+// tool te roepen, één om af te ronden — ruim gehouden op 3. Harde timeout net als
+// research/agentic zodat een hangende run nooit op abonnementskosten blijft draaien.
+const EXTRACT_MAX_TURNS = 3;
+const EXTRACT_TIMEOUT_MS = 90_000;
+
+/** Tool-forced brein-extractie (#226, docs/ARCHITECTURE brein-epic §3.1). Draait
+ * één geforceerde in-process MCP-tool (createSdkMcpServer/tool, zelfde mechaniek als
+ * de agentic brein-tools) waarvan het zod-schema de enum-poorten dichttimmert: het
+ * model KAN geen ref/kind/window buiten het aangeboden vocabulaire noemen. De
+ * tool-handler VANGT de gevalideerde argumenten in een closure en geeft een ack
+ * terug; de daadwerkelijke kandidaten reizen dus niet via de antwoordtekst maar via
+ * de tool-input. Retourneert de gevangen array (mogelijk leeg) of <c>null</c> als de
+ * tool niet werd geroepen / de run faalde — de aanroeper (rb-api) degradeert daarop
+ * netjes (null → geen half feit). Puur SDK-gedreven en dus, net als askClaude, niet
+ * los unit-getest; de vocabulaire→schema-vertaling in extract.ts is dat wél. */
+export async function extractWithTool(opts: {
+  toolName: string;
+  description: string;
+  schema: Parameters<typeof tool>[2];
+  resultKey: string;
+  system?: string;
+  addendum: string;
+  text: string;
+  signal?: AbortSignal;
+}): Promise<unknown[] | null> {
+  const { toolName, description, schema, resultKey, system, addendum, text, signal } = opts;
+  const serverName = "extract";
+
+  let captured: unknown[] | null = null;
+  const extractServer = createSdkMcpServer({
+    name: serverName,
+    version: "1.0.0",
+    tools: [
+      tool(toolName, description, schema, async (args) => {
+        const value = (args as Record<string, unknown>)[resultKey];
+        // Alleen een echte array telt; alles anders is een lege vangst (de .NET-
+        // parser is de tweede muur, maar we leveren nooit rommel op).
+        captured = Array.isArray(value) ? value : [];
+        return { content: [{ type: "text" as const, text: "ok" }] };
+      }),
+    ],
+  });
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, EXTRACT_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+
+  const systemPrompt = [system, addendum].filter(Boolean).join("\n\n");
+  let release: (() => void) | undefined;
+  try {
+    release = await aiSemaphore.acquire(1, {
+      signal: controller.signal,
+      maxWaitMs: AI_QUEUE_WAIT_MS,
+    });
+    const options: Options = {
+      model: MODEL.cheap,
+      maxTurns: EXTRACT_MAX_TURNS,
+      tools: [],
+      mcpServers: { [serverName]: extractServer },
+      allowedTools: [`mcp__${serverName}__${toolName}`],
+      permissionMode: "dontAsk" as const,
+      abortController: controller,
+      systemPrompt,
+    };
+    // De berichten leeglezen zodat de tool-call daadwerkelijk vuurt; het
+    // tekstantwoord interesseert ons niet — captured draagt het resultaat.
+    for await (const _ of query({ prompt: text, options })) {
+      // no-op: de closure hierboven vangt de tool-input.
+    }
+    return captured;
+  } catch (e) {
+    if (e instanceof ConcurrencyLimitError) throw e;
+    // Timeout/uitval is verwacht pad: null → rb-api degradeert. Wat de tool vóór
+    // de uitval al ving blijft geldig; anders null.
+    if (timedOut) return captured;
+    if (controller.signal.aborted) return captured;
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+    release?.();
+  }
+}
+
 /** Bericht-vorm voor streaming input. Gedeeld door het koude beeld-pad
  * (userMessage hieronder) en de warme pool (het bericht dat bij de claim in
  * de vastgehouden input-iterator wordt gepusht) — de SDK schrijft voor een

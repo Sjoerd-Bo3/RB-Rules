@@ -2,8 +2,18 @@
 // (CLAUDE_CODE_OAUTH_TOKEN) zodat rb-api (.NET) geen per-token API-key nodig
 // heeft. Alleen bereikbaar binnen het compose-netwerk — nooit publiek exposen.
 import { createServer } from "node:http";
-import { askClaude, warmPool } from "./ai.js";
+import { askClaude, extractWithTool, warmPool } from "./ai.js";
 import { aiSemaphore, ConcurrencyLimitError } from "./concurrency.js";
+import {
+  buildInteractionToolShape,
+  buildPredicateToolShape,
+  INTERACTION_TOOL_ADDENDUM,
+  interactionToolDescription,
+  parseInteractionExtractRequest,
+  parsePredicateExtractRequest,
+  PREDICATE_TOOL_ADDENDUM,
+  predicateToolDescription,
+} from "./extract.js";
 import { splitRelationProposals } from "./relations.js";
 import { parseAskRequest } from "./validate.js";
 
@@ -150,6 +160,60 @@ const server = createServer(async (req, res) => {
         frame({ type: "error", error: String(e) });
       }
       return res.end();
+    }
+
+    if (req.method === "POST" && req.url === "/extract/interactions") {
+      // Tool-forced brein-extractie (#226, §3.1): gegeven kaart/regel-tekst + het
+      // ontologie-vocabulaire levert de agent gestructureerde interactie-kandidaten
+      // via een geforceerde tool-call. rb-api (mining-orkestratie) draait ze door de
+      // fase-2-promotie-poort. Uitval → 500 → RbAiClient degradeert naar null.
+      const parsed = parseInteractionExtractRequest(await readJson(req));
+      if (!parsed.ok) return send(400, { error: parsed.error });
+      try {
+        const interactions = await extractWithTool({
+          toolName: "emit_interactions",
+          description: interactionToolDescription(parsed.request),
+          schema: buildInteractionToolShape(parsed.request),
+          resultKey: "interactions",
+          system: parsed.request.system,
+          addendum: INTERACTION_TOOL_ADDENDUM,
+          text: parsed.request.text,
+          signal: abort.signal,
+        });
+        // null = tool niet geroepen / run gefaald: geef een 500 zodat rb-api dit als
+        // AI-uitval leest (null, nette degradatie) i.p.v. als "geen kandidaten".
+        if (interactions === null) return send(500, { error: "extractie mislukt" });
+        return send(200, { interactions });
+      } catch (e) {
+        if (e instanceof ConcurrencyLimitError)
+          return send(429, { error: e.message, code: e.code });
+        throw e;
+      }
+    }
+
+    if (req.method === "POST" && req.url === "/extract/predicates") {
+      // Tool-forced mechanic-predicaat-extractie (#226/#229, §5): getypeerde
+      // (predicate, object) uit de regel-/definitietekst van één mechanic/keyword.
+      const parsed = parsePredicateExtractRequest(await readJson(req));
+      if (!parsed.ok) return send(400, { error: parsed.error });
+      try {
+        const predicates = await extractWithTool({
+          toolName: "emit_mechanic_predicates",
+          description: predicateToolDescription(parsed.request),
+          schema: buildPredicateToolShape(parsed.request),
+          resultKey: "predicates",
+          system: parsed.request.system,
+          addendum: PREDICATE_TOOL_ADDENDUM,
+          text: parsed.request.text,
+          signal: abort.signal,
+        });
+        if (predicates === null) return send(500, { error: "extractie mislukt" });
+        return send(200, { predicates });
+      } catch (e) {
+        if (e instanceof ConcurrencyLimitError)
+          return send(429, { error: e.message, code: e.code });
+        throw e;
+      }
     }
 
     return send(404, { error: "not found" });
