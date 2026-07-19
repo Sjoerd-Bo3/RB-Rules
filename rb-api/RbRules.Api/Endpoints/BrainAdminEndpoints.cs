@@ -1,4 +1,5 @@
 using RbRules.Infrastructure;
+using RbRules.Infrastructure.GraphRag;
 
 namespace RbRules.Api.Endpoints;
 
@@ -18,6 +19,14 @@ public static class BrainAdminEndpoints
         // ── Overzicht: tegel-tellingen per tabel ───────────────────────
         brein.MapGet("/overzicht", async (BrainExplorerService svc, CancellationToken ct) =>
             Results.Ok(await svc.OverviewAsync(ct)));
+
+        // ── Cockpit: operationele pipeline-status (per-stap-tellingen,
+        //    laatste-run per brein-job, /ask-retrieval-flag). READ-ONLY; de
+        //    flag komt uit de BreinRetrievalSettings-singleton (env, default
+        //    uit), niet uit de DB — hij is een env-schakelaar, geen knop.
+        brein.MapGet("/cockpit", async (
+                BrainExplorerService svc, BreinRetrievalSettings retrieval, CancellationToken ct) =>
+            Results.Ok(await svc.CockpitAsync(retrieval.Enabled, ct)));
 
         // ── Entiteiten: canoniek + alt-labels + merge-status ───────────
         brein.MapGet("/entities", async (

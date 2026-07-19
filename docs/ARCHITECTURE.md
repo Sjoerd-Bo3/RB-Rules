@@ -827,8 +827,17 @@ met slash meekomen), `/brein/conflicts` (reasoning-tegenspraken + routering,
 herspeelbaar detail: dragende subgraaf/paden + trust-toen + epoch-stempels),
 `/brein/observability` (fase-7 rollups: mining-precisie + canonieke drift +
 duplicatie-schuld + tier-verdelingen; de Neo4j/GDS-delen blijven leeg tot de
-graph-jobs draaien — nette lege staat). Puur additief: raakt geen bestaande
-endpoint/service/flow, leest bestaande tabellen (geen migratie).
+graph-jobs draaien — nette lege staat), en `/brein/cockpit` (brein-jobs-ui: de
+operationele pipeline-status — per-stap-tellingen (interacties + mechanic-
+predicaten, canonieke entiteiten, conflicts/open) + de laatste-run per brein-job
+(uit `RunLog` Kind="job", Ref=jobnaam — greatest-n-per-group in-memory, niet
+server-side) + de `/ask`-retrieval-flag (`BreinRetrievalSettings.Enabled`, uit de
+env-singleton, niet de DB)). Puur additief: raakt geen bestaande
+endpoint/service/flow, leest bestaande tabellen (geen migratie). De cockpit-
+trigger-knoppen zelf starten via het bestaande `POST /api/admin/jobs/{name}`
+(JobRunner-gate: één job tegelijk, 409 als er al een draait) — de vier
+brein-jobs (`breinmine-interacties`, `breinmine-predicaten`, `breinprojectie`,
+`reason`) waren voorheen API-only.
 
 ### rb-ai — belangrijkste modules
 
@@ -878,6 +887,11 @@ met sub-routes `entities`/`interactions`/`conflicts`/`answertrace`, #236 — eig
 `+layout` met tab-nav + auth-guard, server-loads proxyen de `/api/admin/brein/*`-
 endpoints; de interacties- en answertrace-pagina laden hun provenance-keten
 resp. herspeelbaar detail server-side via `?sel=`/`?id=`, geen client-fetch).
+Het Brein-overzicht draagt bovenaan de **operationele cockpit** (brein-jobs-ui):
+de server-load proxyt óók `/api/admin/brein/cockpit`, en een `job`-action (zelfde
+patroon/409-afhandeling als de `job`-action op `/admin`) triggert de vier
+brein-jobs via `POST /api/admin/jobs/{name}`; de knop-disabled/"Bezig"-staat komt
+uit de bestaande `/admin/status`-poll).
 Een globale **`+error.svelte`** (#219) rendert binnen
 de shell: bij 404 een "zoekende" poro + terug-links naar `/` en `/ask`, bij
 elke andere status een generieke variant (kop = `status + boodschap`). De
