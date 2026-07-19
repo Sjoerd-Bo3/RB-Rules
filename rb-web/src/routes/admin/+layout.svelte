@@ -57,6 +57,12 @@
 			badge: reviewBadge,
 			active: path.startsWith('/admin/overview/relaties')
 		},
+		{
+			href: '/admin/brein',
+			label: 'Brein',
+			badge: data.breinBadge,
+			active: path.startsWith('/admin/brein')
+		},
 		{ href: '/admin#bronnen', label: 'Bronnen', badge: sourceBadge, active: false },
 		{
 			href: '/admin/overview/gebruikers',
