@@ -181,6 +181,20 @@ public static class OntologySchema
     public static readonly IReadOnlyDictionary<RelationType, OntologyRelation> Relations =
         RelationList.ToDictionary(r => r.Type);
 
+    // ── Subproperty-as voor RELATES_TO-kinds (redeneer-laag, #227) ────────────
+    // Legacy/alias-kind → canonieke super-kind. De reasoner materialiseert voor
+    // elke alias-edge een canonieke edge (subproperty-collapse,
+    // <see cref="RbRules.Domain.Reasoning.InferenceRuleRegistry"/>), zodat een
+    // synoniem-kind niet naast zijn canonieke super-property als aparte relatie
+    // blijft leven (wapening tegen synoniem-proliferatie, faalmodus #2). Dit
+    // blijft de ÉNE schema-bron: de registry genereert automatisch precies één
+    // collapse-regel per entry. v0: nog geen aliassen gedeclareerd — entries
+    // komen erbij zodra concrete legacy-kinds opduiken (bewuste data-curatie,
+    // geen code-wijziging). Hoofdletterongevoelig, zelfde lijn als de overige
+    // kind-resolutie.
+    public static readonly IReadOnlyDictionary<string, string> RelatesToKindSubProperties =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
     private static readonly IReadOnlyDictionary<string, OntologyRelation> RelationsByEdgeName =
         RelationList.ToDictionary(r => r.EdgeName, StringComparer.OrdinalIgnoreCase);
 
