@@ -39,7 +39,9 @@ public static class JobCatalog
         {
             // Eén knop voor alles: elke stap best-effort in de juiste volgorde —
             // een haperende stap (Ollama/LLM even weg) stopt de rest niet.
-            new("all", RunAllAsync),
+            // Lambda-wrap (niet als method-group): RunAllAsync draagt sinds #245
+            // trailing optionele params (mechanicMaxBatches/deadline) voor de nachtrun.
+            new("all", (sp, report, ct) => RunAllAsync(sp, report, ct)),
             new("scan", ScanAsync),
             // Bron-feeds (#167): losse, snelle trigger die alleen de feed-
             // crawl draait (geen volledige bron-scan) — handig om net
@@ -82,6 +84,14 @@ public static class JobCatalog
             // promotie-poort en atomaire persistentie zijn al bewezen (ReifiedInteractionTests).
             new("breinmine-interacties", BreinMineInteractionsAsync),
             new("breinmine-predicaten", BreinMinePredicatesAsync),
+            // Nachtrun (#245): de volledige ONGECAPTE keten in één job —
+            // "alles bijwerken" (met ongecapte mechaniek-mining) → brein-interacties
+            // → brein-predicaten → projectie → reason. Draait automatisch in het
+            // nachtvenster (ScanScheduler, 00:00–11:00 lokaal, default) én is
+            // handmatig te starten. Deadline = venster-einde als binnen het venster
+            // gestart, anders geen deadline (handmatige volledige drain). Overdag
+            // blijven de losse jobs hierboven gecapt; dit is de enige uncapped route.
+            new("nachtrun", RunNightlyAsync),
             // Bronnenjacht (#63, stap 2): rb-ai doorzoekt het web (task
             // "research", #64) naar nieuwe regel-/uitlegbronnen. Vondsten
             // komen als SourceProposal in de reviewqueue (beheer →
@@ -153,7 +163,8 @@ public static class JobCatalog
         }.ToDictionary(j => j.Name);
 
     private static async Task<JobOutcome> RunAllAsync(
-        IServiceProvider sp, Action<string> report, CancellationToken ct)
+        IServiceProvider sp, Action<string> report, CancellationToken ct,
+        int mechanicMaxBatches = 25, DateTimeOffset? deadline = null)
     {
         var results = new List<string>();
         async Task Step(string label, Func<Task<string>> run)
@@ -195,6 +206,7 @@ public static class JobCatalog
         await Step("mechanieken", async () =>
         {
             var r = await sp.GetRequiredService<MechanicMiningService>().RunAsync(
+                maxBatches: mechanicMaxBatches, deadline: deadline,
                 progress: p => report($"6/8 · mechanieken — {p}"), ct: ct);
             return $"{r.Mined} gemined, {r.Remaining} resterend";
         });
@@ -210,6 +222,55 @@ public static class JobCatalog
             return $"{r.Verified} geverifieerd";
         });
         return new(string.Join(" · ", results));
+    }
+
+    /// <summary>Nachtrun (#245): de volledige ONGECAPTE kennis-keten in één job.
+    /// Deadline = venster-einde (<see cref="NightlyRunSettings"/>) als binnen het
+    /// venster gestart, anders geen deadline (handmatige volledige drain — bv. de
+    /// beheer-knop overdag). Elke stap best-effort in volgorde: alles bijwerken
+    /// (ongecapte mechaniek-mining) → brein-interacties → brein-predicaten →
+    /// projectie → reason. De mining-services stoppen zelf netjes op de deadline;
+    /// hun watermark bewaart de voortgang voor de volgende nacht.</summary>
+    private static async Task<JobOutcome> RunNightlyAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var settings = sp.GetRequiredService<NightlyRunSettings>();
+        var tz = Domain.NightlyWindow.ResolveTimeZone(settings.TimeZoneId);
+        var now = DateTimeOffset.UtcNow;
+        DateTimeOffset? deadline =
+            Domain.NightlyWindow.InWindow(now, tz, settings.StartHour, settings.EndHour)
+                ? Domain.NightlyWindow.Deadline(now, tz, settings.EndHour)
+                : null;
+
+        var parts = new List<string>();
+        async Task Stage(string label, Func<Task<string>> run)
+        {
+            report($"nachtrun · {label}");
+            try { parts.Add($"{label}: {await run()}"); }
+            catch (Exception ex) { parts.Add($"{label}: FOUT — {ex.Message}"); }
+        }
+
+        // 1. Alles bijwerken, met ONGECAPTE mechaniek-mining + deadline.
+        await Stage("alles bijwerken (ongecapt)", async () =>
+            (await RunAllAsync(sp, p => report($"nachtrun · {p}"), ct,
+                mechanicMaxBatches: Domain.NightlyWindow.UncappedBatches, deadline: deadline)).Detail);
+        // 2. Brein-interacties, ongecapt.
+        await Stage("brein-interacties (ongecapt)", async () =>
+            (await sp.GetRequiredService<BreinInteractionMiningService>().RunAsync(
+                maxFocusCards: Domain.NightlyWindow.UncappedItems, deadline: deadline,
+                progress: p => report($"nachtrun · {p}"), ct: ct)).Summary);
+        // 3. Brein-predicaten, ongecapt.
+        await Stage("brein-predicaten (ongecapt)", async () =>
+            (await sp.GetRequiredService<BreinPredicateMiningService>().RunAsync(
+                maxSubjects: Domain.NightlyWindow.UncappedItems, deadline: deadline,
+                progress: p => report($"nachtrun · {p}"), ct: ct)).Summary);
+        // 4. Projectie + reason (Neo4j, geen LLM) op wat er nu staat.
+        await Stage("brein-projectie", async () =>
+            (await sp.GetRequiredService<BreinProjectionService>().ProjectAsync(progress: report, ct: ct)).Summary);
+        await Stage("reason", async () =>
+            (await sp.GetRequiredService<ReasoningService>().RunAsync(progress: report, ct: ct)).Summary);
+
+        return new(string.Join(" · ", parts));
     }
 
     private static async Task<JobOutcome> ScanAsync(

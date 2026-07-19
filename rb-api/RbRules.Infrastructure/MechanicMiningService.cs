@@ -15,7 +15,8 @@ public class MechanicMiningService(RbRulesDbContext db, RbAiClient ai)
     private const int BatchSize = 8;
 
     public async Task<MiningResult> RunAsync(
-        int maxBatches = 25, Action<string>? progress = null, CancellationToken ct = default)
+        int maxBatches = 25, DateTimeOffset? deadline = null,
+        Action<string>? progress = null, CancellationToken ct = default)
     {
         var accepted = await db.MechanicKeywords.AsNoTracking()
             .Where(k => k.Status == "accepted")
@@ -35,6 +36,9 @@ public class MechanicMiningService(RbRulesDbContext db, RbAiClient ai)
         var done = 0;
         foreach (var batch in todo.Chunk(BatchSize))
         {
+            // Nachtrun-deadline (#245): stop netjes op venster-einde — nog niet
+            // gemijnde kaarten blijven Mechanics==null en komen de volgende run terug.
+            if (deadline is { } dl && DateTimeOffset.UtcNow >= dl) break;
             done += batch.Length;
             progress?.Invoke($"kaartteksten analyseren via LLM: {done}/{todo.Count} in deze run");
             var raw = await ai.AskAsync(

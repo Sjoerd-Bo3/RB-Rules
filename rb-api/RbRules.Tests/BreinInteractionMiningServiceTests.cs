@@ -329,6 +329,29 @@ public class BreinInteractionMiningServiceTests
         Assert.Equal(0, run.Verified);
     }
 
+    // ── Nachtrun-deadline (#245) ───────────────────────────────────────────────
+    [Fact]
+    public async Task RunAsync_DeadlineVerstreken_StoptDirect_GeenHalfFeit_MeerWerk()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage. Assault deals damage.", ["Deflect", "Assault"]);
+        // rb-ai zou promoveren, maar de deadline is al verstreken: de lus breekt vóór
+        // de eerste rb-ai-aanroep — geen (half) feit, en er blijft vers werk liggen.
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Deflect", to = "mechanic:Assault", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: NightlyWindow.UncappedItems,
+            deadline: DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        Assert.Equal(0, r.FocusCards);   // niets verwerkt
+        Assert.True(r.CapHit);           // deadline afgekapt ⇒ vers werk blijft liggen
+        Assert.Empty(await db.Interactions.ToListAsync());
+    }
+
     // ── testinfra ─────────────────────────────────────────────────────────────
 
     private static BreinInteractionMiningService Service(RbRulesDbContext db, Func<string?> body) =>

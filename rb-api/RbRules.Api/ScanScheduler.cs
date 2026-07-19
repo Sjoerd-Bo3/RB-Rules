@@ -12,7 +12,8 @@ namespace RbRules.Api;
 /// FAQ-/clarificatie-concept-extractie nachtelijk (#177), als gewone
 /// JobRunner-jobs op het run_log-grootboek.</summary>
 public class ScanScheduler(
-    IServiceScopeFactory scopeFactory, JobRunner jobs, ILogger<ScanScheduler> logger)
+    IServiceScopeFactory scopeFactory, JobRunner jobs, NightlyRunSettings nightly,
+    ILogger<ScanScheduler> logger)
     : BackgroundService
 {
     private static readonly TimeSpan Tick = TimeSpan.FromHours(1);
@@ -238,6 +239,11 @@ public class ScanScheduler(
                 // bestaande cadans; de mogelijkheid staat wel klaar.
                 foreach (var (pathName, window) in PathSchedules)
                     await TryStartPeriodicPathAsync(scope.ServiceProvider, pathName, window, ct);
+
+                // Nachtrun (#245): de volledige ONGECAPTE keten in een klok-venster
+                // (default 00:00–11:00 lokaal). Anders dan de interval-schedules
+                // hierboven is dit klok-gebaseerd — de grote run moet 's nachts vallen.
+                await TryStartNightlyAsync(scope.ServiceProvider, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -281,6 +287,43 @@ public class ScanScheduler(
             // Grootboek even onleesbaar (db-hik): loggen en volgende tick
             // opnieuw — de scheduler zelf mag hier nooit op stoppen.
             logger.LogWarning(ex, "Periodieke job '{Name}' niet gestart", name);
+        }
+    }
+
+    /// <summary>Nachtrun (#245): start de volledige ongecapte keten binnen het
+    /// KLOK-venster (default 00:00–11:00 lokaal), maximaal één keer per lokale
+    /// kalenderdag (<see cref="NightlyWindow.RanToday"/> op het run_log-grootboek).
+    /// Anders dan de interval-schedules hierboven is dit klok-gebaseerd. De
+    /// single-job-gate (<see cref="JobRunner.TryStart"/>) voorkomt dubbelstart; een
+    /// lopende run houdt het slot vast tot de deadline, dus een tweede tick binnen
+    /// het venster start niets (TryStart=false, geen fout).</summary>
+    private async Task TryStartNightlyAsync(IServiceProvider sp, CancellationToken ct)
+    {
+        try
+        {
+            var tz = NightlyWindow.ResolveTimeZone(nightly.TimeZoneId);
+            var now = DateTimeOffset.UtcNow;
+            if (!NightlyWindow.InWindow(now, tz, nightly.StartHour, nightly.EndHour)) return;
+            var lastRun = await sp.GetRequiredService<JobLedger>().LastRunAsync("nachtrun", ct);
+            if (NightlyWindow.RanToday(lastRun, now, tz)) return;
+            if (JobCatalog.Find("nachtrun") is not { } job)
+            {
+                logger.LogError("Nachtrun-job 'nachtrun' bestaat niet in de JobCatalog");
+                return;
+            }
+            if (jobs.TryStart("nachtrun", job.Run))
+                logger.LogInformation(
+                    "Nachtrun gestart (venster {Start}:00–{End}:00 {Tz}, vorige run: {LastRun})",
+                    nightly.StartHour, nightly.EndHour, nightly.TimeZoneId,
+                    lastRun?.ToString("u") ?? "nog nooit");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Nachtrun niet gestart");
         }
     }
 
