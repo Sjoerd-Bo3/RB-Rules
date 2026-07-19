@@ -109,7 +109,9 @@ public static class PathCitations
             {
                 var key = node.Ref.Format();
                 if (byRef.ContainsKey(key)) continue;
-                var cit = new PathCitation(next++, node.Ref, node.Tier, node.Label, WidgetMarker(node));
+                var cit = new PathCitation(
+                    next++, node.Ref, node.Tier, node.Label, WidgetMarker(node),
+                    node.EffectiveTrust.Weight);
                 byRef[key] = cit;
                 ordered.Add(cit);
             }
@@ -119,10 +121,12 @@ public static class PathCitations
 }
 
 /// <summary>Eén citatie afgeleid uit een pad-knoop (§4): stabiel nummer, de knoop-
-/// ref, zijn tier en de widget-marker. De referee schrijft <c>[cit:N]</c>;
-/// AskService mapt N → deze rij.</summary>
+/// ref, zijn tier, de widget-marker en het WERKELIJKE trust-gewicht van de knoop
+/// (<see cref="GraphNode.EffectiveTrust"/>). De referee schrijft <c>[cit:N]</c>;
+/// AskService mapt N → deze rij. Het trust-gewicht laat de pad-citatie exact zoals een
+/// bundle-chunk door de <see cref="TrustGate"/> (#229) — geen rauwe-authority-omweg.</summary>
 public sealed record PathCitation(
-    int N, BrainRef Ref, KnowledgeTier Tier, string Label, string? WidgetMarker)
+    int N, BrainRef Ref, KnowledgeTier Tier, string Label, string? WidgetMarker, double TrustWeight)
 {
     public string CitationTag => string.Create(CultureInfo.InvariantCulture, $"[cit:{N}]");
 }

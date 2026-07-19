@@ -149,7 +149,7 @@ public static class AnswerTraceBuilder
                     CitationN = p.N,
                     SubjectRef = p.Ref.Format(),
                     Tier = p.Tier.ToString(),
-                    TrustWeightAtQuery = Authority.Of(p.Tier),
+                    TrustWeightAtQuery = p.TrustWeight,
                     WidgetMarker = p.WidgetMarker,
                 });
             }

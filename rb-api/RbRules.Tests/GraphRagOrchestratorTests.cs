@@ -70,6 +70,15 @@ public class GraphRagOrchestratorTests
                 new GraphEdge(BrainRef.Mechanic("Empowered"), BrainRef.Concept("showdown"), "REQUIRES", 0.9), 0.9, 0.9),
         ]);
 
+    /// <summary>Een pad waarvan alle knopen niet-officiële, zwak-onderbouwde
+    /// community-lezingen zijn (geen expliciete trust → tier-default ~0.22).</summary>
+    private static GraphPath CommunityPath() =>
+        new(new GraphNode(BrainRef.Claim(7), KnowledgeTier.Community, "community lezing A"),
+        [
+            new PathHop(new GraphNode(BrainRef.Claim(8), KnowledgeTier.Community, "community lezing B"),
+                new GraphEdge(BrainRef.Claim(7), BrainRef.Claim(8), "INTERACTS_WITH", 0.4), 0.4, 0.4),
+        ]);
+
     // ── 1) Entity-dichte interactie → DRIFT + path, graph-kanaal leidt ──
 
     [Fact]
@@ -89,7 +98,10 @@ public class GraphRagOrchestratorTests
         Assert.True(outcome.GraphChannelLeads);          // β → graph-kanaal
         Assert.True(retriever.DriftCalled && retriever.PathCalled);
         Assert.NotEmpty(outcome.PathCitations);           // pad → citatie
-        Assert.Contains(outcome.PathCitations, c => c.WidgetMarker == "[[interaction:showdown]]" || c.Ref == BrainRef.Concept("showdown"));
+        // De showdown-knoop is een Concept; die levert (terecht) géén widget-marker.
+        // De interactie-widget-marker-tak wordt apart en écht gedekt in
+        // GraphRagBundlingTests.PathCitations_InteractieKnoop_LevertInteractionWidgetMarker.
+        Assert.Contains(outcome.PathCitations, c => c.Ref == BrainRef.Concept("showdown"));
         Assert.NotEmpty(outcome.Trace.Supports);          // AnswerTrace verantwoordt
     }
 
@@ -122,6 +134,26 @@ public class GraphRagOrchestratorTests
         Assert.True(outcome.Gate.BadgeCommunity);
     }
 
+    // ── 3b) Trust-gating: zwak community-PAD valt onder de vloer → geen primair ──
+
+    [Fact]
+    public async Task Gating_ZwakCommunityPad_ValtOnderDeVloer_GeenPrimair()
+    {
+        var retriever = new FakeRetriever(path: new RetrievalResult([], [], [], [CommunityPath()], []));
+        var orch = new RetrievalOrchestrator(new FakeGazetteer(Gaz()), new FakeSimilarity(), new FakeAdjacency(), retriever);
+
+        var outcome = await orch.RetrieveAsync("Werkt Empowered samen met Might?", QuestionType.Ruling);
+
+        Assert.True(outcome.Mode.UsePath);
+        Assert.NotEmpty(outcome.PathCitations);
+        Assert.All(outcome.PathCitations, c => Assert.Equal(KnowledgeTier.Community, c.Tier));
+        // Pad-afgeleide zwakke community-lezing gaat met haar ECHTE trust-gewicht
+        // (~0.22 < CommunityPrimaryFloor 0.28) de gate in — net als een bundle-chunk.
+        // Rauwe Authority.Of(Community)=0.45 zou hier ten onrechte CommunityBadged geven.
+        Assert.True(outcome.PathCitations[0].TrustWeight < TrustGate.CommunityPrimaryFloor);
+        Assert.Equal(PrimaryChannel.None, outcome.Gate.Primary);
+    }
+
     // ── 4) Begrotings-fallback: GDS koud → Path-kanaal uit ──
 
     [Fact]
@@ -140,7 +172,8 @@ public class GraphRagOrchestratorTests
         Assert.NotEqual(RetrievalMode.Path, outcome.Mode.Primary); // Path→Drift gedegradeerd
     }
 
-    // ── 5) Begrotings-fallback: latency-budget overschreden → Local-only ──
+    // ── 5) Begrotings-fallback: latency-budget al VÓÓR retrieval over → Local-only,
+    //       de dure kanalen draaien nooit (pre-retrieval-poort, regel 77). ──
 
     [Fact]
     public async Task Budget_LatencyOverschreden_ValtTerugOpLocalOnly()
@@ -155,7 +188,41 @@ public class GraphRagOrchestratorTests
 
         Assert.Equal(RetrievalFallback.LatencyExceeded, outcome.FallbackReason);
         Assert.Equal(RetrievalMode.Local, outcome.Mode.Primary);
-        Assert.False(retriever.DriftCalled && retriever.PathCalled);
+        // Elke conjunctie-assertie zou de bug missen dat één kanaal wél draaide; los
+        // asserten dat geen van de dure kanalen liep.
+        Assert.False(retriever.DriftCalled);
+        Assert.False(retriever.PathCalled);
+    }
+
+    // ── 5b) Late latency-terugval (post-retrieval, regel 84-89): op tijd bij de
+    //        vóór-poort, maar over budget NÁ de dure fase → paden worden alsnog uit
+    //        de bundel geknepen. Dit dekt de tweede, aparte guard-tak. ──
+
+    [Fact]
+    public async Task Budget_LateLatency_StriptPadenNaDureFase()
+    {
+        var pathResult = new RetrievalResult([], [], [], [SamplePath()], []);
+        var retriever = new FakeRetriever(
+            drift: OfficialChunk(BrainRef.Section("core", "7.3"), "showdown timing regel"),
+            path: pathResult);
+        var orch = new RetrievalOrchestrator(new FakeGazetteer(Gaz()), new FakeSimilarity(), new FakeAdjacency(), retriever);
+
+        // Onder budget bij de vóór-poort (regel 77), over budget bij de late check
+        // (regel 84): stateful — 1e Elapsed()=100 (< 1000), 2e Elapsed()=5000 (> 1000).
+        var calls = 0;
+        var outcome = await orch.RetrieveAsync(
+            "Werkt Empowered samen met Might in een showdown?", QuestionType.Ruling,
+            new GraphRagContext(LatencyBudget: new LatencyBudget(1000)),
+            elapsedMsOverride: () => ++calls == 1 ? 100 : 5000);
+
+        // De vóór-poort liet de dure DRIFT+Path-fase dus WÉL draaien...
+        Assert.True(retriever.PathCalled);
+        Assert.True(retriever.DriftCalled);
+        // ...maar de late guard viel terug op Local-only en kneep de paden weg.
+        Assert.Equal(RetrievalFallback.LatencyExceeded, outcome.FallbackReason);
+        Assert.Equal(RetrievalMode.Local, outcome.Mode.Primary);
+        Assert.Empty(outcome.Retrieval.Paths);   // paden gestript uit het retrieval-resultaat
+        Assert.Empty(outcome.PathCitations);      // en dus geen pad-citaties in de prompt
     }
 
     // ── 6) NoPath-signaal wanneer een pad verwacht maar niet gevonden is ──
@@ -196,7 +263,7 @@ public class GraphRagOrchestratorTests
     }
 
     [Fact]
-    public async Task AnswerTrace_Roundtrip_CascadeBewaartSupports()
+    public async Task AnswerTrace_Roundtrip_BewaartSupports()
     {
         var official = new BundleItem(BrainRef.Section("core", "1.1"), KnowledgeTier.Official, "regel", 0.9,
             TrustVector.OfficialDefault);
@@ -213,6 +280,51 @@ public class GraphRagOrchestratorTests
         var reloaded = await db2.AnswerTraces.Include(t => t.Supports).SingleAsync(t => t.Id == trace.Id);
         Assert.Single(reloaded.Supports);
         Assert.Equal(PrimaryChannel.Official.ToString(), reloaded.PrimaryChannel);
+    }
+
+    /// <summary>De cascade-delete-schrijfgarantie (§6: "het spoor is atomair, niet los
+    /// te knippen"): een verwijderd spoor neemt zijn supports mee. Draait via de
+    /// EF-change-tracker (geladen dependents → cascade volgens de geconfigureerde
+    /// OnDelete), zodat een verzwakking naar Restrict/SetNull hier zou opvallen.</summary>
+    [Fact]
+    public async Task AnswerTrace_Verwijderen_CascadeVerwijdertSupports()
+    {
+        var official = new BundleItem(BrainRef.Section("core", "1.1"), KnowledgeTier.Official, "regel", 0.9,
+            TrustVector.OfficialDefault);
+        var bundle = ContextBundler.Bundle([official], tokenBudget: 1000);
+        var gate = TrustGate.Decide(ContextBundler.ToTrustCandidates([official]));
+        var mode = ModeSelector.Select(QuestionType.Ruling, "Werkt A met B?", 2);
+        var trace = AnswerTraceBuilder.Build("Werkt A met B?", QuestionType.Ruling, mode, 0.7, gate, bundle);
+
+        await using var db = NewDb();
+        db.AnswerTraces.Add(trace);
+        await db.SaveChangesAsync();
+        Assert.Equal(1, await db.AnswerTraceSupports.CountAsync());
+
+        await using var db2 = NewDb2(db);
+        var toDelete = await db2.AnswerTraces.Include(t => t.Supports).SingleAsync(t => t.Id == trace.Id);
+        db2.AnswerTraces.Remove(toDelete);
+        await db2.SaveChangesAsync();
+
+        await using var db3 = NewDb2(db);
+        Assert.Empty(await db3.AnswerTraces.ToListAsync());
+        Assert.Equal(0, await db3.AnswerTraceSupports.CountAsync()); // geen wees-supports
+    }
+
+    /// <summary>Model-guard (provider-onafhankelijk): de FK
+    /// AnswerTraceSupport→AnswerTrace staat op <see cref="DeleteBehavior.Cascade"/>. Leest
+    /// de werkelijke RbRulesDbContext-modelconfiguratie, dus een migratie/config die de
+    /// cascade naar Restrict/SetNull wijzigt breekt deze test — precies de garantie die
+    /// het atomaire spoor (§6) borgt, óók waar de InMemory-provider geen echte FK legt.</summary>
+    [Fact]
+    public void AnswerTraceSupport_FkStaatOpCascade()
+    {
+        using var db = NewDb();
+        var support = db.Model.FindEntityType(typeof(AnswerTraceSupport));
+        Assert.NotNull(support);
+        var fk = Assert.Single(support!.GetForeignKeys(),
+            f => f.PrincipalEntityType.ClrType == typeof(AnswerTrace));
+        Assert.Equal(DeleteBehavior.Cascade, fk.DeleteBehavior);
     }
 
     private static readonly string SharedDbName = "answer-trace-" + Guid.NewGuid();

@@ -2,8 +2,26 @@ namespace RbRules.Domain.GraphRag;
 
 /// <summary>Een knoop in een opgehaalde subgraaf/pad (§4). <see cref="Tier"/> draagt
 /// de kennispiramide-laag (voor trust-weging en labels), <see cref="Text"/> de
-/// eventueel gekoppelde brontekst.</summary>
-public sealed record GraphNode(BrainRef Ref, KnowledgeTier Tier, string Label, string? Text = null);
+/// eventueel gekoppelde brontekst. <see cref="Trust"/> is de werkelijke trust-vector
+/// van het onderliggende feit; is die niet meegegeven (retriever nog niet ingevuld),
+/// dan geldt de tier-afgeleide default via <see cref="EffectiveTrust"/>.</summary>
+public sealed record GraphNode(
+    BrainRef Ref, KnowledgeTier Tier, string Label, string? Text = null, TrustVector? Trust = null)
+{
+    /// <summary>De trust-vector die voor deze knoop geldt: expliciet meegegeven, of
+    /// een tier-afgeleide default. CRUCIAAL voor #229: een niet-officiële knoop krijgt
+    /// zijn ECHTE (onbevestigde) trust-gewicht, niet zijn rauwe authority-as — zo kan
+    /// een pad-afgeleid community-feit de <see cref="TrustGate.CommunityPrimaryFloor"/>
+    /// niet omzeilen die exact hetzelfde feit als bundle-chunk wél zou toepassen.</summary>
+    public TrustVector EffectiveTrust => Trust ?? DefaultTrust(Tier);
+
+    private static TrustVector DefaultTrust(KnowledgeTier tier) => tier switch
+    {
+        KnowledgeTier.Official => TrustVector.OfficialDefault,
+        KnowledgeTier.VerifiedRuling => TrustVector.For(tier, Verification.HumanApproved),
+        _ => TrustVector.For(tier, Verification.Unverified),
+    };
+}
 
 /// <summary>Een getypeerde, gerichte edge (§4). <see cref="EdgeType"/> is de
 /// canonieke Neo4j-edge-naam (SCREAMING_SNAKE_CASE, uit

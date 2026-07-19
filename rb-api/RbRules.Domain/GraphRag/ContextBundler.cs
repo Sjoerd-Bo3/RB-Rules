@@ -77,22 +77,28 @@ public static class ContextBundler
         // Onbekende/toekomstige tiers (defensief) achteraan, na meta.
         orderedByTier.AddRange(all.Where(i => !TierOrder.Contains(i.Tier)));
 
-        // 2) Harde afkap van ONDERAF: vul van boven tot het budget vol is.
+        // 2) Harde afkap van ONDERAF: vul van boven tot het budget vol is. De afkap is
+        //    een enkele horizontale lijn in de tier-geordende lijst — zodra één item
+        //    door het budget wordt geweigerd, valt ALLES eronder (lager gezag) óók weg.
+        //    Zonder deze lijn zou een klein community-fragment ná een te groot officieel
+        //    item alsnog blijven staan, tegen de official-primacy in (#228-review).
         var kept = new List<BundleItem>();
         var dropped = new List<BundleItem>();
         var used = 0;
+        var cut = false;
         foreach (var item in orderedByTier)
         {
             var cost = EstimateTokens(item.Text);
-            if (used + cost <= tokenBudget || kept.Count == 0 && cost > tokenBudget)
+            // Sta één over-budget item toe als er nog niets in zit (anders zou een enkele
+            // lange officiële sectie een lege bundel geven).
+            if (!cut && (used + cost <= tokenBudget || (kept.Count == 0 && cost > tokenBudget)))
             {
-                // Neem het item; sta één over-budget item toe als er nog niets in zit
-                // (anders zou een enkele lange officiële sectie een lege bundel geven).
                 kept.Add(item);
                 used += cost;
             }
             else
             {
+                cut = true;
                 dropped.Add(item);
             }
         }

@@ -110,7 +110,7 @@ public sealed class RetrievalOrchestrator(
 
         // 9) Trust-gating (beslissing #229): route op officiële dekking.
         var trustCandidates = new List<TrustCandidate>(ContextBundler.ToTrustCandidates(bundle.Items.Select(i => i.Item)));
-        trustCandidates.AddRange(pathCitations.Select(p => new TrustCandidate(p.Tier, Authority.Of(p.Tier))));
+        trustCandidates.AddRange(pathCitations.Select(p => new TrustCandidate(p.Tier, p.TrustWeight)));
         var gate = TrustGate.Decide(trustCandidates);
 
         // 10) AnswerTrace (§6/#236).

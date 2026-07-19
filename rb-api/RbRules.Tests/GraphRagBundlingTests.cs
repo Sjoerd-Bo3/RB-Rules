@@ -117,6 +117,44 @@ public class GraphRagBundlingTests
     }
 
     [Fact]
+    public void PathCitations_InteractieKnoop_LevertInteractionWidgetMarker()
+    {
+        // Een gereïficeerde interactie-knoop (BrainRefKind.Interaction, numerieke id)
+        // → de interactie-widget-marker-tak van PathCitations.WidgetMarker.
+        var start = new GraphNode(BrainRef.Card("Empowered Unit"), KnowledgeTier.Official, "Empowered Unit");
+        var edge = new GraphEdge(BrainRef.Card("Empowered Unit"), BrainRef.Interaction(42), "PARTICIPATES_IN", 1.0);
+        var path = new GraphPath(start,
+            [new PathHop(new GraphNode(BrainRef.Interaction(42), KnowledgeTier.Official, "Empowered×Might"), edge, 0.9, 0.9)]);
+
+        var citations = PathCitations.Build([path], startId: 1);
+        Assert.Equal("[[interaction:42]]", citations[1].WidgetMarker);
+    }
+
+    // ── Harde afkap van ONDERAF: geen lager-tier item overleeft een gedropt hoger-tier item ──
+
+    [Fact]
+    public void Bundle_AfkapVanOnderaf_LagerTierOverleeftGeenGedroptHogerTier()
+    {
+        // Twee officiële items + één community-item. Het budget past official1, maar
+        // official2 niet meer; de afkap moet dan óók het (kleinere) community-item
+        // droppen — anders overleeft community-tekst terwijl officiële regeltekst wegvalt.
+        var official1 = Item(BrainRef.Section("core", "1.1"), KnowledgeTier.Official,
+            new string('a', 40), 0.9, TrustVector.OfficialDefault);   // 10 tokens
+        var official2 = Item(BrainRef.Section("core", "1.2"), KnowledgeTier.Official,
+            new string('b', 60), 0.9, TrustVector.OfficialDefault);   // 15 tokens
+        var community = Item(BrainRef.Claim(1), KnowledgeTier.Community,
+            new string('c', 20), 0.9, new TrustVector(0.45, 0.8, 0.9, 0.9)); // 5 tokens
+
+        var bundle = ContextBundler.Bundle([official1, official2, community], tokenBudget: 20);
+
+        Assert.Single(bundle.Items);
+        Assert.Equal(BrainRef.Section("core", "1.1"), bundle.Items[0].Item.Ref);
+        Assert.DoesNotContain(bundle.Items, i => i.Item.Tier == KnowledgeTier.Community);
+        Assert.Contains(bundle.Dropped, i => i.Tier == KnowledgeTier.Community);
+        Assert.Contains(bundle.Dropped, i => i.Ref == BrainRef.Section("core", "1.2"));
+    }
+
+    [Fact]
     public void PathCitations_Explain_ToontDePadStructuur()
     {
         var start = new GraphNode(BrainRef.Card("Unit"), KnowledgeTier.Official, "Unit");
