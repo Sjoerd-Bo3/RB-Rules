@@ -292,6 +292,28 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   verified) — puur en getest,
   zelfde patroon als `ClaimMining`), `Entities.cs`. Bewuste enige uitzondering:
   het `Pgvector`-datatype op entiteiten (#44, `docs/CONVENTIONS.md`).
+- **`RbRules.Domain/Ontology` — ontologie-schema v0 (brein-fundament, nog niet
+  bedraad).** Eerste fundament-brok van het Poracle-brein (brein-epic, §2 van de
+  geïntegreerde brein-architectuur): een losstaande, pure Domain-module zonder
+  DB, migratie of koppeling aan bestaande services/flows. `OntologyTypes`/
+  `OntologySchema` leggen de klassenhiërarchie (`EntityType`, multi-label,
+  SUBCLASS_OF transitief + acyclisch), de kern-relaties (`RelationType` met
+  domain/range, kardinaliteit en logische eigenschappen — transitief/symmetrisch/
+  functioneel/acyclisch, plus de reïficatie-dwang voor de gekwalificeerde
+  relaties COUNTERS/MODIFIES/GRANTS/REQUIRES) en de disjointness-assen
+  (Keyword ⟂ Mechanic ⟂ Status, Spell ⟂ Object) vast als één onveranderlijk,
+  machine-leesbaar register — bewust de ÉNE schema-bron waaruit later
+  prompt-enums, de parser-poort en Neo4j-constraints gegenereerd worden (dus
+  geen losse constanten elders). `OntologyValidationService` is de bijbehorende
+  pure, deterministische poort: hij valideert een kandidaat-triple
+  `(subjectType, relationType, objectType[, context])` op domain/range mét
+  subclass-overerving, kardinaliteit, disjointness en de reïficatie-vlag, en
+  geeft een gestructureerd resultaat (geldig + reden + schendingen) terug —
+  bedoeld als schema-gate náást het LLM-oordeel, niet in plaats daarvan.
+  Modelleer-keuze t.o.v. de kale ASCII-boom in §2.1: `Card` hangt niet onder
+  `Object` maar de object-kaarttypes erven van beide (multi-parent), zodat
+  `Spell ⟂ Object` vervulbaar blijft. Nog geen endpoint, EF-migratie of
+  Neo4j-write — puur, volledig unit-getest (`OntologySchemaTests`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
