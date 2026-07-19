@@ -80,6 +80,22 @@ public sealed record BrainInteractionItem(
     DateTimeOffset? PromotedAt, IReadOnlyList<BrainConditionItem> Conditions,
     string SubjectRef, string? AssertionRef);
 
+/// <summary>De opgeloste entiteit achter een interactie-ref, voor hover + doorklik
+/// in de verkenner (#243). <see cref="Kind"/> = "card" (klik → <see cref="Href"/>,
+/// hover → <see cref="Label"/> + <see cref="ImageUrl"/>) of "mechanic" (hover →
+/// <see cref="Label"/> + <see cref="Description"/>; geen detailpagina). Refs die
+/// niet resolven staan niet in de map — de UI toont die als kale ref.</summary>
+public sealed record BrainRefEntity(
+    string Ref, string Kind, string Label, string? ImageUrl, string? Href, string? Description);
+
+/// <summary>Interacties-pagina mét de ref→entiteit-lookup zodat rb-web hover en
+/// doorklik toont zonder tweede fetch (dun endpoint, logica hier — CONVENTIONS).
+/// Zelfde velden als <see cref="Paged{T}"/> plus <see cref="Entities"/>.</summary>
+public sealed record BrainInteractionsPage(
+    int Total, int Page, int PageSize,
+    IReadOnlyList<BrainInteractionItem> Items,
+    IReadOnlyDictionary<string, BrainRefEntity> Entities);
+
 /// <summary>Eén PROV-O-mining-run in de provenance-keten (WAS_GENERATED_BY-doel).</summary>
 public sealed record BrainMiningRunItem(
     string Id, string Kind, string? LlmModel, string? PromptVersion, string? EmbeddingModel,
@@ -261,7 +277,7 @@ public class BrainExplorerService(RbRulesDbContext db)
     /// gepagineerd (nieuwste eerst). Optioneel op status (tier) gefilterd. De
     /// AssertionRef verwijst naar de keten die <see cref="ProvenanceChainAsync"/>
     /// uitklapt — of null als het feit (nog) geen Assertion draagt.</summary>
-    public async Task<Paged<BrainInteractionItem>> InteractionsAsync(
+    public async Task<BrainInteractionsPage> InteractionsAsync(
         string? status, int page, CancellationToken ct = default)
     {
         page = ClampPage(page);
@@ -303,7 +319,63 @@ public class BrainExplorerService(RbRulesDbContext db)
                 subjectRef,
                 assertionId is null ? null : BrainRef.Assertion(assertionId).Format());
         }).ToList();
-        return new(total, page, PageSize, items);
+
+        // Ref → entiteit voor hover + doorklik (#243): resolve de kaart-/mechanic-
+        // refs van déze pagina in twee vertaalbare batch-queries. Read-only, geen
+        // tweede client-fetch — zelfde lijn als de rest van de verkenner.
+        var entities = await ResolveRefsAsync(
+            rows.SelectMany(i => new[] { i.AgentRef, i.PatientRef, i.GovernedByRef }), ct);
+        return new BrainInteractionsPage(total, page, PageSize, items, entities);
+    }
+
+    /// <summary>Resolvet de distinct kaart-/mechanic-refs van een interactiepagina
+    /// naar weergave-info (#243): kaarten → naam + afbeelding + doorklik-href
+    /// (/cards/{RiftboundId}); mechanics → canoniek label + definitie (geen
+    /// detailpagina). Twee EF-vertaalbare batch-queries (ANY op RiftboundId resp.
+    /// CanonicalLabel). Tombstone-entiteiten (merged) tellen niet mee; onopgeloste
+    /// kaarten en andere ref-soorten komen niet in de map (UI toont kale ref).</summary>
+    private async Task<IReadOnlyDictionary<string, BrainRefEntity>> ResolveRefsAsync(
+        IEnumerable<string?> refs, CancellationToken ct)
+    {
+        var parsed = new Dictionary<string, BrainRef>();
+        foreach (var r in refs)
+        {
+            if (string.IsNullOrWhiteSpace(r) || parsed.ContainsKey(r)) continue;
+            if (BrainRef.TryParse(r, out var p)) parsed[r] = p;
+        }
+        if (parsed.Count == 0) return new Dictionary<string, BrainRefEntity>();
+
+        var cardIds = parsed.Values.Where(p => p.Kind == BrainRefKind.Card)
+            .Select(p => p.Key).Distinct().ToList();
+        var mechLabels = parsed.Values.Where(p => p.Kind == BrainRefKind.Mechanic)
+            .Select(p => p.Key).Distinct().ToList();
+
+        var cardById = (await db.Cards.AsNoTracking()
+                .Where(c => cardIds.Contains(c.RiftboundId))
+                .Select(c => new { c.RiftboundId, c.Name, c.ImageUrl })
+                .ToListAsync(ct))
+            .ToDictionary(c => c.RiftboundId);
+
+        // Keyword-/mechanic-refs zijn opgeslagen als mechanic:{CanonicalLabel}
+        // (BreinInteractionMiningService) — resolve dus op CanonicalLabel, niet op
+        // CanonicalEntity.Ref (dat voor keyword tag: zou zijn).
+        var mechByLabel = (await db.CanonicalEntities.AsNoTracking()
+                .Where(e => e.MergedIntoId == null && mechLabels.Contains(e.CanonicalLabel))
+                .Select(e => new { e.CanonicalLabel, e.Definition })
+                .ToListAsync(ct))
+            .GroupBy(e => e.CanonicalLabel)
+            .ToDictionary(g => g.Key, g => g.First().Definition);
+
+        var map = new Dictionary<string, BrainRefEntity>();
+        foreach (var (r, p) in parsed)
+        {
+            if (p.Kind == BrainRefKind.Card && cardById.TryGetValue(p.Key, out var c))
+                map[r] = new BrainRefEntity(r, "card", c.Name, c.ImageUrl, $"/cards/{c.RiftboundId}", null);
+            else if (p.Kind == BrainRefKind.Mechanic)
+                map[r] = new BrainRefEntity(r, "mechanic", p.Key, null, null,
+                    mechByLabel.GetValueOrDefault(p.Key));
+        }
+        return map;
     }
 
     /// <summary>De vertaalbare (Where+Select) ankersubquery achter

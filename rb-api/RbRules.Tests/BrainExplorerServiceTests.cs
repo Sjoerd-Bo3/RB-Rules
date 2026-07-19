@@ -193,6 +193,53 @@ public class BrainExplorerServiceTests
         Assert.Empty(promoted.Items);
     }
 
+    /// <summary>#243: de interactie-refs resolven naar hover/doorklik-info — een kaart
+    /// (naam + afbeelding + /cards/{RiftboundId}) en een mechanic (canoniek label +
+    /// definitie). De tombstone met hetzelfde label mag de hover NIET vullen; een
+    /// onbekende kaart-ref komt niet in de map (UI toont dan de kale ref).</summary>
+    [Fact]
+    public async Task Interactions_ResolvesRefs_KaartEnLevendeMechanic()
+    {
+        using var db = NewDb();
+        db.MiningRuns.Add(Run("r1"));
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-011-298", Name = "Yasuo, the Unforgiven",
+            ImageUrl = "https://img.example/yasuo.png",
+        });
+        db.CanonicalEntities.Add(new CanonicalEntity
+        {
+            Kind = "mechanic", CanonicalLabel = "Deflect", Status = CanonicalEntityStatus.Canonical,
+            CreatedByRunId = "r1", Definition = "Prevent the next instance of damage.",
+        });
+        // Tombstone met hetzelfde label: mag de hover-definitie niet leveren.
+        db.CanonicalEntities.Add(new CanonicalEntity
+        {
+            Kind = "mechanic", CanonicalLabel = "Deflect", Status = CanonicalEntityStatus.Merged,
+            MergedIntoId = 999, CreatedByRunId = "r1", Definition = "STALE — mag niet winnen",
+        });
+        db.Interactions.Add(Interaction("mechanic:Deflect", "card:ogn-011-298", InteractionStatus.Promoted, "r1"));
+        // Onbekende kaart-ref → niet in de map.
+        db.Interactions.Add(Interaction("card:bestaat-niet", "mechanic:Deflect", InteractionStatus.Promoted, "r1"));
+        await db.SaveChangesAsync();
+
+        var page = await new BrainExplorerService(db).InteractionsAsync(null, 1);
+
+        var card = page.Entities["card:ogn-011-298"];
+        Assert.Equal("card", card.Kind);
+        Assert.Equal("Yasuo, the Unforgiven", card.Label);
+        Assert.Equal("/cards/ogn-011-298", card.Href);
+        Assert.Equal("https://img.example/yasuo.png", card.ImageUrl);
+
+        var mech = page.Entities["mechanic:Deflect"];
+        Assert.Equal("mechanic", mech.Kind);
+        Assert.Equal("Deflect", mech.Label);
+        Assert.Equal("Prevent the next instance of damage.", mech.Description);
+        Assert.Null(mech.Href);
+
+        Assert.False(page.Entities.ContainsKey("card:bestaat-niet"));
+    }
+
     /// <summary>Regressie (#236): de provenance-anker-lookup in InteractionsAsync mag
     /// niet server-side greatest-n-per-group doen — dat vertaalt Npgsql niet en de
     /// InMemory-test hierboven maskeert het. Bewijs de échte productiequery via

@@ -22,11 +22,20 @@
 		subjectRef: string;
 		assertionRef: string | null;
 	}
+	interface RefEntity {
+		ref: string;
+		kind: 'card' | 'mechanic';
+		label: string;
+		imageUrl: string | null;
+		href: string | null;
+		description: string | null;
+	}
 	interface Paged<T> {
 		total: number;
 		page: number;
 		pageSize: number;
 		items: T[];
+		entities: Record<string, RefEntity>;
 	}
 	interface MiningRun {
 		id: string;
@@ -65,7 +74,30 @@
 
 	const paged = $derived(data.data as Paged<InteractionItem> | null);
 	const chain = $derived(data.chain as Chain | null);
+	const entities = $derived(paged?.entities ?? {});
 	const totalPages = $derived(paged ? Math.max(1, Math.ceil(paged.total / paged.pageSize)) : 1);
+
+	// Hover-detail (#243): één vaste popover op paginaniveau i.p.v. absoluut binnen
+	// de tabel — .table-wrap heeft overflow-x:auto en zou een popover clippen. We
+	// plaatsen hem via de bounding-rect van de chip en flippen boven de rij als er
+	// onder te weinig ruimte is. pointer-events:none, dus nooit hover-flikker.
+	type HoverState = { ent: RefEntity; x: number; y: number; above: boolean };
+	let hover = $state<HoverState | null>(null);
+
+	function showHover(e: Event, ent: RefEntity) {
+		const el = e.currentTarget as HTMLElement | null;
+		if (!el) return;
+		const r = el.getBoundingClientRect();
+		const estH = ent.kind === 'card' ? 320 : 140;
+		const below = r.bottom + estH + 12 < window.innerHeight || r.top < estH;
+		hover = {
+			ent,
+			x: Math.max(8, Math.min(r.left, window.innerWidth - 224)),
+			y: below ? r.bottom + 6 : r.top - 6,
+			above: !below
+		};
+	}
+	const hideHover = () => (hover = null);
 
 	const STATUS_CHIPS = [
 		{ v: '', label: 'Alle tiers' },
@@ -100,6 +132,33 @@
 		`${c.onKind}${c.subjectRole ? ` (${c.subjectRole})` : ''}: ${c.operator ? `${c.operator} ` : ''}${c.value}`;
 </script>
 
+<svelte:window onscroll={hideHover} onresize={hideHover} />
+
+{#snippet entityRef(ref: string)}
+	{@const ent = entities[ref]}
+	{#if ent?.kind === 'card'}
+		<a
+			class="ref ref-chip card"
+			href={ent.href}
+			title="{ent.label} · {ent.ref}"
+			onpointerenter={(e) => showHover(e, ent)}
+			onpointerleave={hideHover}
+			onfocus={(e) => showHover(e, ent)}
+			onblur={hideHover}>{ent.label}</a>
+	{:else if ent?.kind === 'mechanic'}
+		<button
+			type="button"
+			class="ref ref-chip mech"
+			title={ent.description ? `${ent.label} — ${ent.description}` : ent.label}
+			onpointerenter={(e) => showHover(e, ent)}
+			onpointerleave={hideHover}
+			onfocus={(e) => showHover(e, ent)}
+			onblur={hideHover}>{ent.label}</button>
+	{:else}
+		<span class="ref">{ref}</span>
+	{/if}
+{/snippet}
+
 <div class="chips">
 	{#each STATUS_CHIPS as c (c.v)}
 		<a href={href({ status: c.v, page: 1, sel: '' })} class:on={data.status === c.v}>{c.label}</a>
@@ -131,11 +190,11 @@
 						{#each paged.items as it (it.id)}
 							<tr class:selected={data.sel === it.subjectRef}>
 								<td>
-									<span class="ref">{it.agentRef}</span>
+									{@render entityRef(it.agentRef)}
 									<span class="arrow">→</span>
-									<span class="ref">{it.patientRef}</span>
+									{@render entityRef(it.patientRef)}
 									{#if it.governedByRef}
-										<div class="gov muted">verankerd: <span class="ref">{it.governedByRef}</span></div>
+										<div class="gov muted">verankerd: {@render entityRef(it.governedByRef)}</div>
 									{/if}
 								</td>
 								<td><span class="kind">{it.kind}</span></td>
@@ -222,6 +281,36 @@
 	</div>
 {/if}
 
+{#if hover}
+	<div
+		class="hovercard"
+		class:above={hover.above}
+		style="left: {hover.x}px; top: {hover.y}px;"
+		role="tooltip"
+	>
+		{#if hover.ent.kind === 'card'}
+			{#if hover.ent.imageUrl}
+				<img class="hc-img" src={hover.ent.imageUrl} alt="" loading="lazy" />
+			{/if}
+			<div class="hc-body">
+				<div class="hc-name">{hover.ent.label}</div>
+				<div class="hc-ref ref muted">{hover.ent.ref}</div>
+				<div class="hc-hint muted">Klik voor kaartdetail</div>
+			</div>
+		{:else}
+			<div class="hc-body">
+				<div class="hc-name">{hover.ent.label}</div>
+				{#if hover.ent.description}
+					<div class="hc-desc">{hover.ent.description}</div>
+				{:else}
+					<div class="hc-desc muted">Geen definitie vastgelegd</div>
+				{/if}
+				<div class="hc-ref ref muted">{hover.ent.ref}</div>
+			</div>
+		{/if}
+	</div>
+{/if}
+
 <style>
 	.layout.split {
 		display: grid;
@@ -237,6 +326,92 @@
 	.arrow {
 		color: var(--muted);
 		margin: 0 4px;
+	}
+
+	/* Interactieve entiteit-chips (#243): kaart = doorklik, mechanic = hover-info. */
+	.ref-chip {
+		display: inline;
+		word-break: normal;
+		text-underline-offset: 2px;
+	}
+	.ref-chip.card {
+		text-decoration: underline solid var(--border-strong);
+		cursor: pointer;
+	}
+	.ref-chip.card:hover,
+	.ref-chip.card:focus-visible {
+		text-decoration-color: var(--accent);
+		color: var(--accent-ink);
+	}
+	.ref-chip.mech {
+		background: none;
+		border: 0;
+		padding: 0;
+		font: inherit;
+		color: inherit;
+		text-decoration: underline dotted var(--border-strong);
+		cursor: help;
+	}
+	.ref-chip.mech:hover,
+	.ref-chip.mech:focus-visible {
+		text-decoration-color: var(--muted);
+	}
+
+	.hovercard {
+		position: fixed;
+		z-index: 50;
+		width: 216px;
+		background: var(--surface);
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius-lg);
+		box-shadow: var(--shadow-panel-lg);
+		padding: 10px;
+		pointer-events: none;
+		display: flex;
+		flex-direction: column;
+		gap: 7px;
+	}
+	.hovercard.above {
+		transform: translateY(-100%);
+	}
+	.hc-img {
+		display: block;
+		width: 100%;
+		max-height: 260px;
+		object-fit: contain;
+		border-radius: var(--radius);
+	}
+	.hc-body {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+	.hc-name {
+		font-weight: 700;
+		font-size: 0.86rem;
+	}
+	.hc-desc {
+		font-size: 0.8rem;
+		line-height: 1.4;
+	}
+	.hc-ref {
+		font-size: 0.68rem;
+	}
+	.hc-hint {
+		font-size: 0.68rem;
+	}
+	@media (prefers-reduced-motion: no-preference) {
+		.hovercard {
+			animation: hc-in 90ms ease-out;
+		}
+		@keyframes hc-in {
+			from {
+				opacity: 0;
+			}
+			to {
+				opacity: 1;
+			}
+		}
 	}
 	.kind {
 		font-size: 0.72rem;
