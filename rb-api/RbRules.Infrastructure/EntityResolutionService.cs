@@ -186,6 +186,18 @@ public class EntityResolutionService(RbRulesDbContext db)
                 {
                     var a = members[i];
                     var b = members[j];
+                    // Sla paren over waarvan een lid eerder in DEZELFDE scan al tot
+                    // tombstone werd gemerged. Zonder deze guard cascadeert een blok
+                    // van 3+ onderling-gelijkende entiteiten merges op/naar tombstones:
+                    // MergeInternalAsync controleert Status niet, dus een reeds-gemergde
+                    // bron wordt opnieuw (naar een dood doel) gemerged — dat corrumpeert
+                    // de tombstone-keten (wijst naar een tombstone i.p.v. de levende
+                    // overlever), hangt aliassen aan een dode entiteit en schrijft een
+                    // tweede MergeDecision voor dezelfde bron, waardoor het herstelpad
+                    // (UnconsolidateAsync, rode draad #236) ambigu/stuk raakt.
+                    if (a.Status == CanonicalEntityStatus.Merged
+                        || b.Status == CanonicalEntityStatus.Merged) continue;
+
                     var signals = new EntityMatchSignals(
                         normalized[a.Id], normalized[b.Id],
                         Trigrams.Similarity(normalized[a.Id], normalized[b.Id]),

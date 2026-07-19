@@ -220,6 +220,54 @@ public class EntityResolutionTests
         Assert.Equal(1, await db.MergeDecisions.CountAsync(d => !d.Reverted));
     }
 
+    [Fact]
+    public async Task Scan_ThreeSimilarEntities_GateOpen_NoCascadeOntoTombstones()
+    {
+        // Regressie (#225-review): een blok van 3 onderling-gelijkende varianten met
+        // identieke embeddings scoort op elk paar 3/3 signalen. Zonder de tombstone-
+        // guard verwerkt de lus (1,2),(1,3),(2,3): na (1,2)+(1,3) zijn 2 én 3 al
+        // tombstones, waarna (2,3) 3 OPNIEUW zou mergen (naar tombstone 2) — kapotte
+        // keten + dubbele MergeDecision + ambigu herstelpad. De guard slaat (2,3) over.
+        using var db = NewDb();
+        var svc = new EntityResolutionService(db);
+        var vec = new Vector(new float[] { 1f, 0f, 0f });
+        CanonicalEntity Make(long id, string label) => new()
+        {
+            Id = id, Kind = "keyword", CanonicalLabel = label, CreatedByRunId = "r",
+            Embedding = vec, EmbeddingModel = "bge-m3", EmbeddingDim = 3,
+        };
+        db.CanonicalEntities.AddRange(Make(1, "Deflect"), Make(2, "Deflecting"), Make(3, "Deflected"));
+        await db.SaveChangesAsync();
+
+        var result = await svc.ScanForMergeCandidatesAsync("keyword");
+        Assert.True(result.GateOpen);
+
+        // Precies één levende overlever (laagste id) en twee tombstones die er beide
+        // rechtstreeks naar wijzen — geen tombstone→tombstone-keten.
+        var survivors = await db.CanonicalEntities
+            .Where(e => e.Status != CanonicalEntityStatus.Merged).ToListAsync();
+        var tombstones = await db.CanonicalEntities
+            .Where(e => e.Status == CanonicalEntityStatus.Merged).ToListAsync();
+        var survivor = Assert.Single(survivors);
+        Assert.Equal(1L, survivor.Id);
+        Assert.Equal(2, tombstones.Count);
+        Assert.All(tombstones, t => Assert.Equal(survivor.Id, t.MergedIntoId));
+
+        // Elke tombstone heeft exact één niet-teruggedraaide MergeDecision (geen dubbele
+        // beslissing voor dezelfde bron) die naar de levende overlever wijst.
+        foreach (var t in tombstones)
+        {
+            var decisions = await db.MergeDecisions
+                .Where(d => d.SourceEntityId == t.Id && !d.Reverted).ToListAsync();
+            var decision = Assert.Single(decisions);
+            Assert.Equal(survivor.Id, decision.TargetEntityId);
+        }
+
+        // Herstelpad blijft schoon: elke tombstone is eenduidig terug te draaien.
+        foreach (var t in tombstones)
+            Assert.True(await svc.UnconsolidateAsync(t.Id));
+    }
+
     // ── Service: tombstone-merge + unconsolidate (herstelpad) ────────────────
 
     [Fact]
