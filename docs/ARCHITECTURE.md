@@ -370,6 +370,40 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `DriftSnapshotAsync` (`CanonicalDriftSnapshot`: node-count per kind, singletons,
   duplicatie-schuld — queryable voor inzicht #236). EF-migratie
   `CanonicalEntities225`; getest in `EntityResolutionTests`.
+- **`RbRules.Domain/ReifiedInteractions.cs` + `InteractionPromotionGate.cs` +
+  `InteractionProjection.cs` + `InteractionExtraction.cs` +
+  `InteractionPromotionService` — reïficatie & gekwalificeerde relaties (fase 2,
+  #226).** Versla faalmodus #3 (structuurverlies): een kale
+  `(:Card)-[:COUNTERS]->(:Card)`-edge is verboden, elk COUNTERS/MODIFIES/GRANTS/
+  REQUIRES-feit leeft als gereïficeerde **`Interaction`** (Postgres = SoT) met
+  rollen agent/patient (BrainRefs naar Card/Keyword), een `Kind` uit de
+  reïficatie-verplichte ontologie-relaties, een optionele `GovernedByRef` naar de
+  RuleSection en een `Status` ∈ {candidate, verified, promoted, rejected,
+  **model_hypothesized_unruled**}. Condities (window/status/cost) zijn losse,
+  individueel weerlegbare **`InteractionCondition`**-knopen met expliciete
+  `SubjectRole` i.p.v. platgeslagen in proza. De **reïficatie-vorm-poort**
+  (`OntologyValidationService.ValidateReifiedInteraction`, fase 0b) dwingt de rol-
+  range en de kale-edge-dwang af. De **promotie-poort**
+  (`InteractionPromotionGate`, puur) is deterministisch: `schema ∧ (lexicaal ∨
+  consensus≥N) ∧ verdict` → promoted; anders reviewqueue met een `StatusReason`
+  die zégt welke poort faalde. Twee bindende bijzonderheden: (a) een levende
+  **`RejectionTombstone`** (op de `agent|patient|kind`-dedupe-sleutel) blokkeert
+  stil-heropenen — herstel is een expliciete beheerdersactie
+  (`LiftTombstonesAsync`); (b) cold-start (kritiek Risico 1) — een emergente
+  card×card-hypothese zonder lexicale/consensus-steun wordt NIET verworpen maar
+  getierd als `model_hypothesized_unruled` (eigen trust-label, micro-reviewqueue),
+  nooit stil weggegooid. Elke acceptatie legt een `Assertion` (0a-provenance,
+  subject `interaction:{id}`) én een **`InteractionDecision`**-memo vast (rode
+  draad #236 — niets levert onzichtbare state). `InteractionProjection` bouwt de
+  gedenormaliseerde `RELATES_TO`-qualifier-cache (window/actor_status/cost_delta/
+  tier) — herbouwbaar uit de reïficatie, nooit de bron; bij ≥2 condities per as of
+  een patient-rol markeert ze `reifiedOnly`. `InteractionExtraction` definieert de
+  tool-forced `emit_interactions`-structured-output-vorm met enum-poorten uit de
+  ontologie (`RelationTypeConstraint`); de live rb-ai-call is bewust
+  integratie-follow-up (de bestaande `InteractionMiner` kent geen condities en
+  tool-forcing vereist een rb-ai-uitbreiding — de promotie-pipeline + structuur
+  staan er). EF-migratie `ReifiedInteractions226`; getest in
+  `ReifiedInteractionTests` (30 tests).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
@@ -1133,6 +1167,22 @@ Card/…) bestaan al vóór deze stap, dus de label-loze ref-match resolveert
 draagt beide edges) leeft in de Postgres-schrijfpoort, niet in een Neo4j-
 constraint.
 
+Sinds fase 2 (#226) projecteert dezelfde transactie ook de reïficatie-tak
+(`InteractionProjection.BuildProjectionRows`, puur + getest): niet-verworpen
+`Interaction`-knopen (`:Interaction:Concept`) met `HAS_ROLE {role}`-edges naar de
+agent/patient-fillers, `REQUIRES_CONDITION`-edges naar `:Condition`-knopen, een
+optionele `GOVERNED_BY`-edge naar de RuleSection, en — alleen voor verankerde
+(promoted/verified) interacties — de gedenormaliseerde
+`RELATES_TO {kind, window, actorStatus, costDelta, tier, reifiedOnly,
+source:'interaction'}`-qualifier-cache. Die cache is NOOIT de bron: ze is volledig
+herbouwbaar uit de reïficatie, en bij ≥2 condities per as of een patient-rol
+markeert `reifiedOnly` dat consumenten de `Interaction` moeten lezen. Rejected
+interacties leven alleen als `RejectionTombstone` (herstelpad), niet als knoop.
+Let op: dit is een additieve uitbreiding op dezelfde transactionele rebuild als de
+provenance-tak — nog niet geverifieerd tegen een live Neo4j (geen lokale instance),
+wel via dezelfde batched-UNWIND/dictionaries-only-patronen als de bewezen
+Assertion-projectie.
+
 Changeconsolidatie (#206) is bewust NIET in deze projectie verwerkt: de
 `Change`-query hierboven selecteert nog steeds ALLE rijen, dus zowel een
 primaire als een geconsolideerde secundaire krijgen elk hun eigen `Change`-
@@ -1507,6 +1557,28 @@ zichtbaar gemaakt i.p.v. stil gedoogd. Legacy-feiten worden geïnventariseerd
 voor backfill. `Provenance.cs`, `ProvenanceAuditService`, `GraphSyncService`,
 `GraphSchema`.
 
+### ADR-12 — Gekwalificeerde relaties altijd gereïficeerd, promotie via een deterministische poort (#226)
+**Context.** Gekwalificeerde relaties (COUNTERS/MODIFIES/GRANTS/REQUIRES) dragen
+condities (window/status/cost); als kale edge of vrije-tekst-`Explanation` gaat
+die structuur verloren (faalmodus #3). **Besluit.** Elk zo'n feit leeft als
+gereïficeerde `Interaction` (Postgres = SoT) met rollen agent/patient en losse
+`Condition`-knopen; een kale gekwalificeerde edge wordt door
+`OntologyValidationService` geweigerd, de gereïficeerde vorm afgedwongen. Promotie
+loopt door een **deterministische poort** (`InteractionPromotionGate`): nooit
+LLM-alleen — `schema ∧ (lexicaal ∨ consensus≥N) ∧ verdict`. Twee harde regels:
+(a) een levende `RejectionTombstone` blokkeert stil-heropenen, herstel is een
+expliciete beheerdersactie; (b) een emergente card×card-hypothese zonder steun
+wordt NIET verworpen maar getierd als `model_hypothesized_unruled` (cold-start,
+kritiek Risico 1), nooit stil weggegooid. De `RELATES_TO`-qualifier-cache is een
+gedenormaliseerde projectie, nooit de bron. **Gevolg.** "Deflect countert Assault
+alleen in een showdown" is queryable i.p.v. begraven in proza; geen promotie of
+verwerping zonder deterministisch bewijs + memo + herstelpad (rode draad #236).
+De live rb-ai-extractie (tool-forced `emit_interactions`) is als integratie-
+follow-up afgesplitst — de vorm staat in `InteractionExtraction`, de pipeline in
+`InteractionPromotionService`. `ReifiedInteractions.cs`,
+`InteractionPromotionGate.cs`, `InteractionProjection.cs`,
+`InteractionExtraction.cs`, `InteractionPromotionService`.
+
 ---
 
 ## 10. Kwaliteitsscenario's
@@ -1579,6 +1651,9 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Set-release-keten | Geautomatiseerde keten die bij een nieuwe set alle afgeleiden bijwerkt |
 | Cadence | Scan-interval per bron |
 | Sidecar | rb-ai: de interne AI-container op het Claude-abonnement |
+| Reïficatie | Een gekwalificeerde relatie als eigen knoop (`Interaction`) i.p.v. kale edge, zodat condities niet verloren gaan (fase 2, #226) |
+| `model_hypothesized_unruled` | Cold-start-trust-tier: emergente card×card-hypothese zonder officiële/community-steun — geparkeerd, niet weggegooid |
+| RejectionTombstone | Grafsteen op een verworpen interactie die stil-heropenen blokkeert; opheffen is een expliciete beheerdersactie (herstelpad) |
 
 ---
 
