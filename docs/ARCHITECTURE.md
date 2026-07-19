@@ -1671,7 +1671,7 @@ kan rb-api eerder starten dan Postgres klaar is.
   (case-niveau `SupersededByErratum`/`ValidUntil` → overslaan; claim-niveau
   `ForbiddenClaim.SupersededByErratum` → een door een erratum waar-geworden
   claim telt niet meer als contradictie, C). De voorbeeld-gouden-set staat als
-  seed in `docs/eval/poracle-eval-seed.json` (via `EvalSeed.Parse`); het echte
+  seed in `rb-api/RbRules.Tests/Fixtures/poracle-eval-seed.json` (via `EvalSeed.Parse`); het echte
   corpus komt in Postgres `eval_case` met rb-ai-kandidaten uit set/errata-diffs.
   **Fase 7 legt daar bovenop** (alles PURE Domain, `RbRules.Domain/Eval*.cs`;
   KRITIEK — live-graaf/rb-ai/pgvector niet in CI):
