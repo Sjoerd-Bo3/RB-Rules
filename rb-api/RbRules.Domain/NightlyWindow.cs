@@ -23,29 +23,36 @@ public static class NightlyWindow
     }
 
     /// <summary>Valt de lokale tijd van <paramref name="nowUtc"/> binnen [start, end)?
-    /// Half-open: het end-uur (bv. 11) valt al buiten het venster. Vensters die
-    /// middernacht kruisen (start &gt; end, bv. 22–06) worden ondersteund.</summary>
+    /// Half-open: het end-uur (bv. 11) valt al buiten het venster. Het venster valt
+    /// binnen één kalenderdag (start &lt; end — afgedwongen door NightlyRunSettings);
+    /// een middernacht-kruisend venster wordt bewust NIET ondersteund omdat de
+    /// kalenderdag-dedup van <see cref="RanToday"/> daar niet voor klopt (#245-review).</summary>
     public static bool InWindow(DateTimeOffset nowUtc, TimeZoneInfo tz, int startHour, int endHour)
     {
         var h = TimeZoneInfo.ConvertTime(nowUtc, tz).Hour;
-        return startHour <= endHour
-            ? h >= startHour && h < endHour
-            : h >= startHour || h < endHour; // venster kruist middernacht
+        return h >= startHour && h < endHour;
     }
 
     /// <summary>De deadline (UTC) waarop de nachtrun stopt: het eerstvolgende
-    /// <paramref name="endHour"/> in lokale tijd op/na <paramref name="nowUtc"/>.</summary>
+    /// <paramref name="endHour"/> in lokale wandkloktijd op/na <paramref name="nowUtc"/>.
+    /// De wandkloktijd wordt via de tz-regels ZELF naar UTC omgezet, zodat de offset
+    /// van het EIND-uur telt (niet die van 'now') — op een DST-overgangsdag scheelt
+    /// dat anders een uur (#245-review).</summary>
     public static DateTimeOffset Deadline(DateTimeOffset nowUtc, TimeZoneInfo tz, int endHour)
     {
-        var local = TimeZoneInfo.ConvertTime(nowUtc, tz);
-        var endToday = new DateTimeOffset(local.Year, local.Month, local.Day, endHour, 0, 0, local.Offset);
-        if (endToday <= local) endToday = endToday.AddDays(1);
-        return endToday.ToUniversalTime();
+        var localDate = TimeZoneInfo.ConvertTime(nowUtc, tz).Date;
+        var endWall = new DateTime(localDate.Year, localDate.Month, localDate.Day, endHour, 0, 0,
+            DateTimeKind.Unspecified);
+        var endUtc = TimeZoneInfo.ConvertTimeToUtc(endWall, tz);
+        if (endUtc <= nowUtc.UtcDateTime)
+            endUtc = TimeZoneInfo.ConvertTimeToUtc(endWall.AddDays(1), tz);
+        return new DateTimeOffset(endUtc, TimeSpan.Zero);
     }
 
     /// <summary>Is de nachtrun vandaag (lokale kalenderdag) al gedraaid? Voorkomt een
-    /// tweede start binnen hetzelfde venster. <paramref name="lastRunUtc"/> = laatste
-    /// voltooiing (JobLedger/run_log); null = nog nooit.</summary>
+    /// tweede start binnen hetzelfde venster — correct omdat het venster binnen één
+    /// kalenderdag valt (<see cref="InWindow"/>, start &lt; end). <paramref
+    /// name="lastRunUtc"/> = laatste voltooiing (JobLedger/run_log); null = nog nooit.</summary>
     public static bool RanToday(DateTimeOffset? lastRunUtc, DateTimeOffset nowUtc, TimeZoneInfo tz)
     {
         if (lastRunUtc is null) return false;

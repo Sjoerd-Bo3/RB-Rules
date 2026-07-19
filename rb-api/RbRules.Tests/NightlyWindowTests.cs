@@ -25,15 +25,26 @@ public class NightlyWindowTests
         Assert.Equal(expected, NightlyWindow.InWindow(now, Plus2, 0, 11));
     }
 
-    [Theory]
-    // venster [22,6) kruist middernacht
-    [InlineData(21, true)]   // 21:00 UTC → 23:00 lokaal → uur 23 → in
-    [InlineData(2, true)]    // 02:00 UTC → 04:00 lokaal → uur 4 → in
-    [InlineData(11, false)]  // 11:00 UTC → 13:00 lokaal → uur 13 → uit
-    public void InWindow_KruistMiddernacht(int utcHour, bool expected)
+    [Fact]
+    public void Settings_MiddernachtKruisendVenster_ValtTerugOpDefault()
     {
-        var now = Utc(2026, 7, 20, utcHour, 0);
-        Assert.Equal(expected, NightlyWindow.InWindow(now, Plus2, 22, 6));
+        // start >= end (bv. 22–06) wordt niet ondersteund (RanToday is kalenderdag-
+        // gebaseerd) → FromEnvironment valt terug op de default 00–11 (#245-review).
+        var start = Environment.GetEnvironmentVariable("NIGHTLY_START_HOUR");
+        var end = Environment.GetEnvironmentVariable("NIGHTLY_END_HOUR");
+        try
+        {
+            Environment.SetEnvironmentVariable("NIGHTLY_START_HOUR", "22");
+            Environment.SetEnvironmentVariable("NIGHTLY_END_HOUR", "6");
+            var s = NightlyRunSettings.FromEnvironment();
+            Assert.Equal(0, s.StartHour);
+            Assert.Equal(11, s.EndHour);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NIGHTLY_START_HOUR", start);
+            Environment.SetEnvironmentVariable("NIGHTLY_END_HOUR", end);
+        }
     }
 
     [Fact]
