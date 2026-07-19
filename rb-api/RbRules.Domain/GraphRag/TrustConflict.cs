@@ -136,36 +136,63 @@ public static class TrustConflictResolver
             _ => ResolveCrossTier(a, b),
         };
 
-    /// <summary>Cross-tier: authority wint MET veto. De hoogste tier (laagste enum-waarde)
-    /// draagt het meeste gezag; de verliezer wordt <c>contradicted_by_official</c> (w→ε),
-    /// omgeleid naar het misvattingen-kanaal — niet verwijderd. Bij gelijk gezag valt de
-    /// beslissing terug op de recentste (dan is het feitelijk geen cross-tier-conflict).</summary>
+    /// <summary>Cross-tier: authority wint. De hoogste tier (laagste enum-waarde) draagt
+    /// het meeste gezag. Maar het VETO (verliezer → <c>contradicted_by_official</c>, w→ε,
+    /// misvattingen-kanaal) is gereserveerd voor een écht OFFICIËLE winnaar — de routing
+    /// keyt op "is er officiële dekking?" (beslissing #229), niet op kale tier-ordening.
+    /// Wint een hoger-gezaghebbende maar NIET-officiële lezing (bv. een Primer van een
+    /// Community-claim), dan is er geen officieel veto: de verliezer wordt <c>superseded</c>
+    /// i.p.v. vals als door-officieel-weersproken gelabeld. Bij gelijk gezag valt de
+    /// beslissing terug op de recentste (dan is het feitelijk geen cross-tier-conflict);
+    /// een volledige gelijkstand breekt stabiel op de ref, nooit op invoervolgorde.</summary>
     private static TrustDecision ResolveCrossTier(TrustParty a, TrustParty b)
     {
         // Precedence: gelijk-tier → recentste; ongelijk-tier → authority. Positief = A wint.
         var cmp = Precedence.Compare((short)a.Tier, a.EffectiveDate, (short)b.Tier, b.EffectiveDate);
-        var (winner, loser) = cmp >= 0 ? (a, b) : (b, a);
+        var (winner, loser) = AWins(cmp, a, b) ? (a, b) : (b, a);
+
+        // Beslissing #229: alleen officiële dekking legt een veto op. Een niet-officiële
+        // winnaar (Primer/Community/Meta) mag de verliezer niet contradicted_by_official
+        // noemen — anders labelt hij een lezing vals als officieel-weersproken.
+        if (Authority.IsOfficial(winner.Tier))
+            return new TrustDecision(
+                TrustConflictContext.CrossTier, winner.Ref, loser.Ref,
+                TrustDisposition.ContradictedByOfficial,
+                $"Cross-tier: {TrustLabels.TierTag(winner.Tier)} ({winner.Ref}) wint met veto van " +
+                $"{TrustLabels.TierTag(loser.Tier)} ({loser.Ref}); verliezer → contradicted_by_official " +
+                "(w→ε, misvattingen-kanaal), blijft toonbaar.");
+
         return new TrustDecision(
             TrustConflictContext.CrossTier, winner.Ref, loser.Ref,
-            TrustDisposition.ContradictedByOfficial,
-            $"Cross-tier: {TrustLabels.TierTag(winner.Tier)} ({winner.Ref}) wint met veto van " +
-            $"{TrustLabels.TierTag(loser.Tier)} ({loser.Ref}); verliezer → contradicted_by_official " +
-            "(w→ε, misvattingen-kanaal), blijft toonbaar.");
+            TrustDisposition.Superseded,
+            $"Cross-tier zonder officiële dekking: {TrustLabels.TierTag(winner.Tier)} ({winner.Ref}) " +
+            $"heeft meer gezag dan {TrustLabels.TierTag(loser.Tier)} ({loser.Ref}) maar is niet " +
+            "officieel — zonder officieel weerwoord; verliezer → superseded, blijft toonbaar.");
     }
 
     /// <summary>Within-tier temporeel: de recentste-gezaghebbende wint (#168-richting).
     /// Bij gelijke tier beslist de nieuwste <see cref="TrustParty.EffectiveDate"/>; de
-    /// verliezer wordt <c>superseded</c> maar blijft als historie bestaan.</summary>
+    /// verliezer wordt <c>superseded</c> maar blijft als historie bestaan. Een volledige
+    /// gelijkstand (gelijke tier, gelijke of beide-null datum) breekt stabiel op de ref —
+    /// nooit op invoervolgorde, want een <see cref="TrustDecision"/> is een first-class
+    /// knoop en mag niet per run van winnaar/richting flippen.</summary>
     private static TrustDecision ResolveTemporal(TrustParty a, TrustParty b)
     {
         var cmp = Precedence.Compare((short)a.Tier, a.EffectiveDate, (short)b.Tier, b.EffectiveDate);
-        var (winner, loser) = cmp >= 0 ? (a, b) : (b, a);
+        var (winner, loser) = AWins(cmp, a, b) ? (a, b) : (b, a);
         return new TrustDecision(
             TrustConflictContext.WithinTierTemporal, winner.Ref, loser.Ref,
             TrustDisposition.Superseded,
             $"Within-tier temporeel: {winner.Ref} (recentste-gezaghebbende) SUPERSEDES {loser.Ref}; " +
             "de oude passage blijft superseded in de historie.");
     }
+
+    /// <summary>Wint partij A van B gegeven een <see cref="Precedence.Compare"/>-uitkomst?
+    /// Positief → A; negatief → B; een echte gelijkstand (0) breekt stabiel op de ref
+    /// (ordinaal, laagste wint) zodat de winnaar niet van invoervolgorde afhangt — dezelfde
+    /// stabilisatie als <see cref="ResolveDetection"/>.</summary>
+    private static bool AWins(int cmp, TrustParty a, TrustParty b) =>
+        cmp > 0 || (cmp == 0 && string.CompareOrdinal(a.Ref, b.Ref) <= 0);
 
     /// <summary>Detectie-botsing: de VROEGST-gedetecteerde canonieke ID wint (omgekeerde
     /// tie-break t.o.v. temporeel — de #150/#175-les: stabiele canonieke ID's, latere

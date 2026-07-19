@@ -114,4 +114,94 @@ public class TrustConflictTests
         Assert.Equal("entity:a", ab.WinnerRef);
         Assert.Equal("entity:a", ba.WinnerRef); // uitkomst hangt niet van invoervolgorde af
     }
+
+    [Fact]
+    public void WithinTierTemporal_GelijkeTier_OnbekendeDatum_StabielOpRef_NietInvoervolgorde()
+    {
+        // Twee same-tier passages met onbekende (null) datum: Precedence.Compare == 0.
+        // Zonder stabiele ref-tie-break zou de winnaar puur van de argumentvolgorde
+        // afhangen en de SUPERSEDES-richting per run flippen — precies de flip-flop die
+        // het project bevecht (een TrustDecision is een persistente first-class knoop).
+        var a = new TrustParty("ruling:a", KnowledgeTier.VerifiedRuling, null, DateTimeOffset.UtcNow);
+        var b = new TrustParty("ruling:b", KnowledgeTier.VerifiedRuling, null, DateTimeOffset.UtcNow);
+
+        var ab = TrustConflictResolver.Resolve(a, b, TrustConflictContext.WithinTierTemporal);
+        var ba = TrustConflictResolver.Resolve(b, a, TrustConflictContext.WithinTierTemporal);
+        Assert.Equal("ruling:a", ab.WinnerRef);
+        Assert.Equal("ruling:a", ba.WinnerRef); // winnaar/richting hangen niet van invoervolgorde af
+        Assert.Equal("ruling:b", ab.LoserRef);
+        Assert.Equal("ruling:b", ba.LoserRef);
+    }
+
+    [Fact]
+    public void WithinTierTemporal_GelijkeDatum_StabielOpRef_NietInvoervolgorde()
+    {
+        // Twee rulings op dezelfde dag uitgevaardigd: ook cmp == 0, ook stabiel op ref.
+        var d = new DateTimeOffset(2026, 4, 4, 0, 0, 0, TimeSpan.Zero);
+        var a = new TrustParty("ruling:a", KnowledgeTier.VerifiedRuling, d, DateTimeOffset.UtcNow);
+        var b = new TrustParty("ruling:b", KnowledgeTier.VerifiedRuling, d, DateTimeOffset.UtcNow);
+
+        var ab = TrustConflictResolver.Resolve(a, b, TrustConflictContext.WithinTierTemporal);
+        var ba = TrustConflictResolver.Resolve(b, a, TrustConflictContext.WithinTierTemporal);
+        Assert.Equal("ruling:a", ab.WinnerRef);
+        Assert.Equal("ruling:a", ba.WinnerRef);
+    }
+
+    [Fact]
+    public void CrossTier_GelijkeTier_OnbekendeDatum_StabielOpRef_NietInvoervolgorde()
+    {
+        // De equal-tier fallback in ResolveCrossTier moet net zo stabiel zijn.
+        var a = new TrustParty("section:a", KnowledgeTier.Official, null, DateTimeOffset.UtcNow);
+        var b = new TrustParty("section:b", KnowledgeTier.Official, null, DateTimeOffset.UtcNow);
+
+        var ab = TrustConflictResolver.Resolve(a, b, TrustConflictContext.CrossTier);
+        var ba = TrustConflictResolver.Resolve(b, a, TrustConflictContext.CrossTier);
+        Assert.Equal("section:a", ab.WinnerRef);
+        Assert.Equal("section:a", ba.WinnerRef);
+    }
+
+    [Fact]
+    public void CrossTier_NietOfficieleWinnaar_GeenVeto_VerliezerSuperseded()
+    {
+        // Een Primer (0.65, NIET officieel) spreekt een Community-claim (0.45) tegen.
+        // De Primer wint op de gezags-as, maar zonder officiële dekking mag er GEEN
+        // veto zijn: de verliezer wordt superseded, niet vals contradicted_by_official
+        // (beslissing #229 — routing keyt op "is er officiële dekking?").
+        var primer = new TrustParty("primer:combat", KnowledgeTier.Primer, null, DateTimeOffset.UtcNow);
+        var claim = new TrustParty("claim:42", KnowledgeTier.Community, null, DateTimeOffset.UtcNow);
+
+        var d = TrustConflictResolver.Resolve(primer, claim, TrustConflictContext.CrossTier);
+        Assert.Equal("primer:combat", d.WinnerRef);
+        Assert.Equal("claim:42", d.LoserRef);
+        Assert.Equal(TrustDisposition.Superseded, d.LoserDisposition);
+        Assert.DoesNotContain("veto", d.Memo);
+        Assert.DoesNotContain("contradicted_by_official", d.Memo);
+    }
+
+    [Fact]
+    public void CrossTier_CommunityVanMeta_GeenValsOfficieelVeto()
+    {
+        // Ook Community-vs-Meta: winnaar (Community) is niet officieel → geen veto.
+        var claim = new TrustParty("claim:7", KnowledgeTier.Community, null, DateTimeOffset.UtcNow);
+        var meta = new TrustParty("meta:tierlist", KnowledgeTier.Meta, null, DateTimeOffset.UtcNow);
+
+        var d = TrustConflictResolver.Resolve(claim, meta, TrustConflictContext.CrossTier);
+        Assert.Equal("claim:7", d.WinnerRef);
+        Assert.Equal(TrustDisposition.Superseded, d.LoserDisposition);
+        Assert.NotEqual(TrustDisposition.ContradictedByOfficial, d.LoserDisposition);
+    }
+
+    [Fact]
+    public void CrossTier_GeverifieerdeRuling_IsOfficieel_HoudtVeto()
+    {
+        // Een geverifieerde ruling telt WEL als officiële dekking (Authority.IsOfficial):
+        // het veto blijft geldig, verliezer → contradicted_by_official.
+        var ruling = new TrustParty("ruling:9", KnowledgeTier.VerifiedRuling, null, DateTimeOffset.UtcNow);
+        var claim = new TrustParty("claim:3", KnowledgeTier.Community, null, DateTimeOffset.UtcNow);
+
+        var d = TrustConflictResolver.Resolve(ruling, claim, TrustConflictContext.CrossTier);
+        Assert.Equal("ruling:9", d.WinnerRef);
+        Assert.Equal(TrustDisposition.ContradictedByOfficial, d.LoserDisposition);
+        Assert.Contains("veto", d.Memo);
+    }
 }

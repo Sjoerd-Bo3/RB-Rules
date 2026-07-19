@@ -152,17 +152,67 @@ public class HypothesisEngineTests
         var hyp = HypothesisEngine.Generate(holders);
         Assert.Equal(4, hyp.Count); // p1×r1, p1×r2, p2×r1, p2×r2
 
-        var gold = hyp.Select(h => h.UnorderedPairKey).ToHashSet();
+        // Onafhankelijke gouden set (NIET uit de motor-output afgeleid, anders is de
+        // precisie-assert tautologisch): twee van de vier hypotheses zijn écht (TP),
+        // twee zijn vals (FP), plus één gouden paar dat de motor MISTE. Zo meet dit de
+        // discriminerende precisie<1-tak i.p.v. altijd 1,0 (kritiek B7).
+        var gold = new HashSet<string>
+        {
+            "card:p1|card:r1", // gehypothetiseerd én waar → true positive
+            "card:p2|card:r2", // gehypothetiseerd én waar → true positive
+            "card:p1|card:x",  // waar maar NIET gehypothetiseerd → gemist (drukt base-rate)
+        };
         var yield = HypothesisYield.Measure(holders.Count, hyp, gold);
 
         Assert.Equal(100, yield.EntityCount);
         Assert.Equal(4950, yield.BlindPairCount);          // 100·99/2 — de blinde baseline
         Assert.Equal(4, yield.HypothesisPairCount);        // wat écht naar de LLM gaat
         Assert.True(yield.ReductionFactor > 1000);         // gemeten, niet verzonnen
-        Assert.Equal(1.0, yield.Precision);                // alle 4 zijn de gouden paren
-        Assert.Equal(4.0 / 4950, yield.BlindBaseRate!.Value, 6);
+        Assert.Equal(2, yield.TruePositives);              // 2 van 4 zitten in de gouden set
+        Assert.Equal(0.5, yield.Precision);                // 2/4 — de FP's drukken de precisie
+        Assert.Equal(3.0 / 4950, yield.BlindBaseRate!.Value, 6);
         Assert.NotNull(yield.PrecisionLift);
+        Assert.Equal(0.5 / (3.0 / 4950), yield.PrecisionLift!.Value, 6); // gemeten lift, geen vaste factor
         Assert.True(yield.PrecisionLift > 100);            // veel scherper dan blind gokken
+    }
+
+    [Fact]
+    public void Yield_AlleKandidatenWaar_PrecisieEen_MaarNietTautologisch()
+    {
+        // Aparte sanity: als de gouden set precies de gehypothetiseerde paren dekt, is
+        // de precisie 1,0 — maar de gouden set is hier expliciet/onafhankelijk opgesteld,
+        // niet uit de motor-output gekopieerd, zodat de assert echt discrimineert.
+        var holders = new List<PredicateHolder>
+        {
+            Card("p1", ["fury"], (MechanicPredicateKinds.TriggersOn, "exhaust")),
+            Card("r1", ["fury"], (MechanicPredicateKinds.Prevents, "exhaust")),
+        };
+        var hyp = HypothesisEngine.Generate(holders);
+        Assert.Single(hyp);
+
+        var gold = new HashSet<string> { "card:p1|card:r1" };
+        var yield = HypothesisYield.Measure(holders.Count, hyp, gold);
+        Assert.Equal(1, yield.TruePositives);
+        Assert.Equal(1.0, yield.Precision);
+    }
+
+    [Fact]
+    public void Yield_GeenTruePositives_PrecisieNul_LiftNul()
+    {
+        // Alle hypotheses vals t.o.v. een disjuncte gouden set: precisie 0, geen deel-
+        // door-nul-ongeluk, lift 0 (niet null, want base-rate > 0).
+        var holders = new List<PredicateHolder>
+        {
+            Card("p1", ["fury"], (MechanicPredicateKinds.TriggersOn, "exhaust")),
+            Card("r1", ["fury"], (MechanicPredicateKinds.Prevents, "exhaust")),
+        };
+        var hyp = HypothesisEngine.Generate(holders);
+        var gold = new HashSet<string> { "card:q1|card:q2" }; // niets gemeenschappelijks
+
+        var yield = HypothesisYield.Measure(10, hyp, gold);
+        Assert.Equal(0, yield.TruePositives);
+        Assert.Equal(0.0, yield.Precision);
+        Assert.Equal(0.0, yield.PrecisionLift);
     }
 
     [Fact]
