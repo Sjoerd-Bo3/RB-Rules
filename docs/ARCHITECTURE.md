@@ -334,6 +334,42 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   en embeddings zonder herkomst, gesplitst in "nieuw" (ná de cutoff — moet 0
   zijn) en "legacy" (geïnventariseerd voor backfill). Puur/EF-vertaalbaar getest
   (`ProvenanceBackboneTests`).
+- **`RbRules.Domain/EntityResolution.cs` + `CanonicalEntities.cs` +
+  `CanonicalDrift.cs` + `EntityResolutionService` — canonieke entiteiten &
+  entity-resolution (fase 1, #225).** Versla faalmodus #1 (duplicatie) en #2
+  (synoniem-proliferatie). Drie nieuwe entiteiten (Postgres = SoT, additief
+  bovenop `Card.Mechanics[]` — bestaande strings blijven ongemoeid):
+  `CanonicalEntity` (één rij per mechanic/keyword/concept — kind uit de
+  Concept-tak van de ontologie — met `CanonicalLabel`, het `AltLabels`-
+  alias-lexicon, `Definition`+embedding, `Status` candidate/canonical/merged,
+  `MergedIntoId`-tombstone en `CreatedByRunId`-0a-provenance), `MergeDecision`
+  (expliciete merge-beslissing als first-class knoop: bron/doel, `DecidedBy`
+  auto|admin, `Memo` met signaal-uitslag en — cruciaal voor het herstelpad —
+  `MovedAltLabels` zodat `Unconsolidate` exact díe labels terugtrekt) en
+  `MergeCandidate` (voorgesteld paar → reviewqueue; telt als duplicatie-schuld).
+  De **pure** bouwstenen (`EntityResolution.cs`, IO-loos, volledig unit-getest):
+  `AliasNormalizer` (case/whitespace/underscore/koppelteken-collapse — het
+  canonicalisatie-oppervlak), `Magnitude` (splitst de trailing integer af zodat
+  `Assault 2`/`Assault 3` de FAMILIE `Assault` delen met de magnitude als
+  parameter — kritiek Risico 2a: nooit weggestript tot aparte entiteit),
+  `Trigrams` (Jaccard-similarity, spiegelt `pg_trgm` zodat de gate exact de
+  productie-beslissing meet), `EntityResolutionClassifier` (drietraps-signalen
+  blocking→trigram→embedding-cosine: 3/3 = auto-merge-kandidaat, 2/3 = review,
+  minder = geen match — NOOIT auto-merge op alleen embedding), `EntityResolutionGate`
+  (auto-merge standaard UIT — mag pas schrijven ná een gemeten ER-gouden-set-
+  precisie ≥ 0,95 ÉN labels ≥ 4 tekens; kritiek Risico 2b) en
+  `EntityResolutionGoldSet` (gelabelde merge/niet-merge-paren + precisie-meting,
+  patroon eval-scaffold #235). De **service** hangt de IO eromheen: `ResolveAsync`/
+  `ResolveOrRegisterAsync` (resolve tegen `CanonicalLabel ∪ AltLabels` VÓÓR
+  kandidaat-creatie — stopt synoniem-proliferatie over sets heen),
+  `RegisterExistingMechanicsAsync` (additieve, niet-destructieve backfill uit
+  `Card.Mechanics`/geaccepteerde `MechanicKeyword`s), `ScanForMergeCandidatesAsync`
+  (blocking in-memory bij fase-1-cardinaliteit, gate-consistent; `pg_trgm`+GIN
+  staan als schaal-pad in de migratie), `MergeAsync`/`UnconsolidateAsync`
+  (tombstone + Decision-memo + omkeerbaar herstelpad — rode draad #236) en
+  `DriftSnapshotAsync` (`CanonicalDriftSnapshot`: node-count per kind, singletons,
+  duplicatie-schuld — queryable voor inzicht #236). EF-migratie
+  `CanonicalEntities225`; getest in `EntityResolutionTests`.
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
@@ -861,7 +897,9 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
 
 - **Postgres + pgvector** — source of truth. Getypeerde `vector(1024)` met
   HNSW; snake_case; EF-migraties bij opstart (`RbRulesDbContext`, `Migrations/`,
-  `Program.cs`).
+  `Program.cs`). Sinds fase 1 (#225) ook de `pg_trgm`-extensie — voorlopig als
+  gedocumenteerd schaal-pad voor het lexicale entity-resolution-signaal (de
+  fase-1-scorer draait in-memory en gate-consistent).
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
