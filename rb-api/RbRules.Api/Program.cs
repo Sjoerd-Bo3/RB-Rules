@@ -5,7 +5,9 @@ using Pgvector.EntityFrameworkCore;
 using RbRules.Api;
 using RbRules.Api.Endpoints;
 using RbRules.Domain;
+using RbRules.Domain.GraphRag;
 using RbRules.Infrastructure;
+using RbRules.Infrastructure.GraphRag;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -75,6 +77,19 @@ builder.Services.AddScoped<BreinInteractionMiningService>();
 builder.Services.AddScoped<BreinPredicateMiningService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
+// Brein-GraphRAG-retrieval in /ask (#228, §4) ACHTER de default-uit feature-flag
+// (BREIN_RETRIEVAL_ENABLED). De settings zijn singleton (uit env, één keer gelezen);
+// staat de flag uit, dan raakt AskService deze laag nooit aan. De vier fase-4-poorten
+// draaien tegen de live Neo4j + pgvector (INTEGRATIE-FOLLOW-UP: niet in CI — de
+// adapters degraderen bij uitval naar leeg, zodat /ask nooit een 500 krijgt). De
+// orchestrator + service zijn scoped (per request), net als AskService zelf.
+builder.Services.AddSingleton(_ => BreinRetrievalSettings.FromEnvironment());
+builder.Services.AddScoped<IGazetteerSource, PostgresGazetteerSource>();
+builder.Services.AddScoped<INodeContextSimilarity, PgVectorNodeSimilarity>();
+builder.Services.AddScoped<INodeAdjacency, Neo4jNodeAdjacency>();
+builder.Services.AddScoped<IGraphRetriever, BreinGraphRetriever>();
+builder.Services.AddScoped<RetrievalOrchestrator>();
+builder.Services.AddScoped<BreinRetrievalService>();
 // Rewrite-cache (#152): singleton — moet de levensduur van het proces
 // overspannen (AskService zelf is scoped, per request), klein en LRU op de
 // genormaliseerde vraag. Zonder registratie zou AskService's optionele
