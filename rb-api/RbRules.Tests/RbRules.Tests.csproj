@@ -29,6 +29,11 @@
     <!-- Echte snapshots van live bronnen (conventie: fixtures spiegelen de
          echte data-vormen, geen versimpelde verzinsels). -->
     <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Eval-harness-seed (#231): één bron van waarheid in docs/eval, hier
+         gelinkt zodat EvalSeedTests de echte JSON-vorm rondtest. -->
+    <None Include="..\..\docs\eval\poracle-eval-seed.json"
+          Link="Fixtures\poracle-eval-seed.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
