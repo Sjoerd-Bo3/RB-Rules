@@ -38,6 +38,11 @@ public sealed record BrainEntityItem(
 /// <summary>Eén gereïficeerde conditie (window/status/cost) op een interactie.</summary>
 public sealed record BrainConditionItem(string OnKind, string? SubjectRole, string Value, string? Operator);
 
+/// <summary>Ankerkolommen per assertion voor de provenance-anker-lookup: net genoeg
+/// om in-memory het nieuwste anker per subject te kiezen zonder een niet-vertaalbare
+/// server-side greatest-n-per-group.</summary>
+public sealed record AssertionAnchorRow(string Subject, string Id, DateTimeOffset AssertedAt);
+
 /// <summary>Eén gereïficeerde interactie met haar condities en tier. <see
 /// cref="AssertionRef"/> is de provenance-ankerref (assertion:{ulid}) als er een
 /// Assertion met subject interaction:{id} bestaat — de doorklik naar de keten.</summary>
@@ -198,14 +203,17 @@ public class BrainExplorerService(RbRulesDbContext db)
             .ToListAsync(ct);
 
         // Provenance-ankers: welke interaction-subjects dragen een Assertion?
+        // Greatest-n-per-group (nieuwste assertion per subject) kan Npgsql niet
+        // server-side vertalen (First() uit een geordende GroupBy) — dus alleen
+        // de ankerkolommen ophalen (vertaalbare Where+Select) en in-memory
+        // groeperen. Het aantal rijen is begrensd door paginagrootte ×
+        // assertions-per-subject.
         var subjects = rows.Select(i => i.Ref.Format()).ToList();
         var assertionBySubject = subjects.Count == 0
             ? new Dictionary<string, string>()
-            : await db.Assertions.AsNoTracking()
-                .Where(a => subjects.Contains(a.Subject))
+            : (await AssertionAnchorQuery(db, subjects).ToListAsync(ct))
                 .GroupBy(a => a.Subject)
-                .Select(g => new { Subject = g.Key, Id = g.OrderByDescending(a => a.AssertedAt).First().Id })
-                .ToDictionaryAsync(x => x.Subject, x => x.Id, ct);
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.AssertedAt).First().Id);
 
         var items = rows.Select(i =>
         {
@@ -223,6 +231,18 @@ public class BrainExplorerService(RbRulesDbContext db)
         }).ToList();
         return new(total, page, PageSize, items);
     }
+
+    /// <summary>De vertaalbare (Where+Select) ankersubquery achter
+    /// <see cref="InteractionsAsync"/>: de assertion-kolommen per subject die we
+    /// nodig hebben om in-memory het nieuwste anker te kiezen. Als eigen methode
+    /// zodat een regressietest de échte productiequery via ToQueryString kan
+    /// bewijzen (greatest-n-per-group hoort NIET server-side — Npgsql vertaalt
+    /// First() uit een geordende GroupBy niet).</summary>
+    internal static IQueryable<AssertionAnchorRow> AssertionAnchorQuery(
+        RbRulesDbContext db, IReadOnlyList<string> subjects) =>
+        db.Assertions.AsNoTracking()
+            .Where(a => subjects.Contains(a.Subject))
+            .Select(a => new AssertionAnchorRow(a.Subject, a.Id, a.AssertedAt));
 
     /// <summary>De provenance-keten van één feit-ref (assertions/{ref}, §6). Accepteert
     /// een subject-ref (bv. interaction:42, relation:5, card:…) én een directe

@@ -124,6 +124,23 @@ public class BrainExplorerServiceTests
         Assert.Empty(promoted.Items);
     }
 
+    /// <summary>Regressie (#236): de provenance-anker-lookup in InteractionsAsync mag
+    /// niet server-side greatest-n-per-group doen — dat vertaalt Npgsql niet en de
+    /// InMemory-test hierboven maskeert het. Bewijs de échte productiequery via
+    /// ToQueryString op een Npgsql-context (geen database nodig).</summary>
+    [Fact]
+    public void AssertionAnchorQuery_TranslatesToSql()
+    {
+        using var db = new RbRulesDbContext(
+            new DbContextOptionsBuilder<RbRulesDbContext>()
+                .UseNpgsql("Host=localhost;Database=x;Username=x", o => o.UseVector())
+                .UseSnakeCaseNamingConvention()
+                .Options);
+        var subjects = new List<string> { "interaction:1", "interaction:2" };
+        var sql = BrainExplorerService.AssertionAnchorQuery(db, subjects).ToQueryString();
+        Assert.Contains("assertion", sql);
+    }
+
     [Fact]
     public async Task ProvenanceChain_SubjectRef_GeeftKetenMetRun()
     {
