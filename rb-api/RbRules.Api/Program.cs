@@ -61,6 +61,7 @@ builder.Services.AddScoped<CardEmbeddingPipeline>();
 builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
 builder.Services.AddScoped<ProvenanceAuditService>();
+builder.Services.AddScoped<EntityResolutionService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
 // Rewrite-cache (#152): singleton — moet de levensduur van het proces

@@ -45,6 +45,10 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     // Provenance-ruggengraat (fase 0a, #233).
     public DbSet<MiningRun> MiningRuns => Set<MiningRun>();
     public DbSet<Assertion> Assertions => Set<Assertion>();
+    // Canonieke entiteiten & entity-resolution (fase 1, #225).
+    public DbSet<CanonicalEntity> CanonicalEntities => Set<CanonicalEntity>();
+    public DbSet<MergeDecision> MergeDecisions => Set<MergeDecision>();
+    public DbSet<MergeCandidate> MergeCandidates => Set<MergeCandidate>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -380,6 +384,57 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // "Heeft dit feit al provenance?" — de Ring-A-audit zoekt op subject.
             e.HasIndex(x => new { x.FactKind, x.Subject });
             e.HasIndex(x => x.MiningRunId);
+        });
+
+        // Canonieke entiteiten & entity-resolution (fase 1, #225). Postgres is de
+        // bron van waarheid; de Neo4j-projectie is idempotent herbouwbaar (MERGE op
+        // de canonieke id). pg_trgm staat als extensie klaar voor het lexicale
+        // schaal-pad (§3.2) — de fase-1-scorer draait in-memory en gate-consistent.
+        b.HasPostgresExtension("pg_trgm");
+        b.Entity<CanonicalEntity>(e =>
+        {
+            e.ToTable("canonical_entity");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Kind);
+            e.HasIndex(x => x.Status);
+            // Eén canonieke rij per (kind, label): de harde borg tegen duplicatie
+            // (#1) náást de service-resolutie. Case-collisie is de service's taak
+            // (genormaliseerd resolven vóór insert); dit vangt exacte duplicaten.
+            e.HasIndex(x => new { x.Kind, x.CanonicalLabel }).IsUnique();
+            e.Property(x => x.Embedding).HasColumnType(vectorType);
+            // Tombstone-verwijzing naar de overlevende entiteit (self-FK). Restrict:
+            // een doel met tombstones eromheen mag niet stil verdwijnen — dat zou
+            // het herstelpad (unconsolidate) breken.
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.MergedIntoId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<MergeDecision>(e =>
+        {
+            e.ToTable("merge_decision");
+            e.HasKey(x => x.Id);
+            // "Welke merge(s) raakten deze entiteit" + het herstelpad-zoekpad.
+            e.HasIndex(x => x.SourceEntityId);
+            e.HasIndex(x => x.TargetEntityId);
+            // Merge-beslissing verwijst naar entiteiten die als tombstone blijven
+            // bestaan; nooit cascade-deleten (audit-spoor is heilig).
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.SourceEntityId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.TargetEntityId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<MergeCandidate>(e =>
+        {
+            e.ToTable("merge_candidate");
+            e.HasKey(x => x.Id);
+            // Ongeordend uniek paar (service ordent A<B) — nooit twee spiegelrijen.
+            e.HasIndex(x => new { x.EntityAId, x.EntityBId }).IsUnique();
+            e.HasIndex(x => x.Status);
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.EntityAId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.EntityBId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 
