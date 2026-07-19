@@ -114,8 +114,16 @@ public class InteractionPromotionService(RbRulesDbContext db)
         InteractionPromotionRequest request, string kind, string dedupeKey,
         InteractionGateResult gate, string runId, CancellationToken ct)
     {
-        // Bestaande kandidaat op deze sleutel intrekken (status → rejected) zodat
-        // ze niet als graaf-knoop blijft hangen; nieuwe verwerping heeft er geen.
+        // Beide schrijfstappen (feit/tombstone + provenance-beslissing) in één
+        // transactie: een crash tussen de twee mag geen verworpen-zonder-memo of
+        // gedemote-zonder-beslissing achterlaten (rode draad #236: geen onzichtbare
+        // half-state).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        // Bestaande interactie op deze sleutel demoten (status → rejected) zodat ze
+        // niet als graaf-knoop blijft hangen en de projectie ze overslaat; een
+        // gepromoveerde die nu valt verliest ook zijn PromotedAt (geen misleidende
+        // timestamp op een verworpen knoop). Nieuwe verwerping heeft er geen.
         var existing = await db.Interactions
             .FirstOrDefaultAsync(x => x.AgentRef == request.AgentRef
                 && x.PatientRef == request.PatientRef && x.Kind == kind, ct);
@@ -123,22 +131,29 @@ public class InteractionPromotionService(RbRulesDbContext db)
         {
             existing.Status = InteractionStatus.Rejected;
             existing.StatusReason = gate.StatusReason;
+            existing.PromotedAt = null;
         }
 
-        // Tombstone alleen aanmaken als er nog geen levende op deze sleutel staat.
-        var alreadyTombstoned = await db.RejectionTombstones
-            .AnyAsync(t => t.DedupeKey == dedupeKey && !t.Lifted, ct);
-        if (!alreadyTombstoned)
-            db.RejectionTombstones.Add(new RejectionTombstone
-            {
-                DedupeKey = dedupeKey,
-                AgentRef = request.AgentRef,
-                PatientRef = request.PatientRef,
-                Kind = kind,
-                Reason = gate.StatusReason,
-                Actor = "gate",
-                RunId = runId,
-            });
+        // Grafsteen alleen als de poort de verwerping duurzaam-gegrond acht
+        // (deterministische steun; nooit op een losstaand LLM-verdict of een
+        // transiënte schema-fout, #226-review) én er nog geen levende op deze
+        // sleutel staat.
+        if (gate.WritesTombstone)
+        {
+            var alreadyTombstoned = await db.RejectionTombstones
+                .AnyAsync(t => t.DedupeKey == dedupeKey && !t.Lifted, ct);
+            if (!alreadyTombstoned)
+                db.RejectionTombstones.Add(new RejectionTombstone
+                {
+                    DedupeKey = dedupeKey,
+                    AgentRef = request.AgentRef,
+                    PatientRef = request.PatientRef,
+                    Kind = kind,
+                    Reason = gate.StatusReason,
+                    Actor = "gate",
+                    RunId = runId,
+                });
+        }
 
         await db.SaveChangesAsync(ct);
         db.InteractionDecisions.Add(new InteractionDecision
@@ -149,6 +164,7 @@ public class InteractionPromotionService(RbRulesDbContext db)
             RunId = runId,
         });
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
 
         return new(gate.Outcome, gate.StatusReason, existing?.Id);
     }
@@ -159,6 +175,11 @@ public class InteractionPromotionService(RbRulesDbContext db)
         IReadOnlyList<InteractionConditionInput> conditions,
         InteractionGateResult gate, string runId, CancellationToken ct)
     {
+        // Feit (SoT) + provenance-Assertion + beslissing in één transactie: een
+        // crash/FK-fout tussen de twee SaveChanges mag geen gepromoveerd feit
+        // zonder Assertion achterlaten (0a-dubbele-write-guard; rode draad #236).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         var interaction = await db.Interactions
             .Include(x => x.Conditions)
             .FirstOrDefaultAsync(x => x.AgentRef == request.AgentRef
@@ -206,6 +227,20 @@ public class InteractionPromotionService(RbRulesDbContext db)
         // SaveChanges vóór de Assertion: de interaction-Id (identity) is de subject-ref.
         await db.SaveChangesAsync(ct);
 
+        // Verifier/Verdict eerlijk labelen naar de tier (KNOWLEDGE.md-labeling +
+        // rode draad): alleen een gepromoveerd feit draagt deterministische steun en
+        // is SUPPORTED; een candidate wacht op corroboratie en een
+        // model_hypothesized_unruled is per definitie een onbewezen hypothese — die
+        // mogen niet als "llm+lexical/SUPPORTED" verschijnen (#226-review).
+        var (verifier, verdict) = gate.Outcome switch
+        {
+            InteractionGateOutcome.Promoted =>
+                (request.LexicalSupport ? "llm+lexical" : "llm+consensus", "SUPPORTED"),
+            InteractionGateOutcome.Candidate => ("llm", "CANDIDATE"),
+            InteractionGateOutcome.ModelHypothesizedUnruled => ("llm", "HYPOTHESIZED"),
+            _ => ("llm", "UNVERIFIED"),
+        };
+
         var run = await db.MiningRuns.AsNoTracking().FirstOrDefaultAsync(r => r.Id == runId, ct);
         db.Assertions.Add(new Assertion
         {
@@ -216,8 +251,8 @@ public class InteractionPromotionService(RbRulesDbContext db)
             DerivedFromRef = request.DerivedFromRef,
             Model = run?.LlmModel,
             PromptVersion = run?.PromptVersion,
-            Verifier = "llm+lexical",
-            Verdict = "SUPPORTED",
+            Verifier = verifier,
+            Verdict = verdict,
         });
         db.InteractionDecisions.Add(new InteractionDecision
         {
@@ -227,6 +262,7 @@ public class InteractionPromotionService(RbRulesDbContext db)
             RunId = runId,
         });
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
 
         return new(gate.Outcome, gate.StatusReason, interaction.Id);
     }

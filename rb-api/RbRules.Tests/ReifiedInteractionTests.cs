@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Pgvector;
 using RbRules.Domain;
@@ -268,6 +269,38 @@ public class ReifiedInteractionTests
     }
 
     [Fact]
+    public void Extraction_Parse_CarriesInteractsVerdict_BothPolarities()
+    {
+        // Het interacts-verdict wordt de promotie-blokkerende LlmVerdictInteracts —
+        // beide polariteiten moeten trouw doorkomen (mutatie die het hardcodet zou
+        // elke "geen interactie" stil positief maken).
+        var raw = """
+        {"interactions":[
+          {"from":"card:a","to":"card:b","kind":"COUNTERS","interacts":true},
+          {"from":"card:b","to":"card:a","kind":"MODIFIES","interacts":false}
+        ]}
+        """;
+        var parsed = InteractionExtraction.Parse(raw, Vocab());
+        Assert.Equal(2, parsed.Count);
+        Assert.True(parsed[0].Interacts);
+        Assert.False(parsed[1].Interacts);
+    }
+
+    [Fact]
+    public void Extraction_Parse_DropsSelfLoop()
+    {
+        // from == to (een kaart die zichzelf countert) is een write-guard-schending
+        // en moet vallen.
+        var raw = """
+        {"interactions":[
+          {"from":"card:a","to":"card:a","kind":"COUNTERS","interacts":true}
+        ]}
+        """;
+        var parsed = InteractionExtraction.Parse(raw, Vocab());
+        Assert.Empty(parsed);
+    }
+
+    [Fact]
     public void RelationTypeConstraint_AllowsCardCardCounters_RejectsBareStructural()
     {
         Assert.True(RelationTypeConstraint.Allows(EntityType.Card, "COUNTERS", EntityType.Card));
@@ -447,10 +480,150 @@ public class ReifiedInteractionTests
         Assert.Equal(InteractionConditionKinds.Status, ix.Conditions[0].OnKind);
     }
 
+    // ── Grafsteen alleen bij duurzaam-gegronde verwerping (#226-review #1) ────
+
+    [Fact]
+    public async Task Service_LoneNegativeVerdict_NoTombstone_DoesNotPermanentlyBlock()
+    {
+        // Een kaal negatief LLM-verdict (geen lexicale/consensus-steun) mag de
+        // sleutel niet permanent sluiten (rode draad: LLM-alleen draagt nooit een
+        // blijvende destructieve actie). Geen grafsteen → een latere, volledig
+        // gesteunde run promoveert alsnog.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var rejected = await svc.PromoteAsync(
+            Req(agentType: EntityType.Keyword, patientType: EntityType.Keyword,
+                agent: "mechanic:Deflect", patient: "mechanic:Assault",
+                lexical: false, consensus: 0, verdict: false), runId);
+        Assert.Equal(InteractionGateOutcome.Rejected, rejected.Outcome);
+        Assert.False(await db.RejectionTombstones.AnyAsync());   // GEEN grafsteen
+
+        var reopened = await svc.PromoteAsync(
+            Req(agentType: EntityType.Keyword, patientType: EntityType.Keyword,
+                agent: "mechanic:Deflect", patient: "mechanic:Assault",
+                lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, reopened.Outcome);
+    }
+
+    [Fact]
+    public async Task Service_SchemaRejection_NoTombstone_AllowsLaterPromotion()
+    {
+        // Een schema/structuur-fout (hier: verkeerd geresolvede agent-EntityType →
+        // rol-range faalt) is transiënt en mag geen permanente grafsteen achterlaten.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var rejected = await svc.PromoteAsync(
+            Req(agentType: EntityType.Mechanic, patientType: EntityType.Card,
+                agent: "mechanic:Deflect", patient: "card:b",
+                lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Rejected, rejected.Outcome);
+        Assert.Contains("schema", rejected.StatusReason);
+        Assert.False(await db.RejectionTombstones.AnyAsync());   // GEEN grafsteen
+
+        // Entity-resolution gecorrigeerd (agent is toch een Card) → dezelfde sleutel
+        // promoveert nu, niet geblokkeerd door een grafsteen.
+        var reopened = await svc.PromoteAsync(
+            Req(agentType: EntityType.Card, patientType: EntityType.Card,
+                agent: "mechanic:Deflect", patient: "card:b",
+                lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, reopened.Outcome);
+    }
+
+    // ── Eerlijke Assertion-labels per tier (#226-review #5) ───────────────────
+
+    [Fact]
+    public async Task Service_HypothesizedTier_AssertionIsNotLabelledSupported()
+    {
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var r = await svc.PromoteAsync(Req(lexical: false, consensus: 0, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.ModelHypothesizedUnruled, r.Outcome);
+
+        var assertion = await db.Assertions.SingleAsync();
+        Assert.Equal("HYPOTHESIZED", assertion.Verdict);
+        Assert.Equal("llm", assertion.Verifier);
+        Assert.NotEqual("SUPPORTED", assertion.Verdict);   // geen overdreven verificatie
+    }
+
+    [Fact]
+    public async Task Service_CandidateTier_AssertionIsLabelledCandidate()
+    {
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var r = await svc.PromoteAsync(Req(
+            agentType: EntityType.Keyword, patientType: EntityType.Keyword,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault",
+            lexical: false, consensus: 1, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Candidate, r.Outcome);
+
+        var assertion = await db.Assertions.SingleAsync();
+        Assert.Equal("CANDIDATE", assertion.Verdict);
+        Assert.Equal("llm", assertion.Verifier);
+    }
+
+    [Fact]
+    public async Task Service_PromotedViaConsensus_AssertionVerifierReflectsConsensus()
+    {
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var r = await svc.PromoteAsync(Req(lexical: false, consensus: 2, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, r.Outcome);
+
+        var assertion = await db.Assertions.SingleAsync();
+        Assert.Equal("SUPPORTED", assertion.Verdict);
+        Assert.Equal("llm+consensus", assertion.Verifier);   // geen lexicale steun geclaimd
+    }
+
+    // ── Demotie-tak van RejectAsync (#226-review #6) ──────────────────────────
+
+    [Fact]
+    public async Task Service_RejectAfterPromotion_DemotesExistingNode_ClearsPromotedAt()
+    {
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        // 1. Promoveer.
+        var promoted = await svc.PromoteAsync(Req(lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, promoted.Outcome);
+        var before = await db.Interactions.SingleAsync();
+        Assert.NotNull(before.PromotedAt);
+        var interactionId = before.Id;
+
+        // 2. Latere run met deterministische steun maar negatief verdict → verwerpen.
+        //    De bestaande knoop wordt gedemote (status → rejected, PromotedAt gewist)
+        //    en er verschijnt een grafsteen + beslissings-memo.
+        var rejected = await svc.PromoteAsync(Req(lexical: true, verdict: false), runId);
+        Assert.Equal(InteractionGateOutcome.Rejected, rejected.Outcome);
+        Assert.Equal(interactionId, rejected.InteractionId);
+
+        var after = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Rejected, after.Status);
+        Assert.Null(after.PromotedAt);                        // geen misleidende timestamp
+        Assert.True(await db.RejectionTombstones.AnyAsync(t => !t.Lifted));
+
+        var decisions = await db.InteractionDecisions
+            .Where(d => d.InteractionId == interactionId).ToListAsync();
+        Assert.Contains(decisions, d => d.Outcome == InteractionStatus.Rejected);
+    }
+
     // ── InMemory-context (pgvector als tekst, zoals de andere service-tests) ──
     private static RbRulesDbContext NewDb() => new InMemoryDbContext(
         new DbContextOptionsBuilder<RbRulesDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            // InMemory kent geen transacties; de service draait er wél in (Postgres) —
+            // voor de test volstaat negeren (zelfde patroon als de andere service-tests).
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options);
 
     private sealed class InMemoryDbContext(DbContextOptions<RbRulesDbContext> options)

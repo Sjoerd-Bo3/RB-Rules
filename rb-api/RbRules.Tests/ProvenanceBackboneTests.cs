@@ -295,6 +295,54 @@ public class ProvenanceBackboneTests
         Assert.True(report.Passes);
     }
 
+    /// <summary>Fase-2 gereïficeerde interacties tellen óók mee in de Ring-A-gate
+    /// (#226-review #4): een levend (niet-verworpen) nieuw <see cref="Interaction"/>
+    /// -feit zonder Assertion laat de gate falen; een verworpen interactie is geen
+    /// levend feit en telt niet; een legacy interactie is backlog.</summary>
+    [Fact]
+    public async Task AuditAsync_CountsReifiedInteractionsMissingProvenance_ExcludesRejected()
+    {
+        await using var db = NewDb();
+        var cutoff = DateTimeOffset.FromUnixTimeMilliseconds(2_000_000_000_000);
+        var newTime = cutoff.AddDays(1);
+        var legacyTime = cutoff.AddDays(-1);
+
+        // Nieuw, levend feit zónder Assertion → laat de gate falen.
+        db.Interactions.Add(new Interaction
+        {
+            AgentRef = "card:a", PatientRef = "card:b", Kind = InteractionKinds.Counters,
+            Status = InteractionStatus.Promoted, CreatedByRunId = "run", DetectedAt = newTime,
+        });
+        // Nieuw, MÉT bijpassende Assertion → telt niet mee.
+        var withProv = new Interaction
+        {
+            Id = 555, AgentRef = "card:c", PatientRef = "card:d", Kind = InteractionKinds.Modifies,
+            Status = InteractionStatus.Candidate, CreatedByRunId = "run", DetectedAt = newTime,
+        };
+        db.Interactions.Add(withProv);
+        db.Assertions.Add(AssertionFor(
+            ProvenanceAuditService.ReifiedInteractionSubjectPrefix + 555, FactKinds.Interaction));
+        // Nieuw maar verworpen (geen levend feit) → telt niet mee.
+        db.Interactions.Add(new Interaction
+        {
+            AgentRef = "card:e", PatientRef = "card:f", Kind = InteractionKinds.Grants,
+            Status = InteractionStatus.Rejected, CreatedByRunId = "run", DetectedAt = newTime,
+        });
+        // Legacy, levend, zónder Assertion → backlog, blokkeert niet.
+        db.Interactions.Add(new Interaction
+        {
+            AgentRef = "card:g", PatientRef = "card:h", Kind = InteractionKinds.Requires,
+            Status = InteractionStatus.Promoted, CreatedByRunId = "run", DetectedAt = legacyTime,
+        });
+        await db.SaveChangesAsync();
+
+        var report = await new ProvenanceAuditService(db).AuditAsync(cutoff);
+
+        Assert.Equal(1, report.FactsMissingAssertion);   // alleen het nieuwe levende feit
+        Assert.Equal(1, report.LegacyBacklog);           // de legacy interactie
+        Assert.False(report.Passes);
+    }
+
     /// <summary>De embedding-tak (productie-projectie <c>EmbeddingRow</c> + filter):
     /// een rij mét content-hash maar zónder geldig model is een provenance-fout in
     /// de nieuwe pipeline; een rij zonder hash is legacy-backlog.</summary>

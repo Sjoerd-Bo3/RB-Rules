@@ -41,6 +41,22 @@ public class ProvenanceAuditService(RbRulesDbContext db)
                 a.FactKind == FactKinds.CardInteraction && a.Subject == InteractionSubjectPrefix + i.Id))
             .CountAsync(ct);
 
+        // Fase-2 gereïficeerde interacties (§2.3): een levend (niet-verworpen) feit
+        // moet zijn Assertion (subject interaction:{id}) dragen. Verworpen interacties
+        // zijn geen levende feiten (ze dragen een tombstone, geen Assertion) → uitsluiten.
+        var reifiedNew = await db.Interactions.AsNoTracking()
+            .Where(i => i.Status != InteractionStatus.Rejected)
+            .Where(i => i.DetectedAt >= newFactCutoff)
+            .Where(i => !db.Assertions.Any(a =>
+                a.FactKind == FactKinds.Interaction && a.Subject == ReifiedInteractionSubjectPrefix + i.Id))
+            .CountAsync(ct);
+        var reifiedLegacy = await db.Interactions.AsNoTracking()
+            .Where(i => i.Status != InteractionStatus.Rejected)
+            .Where(i => i.DetectedAt < newFactCutoff)
+            .Where(i => !db.Assertions.Any(a =>
+                a.FactKind == FactKinds.Interaction && a.Subject == ReifiedInteractionSubjectPrefix + i.Id))
+            .CountAsync(ct);
+
         // Embeddings: een rij die al een content-hash draagt (dus door de nieuwe
         // pipeline geraakt) MOET een geldig model dragen — de dim is structureel
         // 1024 (getypte vector-kolom), dus die kan niet mismatchen. Legacy-rijen
@@ -48,9 +64,9 @@ public class ProvenanceAuditService(RbRulesDbContext db)
         var (embMissingNew, embLegacy) = await AuditEmbeddingsAsync(ct);
 
         return new ProvenanceAudit.Report(
-            FactsMissingAssertion: relationsNew + interactionsNew,
+            FactsMissingAssertion: relationsNew + interactionsNew + reifiedNew,
             EmbeddingsMissingProvenance: embMissingNew,
-            LegacyBacklog: relationsLegacy + interactionsLegacy + embLegacy);
+            LegacyBacklog: relationsLegacy + interactionsLegacy + reifiedLegacy + embLegacy);
     }
 
     private async Task<(int MissingNew, int Legacy)> AuditEmbeddingsAsync(CancellationToken ct)
@@ -103,6 +119,9 @@ public class ProvenanceAuditService(RbRulesDbContext db)
     // concat wordt.
     public const string RelationSubjectPrefix = "relation:";
     public const string InteractionSubjectPrefix = "card_interaction:";
+    /// <summary>Subject-prefix (BrainRef.Format-vorm) van een fase-2 gereïficeerde
+    /// <see cref="Interaction"/> — <c>interaction:{id}</c>.</summary>
+    public const string ReifiedInteractionSubjectPrefix = "interaction:";
 }
 
 /// <summary>Canonieke <see cref="Assertion.FactKind"/>-waarden (fase 0a, #233):

@@ -59,8 +59,16 @@ public sealed record InteractionGateSignals(
 }
 
 /// <summary>De poort-beslissing: de tier + een memo die zégt welke poort
-/// faalde/slaagde (§3.4 — zichtbaar in de reviewqueue, inzicht-thread #236).</summary>
-public sealed record InteractionGateResult(InteractionGateOutcome Outcome, string StatusReason)
+/// faalde/slaagde (§3.4 — zichtbaar in de reviewqueue, inzicht-thread #236).
+/// <paramref name="WritesTombstone"/> zegt of een verwerping een <b>duurzame</b>
+/// <see cref="RejectionTombstone"/> verdient (flip-flop-suppressie) — alleen wanneer
+/// de verwerping deterministisch gegrond is. Een transiënte schema/structuur-fout
+/// (bv. nog-slechte entity-resolution) en een <i>losstaand</i> negatief LLM-verdict
+/// verdienen géén grafsteen: die zou een legitieme interactie permanent onderdrukken
+/// en botst met de rode draad (#236) dat een LLM-oordeel alléén nooit een
+/// destructieve/blijvende actie draagt.</summary>
+public sealed record InteractionGateResult(
+    InteractionGateOutcome Outcome, string StatusReason, bool WritesTombstone = false)
 {
     /// <summary>De bijbehorende <see cref="InteractionStatus"/>-tier-string.</summary>
     public string Status => Outcome switch
@@ -100,15 +108,28 @@ public static class InteractionPromotionGate
 
         // 2. Schema-poort is hard: een kale gekwalificeerde edge of een rol/conditie
         //    buiten de ontologie kan geen feit worden (versla #3, structuurverlies).
+        //    GEEN grafsteen: een schema/structuur-fout is doorgaans transiënt (nog-
+        //    slechte entity-resolution levert een verkeerde rol-range); een tombstone
+        //    zou een later-correct opgeloste, volledig gesteunde interactie permanent
+        //    onderdrukken. Deze run verwerpen, maar de sleutel niet blijvend sluiten.
         if (!s.SchemaValid)
             return new(InteractionGateOutcome.Rejected,
-                $"schema-schending: {s.SchemaReason ?? "reïficatie-vorm ongeldig"}");
+                $"schema-schending: {s.SchemaReason ?? "reïficatie-vorm ongeldig"}",
+                WritesTombstone: false);
 
         // 3. Het LLM-verdict is een noodzakelijke (niet voldoende) voorwaarde: geen
-        //    interactie volgens het model → verwerpen (schrijft een flip-flop-memo).
+        //    interactie volgens het model → verwerpen. Een grafsteen (blijvende,
+        //    destructieve actie) mag hier NIET op een losstaand LLM-verdict rusten
+        //    (rode draad #236): alleen wanneer er deterministische steun (lexicaal/
+        //    consensus) náást het verdict staat, is de verwerping duurzaam gegrond en
+        //    verdient ze flip-flop-suppressie. Een kaal false-verdict → soft-reject,
+        //    geen grafsteen, zodat een LLM-false-negative de sleutel niet permanent sluit.
         if (!s.LlmVerdictInteracts)
             return new(InteractionGateOutcome.Rejected,
-                "LLM-verdict: geen noemenswaardige interactie");
+                s.HasDeterministicSupport
+                    ? "LLM-verdict: geen noemenswaardige interactie (ondanks deterministische steun)"
+                    : "LLM-verdict: geen noemenswaardige interactie",
+                WritesTombstone: s.HasDeterministicSupport);
 
         // 4. Verdict positief + deterministische steun → promoveren.
         if (s.HasDeterministicSupport)
