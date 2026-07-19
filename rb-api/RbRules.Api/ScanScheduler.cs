@@ -231,6 +231,16 @@ public class ScanScheduler(
                 // run. "decks" hergebruikt DeckIngestService ongewijzigd
                 // (sitemap → pagina's → opslag, #148) en hervat de backfill
                 // vanzelf waar het grootboek bleef.
+                // Nachtrun (#245) VÓÓR de periodieke jobs: de volledige ONGECAPTE keten
+                // in een klok-venster (default 00:00–11:00 lokaal). Anders dan de
+                // interval-schedules hieronder is dit klok-gebaseerd — de grote run moet
+                // 's nachts vallen. Bewust als EERSTE gate-poging in de tick: een
+                // elke-tick-due periodieke job (consolidatechanges) grijpt anders de
+                // single-job-gate vóór de nachtrun en starveert 'm een hele nacht
+                // (review #245). De inline stappen hierboven gebruiken de gate niet en
+                // blokkeren de nachtrun dus niet.
+                await TryStartNightlyAsync(scope.ServiceProvider, ct);
+
                 foreach (var (jobName, window) in JobSchedules)
                     await TryStartPeriodicJobAsync(scope.ServiceProvider, jobName, window, ct);
 
@@ -239,11 +249,6 @@ public class ScanScheduler(
                 // bestaande cadans; de mogelijkheid staat wel klaar.
                 foreach (var (pathName, window) in PathSchedules)
                     await TryStartPeriodicPathAsync(scope.ServiceProvider, pathName, window, ct);
-
-                // Nachtrun (#245): de volledige ONGECAPTE keten in een klok-venster
-                // (default 00:00–11:00 lokaal). Anders dan de interval-schedules
-                // hierboven is dit klok-gebaseerd — de grote run moet 's nachts vallen.
-                await TryStartNightlyAsync(scope.ServiceProvider, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

@@ -10,12 +10,19 @@ public sealed record NightlyRunSettings(int StartHour, int EndHour, string TimeZ
 {
     public static readonly NightlyRunSettings Default = new(0, 11, "Europe/Amsterdam");
 
-    public static NightlyRunSettings FromEnvironment() => new(
-        StartHour: ParseHour("NIGHTLY_START_HOUR", 0),
-        EndHour: ParseHour("NIGHTLY_END_HOUR", 11),
-        TimeZoneId: Environment.GetEnvironmentVariable("NIGHTLY_TZ") is { Length: > 0 } tz
-            ? tz
-            : "Europe/Amsterdam");
+    public static NightlyRunSettings FromEnvironment()
+    {
+        var start = ParseHour("NIGHTLY_START_HOUR", 0);
+        var end = ParseHour("NIGHTLY_END_HOUR", 11);
+        var tz = Environment.GetEnvironmentVariable("NIGHTLY_TZ") is { Length: > 0 } t
+            ? t
+            : "Europe/Amsterdam";
+        // Alleen dezelfde-dag-vensters (start < end): de eenmaal-per-dag-dedup
+        // (NightlyWindow.RanToday, op kalenderdag) klopt niet voor een middernacht-
+        // kruisend venster. Ongeldige config → terug naar de default 00:00–11:00
+        // (#245-review).
+        return start < end ? new(start, end, tz) : new(0, 11, tz);
+    }
 
     private static int ParseHour(string envVar, int fallback) =>
         int.TryParse(Environment.GetEnvironmentVariable(envVar), out var v) && v is >= 0 and <= 23

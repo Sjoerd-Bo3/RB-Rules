@@ -156,6 +156,24 @@ public class BreinPredicateMiningServiceTests
         Assert.Equal(0, run.Verified);
     }
 
+    // ── Nachtrun-deadline (#245) ───────────────────────────────────────────────
+    [Fact]
+    public async Task RunAsync_DeadlineVerstreken_StoptDirect_GeenPredicaat_MeerWerk()
+    {
+        using var db = NewDb();
+        await SeedMechanicAsync(db, "Bastion", definition: "Bastion grants Tank to a friendly unit.");
+        // rb-ai zou een predicaat minen, maar de deadline is al verstreken: de lus
+        // breekt vóór de eerste rb-ai-aanroep — geen predicaat, en er blijft werk liggen.
+        var svc = Service(db, () => Predicates(new { predicate = "grants", @object = "Tank" }));
+
+        var r = await svc.RunAsync(maxSubjects: NightlyWindow.UncappedItems,
+            deadline: DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        Assert.Equal(0, r.Subjects);  // niets verwerkt
+        Assert.True(r.CapHit);        // deadline afgekapt ⇒ vers werk blijft liggen
+        Assert.Empty(await db.MechanicPredicates.ToListAsync());
+    }
+
     // ── testinfra ─────────────────────────────────────────────────────────────
 
     private static BreinPredicateMiningService Service(RbRulesDbContext db, Func<string?> body) =>
