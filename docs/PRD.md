@@ -961,7 +961,11 @@ de globale duur-vangrail).
   verkenner (canoniek label + alias-lexicon + merge-status, filterbaar op
   kind/status); een **interacties**-verkenner (gereïficeerde interacties met
   condities, tier-badge en de doorklikbare provenance-keten
-  WAS_GENERATED_BY/DERIVED_FROM/VERIFIED_BY per feit); een **conflicts**-
+  WAS_GENERATED_BY/DERIVED_FROM/VERIFIED_BY per feit). De entiteiten aan beide
+  kanten van een interactie zijn sinds #243 **klikbaar met hover-detail**: een
+  kaart toont bij hover naam + afbeelding en linkt door naar de kaartpagina
+  (`/cards/{id}`), een mechanic toont bij hover haar canonieke label + definitie
+  (geen detailpagina); ook de `verankerd:`-ref is opgelost. Een **conflicts**-
   verkenner (reasoning-tegenspraken met hun routering, incl. het
   misvattingen-kanaal); en een **AnswerTrace-viewer** (herspeelbaar antwoord:
   de dragende subgraaf/paden met trust-waarde-toen en de epoch-stempels).

@@ -819,7 +819,11 @@ Brein-verkenner (#236, `BrainAdminEndpoints` → `BrainExplorerService`, alle
 GET, read-only, admin-gated): `/brein/overzicht` (tegel-tellingen per
 brein-tabel), `/brein/entities` (canonieke entiteiten + alt-labels +
 merge-status, `kind`/`status`/`page`), `/brein/interactions` (gereïficeerde
-interacties + condities + tier + provenance-anker, `status`/`page`),
+interacties + condities + tier + provenance-anker, `status`/`page`; sinds #243
+levert het endpoint naast de items een `entities`-lookup: de distinct kaart-/
+mechanic-refs van de pagina, in twee EF-vertaalbare batch-queries opgelost naar
+naam + afbeelding + `/cards/{id}`-href resp. canoniek label + definitie — voor
+hover-detail en doorklik in de UI, read-only, geen tweede client-fetch),
 `/brein/assertions/{**ref}` (de provenance-keten van een feit-ref:
 WAS_GENERATED_BY/DERIVED_FROM/VERIFIED_BY — catch-all zodat section-/card-refs
 met slash meekomen), `/brein/conflicts` (reasoning-tegenspraken + routering,
