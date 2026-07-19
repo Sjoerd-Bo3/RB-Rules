@@ -42,6 +42,9 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<BenchmarkQuestion> BenchmarkQuestions => Set<BenchmarkQuestion>();
     public DbSet<BenchmarkRun> BenchmarkRuns => Set<BenchmarkRun>();
     public DbSet<BenchmarkResult> BenchmarkResults => Set<BenchmarkResult>();
+    // Provenance-ruggengraat (fase 0a, #233).
+    public DbSet<MiningRun> MiningRuns => Set<MiningRun>();
+    public DbSet<Assertion> Assertions => Set<Assertion>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -349,5 +352,64 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.HasIndex(x => x.RunId);
             e.HasIndex(x => x.QuestionId);
         });
+
+        // Provenance-ruggengraat (fase 0a, #233): PROV-O-Activity + gereïficeerd
+        // feit-met-herkomst. Postgres is de bron van waarheid; de Neo4j-projectie
+        // is idempotent herbouwbaar (GraphSyncService).
+        b.Entity<MiningRun>(e =>
+        {
+            e.ToTable("mining_run");
+            e.HasKey(x => x.Id);
+            // "Welke feiten kwamen uit deze run" + tijd-sortering (ULID is al
+            // sorteerbaar, maar StartedAt is de operationele as).
+            e.HasIndex(x => x.StartedAt);
+            e.HasIndex(x => x.Kind);
+        });
+
+        b.Entity<Assertion>(e =>
+        {
+            e.ToTable("assertion");
+            e.HasKey(x => x.Id);
+            // WAS_GENERATED_BY: verwijderen van een run mag de afgeleide feiten
+            // niet stil weesmaken — Restrict dwingt bewuste opschoning af
+            // (provenance is geen wegwerp-administratie).
+            e.HasOne(x => x.MiningRun).WithMany().HasForeignKey(x => x.MiningRunId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Document>().WithMany().HasForeignKey(x => x.DerivedFromDocumentId)
+                .OnDelete(DeleteBehavior.SetNull);
+            // "Heeft dit feit al provenance?" — de Ring-A-audit zoekt op subject.
+            e.HasIndex(x => new { x.FactKind, x.Subject });
+            e.HasIndex(x => x.MiningRunId);
+        });
+    }
+
+    /// <summary>Schrijfpoort (fase 0a, #233) — de .NET-helft van het dubbele
+    /// write-guard: een <see cref="Assertion"/> die de provenance-shape niet
+    /// haalt (geen WAS_GENERATED_BY of DERIVED_FROM) wordt hard geweigerd, ook
+    /// als een caller de <see cref="AssertionProvenanceGuard"/> zou vergeten.
+    /// Faalmodus #4 wordt zo een invariant, geen discipline.</summary>
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        GuardAssertions();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        GuardAssertions();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void GuardAssertions()
+    {
+        foreach (var entry in ChangeTracker.Entries<Assertion>())
+        {
+            if (entry.State is not (EntityState.Added or EntityState.Modified)) continue;
+            var result = AssertionProvenanceGuard.Validate(entry.Entity);
+            if (!result.IsValid)
+                throw new InvalidOperationException(
+                    $"Assertion '{entry.Entity.Id}' weigert de provenance-poort: {result.Reason}");
+        }
     }
 }

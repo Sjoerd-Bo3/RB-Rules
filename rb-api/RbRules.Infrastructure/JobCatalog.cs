@@ -272,7 +272,7 @@ public static class JobCatalog
         return new($"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics, "
             + $"{r.Sections} secties, {r.Concepts} concepten, {r.Claims} claims, "
             + $"{r.Sources} bronnen, {r.Errata} errata, {r.Changes} changes, "
-            + $"{r.Relations} relaties");
+            + $"{r.Relations} relaties, {r.MiningRuns} runs, {r.Assertions} assertions");
     }
 
     private static async Task<JobOutcome> PrimerAsync(

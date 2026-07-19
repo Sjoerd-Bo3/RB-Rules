@@ -7,7 +7,7 @@ namespace RbRules.Infrastructure;
 public record GraphSyncResult(
     int Cards, int Domains, int Tags, int Mechanics,
     int Sections, int Concepts, int Claims, int Sources, int Errata, int Changes,
-    int Relations, int Rulings);
+    int Relations, int Rulings, int MiningRuns = 0, int Assertions = 0);
 
 /// <summary>Neo4j-sync met batched UNWIND (audit-fix: de PoP deed ~4 queries
 /// per kaart; dit zijn er een handvol totaal). Tag ≠ Mechanic: facties/tribes
@@ -112,6 +112,21 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             {
                 c.Id, c.Scope, c.Ref, c.Text, c.Question, c.Provenance,
                 c.SourceRef, c.VerifiedAt,
+            })
+            .ToListAsync(ct);
+
+        // Provenance-ruggengraat (fase 0a, #233): PROV-O-Activity + Assertion.
+        // Postgres is de bron; deze projectie is idempotent herbouwbaar. De
+        // Assertion draagt in Postgres altijd WAS_GENERATED_BY + DERIVED_FROM
+        // (schrijfpoort), dus de edges hieronder resolveren per constructie.
+        var miningRuns = await db.MiningRuns.AsNoTracking()
+            .Select(r => new { r.Id, r.Kind, r.LlmModel, r.PromptVersion, r.StartedAt, r.CompletedAt })
+            .ToListAsync(ct);
+        var assertions = await db.Assertions.AsNoTracking()
+            .Select(a => new
+            {
+                a.Id, a.Subject, a.FactKind, a.MiningRunId, a.DerivedFromRef,
+                a.Model, a.EmbeddingModel, a.EmbeddingDim, a.Verifier, a.Verdict, a.AssertedAt,
             })
             .ToListAsync(ct);
 
@@ -367,6 +382,32 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             ["status"] = r.Status,
         }).ToList();
 
+        var miningRunRows = miningRuns.Select(r => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.MiningRun(r.Id).Format(),
+            ["id"] = r.Id,
+            ["kind"] = r.Kind,
+            ["llmModel"] = r.LlmModel,
+            ["promptVersion"] = r.PromptVersion,
+            ["startedAt"] = r.StartedAt.UtcDateTime.ToString("o"),
+            ["completedAt"] = r.CompletedAt?.UtcDateTime.ToString("o"),
+        }).ToList();
+
+        var assertionRows = assertions.Select(a => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Assertion(a.Id).Format(),
+            ["subject"] = a.Subject,
+            ["factKind"] = a.FactKind,
+            ["run"] = BrainRef.MiningRun(a.MiningRunId).Format(),
+            ["derivedFrom"] = a.DerivedFromRef,
+            ["model"] = a.Model,
+            ["embeddingModel"] = a.EmbeddingModel,
+            ["embeddingDim"] = a.EmbeddingDim,
+            ["verifier"] = a.Verifier,
+            ["verdict"] = a.Verdict,
+            ["assertedAt"] = a.AssertedAt.UtcDateTime.ToString("o"),
+        }).ToList();
+
         var affectsSection = new List<object>();
         var affectsCard = new List<object>();
         foreach (var c in changes)
@@ -440,6 +481,7 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             """
             MATCH (n) WHERE n:RuleSection OR n:Concept OR n:Claim
               OR n:Source OR n:Erratum OR n:Change OR n:Ruling
+              OR n:MiningRun OR n:Assertion
             DETACH DELETE n
             """);
 
@@ -517,6 +559,42 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         await RunEdgesAsync(tx, "MATCH (ch:Change {ref: p.change}) MATCH (t:RuleSection {ref: p.target}) MERGE (ch)-[:AFFECTS]->(t)", affectsSection);
         await RunEdgesAsync(tx, "MATCH (ch:Change {ref: p.change}) MATCH (t:Card {id: p.target}) MERGE (ch)-[:AFFECTS]->(t)", affectsCard);
 
+        // Provenance-knopen (fase 0a, #233): eerst de MiningRun-activities, dan
+        // de Assertions met hun WAS_GENERATED_BY- en DERIVED_FROM-edges. De
+        // DERIVED_FROM-doelen (Source/RuleSection/Card/…) bestaan op dit punt al,
+        // dus een label-loze ref-match resolveert (zelfde patroon als RELATES_TO).
+        await RunRowsAsync(tx,
+            """
+            CREATE (r:MiningRun {ref: row.ref, id: row.id, kind: row.kind,
+                                 llmModel: row.llmModel, promptVersion: row.promptVersion,
+                                 startedAt: row.startedAt, completedAt: row.completedAt})
+            """,
+            miningRunRows);
+        await RunRowsAsync(tx,
+            """
+            CREATE (a:Assertion {ref: row.ref, subject: row.subject, factKind: row.factKind,
+                                 derivedFrom: row.derivedFrom, model: row.model,
+                                 embeddingModel: row.embeddingModel, embeddingDim: row.embeddingDim,
+                                 verifier: row.verifier, verdict: row.verdict, assertedAt: row.assertedAt})
+            """,
+            assertionRows);
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (a:Assertion {ref: row.ref})
+            MATCH (run:MiningRun {ref: row.run})
+            MERGE (a)-[:WAS_GENERATED_BY]->(run)
+            """,
+            new Dictionary<string, object> { ["rows"] = assertionRows });
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (a:Assertion {ref: row.ref})
+            MATCH (src {ref: row.derivedFrom})
+            MERGE (a)-[:DERIVED_FROM]->(src)
+            """,
+            new Dictionary<string, object> { ["rows"] = assertionRows });
+
         // RELATES_TO als laatste: beide eindpunten kunnen elke knoopsoort
         // zijn, dus pas nadat álle knopen bestaan. Match op de ref-property
         // (per constructie globaal uniek, §2.1) zonder label — een label-loze
@@ -550,7 +628,9 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             erratumRows.Count,
             changeRows.Count,
             relationRows.Count,
-            rulingRows.Count);
+            rulingRows.Count,
+            miningRunRows.Count,
+            assertionRows.Count);
     }
 
     private static async Task RunPairsAsync(

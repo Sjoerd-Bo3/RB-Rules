@@ -32,6 +32,15 @@ public static class GraphSchema
 
         // Geverifieerde rulings (#191): zelfde ref-sleutel-afspraak.
         "CREATE CONSTRAINT ruling_ref IF NOT EXISTS FOR (rl:Ruling) REQUIRE rl.ref IS UNIQUE",
+
+        // Provenance-ruggengraat (fase 0a, #233): PROV-O-Activity + Assertion,
+        // dezelfde ref-sleutel-afspraak. De harde write-guard (Assertion draagt
+        // ALTIJD WAS_GENERATED_BY + DERIVED_FROM) leeft in Postgres (DbContext-
+        // poort + AssertionProvenanceGuard) en in de deterministische projectie
+        // hieronder; een relatie-existentie-constraint is Neo4j-Enterprise-only
+        // en dus bewust niet de bron van die garantie.
+        "CREATE CONSTRAINT mining_run_ref IF NOT EXISTS FOR (r:MiningRun) REQUIRE r.ref IS UNIQUE",
+        "CREATE CONSTRAINT assertion_ref IF NOT EXISTS FOR (a:Assertion) REQUIRE a.ref IS UNIQUE",
     ];
 
     public static async Task EnsureAsync(IDriver driver, CancellationToken ct = default)
