@@ -5,6 +5,8 @@ using Microsoft.Extensions.Logging;
 using Pgvector;
 using Pgvector.EntityFrameworkCore;
 using RbRules.Domain;
+using RbRules.Domain.GraphRag;
+using RbRules.Infrastructure.GraphRag;
 
 namespace RbRules.Infrastructure;
 
@@ -122,9 +124,17 @@ public class AskService(
     RequestUserContext userContext, ILogger<AskService> logger,
     IDbContextFactory<RbRulesDbContext>? dbFactory = null,
     RewriteCache? rewriteCache = null,
-    AgenticInFlightTracker? agenticInFlight = null)
+    AgenticInFlightTracker? agenticInFlight = null,
+    BreinRetrievalService? brein = null)
 {
     private const int TopK = 8;
+
+    // Brein-GraphRAG-retrieval (#228) ACHTER de default-uit feature-flag. Null (de
+    // meeste constructors/tests) óf flag-uit ⇒ /ask draait EXACT zoals nu: geen
+    // brein-call, geen extra latency, geen gedragswijziging. Alleen wanneer de
+    // service bestaat ÉN Enabled is, verrijkt AskCoreAsync de context (best-effort,
+    // met nette terugval bij elke fout).
+    private readonly BreinRetrievalService? _brein = brein;
 
     // #153: de in-flight-reservering is proces-breed (singleton in DI). De
     // optionele parameter houdt de vele test-constructors ongewijzigd — die
@@ -290,6 +300,18 @@ public class AskService(
         var mentionsResult = await mentionsTask;
         var mentionsCard = mentionsResult.Value;
         var type = QuestionRouter.Classify(question, mentionsCard);
+
+        // Brein-GraphRAG-verrijking (#228) — ALLEEN achter de default-uit flag. Start
+        // hem hier, naast de AI-onafhankelijke lees-kanalen, zodat hij (indien aan)
+        // met de bestaande retrieval overlapt i.p.v. serieel latency toe te voegen.
+        // Flag uit óf geen service (de meeste paden) ⇒ deze tak wordt overgeslagen:
+        // geen brein-call, geen extra latency, exact het bestaande /ask-gedrag. Een
+        // benchmarkrun (#158) blijft eveneens buiten schot (isolatie). EnrichAsync
+        // slikt zelf elke niet-annulering-fout (null terug), dus dit kan /ask nooit
+        // laten falen.
+        var breinTask = _brein is { Enabled: true } && !options.Benchmark
+            ? _brein.EnrichAsync(question, type, ct)
+            : Task.FromResult<BreinEnrichment?>(null);
 
         // 0d. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend
         // blok — rewrite-onafhankelijk, dus ook alvast tijdens de rewrite.
@@ -648,8 +670,15 @@ public class AskService(
         // Blok-volgorde = de kennispiramide van #51: officieel (fragmenten,
         // rulings, kaartfeiten, banlijst) > primer > community-interpretatie >
         // misvattingen (#125, negatieve kennis — onderaan, kleurt nooit het oordeel).
+        // Brein-verrijking innen (zie waar breinTask start). Flag uit ⇒ null ⇒ leeg
+        // blok ⇒ de prompt is byte-voor-byte de bestaande. Een client-abort (OCE met
+        // ct geannuleerd) bubbelt bewust door; elke andere fout is al binnen
+        // EnrichAsync afgevangen tot null.
+        var breinEnrichment = await breinTask;
+        var breinBlock = breinEnrichment?.PromptBlock ?? "";
+
         var prompt =
-            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{misconceptionBlock}{historyBlock}\n\n{questionLabel}: {question}";
+            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{misconceptionBlock}{breinBlock}{historyBlock}\n\n{questionLabel}: {question}";
         var system = $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}";
         var task = images is { Count: > 0 } ? "hard" : "cheap";
 
@@ -861,6 +890,32 @@ public class AskService(
             catch
             {
                 // trace mag een antwoord nooit blokkeren
+            }
+
+            // Brein-AnswerTrace (#228, §6/#236): het immutable auditspoor van de
+            // GraphRAG-retrieval — WELKE subgraaf/paden/trust-gewichten het antwoord
+            // droegen, met de trust-waarde-toen. We schrijven de trace weg zodra het
+            // brein-blok NIET-LEEG was, niet alleen bij dragende Supports: een NoPath-
+            // oordeel, een gating-memo of een terugval-reden kleuren óók het antwoord
+            // (ze staan in de prompt, AskService.cs breinBlock) terwijl Supports leeg
+            // kan zijn — die beslissing mag geen onzichtbare state achterlaten (#236).
+            // Een leeg blok (retrieval vond niets, prompt byte-identiek) → geen trace,
+            // zodat de AnswerTraces-tabel niet met lege rijen vervuilt (#228-review).
+            // Best-effort en apart van de AskTrace: een haperende trace-write mag het
+            // antwoord (en de AskTrace) nooit blokkeren. Zichtbaar in de Brein-verkenner
+            // (#236); Postgres = SoT, de Neo4j-USED_ASSERTION-projectie is een
+            // integratie-follow-up.
+            if (breinEnrichment is { PromptBlock.Length: > 0 })
+            {
+                try
+                {
+                    db.AnswerTraces.Add(breinEnrichment.Outcome.Trace);
+                    await db.SaveChangesAsync(finishCt);
+                }
+                catch
+                {
+                    // brein-auditspoor mag een antwoord nooit blokkeren
+                }
             }
         }
 

@@ -5,7 +5,9 @@ using Pgvector.EntityFrameworkCore;
 using RbRules.Api;
 using RbRules.Api.Endpoints;
 using RbRules.Domain;
+using RbRules.Domain.GraphRag;
 using RbRules.Infrastructure;
+using RbRules.Infrastructure.GraphRag;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -60,13 +62,34 @@ builder.Services.AddHttpClient<EmbeddingService>(c =>
 builder.Services.AddScoped<CardEmbeddingPipeline>();
 builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
+// Brein-projectie (#227, §3.5): de brein-lagen die GraphSyncService niet dekt
+// (CanonicalEntity/MechanicPredicate/OntologyVersion) idempotent naar Neo4j.
+builder.Services.AddScoped<BreinProjectionService>();
 // Redeneer-laag (#227, §5): Neo4j-native inferentie + contradictie-detectie.
 builder.Services.AddScoped<ReasoningService>();
 builder.Services.AddScoped<ProvenanceAuditService>();
 builder.Services.AddScoped<EntityResolutionService>();
 builder.Services.AddScoped<InteractionPromotionService>();
+// Brein-mining-orkestratie (#226, §3.1/§3.4): tool-forced extractie via rb-ai →
+// entity-resolutie → fase-2-promotie-poort → atomair feit+provenance. Handmatige
+// jobs (breinmine-interacties/-predicaten), bewust NIET in de "alles"-keten.
+builder.Services.AddScoped<BreinInteractionMiningService>();
+builder.Services.AddScoped<BreinPredicateMiningService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
+// Brein-GraphRAG-retrieval in /ask (#228, §4) ACHTER de default-uit feature-flag
+// (BREIN_RETRIEVAL_ENABLED). De settings zijn singleton (uit env, één keer gelezen);
+// staat de flag uit, dan raakt AskService deze laag nooit aan. De vier fase-4-poorten
+// draaien tegen de live Neo4j + pgvector (INTEGRATIE-FOLLOW-UP: niet in CI — de
+// adapters degraderen bij uitval naar leeg, zodat /ask nooit een 500 krijgt). De
+// orchestrator + service zijn scoped (per request), net als AskService zelf.
+builder.Services.AddSingleton(_ => BreinRetrievalSettings.FromEnvironment());
+builder.Services.AddScoped<IGazetteerSource, PostgresGazetteerSource>();
+builder.Services.AddScoped<INodeContextSimilarity, PgVectorNodeSimilarity>();
+builder.Services.AddScoped<INodeAdjacency, Neo4jNodeAdjacency>();
+builder.Services.AddScoped<IGraphRetriever, BreinGraphRetriever>();
+builder.Services.AddScoped<RetrievalOrchestrator>();
+builder.Services.AddScoped<BreinRetrievalService>();
 // Rewrite-cache (#152): singleton — moet de levensduur van het proces
 // overspannen (AskService zelf is scoped, per request), klein en LRU op de
 // genormaliseerde vraag. Zonder registratie zou AskService's optionele

@@ -54,6 +54,13 @@ public static class JobCatalog
             new("rules", RulesAsync),
             new("bans", BansAsync),
             new("graph", GraphAsync),
+            // Brein-projectie (#227, §3.5): de brein-lagen die "graph" niet dekt
+            // (CanonicalEntity/MechanicPredicate/OntologyVersion) idempotent naar
+            // Neo4j. Additief naast "graph" (aparte service/transactie, eigen
+            // ref-namespace) en logisch ná "graph" (de basis-graaf moet er zijn).
+            // Bewust GEEN stap in de "alles"-keten — Neo4j-afhankelijk, draait als
+            // expliciete beheerdersactie (zelfde lijn als "graph"/"reason").
+            new("breinprojectie", BreinProjectionAsync),
             // Redeneer-laag (#227, §5): Neo4j-native inferentie (afgeleide edges)
             // + bounded contradictie-detectie (→ misvattingen/reviewqueue). Loopt
             // logisch ná "graph" (de projectie moet er zijn); bewust GEEN stap in
@@ -66,6 +73,15 @@ public static class JobCatalog
             new("owlaudit", OwlAuditAsync),
             new("primer", PrimerAsync),
             new("interactions", InteractionsAsync),
+            // Brein-mining (#226, §3.1/§3.4): tool-forced, ontologie-begrensde
+            // extractie via rb-ai → entity-resolutie (fase 1) → fase-2-promotie-poort
+            // → atomair feit+provenance. Twee losse, handmatige jobs — bewust GEEN
+            // stap in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk; expliciete
+            // beheerdersbeslissing, zelfde lijn als "graph"/"reason"/"claims"). De
+            // extractie is de eerste live rb-ai-koppeling van de fase-2/5-vorm; de
+            // promotie-poort en atomaire persistentie zijn al bewezen (ReifiedInteractionTests).
+            new("breinmine-interacties", BreinMineInteractionsAsync),
+            new("breinmine-predicaten", BreinMinePredicatesAsync),
             // Bronnenjacht (#63, stap 2): rb-ai doorzoekt het web (task
             // "research", #64) naar nieuwe regel-/uitlegbronnen. Vondsten
             // komen als SourceProposal in de reviewqueue (beheer →
@@ -285,6 +301,14 @@ public static class JobCatalog
             + $"{r.Relations} relaties, {r.MiningRuns} runs, {r.Assertions} assertions");
     }
 
+    private static async Task<JobOutcome> BreinProjectionAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        report("brein-lagen (canonieke entiteiten, mechanic-predicaten, ontologie-versies) naar Neo4j projecteren");
+        var r = await sp.GetRequiredService<BreinProjectionService>().ProjectAsync(progress: report, ct: ct);
+        return new(r.Summary);
+    }
+
     private static async Task<JobOutcome> ReasonAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
@@ -320,6 +344,23 @@ public static class JobCatalog
         var r = await sp.GetRequiredService<InteractionService>()
             .MineAsync(progress: report, ct: ct);
         return new($"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd");
+    }
+
+    private static async Task<JobOutcome> BreinMineInteractionsAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BreinInteractionMiningService>()
+            .RunAsync(progress: report, ct: ct);
+        // #190 vers-werk-semantiek: per-run gecapt; CapHit → nog focus-kaarten over.
+        return new(r.Summary, Drained: !r.CapHit);
+    }
+
+    private static async Task<JobOutcome> BreinMinePredicatesAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BreinPredicateMiningService>()
+            .RunAsync(progress: report, ct: ct);
+        return new(r.Summary, Drained: !r.CapHit);
     }
 
     private static async Task<JobOutcome> ScoutAsync(
