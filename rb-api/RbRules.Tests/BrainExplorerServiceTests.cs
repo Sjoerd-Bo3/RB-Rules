@@ -56,6 +56,75 @@ public class BrainExplorerServiceTests
     }
 
     [Fact]
+    public async Task Cockpit_ZonderData_LeegEnFlagPassthrough()
+    {
+        using var db = NewDb();
+        var svc = new BrainExplorerService(db);
+
+        var c = await svc.CockpitAsync(retrievalEnabled: false);
+
+        Assert.Equal(0, c.Interactions);
+        Assert.Equal(0, c.MechanicPredicates);
+        Assert.Equal(0, c.CanonicalEntities);
+        Assert.Equal(0, c.Conflicts);
+        Assert.Equal(0, c.ConflictsOpen);
+        Assert.Null(c.MineInteractionsRun);
+        Assert.Null(c.MinePredicatesRun);
+        Assert.Null(c.ProjectionRun);
+        Assert.Null(c.ReasonRun);
+        Assert.False(c.RetrievalEnabled);
+
+        // De flag is een pure passthrough van de env-instelling (endpoint levert 'm).
+        Assert.True((await svc.CockpitAsync(retrievalEnabled: true)).RetrievalEnabled);
+    }
+
+    [Fact]
+    public async Task Cockpit_MetData_TeltPerStapEnKiestNieuwsteRunPerJob()
+    {
+        using var db = NewDb();
+        db.MiningRuns.Add(Run("r1"));
+        var mech = Entity("Deflect", CanonicalEntityStatus.Canonical, "r1");
+        db.CanonicalEntities.Add(mech);
+        db.Interactions.Add(Interaction("card:a", "card:b", InteractionStatus.Promoted, "r1"));
+        db.ReasoningConflicts.Add(Conflict("claim:1", ReasoningConflictStatus.Open));
+        db.ReasoningConflicts.Add(Conflict("claim:2", ReasoningConflictStatus.Resolved));
+        await db.SaveChangesAsync();
+
+        db.MechanicPredicates.Add(new MechanicPredicateAssertion
+        {
+            SubjectEntityId = mech.Id, Predicate = "targets", ObjectToken = "unit",
+            CreatedByRunId = "r1",
+        });
+
+        // Twee runs van dezelfde job: de nieuwste (op CreatedAt) moet winnen.
+        var older = DateTimeOffset.UtcNow.AddHours(-2);
+        var newer = DateTimeOffset.UtcNow.AddMinutes(-5);
+        db.RunLogs.Add(new RunLog { Kind = "job", Ref = "breinmine-interacties", Status = "error", Detail = "oud", CreatedAt = older });
+        db.RunLogs.Add(new RunLog { Kind = "job", Ref = "breinmine-interacties", Status = "ok", Detail = "3 geverifieerd", CreatedAt = newer });
+        db.RunLogs.Add(new RunLog { Kind = "job", Ref = "breinprojectie", Status = "ok", Detail = "geprojecteerd", CreatedAt = newer });
+        // Een niet-brein-job en een andere RunLog-Kind mogen NIET meetellen.
+        db.RunLogs.Add(new RunLog { Kind = "job", Ref = "scan", Status = "ok", Detail = "scan", CreatedAt = newer });
+        db.RunLogs.Add(new RunLog { Kind = "scan", Ref = "breinmine-predicaten", Status = "ok", Detail = "geen job-kind", CreatedAt = newer });
+        await db.SaveChangesAsync();
+
+        var c = await new BrainExplorerService(db).CockpitAsync(retrievalEnabled: true);
+
+        Assert.Equal(1, c.Interactions);
+        Assert.Equal(1, c.MechanicPredicates);
+        Assert.Equal(1, c.CanonicalEntities);
+        Assert.Equal(2, c.Conflicts);
+        Assert.Equal(1, c.ConflictsOpen);
+
+        Assert.NotNull(c.MineInteractionsRun);
+        Assert.Equal("ok", c.MineInteractionsRun!.Status);
+        Assert.Equal("3 geverifieerd", c.MineInteractionsRun.Detail); // nieuwste run
+        Assert.NotNull(c.ProjectionRun);
+        Assert.Null(c.MinePredicatesRun); // alleen een niet-job-kind → telt niet
+        Assert.Null(c.ReasonRun);         // nog nooit gedraaid
+        Assert.True(c.RetrievalEnabled);
+    }
+
+    [Fact]
     public async Task Entities_TombstoneKrijgtDoellabelEnFiltert()
     {
         using var db = NewDb();

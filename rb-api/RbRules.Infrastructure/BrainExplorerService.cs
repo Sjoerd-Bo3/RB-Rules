@@ -27,6 +27,34 @@ public sealed record BrainOverviewCounts(
     int EvalBaselines,
     int AnswerTraces);
 
+/// <summary>Eén afgeronde brein-jobrun uit het run_log-grootboek (Kind="job",
+/// Ref=jobnaam): status + detailregel + tijdstip. Null in de cockpit = die job
+/// draaide nog nooit. Overleeft een herstart (grootboek, niet de in-memory
+/// JobRunner-snapshot) en toont dus ook de automatische scheduler-runs.</summary>
+public sealed record BrainJobRunItem(string Name, string Status, string? Detail, DateTimeOffset At);
+
+/// <summary>De operationele brein-cockpit (brein-jobs-ui): per-stap-tellingen +
+/// laatste-run per brein-job + de /ask-retrieval-flag. READ-ONLY en additief bovenop
+/// het bestaande overzicht. De pipeline is 1→2→3: extractie (interacties + mechanic-
+/// predicaten mineren) → projectie (naar Neo4j) → reasoner (afgeleide edges +
+/// conflicts). De flag zelf komt uit de omgeving (BreinRetrievalSettings), niet uit
+/// de DB — hij is geen knop maar een env-schakelaar op de VM.</summary>
+public sealed record BrainCockpit(
+    // Stap 1 — Extractie
+    int Interactions,
+    int MechanicPredicates,
+    BrainJobRunItem? MineInteractionsRun,
+    BrainJobRunItem? MinePredicatesRun,
+    // Stap 2 — Projectie (breinprojectie → Neo4j)
+    int CanonicalEntities,
+    BrainJobRunItem? ProjectionRun,
+    // Stap 3 — Reasoner (reason → afgeleide edges + conflicts)
+    int Conflicts,
+    int ConflictsOpen,
+    BrainJobRunItem? ReasonRun,
+    // /ask-retrieval (env-flag BREIN_RETRIEVAL_ENABLED, default uit)
+    bool RetrievalEnabled);
+
 /// <summary>Eén canonieke entiteit in de verkenner: canoniek label + alias-lexicon
 /// + merge-status. <see cref="MergedIntoLabel"/> is het label van de overlevende
 /// entiteit (voor een tombstone) — anders null.</summary>
@@ -140,6 +168,52 @@ public class BrainExplorerService(RbRulesDbContext db)
         MiningRuns: await db.MiningRuns.CountAsync(ct),
         EvalBaselines: await db.EvalBaselines.CountAsync(ct),
         AnswerTraces: await db.AnswerTraces.CountAsync(ct));
+
+    /// <summary>De operationele cockpit (brein-jobs-ui): per-stap-tellingen + de
+    /// laatste afronding per brein-job + de /ask-retrieval-flag. Read-only en
+    /// additief. <paramref name="retrievalEnabled"/> komt van de endpoint (uit de
+    /// <c>BreinRetrievalSettings</c>-singleton, env), niet uit de DB. De laatste-run
+    /// per job komt uit het run_log-grootboek (<see cref="RunLog"/> Kind="job",
+    /// Ref=jobnaam) — dat overleeft een herstart en dekt ook de scheduler-runs.</summary>
+    public async Task<BrainCockpit> CockpitAsync(bool retrievalEnabled, CancellationToken ct = default)
+    {
+        // De vier brein-jobs waarvan de cockpit de laatste afronding toont.
+        var brainJobs = new[]
+        {
+            "breinmine-interacties", "breinmine-predicaten", "breinprojectie", "reason",
+        };
+        // Greatest-n-per-group (nieuwste run per Ref) kan Npgsql niet server-side
+        // vertalen — de kandidaatrijen vertaalbaar (Where+Select) ophalen en
+        // in-memory het nieuwste per job kiezen (zelfde patroon als de assertion-
+        // ankers in InteractionsAsync). Begrensd: enkele jobs × hun run-historie.
+        var runRows = await db.RunLogs.AsNoTracking()
+            .Where(r => r.Kind == "job" && r.Ref != null && brainJobs.Contains(r.Ref))
+            .Select(r => new { r.Ref, r.Status, r.Detail, r.CreatedAt })
+            .ToListAsync(ct);
+        var lastByJob = runRows
+            .GroupBy(r => r.Ref!, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var r = g.OrderByDescending(x => x.CreatedAt).First();
+                    return new BrainJobRunItem(r.Ref!, r.Status, r.Detail, r.CreatedAt);
+                },
+                StringComparer.Ordinal);
+
+        return new BrainCockpit(
+            Interactions: await db.Interactions.CountAsync(ct),
+            MechanicPredicates: await db.MechanicPredicates.CountAsync(ct),
+            MineInteractionsRun: lastByJob.GetValueOrDefault("breinmine-interacties"),
+            MinePredicatesRun: lastByJob.GetValueOrDefault("breinmine-predicaten"),
+            CanonicalEntities: await db.CanonicalEntities.CountAsync(ct),
+            ProjectionRun: lastByJob.GetValueOrDefault("breinprojectie"),
+            Conflicts: await db.ReasoningConflicts.CountAsync(ct),
+            ConflictsOpen: await db.ReasoningConflicts
+                .CountAsync(c => c.Status == ReasoningConflictStatus.Open, ct),
+            ReasonRun: lastByJob.GetValueOrDefault("reason"),
+            RetrievalEnabled: retrievalEnabled);
+    }
 
     /// <summary>Canonieke entiteiten met alias-lexicon en merge-status, gepagineerd.
     /// Optioneel gefilterd op kind (mechanic/keyword/concept) en status (candidate/
