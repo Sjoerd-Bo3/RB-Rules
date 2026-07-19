@@ -182,6 +182,153 @@ public class BreinInteractionMiningServiceTests
         Assert.Equal(1, await db.Interactions.CountAsync());
     }
 
+    // ── Voortgangs-watermark: al-verwerkte focus-kaart wordt overgeslagen (#226) ─
+    [Fact]
+    public async Task RunAsync_SlaatAlGemineFocusKaartOver_SchuiftDoorDePool()
+    {
+        using var db = NewDb();
+        // Twee kaarten met dezelfde mechanieken zodat de vaste stub op beide slaat.
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit", "It has some ability.", ["Snipe", "Tank"]);
+        await SeedCardAsync(db, "ogn-002", "Beta", "Unit", "It has some ability.", ["Snipe", "Tank"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Snipe", to = "mechanic:Tank", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        // Run 1 (cap 1): verwerkt de eerste kaart, legt een interactie-feit +
+        // Assertion(DERIVED_FROM=card:ogn-001) vast; CapHit ⇒ er is nog werk.
+        var r1 = await svc.RunAsync(maxFocusCards: 1);
+        Assert.Equal(1, r1.FocusCards);
+        Assert.True(r1.CapHit);
+
+        // Run 2 (cap 1): de eerste kaart is nu al-gemined ⇒ de selectie schuift op
+        // naar de TWEEDE kaart (versla defect 1/2), niet dezelfde kop opnieuw.
+        var r2 = await svc.RunAsync(maxFocusCards: 1);
+        Assert.Equal(1, r2.FocusCards);
+
+        var derived = await db.Assertions.Select(a => a.DerivedFromRef).ToListAsync();
+        Assert.Contains("card:ogn-001", derived);
+        Assert.Contains("card:ogn-002", derived); // run 2 bereikte de tweede kaart
+
+        // Run 3 (cap 1): beide kaarten verwerkt ⇒ niets meer te doen, drain-signaal
+        // gaat naar 'drained' (geen CapHit) i.p.v. eeuwig 'niet gedraind'.
+        var r3 = await svc.RunAsync(maxFocusCards: 1);
+        Assert.Equal(0, r3.FocusCards);
+        Assert.False(r3.CapHit);
+    }
+
+    // ── Lexicale steun eist co-occurrence binnen ÉÉN kaart, niet cross-card (#226) ─
+    [Fact]
+    public async Task RunAsync_TermenInVerschillendeKaarten_GeenLexicaleSteun_Kandidaat()
+    {
+        using var db = NewDb();
+        // Focus-tekst draagt WEL "Tank", NIET "Snipe"; de partner (deelt Snipe) draagt
+        // "Snipe". Geen enkele kaart draagt beide termen ⇒ geen lexicale steun.
+        await SeedCardAsync(db, "ogn-030", "Malphite", "Unit",
+            "This grants Tank to an ally.", ["Tank", "Snipe"]);
+        await SeedCardAsync(db, "ogn-031", "Caitlyn", "Unit",
+            "Snipe deals damage.", ["Snipe"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Snipe", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        // Vroeger telde de samengevoegde tekst van beide kaarten als co-occurrence en
+        // promoveerde dit paar. Nu blijft het kandidaat (wacht op corroboratie).
+        Assert.Equal(1, r.Candidates);
+        Assert.Equal(0, r.Promoted);
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Candidate, ix.Status);
+    }
+
+    // ── Card→keyword promoveert op kaart-eigen tekst, niet op de kaartnaam (#226) ─
+    [Fact]
+    public async Task RunAsync_CardKeyword_LexicaleSteunOpKaarttekst_ZonderKaartnaam()
+    {
+        using var db = NewDb();
+        // De kaartnaam "Vanguard Sentinel" staat NIET in de kaarttekst; het keyword
+        // "Deflect" wel. De kaart ís het bewijs voor haar eigen card-rol.
+        await SeedCardAsync(db, "ogn-040", "Vanguard Sentinel", "Unit",
+            "This unit counters Deflect.", ["Deflect"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "card:ogn-040", to = "mechanic:Deflect", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        // Vroeger eiste de poort de kaartnaam in de tekst ⇒ nooit steun ⇒ eeuwig
+        // kandidaat. Nu telt de kaart-eigen tekst en promoveert de interactie.
+        Assert.Equal(1, r.Promoted);
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal("card:ogn-040", ix.AgentRef);
+        Assert.Equal("mechanic:Deflect", ix.PatientRef);
+        Assert.Equal(InteractionStatus.Promoted, ix.Status);
+    }
+
+    // ── Negatief verdict + deterministische steun → Rejected + tombstone, geen knoop ─
+    [Fact]
+    public async Task RunAsync_NegatiefVerdictMetSteun_Weigert_ZonderInteractieKnoop()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-050", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        // interacts=false + beide termen letterlijk in één kaart (deterministische
+        // steun) ⇒ de poort weigert duurzaam (tombstone), maar legt GEEN interactie-
+        // knoop aan — alleen een beslissings-memo.
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Deflect", to = "mechanic:Assault", kind = "COUNTERS", interacts = false,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Rejected);
+        Assert.Equal(0, r.Promoted);
+        Assert.Equal(0, r.Candidates);
+        Assert.Equal(0, r.Failed);
+        Assert.Empty(await db.Interactions.ToListAsync());     // geen gepromoveerde/kandidaat-knoop
+        Assert.Empty(await db.Assertions.ToListAsync());        // geen feit-provenance bij een weigering
+        var decision = await db.InteractionDecisions.SingleAsync();
+        Assert.Equal(InteractionStatus.Rejected, decision.Outcome);
+        var tomb = await db.RejectionTombstones.SingleAsync();  // herstelpad tegen flip-flop
+        Assert.False(tomb.Lifted);
+        var run = await db.MiningRuns.SingleAsync();
+        Assert.Equal(1, run.Rejected);
+    }
+
+    // ── AI staat aan maar levert geen kandidaten (200 + lege lijst) ≠ uitval (#226) ─
+    [Fact]
+    public async Task RunAsync_AiLeegResultaat_GeenUitval_GeenFeit()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-060", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        // 200 met een lege interactie-lijst: een geldige, lege attempt — GEEN degradatie.
+        var svc = Service(db, () => Interactions());
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.FocusCards);
+        Assert.Equal(0, r.Extracted);
+        Assert.Equal(0, r.Failed); // onderscheid 'geen kandidaten' ↔ 'rb-ai weg' blijft bewaard
+        Assert.Empty(await db.Interactions.ToListAsync());
+        var run = await db.MiningRuns.SingleAsync();
+        Assert.NotNull(run.CompletedAt);
+        Assert.Equal(0, run.Verified);
+    }
+
     // ── testinfra ─────────────────────────────────────────────────────────────
 
     private static BreinInteractionMiningService Service(RbRulesDbContext db, Func<string?> body) =>

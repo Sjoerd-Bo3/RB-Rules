@@ -111,6 +111,51 @@ public class BreinPredicateMiningServiceTests
         Assert.Equal(1, await db.MechanicPredicates.CountAsync());
     }
 
+    [Fact]
+    public async Task RunAsync_DubbelPredicaatInResponse_LegtSlechtsEenRijAan()
+    {
+        using var db = NewDb();
+        await SeedMechanicAsync(db, "Bastion", definition: "Bastion grants Tank to a friendly unit.");
+
+        // rb-ai levert hetzelfde (predicate, object) tweemaal + één afwijkend: de
+        // dedupe (parser-muur + service-sleutel) mag de duplicaat NOOIT als tweede rij
+        // op de unieke dedupe-sleutel binnenlaten; het afwijkende predicaat wél.
+        var svc = Service(db, () => Predicates(
+            new { predicate = "grants", @object = "tank" },
+            new { predicate = "grants", @object = "tank" },
+            new { predicate = "prevents", @object = "exhaust" }));
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Subjects);
+        Assert.Equal(2, r.Mined); // de duplicaat is samengevallen, het afwijkende blijft
+        Assert.Equal(2, await db.MechanicPredicates.CountAsync());
+        var keys = await db.MechanicPredicates
+            .Select(p => p.Predicate + "|" + p.ObjectToken).ToListAsync();
+        Assert.Equal(keys.Count, keys.Distinct().Count()); // geen dubbele dedupe-sleutel
+    }
+
+    [Fact]
+    public async Task RunAsync_AiLeegResultaat_GeenUitval_GeenFeit()
+    {
+        using var db = NewDb();
+        await SeedMechanicAsync(db, "Bastion", definition: "Bastion grants Tank.");
+
+        // 200 met een lege predicaat-lijst: een geldige, lege attempt — GEEN degradatie
+        // (te onderscheiden van 500/null → Failed++).
+        var svc = Service(db, () => Predicates());
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Subjects);
+        Assert.Equal(0, r.Mined);
+        Assert.Equal(0, r.Failed); // niet als uitval geteld
+        Assert.Empty(await db.MechanicPredicates.ToListAsync());
+        var run = await db.MiningRuns.SingleAsync();
+        Assert.NotNull(run.CompletedAt);
+        Assert.Equal(0, run.Verified);
+    }
+
     // ── testinfra ─────────────────────────────────────────────────────────────
 
     private static BreinPredicateMiningService Service(RbRulesDbContext db, Func<string?> body) =>
