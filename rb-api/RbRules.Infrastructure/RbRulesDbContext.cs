@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RbRules.Domain;
+using RbRules.Domain.GraphRag;
 using RbRules.Domain.Reasoning;
 
 namespace RbRules.Infrastructure;
@@ -57,6 +58,10 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<InteractionDecision> InteractionDecisions => Set<InteractionDecision>();
     // Redeneer-laag (fase 3, #227): door de reasoner gedetecteerde tegenspraken.
     public DbSet<ReasoningConflict> ReasoningConflicts => Set<ReasoningConflict>();
+
+    // GraphRAG-retrieval (fase 4, #228): het immutable auditspoor per /ask-antwoord.
+    public DbSet<AnswerTrace> AnswerTraces => Set<AnswerTrace>();
+    public DbSet<AnswerTraceSupport> AnswerTraceSupports => Set<AnswerTraceSupport>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -503,6 +508,31 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.HasIndex(x => x.Status);
             e.HasIndex(x => x.Channel);
             e.HasIndex(x => x.Kind);
+        });
+
+        // GraphRAG-AnswerTrace (fase 4, #228, §6/#236): immutable auditspoor. ULID-
+        // PK (tijd-sorteerbaar); de dragende feiten hangen er als child-rijen aan,
+        // cascade-verwijderd met de trace (het spoor is atomair, niet los te knippen).
+        b.Entity<AnswerTrace>(e =>
+        {
+            e.ToTable("answer_trace");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(Domain.Ulid.Length);
+            e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => x.PrimaryChannel);
+            e.HasMany(x => x.Supports).WithOne(x => x.AnswerTrace!)
+                .HasForeignKey(x => x.AnswerTraceId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<AnswerTraceSupport>(e =>
+        {
+            e.ToTable("answer_trace_support");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.AnswerTraceId).HasMaxLength(Domain.Ulid.Length);
+            e.HasIndex(x => x.AnswerTraceId);
+            // "Verantwoord dit antwoord"-query (§6): welke antwoorden leunden op een
+            // feit dat inmiddels deprecated/getombstoned is.
+            e.HasIndex(x => x.SubjectRef);
         });
     }
 
