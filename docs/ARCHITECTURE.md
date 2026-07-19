@@ -1522,7 +1522,8 @@ kan rb-api eerder starten dan Postgres klaar is.
   service-schil op InMemory-DbContext); de live Neo4j-projectie van de
   `:Proposed`/`:Superseded`/`:Tombstone`-labels, de daadwerkelijke code-migratie bij
   promotie en het her-minen van de schaduw-mine-batch zijn bewuste integratie-
-  follow-ups. Fase 6 bouwt nog géén eval-industrialisatie (fase 7).
+  follow-ups. Fase 6 bouwt nog géén eval-industrialisatie; die volgt in fase 7
+  (hieronder — de errata-mid-set-flow koppelt er via `ErrataEvalExpiry` op aan).
 - **Degradatiepaden** — AI-uitval is een verwacht pad: `RbAiClient` geeft null,
   de aanroeper degradeert (`docs/CONVENTIONS.md`, `AskService`, `RbAiClient`).
   Neo4j-uitval maakt `neighbors`/`path` een nette Problem-response terwijl de
@@ -1653,26 +1654,73 @@ kan rb-api eerder starten dan Postgres klaar is.
   door. De isolatietest (`AskServiceBenchmarkIsolationTests`) blijft ongewijzigd
   van toepassing: `Model` verandert niets aan welke tabellen wel/niet
   geschreven worden, alleen welk model het antwoord genereert.
-- **Eval-harness-scaffold (nog niet bedraad)** (#231, brein-epic #223, Fase 7) —
-  een losstaand, dependency-vrij fundament voor het meten van
-  brein-hallucinatie als per-release-getal, bewust nog zónder retrieval/graaf,
-  DB of endpoint. Pure Domain-bouwstenen: `EvalCase` (de meeteenheid — vraag +
+- **Eval-industrialisatie & meta** (fase 7, #231, brein-epic #223 — LAATSTE
+  fase) — bouwt op het eval-scaffold voort tot de volledige meet-industrie.
+  Het **scaffold** (nog altijd de kern): `EvalCase` (de meeteenheid — vraag +
   `EvalQueryType` (Factoid/Inference/Comparison/Temporal) + `GoldSupport`
-  (recall-noemer) + `ExpectedCitations` + `ForbiddenClaims` + levenscyclus),
+  (recall-noemer) + `GoldConditionSupport` (de conditie-dragende deelverzameling
+  voor path-recall) + `ExpectedCitations` + `ForbiddenClaims` + levenscyclus),
   `EvalRunResult` (geabstraheerde run-uitkomst: opgehaalde/geciteerde/
   geproduceerde ids — géén graaf-koppeling), `EvalScoringService` (pure
   Relevancy/Recall/F1/CitationPrecision/ContradictionRecall) en
-  `EvalGateEvaluator` (de Ring-A-poort). Twee Kritiek-mitigaties zijn hier al
-  ingebakken: **cold-start-shadow** (een `EvalStatus.Shadow`-case scoort en
-  wordt gerapporteerd maar blokkeert de gate nooit — een half-gereviewde
-  nieuwe set breekt de CI van `main` niet, B4) en **errata-invalidatie** op
-  twee niveaus (case-niveau `SupersededByErratum`/`ValidUntil` → overslaan;
-  claim-niveau `ForbiddenClaim.SupersededByErratum` → een door een erratum
-  waar-geworden claim telt niet meer als contradictie, C). De voorbeeld-
-  gouden-set staat als seed in `docs/eval/poracle-eval-seed.json` (5
-  illustratieve cases, via `EvalSeed.Parse`); het echte corpus komt later in
-  Postgres `eval_case` met rb-ai-kandidaten uit set/errata-diffs. Nog niets
-  hiervan draait in CI of een endpoint — dit is enkel het reviewbare skelet.
+  `EvalGateEvaluator` (de deterministische **Ring-A**-poort: citation-validity
+  100% + nul actieve forbidden claims). Twee Kritiek-mitigaties zijn ingebakken:
+  **cold-start-shadow** (een `EvalStatus.Shadow`-case scoort en wordt
+  gerapporteerd maar blokkeert de gate nooit — een half-gereviewde nieuwe set
+  breekt de CI van `main` niet, B4) en **errata-invalidatie** op twee niveaus
+  (case-niveau `SupersededByErratum`/`ValidUntil` → overslaan; claim-niveau
+  `ForbiddenClaim.SupersededByErratum` → een door een erratum waar-geworden
+  claim telt niet meer als contradictie, C). De voorbeeld-gouden-set staat als
+  seed in `docs/eval/poracle-eval-seed.json` (via `EvalSeed.Parse`); het echte
+  corpus komt in Postgres `eval_case` met rb-ai-kandidaten uit set/errata-diffs.
+  **Fase 7 legt daar bovenop** (alles PURE Domain, `RbRules.Domain/Eval*.cs`;
+  KRITIEK — live-graaf/rb-ai/pgvector niet in CI):
+  - **Ring B/C-scoring** (`RetrievalQualityScoring`, `EvalRing`/`EvalMetricNames`,
+    `EvalHarness`): naast de kale set-recall meet Ring B **path-recall op
+    gekwalificeerde interacties** (structuurverlies, faalmodus 3 — een pad dat de
+    `window=showdown`-conditie mist scoort < 1.0), **citation-support/
+    groundedness** (geciteerd ∈ opgehaalde subgraaf), en **answer-faithfulness**
+    via geabstraheerde judge-verdicten (`JudgedClaim`, SUPPORTED/CONTRADICTED/
+    NOT_IN_CONTEXT) **mét deterministisch vangnet** (een SUPPORTED claim die naar
+    ongehaalde support citeert wint niet — de structurele check verslaat de
+    judge). Ring C voegt **answer-consistency onder parafrase** toe (paarsgewijze
+    Jaccard over de claim-sets). `EvalHarness` bindt de scorers per ring en
+    vertaalt case-runs naar `ClassifiedSample`s. De judge zelf is een integratie-
+    follow-up (rb-ai niet in CI); de scoring is €0 en volledig getest.
+  - **Baseline-diff-per-klasse-gate** (`EvalBaseline`, `BaselineDiffGate`):
+    vergelijkt het huidige per-(question_class × metric)-gemiddelde tegen een
+    vastgelegde baseline en blokkeert bij een regressie (`mean < baselineMean −
+    kσ`, default 2σ) op ENIGE meetellende klasse — sluipende degradatie die het
+    gemiddelde verbergt wordt zo gevangen. Shadow-samples worden apart
+    geaggregeerd en gerapporteerd maar gaten nooit; een klasse zonder baseline
+    kan niet gaten (cold-start op metriek-niveau); een deterministische metriek
+    (σ 0) mag niet zakken (de harde citation-validity-gate als diff uitgedrukt).
+  - **Auto-gegenereerde eval-cases uit set-diffs** (`SetDiffCaseGenerator`):
+    nieuwe kaart → Factoid, nieuw keyword/mechanic → Inference, erratum →
+    Temporal mét de oude bewoording als `ForbiddenClaim` — ALTIJD in
+    `EvalStatus.Shadow` (cold-start), deterministische ids (idempotente
+    reviewqueue). De koppeling fase 6 → fase 7 zit in `ErrataEvalExpiry`: een
+    fase-6 `ErrataLifecycle.Plan` laat matchende forbidden_claims (claim-niveau)
+    en hele cases (case-niveau) vervallen — forbidden_claim-verval.
+  - **Ops-observability** (`ObservabilityReport`/`ObservabilityRollups`,
+    `CommunityStability`, inzicht #236): queryable admin-tegel-rollups —
+    mining-precisie per (soort × model) uit `MiningRun`, kosten/latency per
+    retrieval-modus uit fase-4-`AnswerTrace`, community-modularity/stabiliteit
+    (label-onafhankelijk, Leiden hernummert), plus hergebruik van de bestaande
+    fase-1-snapshots (`GraphDrift`, `CanonicalDriftSnapshot`) en de fase-5-
+    `HypothesisYield` — geen duplicatie.
+  - **Deck-integratie CO_OCCURS** (`DeckCoOccurrence`, #15): kruis-valideert
+    structureel voorspelde combo-paden (fase 5) met de echte Piltover-meta —
+    per paar co-decks/support/lift + een corroboratie-rate (precisie van de
+    structuurvoorspelling tegen de meta) als meetbaar signaal.
+  - **Persistentie** (`EvalBaselineRecord`/`EvalRunRecord`, migratie
+    `EvalIndustrialization231`): `eval_baseline` (één rij per ring × klasse ×
+    metric, uniek geïndexeerd — de gate diff't tegen precies één cel) en
+    `eval_run` (rollup-samenvatting per gate-run, voor "sluipende degradatie over
+    runs"). De baseline-diff-gate zelf blijft puur; deze tabellen dragen alleen
+    de runtime-baseline en run-historie. De live retrieval-runs, de LLM-judge en
+    de graaf-metrieken (Leiden-modularity, echte latency/token-metering) zijn
+    bewuste integratie-follow-ups; fase 7 levert de pure, geteste meet-kern.
 
 ---
 
@@ -1935,6 +1983,9 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Reasoner / redeneer-laag | Neo4j-native inferentie-run (fase 3, #227): leidt edges af (isa-closure, property-chain, symmetrie, subproperty-collapse) en detecteert tegenspraken — één engine, Cypher, geen Datalog |
 | Afgeleide edge | Een door de reasoner gematerialiseerde edge (`derived=true`+`derivedByRule`+provenance); nooit bron van waarheid, elke run herberekend |
 | `ReasoningConflict` | Postgres-rij voor een door de reasoner gedetecteerde tegenspraak (claim↔officieel, botsende rulings, disjointness), gerouteerd naar misvattingen/reviewqueue/escalatie |
+| Eval-ring (A/B/C) | De drie CI-ringen van de eval-harness (fase 7, #231): A deterministisch/€0/elke PR, B LLM-judge op de kern-set, C volledig+meta nachtelijk |
+| Baseline-diff-per-klasse | Eval-gate die per (question_class × metric) tegen een vastgelegde baseline diff't (`mean < baselineMean − kσ`) i.p.v. een absolute drempel — vangt sluipende degradatie die het gemiddelde verbergt (fase 7, #231) |
+| CO_OCCURS-signaal | Kruisvalidatie van structureel voorspelde combo-paden (fase 5) met de echte Piltover-deck-meta: co-decks/support/lift + corroboratie-rate (fase 7, #231/#15) |
 
 ---
 
