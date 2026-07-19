@@ -35,6 +35,9 @@ public class DbModelTests
     // Passkeys (#109).
     [InlineData(typeof(PasskeyCredential), "passkey_credential")]
     [InlineData(typeof(PasskeyChallenge), "passkey_challenge")]
+    // Provenance-ruggengraat (fase 0a, #233).
+    [InlineData(typeof(MiningRun), "mining_run")]
+    [InlineData(typeof(Assertion), "assertion")]
     public void TableNames_MatchPopSchema(Type entity, string expectedTable)
     {
         using var db = CreateContext();
