@@ -48,14 +48,52 @@ public class KnowledgeLifecycleService(RbRulesDbContext db)
         return ev;
     }
 
+    /// <summary>De HUIDIGE levenscyclus-toestand van een feit, afgeleid uit het
+    /// append-only log: de <see cref="LifecycleEvent.ToState"/> van de laatste
+    /// niet-teruggedraaide transitie, of <see cref="LifecycleState.Active"/> als er nog
+    /// geen enkele transitie is. Zo krijgt elke nieuwe transitie een WAARE
+    /// <c>FromState</c> — nooit een hardgecodeerde <c>Active</c> die een onmogelijke
+    /// historie (bv. tweemaal <c>Active→Stale</c>) in het provenance-spoor schrijft
+    /// (review-defect #230; rode draad #236).</summary>
+    private async Task<string> CurrentStateAsync(string subjectRef, CancellationToken ct)
+    {
+        var last = await db.LifecycleEvents.AsNoTracking()
+            .Where(e => e.SubjectRef == subjectRef && !e.Reverted)
+            .OrderByDescending(e => e.CreatedAt).ThenByDescending(e => e.Id)
+            .Select(e => e.ToState)
+            .FirstOrDefaultAsync(ct);
+        return last ?? LifecycleState.Active;
+    }
+
+    /// <summary>Legt een transitie naar <paramref name="toState"/> vast met de ECHTE
+    /// huidige toestand als <c>FromState</c>. Idempotent en niet-fataal voor de bulk-
+    /// invalidatieflows (errata/staleness/model-upgrade): staat het feit al in de
+    /// doeltoestand of al verder (een transitie die de toestand-machine niet toelaat
+    /// vanuit de huidige toestand — bv. een reeds getombsteend feit), dan is dit een
+    /// no-op (<c>null</c>) i.p.v. een dubbele/valse transitie of een harde fout die de
+    /// hele batch afbreekt. Alleen een echte, toegestane vooruitgang wordt geschreven.</summary>
+    private async Task<LifecycleEvent?> TransitionIfProgressingAsync(
+        string subjectRef, string factKind, string toState,
+        string reason, string actor, string runId,
+        string? supersededByRef = null, string? restorePath = null,
+        CancellationToken ct = default)
+    {
+        var fromState = await CurrentStateAsync(subjectRef, ct);
+        if (fromState == toState || !LifecycleState.CanTransition(fromState, toState))
+            return null;
+        return await RecordTransitionAsync(subjectRef, factKind, fromState, toState,
+            reason, actor, runId, supersededByRef, restorePath, ct);
+    }
+
     /// <summary>Zet een vers-beoordeeld feit dat de staleness-poort raakte naar
     /// <see cref="LifecycleState.Stale"/> — de her-verificatie-trigger, met de
-    /// evaluator-memo als reden.</summary>
-    public Task<LifecycleEvent> RequeueStaleAsync(
+    /// evaluator-memo als reden. Al-stale of al-teruggetrokken feiten leveren een
+    /// no-op (<c>null</c>): geen dubbele her-verificatie-transitie.</summary>
+    public Task<LifecycleEvent?> RequeueStaleAsync(
         string subjectRef, string factKind, StalenessEvaluator.Verdict verdict, string runId,
         CancellationToken ct = default)
-        => RecordTransitionAsync(subjectRef, factKind,
-            LifecycleState.Active, LifecycleState.Stale, verdict.Memo, "staleness", runId, ct: ct);
+        => TransitionIfProgressingAsync(subjectRef, factKind,
+            LifecycleState.Stale, verdict.Memo, "staleness", runId, ct: ct);
 
     /// <summary>Voert het errata-plan uit: de vervangen ruling → <see cref="LifecycleState.Superseded"/>
     /// (SUPERSEDES, blijft bestaan voor dossier-historie), elk afhankelijk feit/eval-case
@@ -69,16 +107,20 @@ public class KnowledgeLifecycleService(RbRulesDbContext db)
 
         if (plan.TargetRulingRef is { } rulingRef)
         {
-            events.Add(await RecordTransitionAsync(
-                rulingRef, "ruling", LifecycleState.Active, LifecycleState.Superseded,
+            var superseded = await TransitionIfProgressingAsync(
+                rulingRef, "ruling", LifecycleState.Superseded,
                 $"vervangen door {plan.ErratumRef}", "errata", runId,
-                supersededByRef: plan.ErratumRef, restorePath: "admin:restore-ruling", ct: ct));
+                supersededByRef: plan.ErratumRef, restorePath: "admin:restore-ruling", ct: ct);
+            if (superseded is not null) events.Add(superseded);
         }
 
         foreach (var inv in plan.Invalidations)
-            events.Add(await RecordTransitionAsync(
-                inv.SubjectRef, inv.FactKind, LifecycleState.Active, LifecycleState.Stale,
-                inv.Reason, "errata", runId, ct: ct));
+        {
+            var stale = await TransitionIfProgressingAsync(
+                inv.SubjectRef, inv.FactKind, LifecycleState.Stale,
+                inv.Reason, "errata", runId, ct: ct);
+            if (stale is not null) events.Add(stale);
+        }
 
         return events;
     }
@@ -87,17 +129,23 @@ public class KnowledgeLifecycleService(RbRulesDbContext db)
     /// her-verificatie-transities: elk geselecteerd, puur-LLM-ongesteund feit →
     /// <see cref="LifecycleState.Stale"/> (re-queue voor her-mining door het nieuwe
     /// model). De backlog blijft ongemoeid tot een volgende cyclus. Het daadwerkelijke
-    /// her-minen is een integratie-follow-up.</summary>
+    /// her-minen is een integratie-follow-up. Retourneert het aantal DAADWERKELIJK
+    /// vastgelegde transities — een reeds-stale feit (bv. eerder al door errata geraakt)
+    /// wordt overgeslagen en niet dubbel geteld.</summary>
     public async Task<int> ApplyModelUpgradeAsync(
         ModelUpgradeInvalidation.Plan plan, string oldModel, string runId,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        var requeued = 0;
         foreach (var fact in plan.Selected)
-            await RecordTransitionAsync(
-                fact.SubjectRef, fact.FactKind, LifecycleState.Active, LifecycleState.Stale,
+        {
+            var ev = await TransitionIfProgressingAsync(
+                fact.SubjectRef, fact.FactKind, LifecycleState.Stale,
                 $"model-upgrade van {oldModel}: puur-LLM-ongesteund → her-mine", "model_upgrade", runId, ct: ct);
-        return plan.Selected.Count;
+            if (ev is not null) requeued++;
+        }
+        return requeued;
     }
 
     /// <summary>Het geconsolideerde herstelpad (unconsolidate): heropent het laatste,
