@@ -134,6 +134,15 @@ met quota en rate-limiting.
   boilerplate). Met de bump rebaselinet elke bron stil bij de eerstvolgende
   scan (`Source.StripVersion`-vergelijking in `IngestService`), zonder
   Change en zonder her-mine-kosten.
+- **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
+  niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
+  Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`
+  wijst (bv. `..\..\docs\…`) slaagt daar, maar de `publish`-stap (die `dotnet
+  test` ín de Dockerfile draait met context `rb-api/`) faalt met MSB3030
+  ("could not copy … not found"). Publish draait alléén op main, dus het valt
+  pas ná de merge op — de deploy wordt dan terecht overgeslagen (prod blijft
+  intact). Houd test-fixtures binnen `rb-api/` (bv. `RbRules.Tests/Fixtures/`);
+  verifieer twijfelgevallen met een lokale `docker build` van rb-api.
 
 ## Waar het werk staat
 - Roadmap: **docs/PRD.md §6** (uit de open issues, in-flight PR's
