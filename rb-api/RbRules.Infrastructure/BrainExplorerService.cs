@@ -53,7 +53,9 @@ public sealed record BrainCockpit(
     int ConflictsOpen,
     BrainJobRunItem? ReasonRun,
     // /ask-retrieval (env-flag BREIN_RETRIEVAL_ENABLED, default uit)
-    bool RetrievalEnabled);
+    bool RetrievalEnabled,
+    // Nachtrun (#245): laatste afronding van de volledige ongecapte keten (of null).
+    BrainJobRunItem? NightlyRun = null);
 
 /// <summary>Eén canonieke entiteit in de verkenner: canoniek label + alias-lexicon
 /// + merge-status. <see cref="MergedIntoLabel"/> is het label van de overlevende
@@ -193,10 +195,10 @@ public class BrainExplorerService(RbRulesDbContext db)
     /// Ref=jobnaam) — dat overleeft een herstart en dekt ook de scheduler-runs.</summary>
     public async Task<BrainCockpit> CockpitAsync(bool retrievalEnabled, CancellationToken ct = default)
     {
-        // De vier brein-jobs waarvan de cockpit de laatste afronding toont.
+        // De brein-jobs waarvan de cockpit de laatste afronding toont (+ de nachtrun).
         var brainJobs = new[]
         {
-            "breinmine-interacties", "breinmine-predicaten", "breinprojectie", "reason",
+            "breinmine-interacties", "breinmine-predicaten", "breinprojectie", "reason", "nachtrun",
         };
         // Greatest-n-per-group (nieuwste run per Ref) kan Npgsql niet server-side
         // vertalen — de kandidaatrijen vertaalbaar (Where+Select) ophalen en
@@ -228,7 +230,8 @@ public class BrainExplorerService(RbRulesDbContext db)
             ConflictsOpen: await db.ReasoningConflicts
                 .CountAsync(c => c.Status == ReasoningConflictStatus.Open, ct),
             ReasonRun: lastByJob.GetValueOrDefault("reason"),
-            RetrievalEnabled: retrievalEnabled);
+            RetrievalEnabled: retrievalEnabled,
+            NightlyRun: lastByJob.GetValueOrDefault("nachtrun"));
     }
 
     /// <summary>Canonieke entiteiten met alias-lexicon en merge-status, gepagineerd.

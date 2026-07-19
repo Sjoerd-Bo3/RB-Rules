@@ -24,6 +24,7 @@
 		conflictsOpen: number;
 		reasonRun: JobRun | null;
 		retrievalEnabled: boolean;
+		nightlyRun: JobRun | null;
 	}
 	const cockpit = $derived(data.cockpit as Cockpit | null);
 
@@ -107,7 +108,8 @@
 		'breinmine-interacties': 'Interacties minen',
 		'breinmine-predicaten': 'Mechanic-predicaten minen',
 		breinprojectie: 'Projectie naar Neo4j',
-		reason: 'Reasoner'
+		reason: 'Reasoner',
+		nachtrun: 'Volledige nachtrun'
 	};
 
 	interface Counts {
@@ -365,6 +367,33 @@
 					{/if}
 				</div>
 			</div>
+		</div>
+
+		<!-- Nachtrun — de volledige ongecapte keten (#245) -->
+		<div class="nightly">
+			<div class="nightly-info">
+				<h3>Volledige nachtrun</h3>
+				<p>
+					De hele keten <strong>ongecapt</strong> in één run: alles bijwerken &rarr; interacties
+					&rarr; predicaten &rarr; projectie &rarr; reason. Draait automatisch elke nacht
+					(00:00&ndash;11:00) tot het venster-einde en pakt de rest de volgende nacht op; overdag
+					blijven de losse jobs hierboven gecapt.
+				</p>
+				<span class="run-meta">{runMeta(cockpit.nightlyRun)}</span>
+			</div>
+			<form
+				method="POST"
+				action="?/job"
+				use:enhance={() => async ({ update }) => {
+					await update();
+					await invalidateAll();
+				}}
+			>
+				<input type="hidden" name="name" value="nachtrun" />
+				<button class="cta" disabled={running !== null}>
+					{running?.name === 'nachtrun' ? 'Bezig…' : 'Nu draaien'}
+				</button>
+			</form>
 		</div>
 	</section>
 {/if}
@@ -688,6 +717,38 @@
 		color: var(--muted);
 	}
 	.jobrow form {
+		margin: 0;
+		flex: none;
+	}
+	.nightly {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		flex-wrap: wrap;
+		margin-top: 16px;
+		padding: 14px 16px;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius-lg, 13px);
+		background: var(--surface-deep);
+	}
+	.nightly-info {
+		flex: 1 1 260px;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+	}
+	.nightly-info h3 {
+		margin: 0;
+		font-size: 0.95rem;
+	}
+	.nightly-info p {
+		margin: 0;
+		font-size: 0.82rem;
+		line-height: 1.45;
+		color: var(--muted);
+	}
+	.nightly form {
 		margin: 0;
 		flex: none;
 	}

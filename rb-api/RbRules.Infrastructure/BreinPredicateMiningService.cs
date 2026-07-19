@@ -35,8 +35,8 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
     public const string PromptVersion = "breinmine-predicates-v1";
 
     public async Task<BreinPredicateMiningResult> RunAsync(
-        int maxSubjects = DefaultMaxSubjects, Action<string>? progress = null,
-        CancellationToken ct = default)
+        int maxSubjects = DefaultMaxSubjects, DateTimeOffset? deadline = null,
+        Action<string>? progress = null, CancellationToken ct = default)
     {
         // Subjecten: levende mechanic/keyword-entiteiten die nog géén predicaat dragen
         // (bounded, idempotent). Een reeds-gepredikeerd subject wordt overgeslagen tot
@@ -76,8 +76,12 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
 
         int mined = 0, skipped = 0, failed = 0;
         var processed = 0;
+        var deadlineHit = false;
         foreach (var subject in subjects)
         {
+            // Nachtrun-deadline (#245): stop netjes op venster-einde; het reeds-
+            // gepredikeerd-watermark bewaart de voortgang voor de volgende nacht.
+            if (deadline is { } dl && DateTimeOffset.UtcNow >= dl) { deadlineHit = true; break; }
             processed++;
             progress?.Invoke($"predicaten extraheren via rb-ai: {processed}/{subjects.Count}");
 
@@ -150,7 +154,9 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
         run.CompletedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
 
-        return new(subjects.Count, mined, skipped, failed, capHit);
+        // Subjects = daadwerkelijk verwerkt (bij deadline-stop < subjects.Count);
+        // CapHit ⇔ er blijft vers werk liggen: cap geraakt óf deadline afgekapt.
+        return new(processed, mined, skipped, failed, capHit || deadlineHit);
     }
 
     /// <summary>Bewijstekst voor één subject: de <see cref="CanonicalEntity.Definition"/>

@@ -903,6 +903,17 @@ de globale duur-vangrail).
   dagen leeg, daarna houdt dezelfde cadans verse/gewijzigde decks
   bijgewerkt) in de scheduler-tick, met job-gate, run_log-vensters en
   degradatiepaden (#122).
+- **Nachtelijke ongelimiteerde run** (#245) — binnen een klok-venster
+  (default **00:00–11:00** lokaal, env-overschrijfbaar) draait de job
+  `nachtrun` de volledige **ongecapte** kennis-keten in één keer: "Alles
+  bijwerken" (met ongecapte mechaniek-mining) → brein-interacties →
+  brein-predicaten → projectie → reason. De dag-caps (mining op 40, e.d.)
+  zijn 's nachts nutteloos; deze run leegt de backlog zo ver het venster
+  reikt en stopt netjes op de deadline (de rest volgt de volgende nacht via
+  het watermark). Overdag blijven de losse jobs gecapt. Ook handmatig te
+  starten in **beheer → Brein → "Volledige nachtrun"** (die knop toont ook de
+  laatste nachtrun-afronding); handmatig buiten het venster draait zonder
+  deadline (volledige drain).
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
   er ook als signaalregel op (#171, `SourceDossierCompleteness`), met

@@ -45,7 +45,7 @@ public class BreinInteractionMiningService(
 
     public async Task<BreinInteractionMiningResult> RunAsync(
         int maxFocusCards = DefaultMaxFocusCards, int maxPartners = DefaultMaxPartners,
-        Action<string>? progress = null, CancellationToken ct = default)
+        DateTimeOffset? deadline = null, Action<string>? progress = null, CancellationToken ct = default)
     {
         var windowLexicon = InteractionQualifierLexicon.Windows;
         var statusLexicon = InteractionQualifierLexicon.Statuses;
@@ -99,8 +99,12 @@ public class BreinInteractionMiningService(
 
         int extracted = 0, promoted = 0, candidates = 0, hypothesized = 0, rejected = 0, failed = 0;
         var processed = 0;
+        var deadlineHit = false;
         foreach (var card in focus)
         {
+            // Nachtrun-deadline (#245): stop netjes op venster-einde — de al verwerkte
+            // kaarten dragen hun watermark, de rest volgt de volgende nacht.
+            if (deadline is { } dl && DateTimeOffset.UtcNow >= dl) { deadlineHit = true; break; }
             processed++;
             progress?.Invoke($"interacties extraheren via rb-ai: {processed}/{focus.Count}");
 
@@ -183,7 +187,10 @@ public class BreinInteractionMiningService(
         run.CompletedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
 
-        return new(focus.Count, extracted, promoted, candidates, hypothesized, rejected, failed, capHit);
+        // FocusCards = daadwerkelijk verwerkt (bij een deadline-stop < focus.Count).
+        // CapHit ⇔ er blijft vers werk liggen: cap geraakt óf deadline afgekapt.
+        return new(processed, extracted, promoted, candidates, hypothesized, rejected, failed,
+            capHit || deadlineHit);
     }
 
     /// <summary>De aangeboden refs (enum-vocabulaire) + de per-kaart bewijsteksten voor

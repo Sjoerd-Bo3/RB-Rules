@@ -80,7 +80,7 @@ public class SetReleaseService(
         {
             // Ruime batch-limiet: een nieuwe set is honderden kaarten ineens.
             var r = await mining.RunAsync(
-                maxBatches: 60, p => progress?.Invoke($"2/6 · mechanieken — {p}"), ct);
+                maxBatches: 60, progress: p => progress?.Invoke($"2/6 · mechanieken — {p}"), ct: ct);
             return $"{r.Mined} gemined, {r.NewCandidates} keyword-kandidaten, {r.Remaining} resterend";
         });
         await Step("claims-harvest", async () =>

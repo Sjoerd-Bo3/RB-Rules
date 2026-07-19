@@ -1228,6 +1228,24 @@ dus een net-geconsolideerd paar kan in theorie nog twee pushmeldingen voor
 hetzelfde event opleveren — geen incident, wel een bewuste, niet
 opgeloste follow-up (feed-presentatie raakt hier de meldingen-laag niet).
 
+Nachtrun (#245): naast de interval-schedules hierboven start `ScanScheduler`
+sinds #245 binnen een KLOK-venster (default 00:00–11:00 lokaal, Europe/Amsterdam;
+env-overschrijfbaar via `NIGHTLY_START_HOUR`/`NIGHTLY_END_HOUR`/`NIGHTLY_TZ` in de
+VM-`.env`) de job `nachtrun`: de volledige ONGECAPTE kennis-keten in één
+JobRunner-slot — `all` (met ongecapte mechaniek-mining) → `breinmine-interacties`
+→ `breinmine-predicaten` → `breinprojectie` → `reason`. De mining-services krijgen
+een optionele `deadline` (het venster-einde) en stoppen daar netjes; hun watermark
+bewaart de voortgang, dus de resterende backlog volgt de volgende nacht. De
+klok-logica leeft in `NightlyWindow` (Domain, puur/getest) i.p.v.
+`Scheduling.IsWindowDue` — de grote run moet 's nachts vállen, niet "X uur sinds de
+vorige run". Maximaal één keer per lokale kalenderdag (`NightlyWindow.RanToday` op
+het run_log-grootboek); de single-job-gate (`JobRunner.TryStart`) voorkomt
+dubbelstart en houdt het slot vast tot de deadline. Overdag blijven de losse jobs
+gecapt (`DefaultMaxFocusCards`/`DefaultMaxSubjects` = 40 in de mining-services) —
+`nachtrun` is de enige ongecapte route, ook handmatig te starten (beheer → Brein →
+"Volledige nachtrun"); handmatig buiten het venster draait zonder deadline
+(volledige drain).
+
 ### 6.3 De graph-sync
 
 `GraphSyncService.SyncAsync` projecteert Postgres naar Neo4j binnen **één

@@ -84,6 +84,8 @@ builder.Services.AddScoped<AskService>();
 // adapters degraderen bij uitval naar leeg, zodat /ask nooit een 500 krijgt). De
 // orchestrator + service zijn scoped (per request), net als AskService zelf.
 builder.Services.AddSingleton(_ => BreinRetrievalSettings.FromEnvironment());
+// Nachtrun-venster (#245): singleton uit env (default 00:00–11:00 Europe/Amsterdam).
+builder.Services.AddSingleton(_ => NightlyRunSettings.FromEnvironment());
 builder.Services.AddScoped<IGazetteerSource, PostgresGazetteerSource>();
 builder.Services.AddScoped<INodeContextSimilarity, PgVectorNodeSimilarity>();
 builder.Services.AddScoped<INodeAdjacency, Neo4jNodeAdjacency>();
