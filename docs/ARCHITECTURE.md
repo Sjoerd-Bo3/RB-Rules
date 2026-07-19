@@ -833,14 +833,23 @@ endpoint/service/flow, leest bestaande tabellen (geen migratie).
 ### rb-ai — belangrijkste modules
 
 - `src/server.ts` — minimale `node:http`-server met `/health` (incl.
-  capaciteits- en pooltellers), `/ask`, `/ask/stream` (NDJSON-streaming) en
-  `/prewarm` (#154, altijd direct 202); koppelt de client-verbinding aan een
-  `AbortController` zodat een weggelopen client de Claude-call afbreekt, en
-  vertaalt de capaciteitsgrens (#155) naar een 429 met machine-leesbare code.
+  capaciteits- en pooltellers), `/ask`, `/ask/stream` (NDJSON-streaming),
+  `/prewarm` (#154, altijd direct 202) en de tool-forced brein-extractie
+  `/extract/interactions` + `/extract/predicates` (#226, zie §6.6); koppelt de
+  client-verbinding aan een `AbortController` zodat een weggelopen client de
+  Claude-call afbreekt, en vertaalt de capaciteitsgrens (#155) naar een 429 met
+  machine-leesbare code.
 - `src/ai.ts` — `askClaude` met vier taaktypes en de per-taak-modellen; één
   optiebron `buildQueryOptions` voor koud én warm (contract-getest tegen
   drift); de server-side prompt-addenda `RESEARCH_CONTRACT` en
-  `AGENT_ADDENDUM`; de in-process brein-MCP-server (`createBrainMcpServer`).
+  `AGENT_ADDENDUM`; de in-process brein-MCP-server (`createBrainMcpServer`);
+  `extractWithTool` (#226) — één geforceerde in-process MCP-tool die de
+  gevalideerde argumenten in een closure vangt (tool-forced structured output).
+- `src/extract.ts` — PUUR (zonder Agent SDK, unit-getest): de
+  vocabulaire→zod-schema-vertaling voor de brein-extractie (#226). Bouwt de
+  enum-poorten voor `emit_interactions`/`emit_mechanic_predicates` uit het door
+  rb-api aangeleverde ontologie-vocabulaire (spiegelt de .NET-Domain
+  `InteractionExtraction`/`MechanicPredicateExtraction`) + de request-validatie.
 - `src/warmpool.ts` — signaal-gedreven warme-sessie-pool (#154): houdt na een
   `/prewarm`-signaal maximaal één voorverwarmde cheap-SDK-sessie klaar
   (subprocess boot alvast, API-call pas bij de vraag; één sessie = één call,
@@ -1343,6 +1352,65 @@ en de #227-scope: `MiningRun`/`Assertion`/`Interaction`/`Condition` blijven bij
 `altLabels`-property (scalaire strings zonder eigen identiteit/provenance) i.p.v.
 een edge naar een `:Alias`-knoop (KISS/YAGNI; een triviale follow-up als
 entity-linking het nodig heeft).
+
+### 6.6 De brein-mining (tool-forced extractie)
+
+De brein-mining (#226, §3.1/§3.4) is de eerste **live rb-ai-koppeling** van de
+fase-2/5-extractie-vorm: waar `InteractionExtraction`/`MechanicPredicateExtraction`
+(Domain, puur) tot nu toe alleen de VORM + de tweede-muur-parser leverden, halen
+twee handmatige jobs nu daadwerkelijk gestructureerde kandidaten bij rb-ai en laten
+ze door de fase-2-poort. Volledig ADDITIEF: de bestaande
+`InteractionService`/`InteractionMiner` (lexicaal-paar-gebaseerd, conditie-loos) en
+alle andere mining blijven ongemoeid.
+
+**rb-ai-kant (tool-forced structured output).** `POST /extract/interactions` en
+`POST /extract/predicates` (server.ts) krijgen kaart-/regeltekst + het
+ontologie-vocabulaire (aangeboden refs, kind-/conditie-/rol-enums, Window/Status-
+lexicon) van rb-api. `extractWithTool` (ai.ts) draait één geforceerde in-process
+MCP-tool (`emit_interactions`/`emit_mechanic_predicates`) waarvan het zod-schema —
+gebouwd door de PURE `extract.ts` uit dat vocabulaire — de enum-poorten
+dichttimmert: het model KAN geen ref/kind/window buiten de aangeboden set noemen.
+De tool-handler vangt de gevalideerde argumenten in een closure; de kandidaten
+reizen dus via de tool-input, niet via de antwoordtekst. Uitval (tool niet
+geroepen, timeout, run gefaald) → de endpoint antwoordt 500, wat `RbAiClient` als
+AI-uitval leest (null, nette degradatie); een 200 met lege lijst betekent "geen
+kandidaten" — dat onderscheid blijft bewaard.
+
+**rb-api-kant (mining-orkestratie).** Twee jobs in `JobCatalog`, bewust GEEN stap
+in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk — expliciete beheerdersactie,
+zelfde lijn als `graph`/`reason`/`claims`):
+
+- `breinmine-interacties` (`BreinInteractionMiningService`). Per bounded batch
+  focus-kaarten: bouwt het aangeboden vocabulaire (de kaart + haar
+  entity-geresolvete keyword-refs + partner-kaarten die een mechaniek delen),
+  haalt kandidaten via rb-ai, en laat elke kandidaat door
+  `InteractionPromotionService` — schema ∧ (lexicaal ∨ consensus) ∧ verdict, met de
+  cold-start-tier voor emergente card×card-hypotheses. **Entity-resolutie (fase 1)
+  draait VÓÓR kandidaat-creatie**: een keyword-surface-form wordt tegen de canonieke
+  laag geresolveerd zodat "Deflecting"/"Deflect 2" op één ref landen (versla #2). De
+  **lexicale poort** toetst tegen de RAUWE kaarttekst (het bewijsanker), niet tegen
+  de ref-headers die de prompt draagt. Feit + provenance (`Assertion` met
+  `DERIVED_FROM` = de bronkaart) worden **atomair** door de promotie-service
+  gepersisteerd; deze job voegt geen eigen graaf-write toe.
+- `breinmine-predicaten` (`BreinPredicateMiningService`). Per canonieke
+  mechanic/keyword-entiteit (het subject IS al geresolveerd) haalt getypeerde
+  predicaten (`triggers_on`/`prevents`/`grants`/`requires_target` + object-token)
+  uit de definitie-/kaarttekst, en legt ze als `MechanicPredicateAssertion` in
+  status `candidate` vast — mét `CreatedByRunId` als 0a-provenance en de unieke
+  dedupe-sleutel als hard slot. Een LLM-verdict promoveert hier NIETS: elk predicaat
+  wacht op menselijke review (voedt de `HypothesisEngine` pas als `reviewed`).
+
+Beide jobs zijn **bounded per run en idempotent** (de promotie-dedupe-sleutel resp.
+de predicaat-dedupe-sleutel + de reeds-gepredikeerd-filter), en **degraderen netjes**:
+rb-ai null → dat item wordt overgeslagen (Failed++), er wordt GEEN half feit
+geschreven, en de job rondt af. **Geen migratie** — er wordt uitsluitend naar
+bestaande tabellen (`Interaction`/`InteractionCondition`/`Assertion`/`MiningRun`/
+`MechanicPredicate`) geschreven. De orkestratie + parsing + poort-koppeling zijn als
+pure .NET-logica getest met een gemockte rb-ai (`BreinInteractionMiningServiceTests`,
+`BreinPredicateMiningServiceTests`); de echte LLM-extractie is verifieerbaar bij de
+eerste run (integratie-follow-up, §8). Het qualifier-lexicon (Window/Status) is een
+seed (`InteractionQualifierLexicon`) die review/evolutie uitbreidt — een nieuwe set
+mag nieuwe timing-windows/toestanden introduceren (CLAUDE.md: mee-evolueren).
 
 ---
 
@@ -1900,11 +1968,13 @@ kritiek Risico 1), nooit stil weggegooid. De `RELATES_TO`-qualifier-cache is een
 gedenormaliseerde projectie, nooit de bron. **Gevolg.** "Deflect countert Assault
 alleen in een showdown" is queryable i.p.v. begraven in proza; geen promotie of
 verwerping zonder deterministisch bewijs + memo + herstelpad (rode draad #236).
-De live rb-ai-extractie (tool-forced `emit_interactions`) is als integratie-
-follow-up afgesplitst — de vorm staat in `InteractionExtraction`, de pipeline in
-`InteractionPromotionService`. `ReifiedInteractions.cs`,
-`InteractionPromotionGate.cs`, `InteractionProjection.cs`,
-`InteractionExtraction.cs`, `InteractionPromotionService`.
+De live rb-ai-extractie (tool-forced `emit_interactions`) is inmiddels bedraad in de
+handmatige job `breinmine-interacties` (`BreinInteractionMiningService`, §6.6): rb-ai
+levert de kandidaten, entity-resolutie draait vóór creatie, en de promotie-service
+persisteert atomair — de echte LLM-extractie blijft integratie-verifieerbaar bij de
+eerste run. `ReifiedInteractions.cs`, `InteractionPromotionGate.cs`,
+`InteractionProjection.cs`, `InteractionExtraction.cs`, `InteractionPromotionService`,
+`BreinInteractionMiningService`.
 
 ### ADR-13 — Redeneer-laag: één engine, Neo4j-native; afgeleide edges nooit bron (#227)
 
@@ -2055,6 +2125,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Reïficatie | Een gekwalificeerde relatie als eigen knoop (`Interaction`) i.p.v. kale edge, zodat condities niet verloren gaan (fase 2, #226) |
 | `model_hypothesized_unruled` | Cold-start-trust-tier: emergente card×card-hypothese zonder officiële/community-steun — geparkeerd, niet weggegooid |
 | RejectionTombstone | Grafsteen op een verworpen interactie die stil-heropenen blokkeert; opheffen is een expliciete beheerdersactie (herstelpad) |
+| Brein-mining / tool-forced extractie | De handmatige jobs `breinmine-interacties`/`breinmine-predicaten` (#226, §6.6): rb-ai levert via een geforceerde tool-call (`emit_interactions`/`emit_mechanic_predicates`) ontologie-begrensde kandidaten die door de fase-2-poort resp. als review-kandidaat landen; degradatie = null (geen half feit) |
 | Reasoner / redeneer-laag | Neo4j-native inferentie-run (fase 3, #227): leidt edges af (isa-closure, property-chain, symmetrie, subproperty-collapse) en detecteert tegenspraken — één engine, Cypher, geen Datalog |
 | Afgeleide edge | Een door de reasoner gematerialiseerde edge (`derived=true`+`derivedByRule`+provenance); nooit bron van waarheid, elke run herberekend |
 | `ReasoningConflict` | Postgres-rij voor een door de reasoner gedetecteerde tegenspraak (claim↔officieel, botsende rulings, disjointness), gerouteerd naar misvattingen/reviewqueue/escalatie |

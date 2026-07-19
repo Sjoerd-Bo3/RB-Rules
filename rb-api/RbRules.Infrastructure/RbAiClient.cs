@@ -110,6 +110,35 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         }
     }
 
+    /// <summary>Tool-forced brein-extractie (#226, §3.1): POST naar een van de
+    /// rb-ai-extractie-endpoints (<c>/extract/interactions</c>, <c>/extract/predicates</c>)
+    /// en geef de rauwe JSON-body terug (de <c>{"interactions":[…]}</c>/<c>{"predicates":[…]}</c>-
+    /// envelop die de Domain-parser als tweede muur consumeert). Best-effort: elke
+    /// non-success of exception → <c>null</c>, zodat de mining-orkestratie netjes
+    /// degradeert (null → geen half feit). De endpoint zelf antwoordt met 500 bij
+    /// AI-uitval (tool niet geroepen/run gefaald) en met 200 + lege lijst wanneer er
+    /// simpelweg geen kandidaten waren — dat onderscheid blijft bewaard: 200 → een
+    /// (mogelijk lege) parse, 500/null → degradatie.</summary>
+    public async Task<string?> ExtractStructuredAsync(
+        string path, object payload, CancellationToken ct = default)
+    {
+        try
+        {
+            var res = await http.PostAsJsonAsync(path, payload, ct);
+            if (!res.IsSuccessStatusCode)
+            {
+                logger.LogWarning("rb-ai {Path} gaf {Status}", path, (int)res.StatusCode);
+                return null;
+            }
+            return await res.Content.ReadAsStringAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "rb-ai-extractie mislukt (path={Path})", path);
+            return null;
+        }
+    }
+
     /// <summary>Antwoord van het agent-pad (#107): het antwoord plus de
     /// brein-stappen (één regel per tool-call) die rb-ai bij task="agentic"
     /// meestuurt — voedt AskTrace.BrainSteps in het beheer. Answer is null

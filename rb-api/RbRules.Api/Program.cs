@@ -68,6 +68,11 @@ builder.Services.AddScoped<ReasoningService>();
 builder.Services.AddScoped<ProvenanceAuditService>();
 builder.Services.AddScoped<EntityResolutionService>();
 builder.Services.AddScoped<InteractionPromotionService>();
+// Brein-mining-orkestratie (#226, §3.1/§3.4): tool-forced extractie via rb-ai →
+// entity-resolutie → fase-2-promotie-poort → atomair feit+provenance. Handmatige
+// jobs (breinmine-interacties/-predicaten), bewust NIET in de "alles"-keten.
+builder.Services.AddScoped<BreinInteractionMiningService>();
+builder.Services.AddScoped<BreinPredicateMiningService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
 // Rewrite-cache (#152): singleton — moet de levensduur van het proces

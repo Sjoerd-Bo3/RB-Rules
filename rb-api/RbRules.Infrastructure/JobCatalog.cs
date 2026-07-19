@@ -73,6 +73,15 @@ public static class JobCatalog
             new("owlaudit", OwlAuditAsync),
             new("primer", PrimerAsync),
             new("interactions", InteractionsAsync),
+            // Brein-mining (#226, §3.1/§3.4): tool-forced, ontologie-begrensde
+            // extractie via rb-ai → entity-resolutie (fase 1) → fase-2-promotie-poort
+            // → atomair feit+provenance. Twee losse, handmatige jobs — bewust GEEN
+            // stap in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk; expliciete
+            // beheerdersbeslissing, zelfde lijn als "graph"/"reason"/"claims"). De
+            // extractie is de eerste live rb-ai-koppeling van de fase-2/5-vorm; de
+            // promotie-poort en atomaire persistentie zijn al bewezen (ReifiedInteractionTests).
+            new("breinmine-interacties", BreinMineInteractionsAsync),
+            new("breinmine-predicaten", BreinMinePredicatesAsync),
             // Bronnenjacht (#63, stap 2): rb-ai doorzoekt het web (task
             // "research", #64) naar nieuwe regel-/uitlegbronnen. Vondsten
             // komen als SourceProposal in de reviewqueue (beheer →
@@ -335,6 +344,23 @@ public static class JobCatalog
         var r = await sp.GetRequiredService<InteractionService>()
             .MineAsync(progress: report, ct: ct);
         return new($"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd");
+    }
+
+    private static async Task<JobOutcome> BreinMineInteractionsAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BreinInteractionMiningService>()
+            .RunAsync(progress: report, ct: ct);
+        // #190 vers-werk-semantiek: per-run gecapt; CapHit → nog focus-kaarten over.
+        return new(r.Summary, Drained: !r.CapHit);
+    }
+
+    private static async Task<JobOutcome> BreinMinePredicatesAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BreinPredicateMiningService>()
+            .RunAsync(progress: report, ct: ct);
+        return new(r.Summary, Drained: !r.CapHit);
     }
 
     private static async Task<JobOutcome> ScoutAsync(
