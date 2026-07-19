@@ -67,15 +67,30 @@ public class BrainProjectionTests
     }
 
     [Fact]
-    public void CanonicalEntity_Ref_NeverCollidesWithBrainRefAlphabet()
+    public void OwnedNodeRefs_NeverCollideWithBrainRefAlphabet()
     {
-        var rows = BrainProjection.Build(
-            [Entity(1, CanonicalEntityKinds.Mechanic, "Deflect")], [], []);
-        var refValue = (string)rows.CanonicalEntities[0]["ref"]!;
-        // De eigen prefix mag GEEN geldige BrainRef zijn — anders wordt een
+        // Alle DRIE de owned-node-prefixes (entity:/predicate:/ontologyversion:)
+        // moeten disjunct blijven van het BrainRef-alfabet — anders wordt een
         // label-loze DERIVED_FROM/RELATES_TO-match in GraphSyncService ambigu.
-        Assert.StartsWith("entity:", refValue);
-        Assert.False(BrainRef.TryParse(refValue, out _));
+        // Eén entiteit als subject zodat het predicaat óók een node oplevert.
+        var rows = BrainProjection.Build(
+            [Entity(1, CanonicalEntityKinds.Mechanic, "Deflect")],
+            [Predicate(11, subject: 1, "prevents", "exhaust")],
+            [Version(2, "1.0.0")]);
+
+        var entityRef = (string)rows.CanonicalEntities[0]["ref"]!;
+        var predicateRef = (string)rows.Predicates[0]["ref"]!;
+        var ontologyVersionRef = (string)rows.OntologyVersions[0]["ref"]!;
+
+        Assert.StartsWith("entity:", entityRef);
+        Assert.StartsWith("predicate:", predicateRef);
+        Assert.StartsWith("ontologyversion:", ontologyVersionRef);
+
+        // Geen van de drie mag als BrainRef parsen (de invariant die de eigen
+        // ref-namespace collision-vrij houdt met GraphSyncService's label-loze match).
+        Assert.False(BrainRef.TryParse(entityRef, out _));
+        Assert.False(BrainRef.TryParse(predicateRef, out _));
+        Assert.False(BrainRef.TryParse(ontologyVersionRef, out _));
     }
 
     [Fact]
