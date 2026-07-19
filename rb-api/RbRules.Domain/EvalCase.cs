@@ -76,6 +76,18 @@ public sealed record EvalCase
     /// telt in het scaffold als een verzonnen citatie.</summary>
     public IReadOnlyList<string> ExpectedCitations { get; init; } = [];
 
+    /// <summary>De DEELVERZAMELING van <see cref="GoldSupport"/> die de
+    /// conditie-dragende knopen van een gekwalificeerde interactie zijn (bv. de
+    /// <c>window=showdown</c>- of <c>instance-limit</c>-knoop). Path-recall
+    /// hierover meet faalmodus 3 (structuurverlies): een pad dat de interactie
+    /// wél maar de conditie níet ophaalt, plat de kwalificatie en scoort
+    /// &lt; 1.0 (#231, spec §7 — <em>path-recall op gekwalificeerde
+    /// interacties</em>). Leeg voor niet-gekwalificeerde cases: dan is er niets
+    /// structureels te missen en scoort path-recall 1.0. Hoort een deelverzameling
+    /// van <see cref="GoldSupport"/> te zijn — de generator/seed borgt dat, de
+    /// scoring dwingt het niet af (een los conditie-id telt gewoon mee).</summary>
+    public IReadOnlyList<string> GoldConditionSupport { get; init; } = [];
+
     public IReadOnlyList<ForbiddenClaim> ForbiddenClaims { get; init; } = [];
 
     // --- Levenscyclus (Kritiek B4/C) ---
