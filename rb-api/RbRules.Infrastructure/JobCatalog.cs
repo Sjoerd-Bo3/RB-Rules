@@ -54,6 +54,13 @@ public static class JobCatalog
             new("rules", RulesAsync),
             new("bans", BansAsync),
             new("graph", GraphAsync),
+            // Brein-projectie (#227, §3.5): de brein-lagen die "graph" niet dekt
+            // (CanonicalEntity/MechanicPredicate/OntologyVersion) idempotent naar
+            // Neo4j. Additief naast "graph" (aparte service/transactie, eigen
+            // ref-namespace) en logisch ná "graph" (de basis-graaf moet er zijn).
+            // Bewust GEEN stap in de "alles"-keten — Neo4j-afhankelijk, draait als
+            // expliciete beheerdersactie (zelfde lijn als "graph"/"reason").
+            new("breinprojectie", BreinProjectionAsync),
             // Redeneer-laag (#227, §5): Neo4j-native inferentie (afgeleide edges)
             // + bounded contradictie-detectie (→ misvattingen/reviewqueue). Loopt
             // logisch ná "graph" (de projectie moet er zijn); bewust GEEN stap in
@@ -283,6 +290,14 @@ public static class JobCatalog
             + $"{r.Sections} secties, {r.Concepts} concepten, {r.Claims} claims, "
             + $"{r.Sources} bronnen, {r.Errata} errata, {r.Changes} changes, "
             + $"{r.Relations} relaties, {r.MiningRuns} runs, {r.Assertions} assertions");
+    }
+
+    private static async Task<JobOutcome> BreinProjectionAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        report("brein-lagen (canonieke entiteiten, mechanic-predicaten, ontologie-versies) naar Neo4j projecteren");
+        var r = await sp.GetRequiredService<BreinProjectionService>().ProjectAsync(progress: report, ct: ct);
+        return new(r.Summary);
     }
 
     private static async Task<JobOutcome> ReasonAsync(

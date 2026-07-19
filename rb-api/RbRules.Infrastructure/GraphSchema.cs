@@ -41,6 +41,15 @@ public static class GraphSchema
         // en dus bewust niet de bron van die garantie.
         "CREATE CONSTRAINT mining_run_ref IF NOT EXISTS FOR (r:MiningRun) REQUIRE r.ref IS UNIQUE",
         "CREATE CONSTRAINT assertion_ref IF NOT EXISTS FOR (a:Assertion) REQUIRE a.ref IS UNIQUE",
+
+        // Brein-projectie (fase live-graph, #227, §3.5): de brein-lagen die
+        // GraphSyncService niet dekt, elk MERGE'd op de eigen ref-namespace
+        // (entity:/predicate:/ontologyversion: — bewust los van het BrainRef-
+        // alfabet, zodat een label-loze ref-match nooit ambigu wordt). De
+        // constraint maakt de MERGE correct (geen dubbele knopen) en snel.
+        "CREATE CONSTRAINT canonical_entity_ref IF NOT EXISTS FOR (e:CanonicalEntity) REQUIRE e.ref IS UNIQUE",
+        "CREATE CONSTRAINT mechanic_predicate_ref IF NOT EXISTS FOR (p:MechanicPredicate) REQUIRE p.ref IS UNIQUE",
+        "CREATE CONSTRAINT ontology_version_ref IF NOT EXISTS FOR (v:OntologyVersion) REQUIRE v.ref IS UNIQUE",
     ];
 
     public static async Task EnsureAsync(IDriver driver, CancellationToken ct = default)

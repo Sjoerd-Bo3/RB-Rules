@@ -1292,6 +1292,58 @@ een **skeleton**: geen OWL/Turtle-runtime, maar een pure zelf-toets van de afged
 schema-bron (`OntologySchema`) op acycliciteit, vervulbare disjointness en
 niet-danglende domain/range. Optioneel en nooit in de "alles"-keten.
 
+### 6.5 De brein-projectie
+
+`BreinProjectionService.ProjectAsync` (job `breinprojectie`, logisch ná `graph`)
+projecteert de brein-lagen die `GraphSyncService` NOG NIET dekt idempotent naar
+Neo4j (fase live-graph, #227, §3.5): `CanonicalEntity` (fase 1),
+`MechanicPredicate` (fase 5) en `OntologyVersion` (fase 6). Het is bewust een
+**aparte service + eigen transactie + eigen job**, volledig ADDITIEF naast de
+`graph`-sync — die transactie/job wordt NIET aangeraakt (minimaliseer risico; de
+job is handmatig getriggerd en breekt de site niet). De rij-/param-/sleutel-opbouw
+is puur en getest (`BrainProjection`, `BrainProjectionTests`); de service is de
+dunne IO-schil eromheen (zelfde arbeidsdeling als `InteractionProjection` ↔
+GraphSyncService).
+
+Geprojecteerd (MERGE op de canonieke `ref`, idempotent herbouwbaar uit
+Postgres = SoT): `:CanonicalEntity {ref, kind, canonicalLabel, brainRef,
+altLabels, status, definition, createdByRun}` (alle statussen, óók merged
+tombstones — herstelpad-historie) met `MERGED_INTO`-edges (tombstone →
+overlevende); `:MechanicPredicate {ref, predicate, objectToken, status,
+createdByRun}` (candidate + reviewed, rejected overgeslagen) met
+`HAS_PREDICATE`-edges vanaf de subject-`:CanonicalEntity`; `:OntologyVersion
+{ref, version, fingerprint, bumpKind, notes, current, appliedAt, createdByRun}`
+op SemVer geordend met een `PRECEDES`-keten en een `current`-vlag op de hoogste
+versie. Elk owned label kent zijn eigen wees-opruiming (`MATCH (n:Label) WHERE
+NOT n.ref IN $refs DETACH DELETE n`), zodat de projectie een exacte spiegel van
+Postgres blijft.
+
+**KRITIEK — ref-namespace-scheiding.** De owned-node-refs dragen een EIGEN prefix
+(`entity:` / `predicate:` / `ontologyversion:`) die NIET in het `BrainRef`-alfabet
+zit, en de projectie linkt NIET naar GraphSyncService-eigen knopen
+(Card/Mechanic/MiningRun/…). Dat is bewust en dubbel gemotiveerd: (a)
+GraphSyncService matcht `DERIVED_FROM`/`RELATES_TO` label-LOOS op `ref` — zou een
+brein-knoop de `mechanic:`-ref van een bestaande `:Mechanic`-knoop delen, dan werd
+zo'n match ambigu en maakte hij dubbele edges; (b) GraphSyncService `DETACH
+DELETE`t + `CREATE`t zijn eigen labels (MiningRun/Assertion/Interaction) elke
+rebuild — een edge daarheen zou een latere `graph`-run weer weggooien. Provenance
+rijdt daarom als `createdByRun`-property mee, niet als edge; de BrainRef-vorm
+(`mechanic:`/`concept:`/`tag:`) staat als `brainRef`-property klaar voor
+toekomstige entity-linking (fase 4), maar nooit als node-sleutel. De drie
+ref-constraints staan in `GraphSchema` (idempotent, `IF NOT EXISTS`).
+
+Neo4j-uitval is een verwacht pad: de hele projectie is best-effort (driver-fout →
+de run doet niets en meldt "graph niet beschikbaar"; Postgres blijft leidend en de
+projectie is bij de volgende run herbouwbaar), zelfde patroon als de graph-sync en
+de reasoner. Net als die twee is de **live-Cypher-executie nog niet tegen een
+draaiende Neo4j geverifieerd** (geen lokale instance): de rij-opbouw is puur en
+getest, de echte write is integratie-follow-up (§8). Bewuste afbakening t.o.v. §3.5
+en de #227-scope: `MiningRun`/`Assertion`/`Interaction`/`Condition` blijven bij
+`GraphSyncService` (§6.3) — geen overlappende projectie — en `ALT_LABEL` is een
+`altLabels`-property (scalaire strings zonder eigen identiteit/provenance) i.p.v.
+een edge naar een `:Alias`-knoop (KISS/YAGNI; een triviale follow-up als
+entity-linking het nodig heeft).
+
 ---
 
 ## 7. Deploymentzicht

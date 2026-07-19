@@ -60,6 +60,9 @@ builder.Services.AddHttpClient<EmbeddingService>(c =>
 builder.Services.AddScoped<CardEmbeddingPipeline>();
 builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
+// Brein-projectie (#227, §3.5): de brein-lagen die GraphSyncService niet dekt
+// (CanonicalEntity/MechanicPredicate/OntologyVersion) idempotent naar Neo4j.
+builder.Services.AddScoped<BreinProjectionService>();
 // Redeneer-laag (#227, §5): Neo4j-native inferentie + contradictie-detectie.
 builder.Services.AddScoped<ReasoningService>();
 builder.Services.AddScoped<ProvenanceAuditService>();
