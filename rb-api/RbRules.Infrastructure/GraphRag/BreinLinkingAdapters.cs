@@ -90,8 +90,12 @@ public sealed class PgVectorNodeSimilarity(
             {
                 if (r.Embedding is null) continue;
                 var refKey = CanonicalRef(r.Kind, r.CanonicalLabel).Format();
-                // CosineDistance ∈ [0,2]; similarity = 1 − distance, geklemd op [0,1].
-                var sim = Math.Clamp(1.0 - r.Embedding.CosineDistance(qv), 0, 1);
+                // cosine-similarity ∈ [−1,1], geklemd op [0,1]. IN-MEMORY berekend:
+                // Vector.CosineDistance is een EF-translator-stub die op een
+                // gematerialiseerde rij een InvalidOperationException gooit (#228-review) —
+                // de server-side .OrderBy hierboven vertaalt wél, maar hier tellen we
+                // zelf op de float-spans.
+                var sim = Math.Clamp(CosineSimilarity(r.Embedding, qv), 0, 1);
                 byRef[refKey] = sim;
             }
             return refValue => byRef.GetValueOrDefault(refValue.Format(), 0.0);
@@ -110,6 +114,27 @@ public sealed class PgVectorNodeSimilarity(
         CanonicalEntityKinds.Concept => BrainRef.Concept(label),
         _ => BrainRef.Tag(label),
     };
+
+    /// <summary>In-memory cosine-similarity tussen twee gematerialiseerde
+    /// <see cref="Vector"/>s (dot / (|a|·|b|)). Bewust NIET via
+    /// <c>Vector.CosineDistance</c> — dat is de EF-translator-stub die alleen in een
+    /// LINQ-boom naar SQL vertaalt en op een echte rij een InvalidOperationException
+    /// gooit. Ongelijke dimensies of een nul-vector → 0 (neutraal).</summary>
+    internal static double CosineSimilarity(Pgvector.Vector a, Pgvector.Vector b)
+    {
+        var x = a.Memory.Span;
+        var y = b.Memory.Span;
+        if (x.Length != y.Length || x.Length == 0) return 0.0;
+        double dot = 0, na = 0, nb = 0;
+        for (var i = 0; i < x.Length; i++)
+        {
+            dot += (double)x[i] * y[i];
+            na += (double)x[i] * x[i];
+            nb += (double)y[i] * y[i];
+        }
+        if (na == 0 || nb == 0) return 0.0;
+        return dot / (Math.Sqrt(na) * Math.Sqrt(nb));
+    }
 }
 
 /// <summary>Co-mention-coherentie/graaf-truc (§4): zijn twee kandidaat-knopen via

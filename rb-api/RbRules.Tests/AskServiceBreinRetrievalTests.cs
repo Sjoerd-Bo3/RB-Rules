@@ -117,6 +117,69 @@ public class AskServiceBreinRetrievalTests
         Assert.Empty(await db.AnswerTraces.ToListAsync());
     }
 
+    // ── 4) NoPath ⇒ blok kleurt de prompt zónder Supports ⇒ trace TÓCH weg ──
+
+    [Fact]
+    public async Task FlagAan_NoPath_LeegBundle_PersisteertTochAnswerTrace()
+    {
+        // Twee ankers (Deflect + showdown) + interactie-cue → het pad-kanaal staat aan
+        // (GdsWarm zodat de RetrievalGuard het Path-kanaal niet als koud-GDS strípt),
+        // maar de retriever levert niets → geen pad, geen chunks → lege bundle, lege
+        // Supports. Het NoPath-oordeel ("geen bekende interactie") kleurt tóch de prompt
+        // (BreinContextFormatter, hasNoPath-tak) en die beslissing mag geen onzichtbare
+        // state achterlaten (#236): de guard mag niet op Supports>0 blijven hangen.
+        using var db = NewDb();
+        await SeedRulesAsync(db);
+        var ai = CapturingAi("**Oordeel:** Geen bekende interactie. [1]");
+        var spy = new SpyRetriever();
+        var brein = new BreinRetrievalService(
+            Orchestrator(spy), new BreinRetrievalSettings(Enabled: true, GdsWarm: true),
+            NullLogger<BreinRetrievalService>.Instance);
+        var svc = new TestableAskService(db, FailingEmbeddings(), ai, brein);
+
+        var result = await svc.AskAsync("Werkt Deflect samen met een showdown?");
+
+        Assert.True(result.Ok);
+        Assert.True(spy.Called); // de retrieval liep écht (geen flag-uit-degradatie)
+        // NoPath kleurde de prompt: eerlijk "geen bekende interactie" i.p.v. een gok.
+        Assert.Contains("BREIN-CONTEXT", ai.LastPrompt);
+        Assert.Contains("GEEN PAD", ai.LastPrompt);
+        // ...en juist die gating/NoPath-beslissing laat nu provenance achter — óók
+        // zonder dragende Supports (dit is de kern van #228-review-defect 2).
+        var trace = Assert.Single(await db.AnswerTraces.Include(t => t.Supports).ToListAsync());
+        Assert.Empty(trace.Supports);
+        Assert.Equal(PrimaryChannel.None.ToString(), trace.PrimaryChannel);
+    }
+
+    // ── 5) Flag AAN + geslaagde-maar-lege retrieval ⇒ leeg blok ⇒ GEEN trace ──
+
+    [Fact]
+    public async Task FlagAan_GeslaagdeMaarLegeRetrieval_LeegBlok_GeenAnswerTrace()
+    {
+        // Geslaagde retrieval die NIETS oplevert: GdsWarm laat de RetrievalGuard het
+        // dure Path-kanaal koud-strippen (gds-cold), de retriever geeft lege resultaten
+        // → geen chunks, geen paden, geen NoPath → lege bundle → leeg brein-blok →
+        // prompt byte-identiek. Dan mag er GÉÉN (lege) AnswerTrace-rij per /ask
+        // wegvloeien (#228-review-defect 4: de weiger-tak van de write-guard). Zeer
+        // gangbaar vroeg in de brein-levensduur (graaf nog dun, GDS koud).
+        using var db = NewDb();
+        await SeedRulesAsync(db);
+        var ai = CapturingAi("**Oordeel:** Ja. [1]");
+        var spy = new SpyRetriever();
+        var brein = new BreinRetrievalService(
+            Orchestrator(spy), new BreinRetrievalSettings(Enabled: true, GdsWarm: false),
+            NullLogger<BreinRetrievalService>.Instance);
+        var svc = new TestableAskService(db, FailingEmbeddings(), ai, brein);
+
+        var result = await svc.AskAsync(Question);
+
+        Assert.True(result.Ok);
+        Assert.True(spy.Called); // de retrieval liep écht, maar leverde niets op
+        // Leeg blok ⇒ prompt draagt geen brein-context ⇒ geen provenance te loggen.
+        Assert.DoesNotContain("BREIN-CONTEXT", ai.LastPrompt);
+        Assert.Empty(await db.AnswerTraces.ToListAsync());
+    }
+
     // ── testinfra ────────────────────────────────────────────────────────
 
     private static RetrievalOrchestrator Orchestrator(IGraphRetriever retriever) =>

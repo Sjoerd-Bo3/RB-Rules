@@ -87,6 +87,17 @@ public class BreinRetrievalTests
     private static RetrievalResult OfficialChunk(BrainRef r, string text) =>
         new([], [], [new RetrievedChunk(r, KnowledgeTier.Official, text, 0.9, TrustVector.OfficialDefault)], [], []);
 
+    /// <summary>Retriever die een NIET-leeg trust-gewogen pad teruggeeft op de
+    /// Path-modus — zodat de pad-onderbouwing + PathCitation-formattering (§4 "het pad
+    /// ÍS de uitleg") daadwerkelijk door een test loopt.</summary>
+    private sealed class PathRetriever(RetrievalResult pathResult) : IGraphRetriever
+    {
+        public Task<RetrievalResult> LocalAsync(IReadOnlyList<BrainRef> a, ModeSelection m, CancellationToken ct = default) => Task.FromResult(RetrievalResult.Empty);
+        public Task<RetrievalResult> GlobalAsync(string q, ModeSelection m, CancellationToken ct = default) => Task.FromResult(RetrievalResult.Empty);
+        public Task<RetrievalResult> PathAsync(IReadOnlyList<BrainRef> a, ModeSelection m, CancellationToken ct = default) => Task.FromResult(pathResult);
+        public Task<RetrievalResult> DriftAsync(string q, IReadOnlyList<BrainRef> a, ModeSelection m, CancellationToken ct = default) => Task.FromResult(RetrievalResult.Empty);
+    }
+
     private static RetrievalOrchestrator Orch(IGraphRetriever retriever, IGazetteerSource? gaz = null) =>
         new(gaz ?? new FakeGazetteer(Gaz()), new FakeSimilarity(), new FakeAdjacency(), retriever);
 
@@ -239,5 +250,44 @@ public class BreinRetrievalTests
 
         Assert.Contains("BREIN-CONTEXT", block);
         Assert.Contains("retrieval-terugval: " + RetrievalFallback.LatencyExceeded, block);
+    }
+
+    // ── 8) Formatter: NIET-leeg pad ⇒ pad-onderbouwing + PathCitations in het blok ──
+
+    [Fact]
+    public async Task Formatter_NietLeegPad_RendertOnderbouwingEnPadCitaties()
+    {
+        // Een causale vraag met 2 ankers → Path-modus; de retriever levert één
+        // trust-gewogen pad (Card —GOVERNED_BY→ §-sectie). Dit is de ENIGE test die
+        // de pad-onderbouwing-lus én de PathCitation-formattering met widget-markers
+        // (§4 "het pad ÍS de uitleg") echt uitvoert — een regressie daarin (verkeerde
+        // citation-nummering, null-deref op WidgetMarker, kapotte Explain) faalt hier.
+        var start = new GraphNode(BrainRef.Card("Poro Herald"), KnowledgeTier.Official, "Poro Herald");
+        var section = new GraphNode(
+            BrainRef.Section("core", "7.3"), KnowledgeTier.Official, "§7.3 Showdown timing");
+        var edge = new GraphEdge(start.Ref, section.Ref, "GOVERNED_BY", 0.9);
+        var path = new GraphPath(start, [new PathHop(section, edge, 0.9, 0.9)]);
+        var pathResult = new RetrievalResult([start, section], [edge], [], [path], []);
+
+        var orch = Orch(new PathRetriever(pathResult));
+        var outcome = await orch.RetrieveAsync(
+            "Waarom verliest Empowered van Might?", QuestionType.Ruling);
+
+        // De orchestrator moet het pad daadwerkelijk als citaties hebben opgenomen
+        // (anders test de formatter een lege lijst en bewijst dit niets).
+        Assert.NotEmpty(outcome.Retrieval.Paths);
+        Assert.NotEmpty(outcome.PathCitations);
+
+        var block = BreinContextFormatter.Format(outcome);
+
+        // De leesbare pad-onderbouwing (Explain): start-label + edge-type + doel-label.
+        Assert.Contains("pad-onderbouwing: Poro Herald —GOVERNED_BY→ §7.3 Showdown timing", block);
+        // De pad-knoop-citaties met hun widget-markers (Card → [[card:label]],
+        // Section → [[rule:code]]) en het trust-label.
+        Assert.Contains("[[card:Poro Herald]]", block);
+        Assert.Contains("[[rule:7.3]]", block);
+        Assert.Contains("[cit:1]", block);
+        Assert.Contains("[cit:2]", block);
+        Assert.Contains("[OFFICIEEL]", block);
     }
 }

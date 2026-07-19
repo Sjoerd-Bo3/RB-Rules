@@ -894,12 +894,18 @@ public class AskService(
 
             // Brein-AnswerTrace (#228, §6/#236): het immutable auditspoor van de
             // GraphRAG-retrieval — WELKE subgraaf/paden/trust-gewichten het antwoord
-            // droegen, met de trust-waarde-toen. Alleen als de flag aan stond én de
-            // retrieval iets opleverde. Best-effort en apart van de AskTrace: een
-            // haperende trace-write mag het antwoord (en de AskTrace) nooit blokkeren.
-            // Zichtbaar in de Brein-verkenner (#236); Postgres = SoT, de Neo4j-
-            // USED_ASSERTION-projectie is een integratie-follow-up.
-            if (breinEnrichment is { Outcome.Trace.Supports.Count: > 0 })
+            // droegen, met de trust-waarde-toen. We schrijven de trace weg zodra het
+            // brein-blok NIET-LEEG was, niet alleen bij dragende Supports: een NoPath-
+            // oordeel, een gating-memo of een terugval-reden kleuren óók het antwoord
+            // (ze staan in de prompt, AskService.cs breinBlock) terwijl Supports leeg
+            // kan zijn — die beslissing mag geen onzichtbare state achterlaten (#236).
+            // Een leeg blok (retrieval vond niets, prompt byte-identiek) → geen trace,
+            // zodat de AnswerTraces-tabel niet met lege rijen vervuilt (#228-review).
+            // Best-effort en apart van de AskTrace: een haperende trace-write mag het
+            // antwoord (en de AskTrace) nooit blokkeren. Zichtbaar in de Brein-verkenner
+            // (#236); Postgres = SoT, de Neo4j-USED_ASSERTION-projectie is een
+            // integratie-follow-up.
+            if (breinEnrichment is { PromptBlock.Length: > 0 })
             {
                 try
                 {
