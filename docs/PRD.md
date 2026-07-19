@@ -965,11 +965,26 @@ de globale duur-vangrail).
   verkenner (reasoning-tegenspraken met hun routering, incl. het
   misvattingen-kanaal); en een **AnswerTrace-viewer** (herspeelbaar antwoord:
   de dragende subgraaf/paden met trust-waarde-toen en de epoch-stempels).
-  Read-only en additief: niets is bewerkbaar, geen mining/reasoner draait
-  vanuit deze schermen. De **Brein**-nav toont een tel-badge; lege staten zijn
-  netjes ("nog geen brein-data — draai de brein-jobs"). *Route* `/admin/brein`
+  De verkenner-tabs zijn read-only en additief: niets is bewerkbaar. De
+  **Brein**-nav toont een tel-badge; lege staten zijn netjes ("nog geen
+  brein-data — draai de brein-jobs via de pipeline"). *Route* `/admin/brein`
   (+ `entities`/`interactions`/`conflicts`/`answertrace`) · *endpoints*
   `GET /api/admin/brein/{overzicht,entities,interactions,assertions/{ref},conflicts,answertraces,answertrace/{id},observability}`.
+- **Brein-cockpit & jobs** (brein-jobs-ui) — bovenaan het Brein-overzicht een
+  operationele **pipeline-cockpit** die per stap toont wát er live staat en de
+  jobs triggerbaar maakt (voorheen waren de vier brein-jobs API-only): **stap 1
+  — Extractie** (`breinmine-interacties` + `breinmine-predicaten`: X interacties
+  / Y mechanic-predicaten gemined, per job een trigger-knop), **stap 2 —
+  Projectie** (`breinprojectie` → Neo4j: canonieke-entiteiten-teller + status,
+  trigger-knop), **stap 3 — Reasoner** (`reason` → afgeleide edges + conflicts: X
+  conflicts / Y open, trigger-knop), en de **/ask-retrieval**-flag (AAN/UIT — bij
+  UIT de hint `BREIN_RETRIEVAL_ENABLED=true` op de VM; env-schakelaar, geen knop).
+  Elke stap heeft een één-regel-uitleg en de volgorde-hint 1→2→3; status = kleur
+  + tekst (geen emoji), met per stap de laatste-run (uit het run_log-grootboek,
+  overleeft herstart). De knoppen respecteren de JobRunner-serialisatie (één job
+  tegelijk; 409 → nette melding). Read-only endpoint, additief. *Endpoint*
+  `GET /api/admin/brein/cockpit` (per-stap-tellingen + laatste-run per job +
+  flag-status) · *actie* `POST ?/job` (start via `POST /api/admin/jobs/{name}`).
 
 ### 4.6 Platform, accounts & PWA
 
