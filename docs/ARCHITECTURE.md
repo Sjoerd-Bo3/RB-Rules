@@ -1456,11 +1456,18 @@ feit hangt aan een gereïficeerde `Assertion` met verplichte `WAS_GENERATED_BY`
 `AssertionProvenanceGuard` plus een `RbRulesDbContext.SaveChanges`-poort die 'm
 altijd draait. Postgres blijft de bron van waarheid (ADR-2); de Neo4j-projectie
 is idempotent herbouwbaar en een relatie-existentie-constraint (Enterprise-only)
-is bewust niet de garantie. Een deterministische Ring-A-gate (€0, geen LLM) telt
-nieuwe feiten zonder Assertion en houdt die op 0. **Gevolg.** "Ontbrekende
-provenance" wordt onmogelijk voor nieuw werk i.p.v. gemitigeerd; legacy-feiten
-worden geïnventariseerd voor backfill, niet stil gedoogd. `Provenance.cs`,
-`ProvenanceAuditService`, `GraphSyncService`, `GraphSchema`.
+is bewust niet de garantie. Wat "nieuw werk" runtime afdwingt is de
+schrijfpoort: elke `Assertion` zónder complete provenance faalt hard op
+`SaveChanges`. Daarnaast is er een deterministische Ring-A-audit (€0, geen LLM,
+`ProvenanceAuditService.AuditAsync`) die afgeleide feiten zónder Assertion en
+embeddings zonder herkomst telt, gesplitst in "nieuw" (moet 0 zijn) en "legacy
+backfill"; die audit is een aparte, herhaalbare uitspraak — nog niet aan een
+job/CI-stap gekoppeld (dat is latere fase-bedrading). **Gevolg.** Een `Assertion`
+zonder herkomst is onmogelijk; een afgeleid feit dat helemáál geen Assertion
+krijgt is niet door de schrijfpoort te vangen, maar wordt door de Ring-A-audit
+zichtbaar gemaakt i.p.v. stil gedoogd. Legacy-feiten worden geïnventariseerd
+voor backfill. `Provenance.cs`, `ProvenanceAuditService`, `GraphSyncService`,
+`GraphSchema`.
 
 ---
 

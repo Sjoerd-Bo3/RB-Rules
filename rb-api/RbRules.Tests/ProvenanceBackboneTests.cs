@@ -91,6 +91,26 @@ public class ProvenanceBackboneTests
         Assert.Contains(r.Violations, v => v.Code == AssertionProvenanceGuard.Code.InvalidDerivedFromRef);
     }
 
+    [Fact]
+    public void Guard_RejectsMissingSubject()
+    {
+        var a = ValidAssertion();
+        a.Subject = "   ";
+        var r = AssertionProvenanceGuard.Validate(a);
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == AssertionProvenanceGuard.Code.MissingSubject);
+    }
+
+    [Fact]
+    public void Guard_RejectsMissingFactKind()
+    {
+        var a = ValidAssertion();
+        a.FactKind = "";
+        var r = AssertionProvenanceGuard.Validate(a);
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == AssertionProvenanceGuard.Code.MissingFactKind);
+    }
+
     // ── EmbeddingProvenance ──────────────────────────────────────────────────
     [Fact]
     public void EmbeddingContentHash_IsDeterministicAndTextSensitive()
@@ -171,6 +191,138 @@ public class ProvenanceBackboneTests
         Assert.Equal(1, await db.Assertions.CountAsync());
     }
 
+    /// <summary>De schrijfpoort draait óók op EntityState.Modified: provenance
+    /// die later wordt gestript (de klassieke manier waarop herkomst wegvalt bij
+    /// een update) moet net zo hard falen als een provenance-loze insert.</summary>
+    [Fact]
+    public async Task SaveChanges_RejectsAssertionModifiedToStripGeneratedBy()
+    {
+        await using var db = NewDb();
+        var a = ValidAssertion();
+        db.Assertions.Add(a);
+        await db.SaveChangesAsync();               // eerst valide opgeslagen
+
+        a.MiningRunId = "";                        // strip WAS_GENERATED_BY na de feiten
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync());
+        Assert.Contains("provenance-poort", ex.Message);
+    }
+
+    // ── ProvenanceAuditService.AuditAsync (Ring-A-teller, end-to-end op de DB) ──
+    private static Relation RelationRow(long id, DateTimeOffset detectedAt) => new()
+    {
+        Id = id,
+        FromRef = "mechanic:Deflect",
+        ToRef = "section:core-rules-pdf/7.4",
+        Kind = "counters",
+        Explanation = "x",
+        Provenance = "concept:combat",
+        DetectedAt = detectedAt,
+    };
+
+    private static CardInteraction InteractionRow(long id, DateTimeOffset detectedAt) => new()
+    {
+        Id = id,
+        CardAId = "ogn-011-298",
+        CardBId = "ogn-011-299",
+        Kind = "combo",
+        Explanation = "x",
+        DetectedAt = detectedAt,
+    };
+
+    private static Assertion AssertionFor(string subject, string factKind)
+    {
+        var a = ValidAssertion();
+        a.Subject = subject;
+        a.FactKind = factKind;
+        return a;
+    }
+
+    /// <summary>De cutoff splitst nieuw (moet 0 zijn = de gate) van legacy; een
+    /// relatie én een interactie zonder Assertion aan elke kant bewijzen dat de
+    /// vergelijkingsrichting, de nieuw/legacy-toewijzing én de interactions-term
+    /// alle drie kloppen (een geflipte `<`, een omgewisselde toewijzing of een
+    /// weggevallen interactions-optelling laat dit falen).</summary>
+    [Fact]
+    public async Task AuditAsync_CountsNewFactsMissingProvenanceAndSplitsLegacy()
+    {
+        await using var db = NewDb();
+        var cutoff = DateTimeOffset.FromUnixTimeMilliseconds(2_000_000_000_000);
+        var newTime = cutoff.AddDays(1);
+        var legacyTime = cutoff.AddDays(-1);
+
+        // Nieuwe feiten zónder Assertion → laten de gate falen.
+        db.Relations.Add(RelationRow(100, newTime));
+        db.CardInteractions.Add(InteractionRow(200, newTime));
+        // Nieuwe relatie MÉT bijpassende Assertion → telt niet mee.
+        db.Relations.Add(RelationRow(101, newTime));
+        db.Assertions.Add(AssertionFor(
+            ProvenanceAuditService.RelationSubjectPrefix + 101, FactKinds.Relation));
+        // Legacy feiten zónder Assertion → backlog, blokkeren de gate niet.
+        db.Relations.Add(RelationRow(102, legacyTime));
+        db.CardInteractions.Add(InteractionRow(201, legacyTime));
+        await db.SaveChangesAsync();
+
+        var report = await new ProvenanceAuditService(db).AuditAsync(cutoff);
+
+        Assert.Equal(2, report.FactsMissingAssertion);     // 1 relation-new + 1 interaction-new
+        Assert.Equal(2, report.LegacyBacklog);             // 1 relation-legacy + 1 interaction-legacy
+        Assert.Equal(0, report.EmbeddingsMissingProvenance);
+        Assert.False(report.Passes);
+    }
+
+    /// <summary>Zowel de relation- als de interaction-subject-prefix moeten kloppen
+    /// om een nieuw feit als "gedekt" te zien — een verkeerde prefix laat de gate
+    /// ten onrechte falen.</summary>
+    [Fact]
+    public async Task AuditAsync_PassesWhenEveryNewFactHasAssertion()
+    {
+        await using var db = NewDb();
+        var cutoff = DateTimeOffset.FromUnixTimeMilliseconds(2_000_000_000_000);
+        var newTime = cutoff.AddDays(1);
+
+        db.Relations.Add(RelationRow(100, newTime));
+        db.Assertions.Add(AssertionFor(
+            ProvenanceAuditService.RelationSubjectPrefix + 100, FactKinds.Relation));
+        db.CardInteractions.Add(InteractionRow(200, newTime));
+        db.Assertions.Add(AssertionFor(
+            ProvenanceAuditService.InteractionSubjectPrefix + 200, FactKinds.CardInteraction));
+        await db.SaveChangesAsync();
+
+        var report = await new ProvenanceAuditService(db).AuditAsync(cutoff);
+
+        Assert.Equal(0, report.FactsMissingAssertion);
+        Assert.Equal(0, report.LegacyBacklog);
+        Assert.True(report.Passes);
+    }
+
+    /// <summary>De embedding-tak (productie-projectie <c>EmbeddingRow</c> + filter):
+    /// een rij mét content-hash maar zónder geldig model is een provenance-fout in
+    /// de nieuwe pipeline; een rij zonder hash is legacy-backlog.</summary>
+    [Fact]
+    public async Task AuditAsync_FlagsEmbeddingsWithoutValidModelAndSplitsLegacy()
+    {
+        await using var db = NewDb();
+        var cutoff = DateTimeOffset.FromUnixTimeMilliseconds(2_000_000_000_000);
+        var vec = new Pgvector.Vector(new float[] { 0.1f });
+
+        db.Cards.Add(new Card { RiftboundId = "c-wrong-model", Name = "x", Embedding = vec,
+            EmbeddingContentHash = "abc", EmbeddingModel = "old-model" });   // fout
+        db.Cards.Add(new Card { RiftboundId = "c-null-model", Name = "x", Embedding = vec,
+            EmbeddingContentHash = "abc", EmbeddingModel = null });          // fout
+        db.Cards.Add(new Card { RiftboundId = "c-ok", Name = "x", Embedding = vec,
+            EmbeddingContentHash = "abc", EmbeddingModel = EmbeddingConfig.Model }); // compleet
+        db.Cards.Add(new Card { RiftboundId = "c-legacy", Name = "x", Embedding = vec,
+            EmbeddingContentHash = null, EmbeddingModel = null });           // legacy
+        db.Cards.Add(new Card { RiftboundId = "c-none", Name = "x", Embedding = null }); // genegeerd
+        await db.SaveChangesAsync();
+
+        var report = await new ProvenanceAuditService(db).AuditAsync(cutoff);
+
+        Assert.Equal(2, report.EmbeddingsMissingProvenance);   // wrong-model + null-model
+        Assert.Equal(1, report.LegacyBacklog);                 // c-legacy
+        Assert.False(report.Passes);
+    }
+
     // ── EF-vertaalbaarheid van de audit-queries (conventie: geen Contains(char),
     //    bewezen vertaalbaar via ToQueryString, zonder database) ───────────────
     private static RbRulesDbContext NpgsqlCtx() => new(
@@ -197,12 +349,17 @@ public class ProvenanceBackboneTests
     public void AuditEmbeddingQuery_TranslatesToSql()
     {
         using var db = NpgsqlCtx();
-        var q = db.Cards.AsNoTracking()
-            .Where(c => c.Embedding != null)
-            .Where(c => c.EmbeddingContentHash != null
-                && (c.EmbeddingModel == null || c.EmbeddingModel != EmbeddingConfig.Model));
-        var sql = q.ToQueryString();
-        Assert.Contains("embedding_content_hash", sql);
+        // De échte productie-query (projectie EmbeddingRow + MissingNewProvenance-
+        // filter), niet een handkopie — zo vangt de test een Npgsql-vertaalbreuk in
+        // de audit zelf (bv. een helper-call die in de Where sluipt). Alle vijf
+        // embedding-tabellen moeten vertalen.
+        var queries = new ProvenanceAuditService(db).MissingNewEmbeddingQueries().ToList();
+        Assert.Equal(5, queries.Count);
+        foreach (var q in queries)
+        {
+            var sql = q.ToQueryString();
+            Assert.Contains("embedding_content_hash", sql);
+        }
     }
 
     [Fact]

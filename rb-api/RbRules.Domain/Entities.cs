@@ -12,6 +12,18 @@ public static class EmbeddingConfig
     public const string Model = "bge-m3";
 }
 
+/// <summary>Gedeeld embedding-contract (fase 0a, #233): elke embedding-dragende
+/// tabel biedt vector + model + content-hash. Zo kan de provenance-audit één
+/// getypeerde, EF-vertaalbare query per tabel draaien (filter direct op de
+/// entiteit-kolommen) i.p.v. een record-projectie die niet naar SQL vertaalt
+/// (#233-review).</summary>
+public interface IEmbeddable
+{
+    Vector? Embedding { get; }
+    string? EmbeddingModel { get; }
+    string? EmbeddingContentHash { get; }
+}
+
 public class Source
 {
     public required string Id { get; set; }
@@ -183,7 +195,7 @@ public class Conflict
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class Correction
+public class Correction : IEmbeddable
 {
     public long Id { get; set; }
     // card | rule_section | answer (chat-ruling/review-notitie-scopes) |
@@ -244,7 +256,7 @@ public class CardSet
     public DateTimeOffset SyncedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class Card
+public class Card : IEmbeddable
 {
     public required string RiftboundId { get; set; }    // 'ogn-011-298'
     public required string Name { get; set; }
@@ -280,7 +292,7 @@ public class Card
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class RuleChunk
+public class RuleChunk : IEmbeddable
 {
     public long Id { get; set; }
     public long DocumentId { get; set; }
@@ -360,7 +372,7 @@ public class AskMetric
 /// <summary>Kennisbank-document (docs/KNOWLEDGE.md). Kind "primer" =
 /// gedistilleerd spelbegrip; draft → door de beheerder approved, daarna
 /// doet het doc mee in de /ask-context.</summary>
-public class KnowledgeDoc
+public class KnowledgeDoc : IEmbeddable
 {
     public long Id { get; set; }
     public required string Kind { get; set; }           // primer | (later: claim-samenvatting …)
@@ -580,7 +592,7 @@ public class Erratum
 /// hoe een regel/kaart/mechaniek/conventie in de praktijk werkt, met
 /// corroboratie (hoeveel onafhankelijke bronnen hetzelfde zeggen) en een
 /// gewogen trust-score. Interpretatief — officieel (laag 0) wint altijd.</summary>
-public class Claim
+public class Claim : IEmbeddable
 {
     public long Id { get; set; }
     public required string TopicType { get; set; }      // card|mechanic|section|concept

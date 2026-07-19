@@ -55,42 +55,48 @@ public class ProvenanceAuditService(RbRulesDbContext db)
 
     private async Task<(int MissingNew, int Legacy)> AuditEmbeddingsAsync(CancellationToken ct)
     {
-        var missingNew = 0;
-        var legacy = 0;
-
-        // Elke IQueryable is deferred, dus tweemaal met een andere Where
-        // hergebruiken levert gewoon twee losse COUNT-queries op.
-        foreach (var q in EmbeddingSources())
-        {
-            // Rij mét content-hash maar zónder geldig model = een echte
-            // provenance-fout in de nieuwe pipeline (gate telt mee).
-            missingNew += await q
-                .Where(x => x.Hash != null && (x.Model == null || x.Model != EmbeddingConfig.Model))
-                .CountAsync(ct);
-            // Geëmbed maar nog geen content-hash = legacy, wacht op backfill.
-            legacy += await q
-                .Where(x => x.Hash == null)
-                .CountAsync(ct);
-        }
+        // Per tabel getypeerd tellen (IQueryable<T> is invariant, dus geen
+        // gemeenschappelijke IEmbeddable-lijst); het filter zelf woont in de
+        // gedeelde MissingNewRows/LegacyRows-builders, dus één bron van waarheid.
+        var missingNew =
+            await MissingNewRows(db.Cards).CountAsync(ct)
+            + await MissingNewRows(db.RuleChunks).CountAsync(ct)
+            + await MissingNewRows(db.Corrections).CountAsync(ct)
+            + await MissingNewRows(db.Claims).CountAsync(ct)
+            + await MissingNewRows(db.KnowledgeDocs).CountAsync(ct);
+        var legacy =
+            await LegacyRows(db.Cards).CountAsync(ct)
+            + await LegacyRows(db.RuleChunks).CountAsync(ct)
+            + await LegacyRows(db.Corrections).CountAsync(ct)
+            + await LegacyRows(db.Claims).CountAsync(ct)
+            + await LegacyRows(db.KnowledgeDocs).CountAsync(ct);
         return (missingNew, legacy);
     }
 
-    // Elke embedding-dragende tabel als uniforme (embedded, model, hash)-projectie.
-    private IEnumerable<IQueryable<EmbeddingRow>> EmbeddingSources() =>
+    /// <summary>De échte "provenance-incomplete embedding"-queries per tabel
+    /// (dezelfde <see cref="MissingNewRows{T}"/>-builder als de audit-teller),
+    /// blootgesteld zodat de EF-vertaalbaarheidstest de productie-query zelf op
+    /// SQL-vertaalbaarheid controleert i.p.v. een handgeschreven kopie
+    /// (#233-review).</summary>
+    internal IEnumerable<IQueryable> MissingNewEmbeddingQueries() =>
     [
-        db.Cards.AsNoTracking().Where(c => c.Embedding != null)
-            .Select(c => new EmbeddingRow(c.EmbeddingModel, c.EmbeddingContentHash)),
-        db.RuleChunks.AsNoTracking().Where(c => c.Embedding != null)
-            .Select(c => new EmbeddingRow(c.EmbeddingModel, c.EmbeddingContentHash)),
-        db.Corrections.AsNoTracking().Where(c => c.Embedding != null)
-            .Select(c => new EmbeddingRow(c.EmbeddingModel, c.EmbeddingContentHash)),
-        db.Claims.AsNoTracking().Where(c => c.Embedding != null)
-            .Select(c => new EmbeddingRow(c.EmbeddingModel, c.EmbeddingContentHash)),
-        db.KnowledgeDocs.AsNoTracking().Where(c => c.Embedding != null)
-            .Select(c => new EmbeddingRow(c.EmbeddingModel, c.EmbeddingContentHash)),
+        MissingNewRows(db.Cards), MissingNewRows(db.RuleChunks),
+        MissingNewRows(db.Corrections), MissingNewRows(db.Claims),
+        MissingNewRows(db.KnowledgeDocs),
     ];
 
-    private sealed record EmbeddingRow(string? Model, string? Hash);
+    // Rij mét content-hash (door de nieuwe pipeline geraakt) maar zónder geldig
+    // model = een echte provenance-fout (gate telt mee). Filter direct op de
+    // entiteit-kolommen (géén tussenrecord-projectie — die vertaalt niet naar
+    // Npgsql, #233-review).
+    private static IQueryable<T> MissingNewRows<T>(DbSet<T> set) where T : class, IEmbeddable =>
+        set.AsNoTracking().Where(x =>
+            x.Embedding != null && x.EmbeddingContentHash != null
+            && (x.EmbeddingModel == null || x.EmbeddingModel != EmbeddingConfig.Model));
+
+    // Geëmbed maar nog geen content-hash = legacy, wacht op backfill.
+    private static IQueryable<T> LegacyRows<T>(DbSet<T> set) where T : class, IEmbeddable =>
+        set.AsNoTracking().Where(x => x.Embedding != null && x.EmbeddingContentHash == null);
 
     // Subject-prefixen (BrainRef.Format-vorm) — de sleutel waarmee een Assertion
     // aan zijn feit hangt. Als string-constante zodat de EF-vertaling een simpele
