@@ -314,6 +314,26 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `Object` maar de object-kaarttypes erven van beide (multi-parent), zodat
   `Spell ⟂ Object` vervulbaar blijft. Nog geen endpoint, EF-migratie of
   Neo4j-write — puur, volledig unit-getest (`OntologySchemaTests`).
+- **`RbRules.Domain/Provenance.cs` + `ProvenanceAuditService` — provenance-
+  ruggengraat (fase 0a, #233).** Versla faalmodus #4 (ontbrekende provenance)
+  als schema-invariant, niet als discipline. Twee nieuwe entiteiten (Postgres,
+  bron van waarheid): `MiningRun` (PROV-O-*Activity* — welk model/prompt-versie/
+  vocab-snapshot leidde feiten af; vult het gat tussen het te-grove `RunLog` en
+  de losse feiten) en `Assertion` (gereïficeerd feit-met-herkomst: `Subject` =
+  BrainRef van het feit, `WAS_GENERATED_BY`→`MiningRun`, `DERIVED_FROM`=BrainRef
+  van de bron, plus model/prompt/embedding-stempel en lichte valid-time — bewust
+  géén volledige bitemporaliteit). Het **dubbele write-guard**: de pure
+  `AssertionProvenanceGuard` (Domain) + een `RbRulesDbContext.SaveChanges`-poort
+  die 'm afdwingt (een Assertion zonder zowel `WAS_GENERATED_BY` als
+  `DERIVED_FROM` faalt hard), náást de Neo4j-uniciteitsconstraint (een
+  relatie-existentie-constraint is Enterprise-only, dus de garantie leeft in
+  Postgres + de deterministische projectie). `EmbeddingProvenance` levert de
+  content-hash (SHA-256 van de geëmbede tekst) op elke embedding-rij; de dim is
+  structureel 1024 (getypte vector-kolom). `ProvenanceAudit`/`ProvenanceAuditService`
+  zijn de **Ring-A-gate** (€0, geen LLM): tel afgeleide feiten zonder Assertion
+  en embeddings zonder herkomst, gesplitst in "nieuw" (ná de cutoff — moet 0
+  zijn) en "legacy" (geïnventariseerd voor backfill). Puur/EF-vertaalbaar getest
+  (`ProvenanceBackboneTests`).
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
@@ -1066,6 +1086,15 @@ herkomst. Elke knoop draagt een `ref`-property volgens de
 `BrainRef`-conventie. Wees-opruiming verwijdert kaarten/facetten die geen
 canonieke printing meer zijn (#57).
 
+Sinds fase 0a (#233) projecteert dezelfde transactie ook de provenance-tak:
+`MiningRun`- en `Assertion`-knopen met `(:Assertion)-[:WAS_GENERATED_BY]->(:MiningRun)`
+en `(:Assertion)-[:DERIVED_FROM]->(bron-knoop op `ref`)`. Idempotent herbouwbaar
+uit Postgres (bron van waarheid); de DERIVED_FROM-doelen (Source/RuleSection/
+Card/…) bestaan al vóór deze stap, dus de label-loze ref-match resolveert
+(zelfde patroon als `RELATES_TO`). De provenance-shape-garantie (elke Assertion
+draagt beide edges) leeft in de Postgres-schrijfpoort, niet in een Neo4j-
+constraint.
+
 Changeconsolidatie (#206) is bewust NIET in deze projectie verwerkt: de
 `Change`-query hierboven selecteert nog steeds ALLE rijen, dus zowel een
 primaire als een geconsolideerde secundaire krijgen elk hun eigen `Change`-
@@ -1418,6 +1447,20 @@ compose. **Gevolg.** Recreates houden data en model. `docker-compose.yml`.
 kwalificerende vraag achter flag `ASK_AGENTIC`, met een klassieke single-pass
 als vangnet en meting per pad. **Gevolg.** Kosten/latency onder controle,
 nooit een slechter antwoord. `AgenticGate`, `AskService`, `rb-ai/src/ai.ts`.
+
+### ADR-11 — Provenance als schema-invariant, dubbel bewaakt (#233)
+**Context.** Afgeleide feiten (relaties, interacties, embeddings) droegen geen
+herkomst — faalmodus #4 uit de brein-architectuur. **Besluit.** Elk afgeleid
+feit hangt aan een gereïficeerde `Assertion` met verplichte `WAS_GENERATED_BY`
+(→`MiningRun`) én `DERIVED_FROM`; de shape wordt dubbel afgedwongen — de pure
+`AssertionProvenanceGuard` plus een `RbRulesDbContext.SaveChanges`-poort die 'm
+altijd draait. Postgres blijft de bron van waarheid (ADR-2); de Neo4j-projectie
+is idempotent herbouwbaar en een relatie-existentie-constraint (Enterprise-only)
+is bewust niet de garantie. Een deterministische Ring-A-gate (€0, geen LLM) telt
+nieuwe feiten zonder Assertion en houdt die op 0. **Gevolg.** "Ontbrekende
+provenance" wordt onmogelijk voor nieuw werk i.p.v. gemitigeerd; legacy-feiten
+worden geïnventariseerd voor backfill, niet stil gedoogd. `Provenance.cs`,
+`ProvenanceAuditService`, `GraphSyncService`, `GraphSchema`.
 
 ---
 
