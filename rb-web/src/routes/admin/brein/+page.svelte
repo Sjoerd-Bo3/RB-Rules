@@ -1,5 +1,114 @@
 <script lang="ts">
-	let { data } = $props();
+	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
+
+	let { data, form } = $props();
+
+	// ── Cockpit (brein-jobs-ui) ─────────────────────────────────────────────
+	// De operationele pipeline-status + trigger-knoppen. De laatste-run per job
+	// komt uit het run_log-grootboek (overleeft herstart); de flag uit de env.
+	interface JobRun {
+		name: string;
+		status: string;
+		detail: string | null;
+		at: string;
+	}
+	interface Cockpit {
+		interactions: number;
+		mechanicPredicates: number;
+		mineInteractionsRun: JobRun | null;
+		minePredicatesRun: JobRun | null;
+		canonicalEntities: number;
+		projectionRun: JobRun | null;
+		conflicts: number;
+		conflictsOpen: number;
+		reasonRun: JobRun | null;
+		retrievalEnabled: boolean;
+	}
+	const cockpit = $derived(data.cockpit as Cockpit | null);
+
+	// Live running-job (voor knop-disabled + "Bezig"): dezelfde status-feed als
+	// /admin, cookie-beveiligd via het /admin/status-proxy. Eén job tegelijk.
+	interface RunningState {
+		running: { name: string } | null;
+	}
+	let live = $state<RunningState | null>(null);
+	const running = $derived(live?.running ?? null);
+	$effect(() => {
+		let stop = false;
+		const tick = async () => {
+			try {
+				const r = await fetch('/admin/status');
+				if (r.ok) live = await r.json();
+			} catch {
+				/* rb-api even weg — volgende poll */
+			}
+			if (!stop) setTimeout(tick, live?.running ? 2000 : 6000);
+		};
+		tick();
+		return () => {
+			stop = true;
+		};
+	});
+
+	function fmtAgo(iso: string | null): string {
+		if (!iso) return '';
+		const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+		return s < 60
+			? `${s}s`
+			: s < 3600
+				? `${Math.round(s / 60)}m`
+				: s < 48 * 3600
+					? `${Math.round(s / 3600)}u`
+					: `${Math.round(s / 86400)}d`;
+	}
+	// Laatste-run-regel per brein-job (grootboek): tijd + mislukt-markering.
+	function runMeta(run: JobRun | null | undefined): string {
+		if (!run) return 'nog niet gedraaid';
+		const tail = run.status === 'error' ? ' — mislukt' : run.status === 'ok' ? '' : ` — ${run.status}`;
+		return `laatste run ${fmtAgo(run.at)} geleden${tail}`;
+	}
+
+	// De twee extractie-jobs (stap 1), als config zodat de twee job-rijen niet
+	// dupliceren. n=0 → "nog niet gedraaid — leeg" als teller-tekst.
+	const step1jobs = $derived(
+		cockpit
+			? [
+					{
+						name: 'breinmine-interacties',
+						label: 'Interacties minen',
+						n: cockpit.interactions,
+						unit: 'interacties',
+						run: cockpit.mineInteractionsRun
+					},
+					{
+						name: 'breinmine-predicaten',
+						label: 'Mechanic-predicaten minen',
+						n: cockpit.mechanicPredicates,
+						unit: 'predicaten',
+						run: cockpit.minePredicatesRun
+					}
+				]
+			: []
+	);
+	const step1empty = $derived(!!cockpit && cockpit.interactions === 0 && cockpit.mechanicPredicates === 0);
+
+	// Pill-toon (kleur + tekst, geen emoji) per stap uit de laatste-run.
+	function stepPill(run: JobRun | null | undefined, okText: string): { tone: string; text: string } {
+		if (!run) return { tone: '', text: 'nog niet gedraaid' };
+		if (run.status === 'error') return { tone: 'err', text: 'mislukt' };
+		if (run.status === 'ok') return { tone: 'ok', text: okText };
+		return { tone: 'warn', text: run.status };
+	}
+	const projectionPill = $derived(stepPill(cockpit?.projectionRun, 'geprojecteerd'));
+	const reasonPill = $derived(stepPill(cockpit?.reasonRun, 'gedraaid'));
+
+	const startedLabel: Record<string, string> = {
+		'breinmine-interacties': 'Interacties minen',
+		'breinmine-predicaten': 'Mechanic-predicaten minen',
+		breinprojectie: 'Projectie naar Neo4j',
+		reason: 'Reasoner'
+	};
 
 	interface Counts {
 		assertions: number;
@@ -105,11 +214,166 @@
 	);
 </script>
 
+{#if !data.apiDown && cockpit}
+	<section class="cockpit" aria-label="Brein-pipeline">
+		<div class="ckhead">
+			<h2>Pipeline</h2>
+			<span class="orderhint">draai in volgorde 1 &rarr; 2 &rarr; 3</span>
+		</div>
+
+		{#if form?.started}
+			<p class="notice ok">Job &ldquo;{startedLabel[form.started] ?? form.started}&rdquo; gestart — de
+				voortgang staat in het beheer-overzicht.</p>
+		{:else if form?.error}
+			<p class="notice err">{form.error}</p>
+		{/if}
+
+		<div class="pipeline">
+			<!-- Stap 1 — Extractie -->
+			<div class="step">
+				<div class="step-rail"><span class="step-n">1</span></div>
+				<div class="step-body">
+					<div class="step-head">
+						<h3 class="step-title">Extractie</h3>
+						<span class="tier {step1empty ? '' : 'ok'}">{step1empty ? 'nog niet gedraaid — leeg' : 'gevuld'}</span>
+					</div>
+					<p class="step-desc">Tool-forced, ontologie-begrensde mining via rb-ai: gereïficeerde
+						interacties en mechanic-predicaten uit de kaarten.</p>
+					<div class="jobrows">
+						{#each step1jobs as j (j.name)}
+							<div class="jobrow">
+								<div class="jr-info">
+									<strong>{j.label}</strong>
+									<span class="jr-stat">
+										{#if j.n === 0}
+											<span class="muted">nog niet gedraaid — leeg</span>
+										{:else}
+											<span class="tnum">{j.n.toLocaleString('nl-NL')}</span> {j.unit}
+										{/if}
+									</span>
+									<span class="run-meta">{runMeta(j.run)}</span>
+								</div>
+								<form
+									method="POST"
+									action="?/job"
+									use:enhance={() => async ({ update }) => {
+										await update();
+										await invalidateAll();
+									}}
+								>
+									<input type="hidden" name="name" value={j.name} />
+									<button class="cta" disabled={running !== null}>
+										{running?.name === j.name ? 'Bezig…' : 'Start'}
+									</button>
+								</form>
+							</div>
+						{/each}
+					</div>
+				</div>
+			</div>
+
+			<!-- Stap 2 — Projectie -->
+			<div class="step">
+				<div class="step-rail"><span class="step-n">2</span></div>
+				<div class="step-body">
+					<div class="step-head">
+						<h3 class="step-title">Projectie</h3>
+						<span class="tier {projectionPill.tone}">{projectionPill.text}</span>
+					</div>
+					<p class="step-desc">Canonieke entiteiten, mechanic-predicaten en ontologie-versies
+						idempotent naar Neo4j projecteren (na de extractie).</p>
+					<div class="jobrows">
+						<div class="jobrow">
+							<div class="jr-info">
+								<span class="jr-stat">
+									<span class="tnum">{cockpit.canonicalEntities.toLocaleString('nl-NL')}</span> canonieke
+									entiteiten klaar om te projecteren
+								</span>
+								<span class="run-meta">{runMeta(cockpit.projectionRun)}</span>
+							</div>
+							<form
+								method="POST"
+								action="?/job"
+								use:enhance={() => async ({ update }) => {
+									await update();
+									await invalidateAll();
+								}}
+							>
+								<input type="hidden" name="name" value="breinprojectie" />
+								<button class="cta" disabled={running !== null}>
+									{running?.name === 'breinprojectie' ? 'Bezig…' : 'Start'}
+								</button>
+							</form>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- Stap 3 — Reasoner -->
+			<div class="step">
+				<div class="step-rail"><span class="step-n">3</span></div>
+				<div class="step-body">
+					<div class="step-head">
+						<h3 class="step-title">Reasoner</h3>
+						<span class="tier {reasonPill.tone}">{reasonPill.text}</span>
+					</div>
+					<p class="step-desc">Monotone inferentie (afgeleide edges) + bounded contradictie-detectie
+						over de geprojecteerde graaf (na de projectie).</p>
+					<div class="jobrows">
+						<div class="jobrow">
+							<div class="jr-info">
+								<span class="jr-stat">
+									<span class="tnum">{cockpit.conflicts.toLocaleString('nl-NL')}</span> conflicts
+									<span class="muted">({cockpit.conflictsOpen.toLocaleString('nl-NL')} open)</span>
+								</span>
+								<span class="run-meta">{runMeta(cockpit.reasonRun)}</span>
+							</div>
+							<form
+								method="POST"
+								action="?/job"
+								use:enhance={() => async ({ update }) => {
+									await update();
+									await invalidateAll();
+								}}
+							>
+								<input type="hidden" name="name" value="reason" />
+								<button class="cta" disabled={running !== null}>
+									{running?.name === 'reason' ? 'Bezig…' : 'Start'}
+								</button>
+							</form>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- Consument — /ask-retrieval (env-flag, geen knop) -->
+			<div class="step consumer">
+				<div class="step-rail"><span class="step-n ask">ask</span></div>
+				<div class="step-body">
+					<div class="step-head">
+						<h3 class="step-title">/ask-retrieval</h3>
+						<span class="tier {cockpit.retrievalEnabled ? 'ok' : 'warn'}"
+							>{cockpit.retrievalEnabled ? 'AAN' : 'UIT'}</span
+						>
+					</div>
+					<p class="step-desc">Gebruikt de brein-graaf (GraphRAG) in /ask-antwoorden — de consument
+						van de pipeline hierboven.</p>
+					{#if !cockpit.retrievalEnabled}
+						<p class="flaghint">
+							uit — zet <code>BREIN_RETRIEVAL_ENABLED=true</code> op de VM om de retrieval aan te zetten.
+						</p>
+					{/if}
+				</div>
+			</div>
+		</div>
+	</section>
+{/if}
+
 {#if data.apiDown}
 	<p class="apidown">Het brein is niet bereikbaar — is rb-api op? Probeer het later opnieuw.</p>
 {:else if !counts || totalBrein === 0}
 	<div class="empty">
-		Nog geen brein-data — draai de brein-jobs (mining, reasoner, interacties) in het beheer. Zodra
+		Nog geen brein-data — draai de brein-jobs via de pipeline hierboven (1 &rarr; 2 &rarr; 3). Zodra
 		er feiten, entiteiten of interacties zijn, verschijnen ze hier.
 	</div>
 {:else}
@@ -267,6 +531,201 @@
 {/if}
 
 <style>
+	/* ── Cockpit (brein-jobs-ui) ─────────────────────────────────────────── */
+	.cockpit {
+		margin-bottom: 26px;
+	}
+	.ckhead {
+		display: flex;
+		align-items: baseline;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+	.ckhead h2 {
+		margin: 0;
+	}
+	.orderhint {
+		font-size: 0.74rem;
+		color: var(--muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		font-weight: 600;
+	}
+	.notice {
+		margin: 12px 0 0;
+		padding: 10px 13px;
+		border-radius: var(--radius-lg);
+		font-size: 0.85rem;
+		border: 1px solid var(--border);
+	}
+	.notice.ok {
+		background: var(--ok-soft);
+		border-color: transparent;
+		color: var(--ok);
+	}
+	.notice.err {
+		background: var(--err-soft);
+		border-color: transparent;
+		color: var(--err);
+	}
+	.pipeline {
+		margin-top: 14px;
+		display: flex;
+		flex-direction: column;
+	}
+	.step {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 14px;
+	}
+	.step-rail {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+	/* Verbindingslijn tussen de stap-nummers (1 → 2 → 3 → ask). */
+	.step-rail::after {
+		content: '';
+		width: 2px;
+		flex: 1 1 auto;
+		min-height: 8px;
+		background: var(--border);
+		margin: 6px 0 0;
+	}
+	.step:last-child .step-rail::after {
+		display: none;
+	}
+	.step-n {
+		flex: none;
+		width: 28px;
+		height: 28px;
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 0.9rem;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+		background: var(--accent);
+		color: var(--accent-ink);
+	}
+	.step-n.ask {
+		font-size: 0.62rem;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+		background: var(--surface-deep);
+		color: var(--muted);
+		border: 1px solid var(--border);
+	}
+	.step-body {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		box-shadow: var(--shadow-card);
+		padding: 13px 15px;
+		margin-bottom: 12px;
+		min-width: 0;
+	}
+	.step.consumer .step-body {
+		background: transparent;
+		box-shadow: none;
+		border-style: dashed;
+	}
+	.step-head {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.step-title {
+		/* Overschrijft de generieke, uppercase h3-regel hieronder. */
+		margin: 0;
+		font-size: 0.98rem;
+		font-weight: 650;
+		text-transform: none;
+		letter-spacing: 0;
+		color: var(--text);
+	}
+	.step-desc {
+		margin: 6px 0 10px;
+		font-size: 0.82rem;
+		color: var(--muted);
+		line-height: 1.45;
+		max-width: 68ch;
+	}
+	.jobrows {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.jobrow {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		flex-wrap: wrap;
+		padding: 9px 11px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md, 8px);
+		background: var(--surface-deep);
+	}
+	.jr-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+		flex: 1 1 200px;
+	}
+	.jr-info strong {
+		font-size: 0.86rem;
+		font-weight: 650;
+	}
+	.jr-stat {
+		font-size: 0.82rem;
+		color: var(--text);
+	}
+	.run-meta {
+		font-size: 0.72rem;
+		color: var(--muted);
+	}
+	.jobrow form {
+		margin: 0;
+		flex: none;
+	}
+	.cta {
+		font: inherit;
+		font-size: 0.8rem;
+		font-weight: 600;
+		padding: 7px 16px;
+		border-radius: 999px;
+		border: 1px solid transparent;
+		background: var(--accent);
+		color: var(--accent-ink);
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.cta:hover:not(:disabled) {
+		filter: brightness(0.96);
+	}
+	.cta:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.flaghint {
+		margin: 4px 0 0;
+		font-size: 0.8rem;
+		color: var(--muted);
+		line-height: 1.45;
+	}
+	.flaghint code {
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+		font-size: 0.78rem;
+		padding: 1px 5px;
+		border-radius: 5px;
+		background: var(--surface-deep);
+		border: 1px solid var(--border);
+		color: var(--text);
+	}
+
 	.tiles {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
