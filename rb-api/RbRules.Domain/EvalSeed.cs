@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace RbRules.Domain;
 
 /// <summary>Pure loader voor de voorbeeld-gouden-set (#231). Deserialiseert het
-/// seed-JSON (<c>docs/eval/poracle-eval-seed.json</c>) naar <see
+/// seed-JSON (<c>RbRules.Tests/Fixtures/poracle-eval-seed.json</c>) naar <see
 /// cref="EvalCase"/>-records. Dit is bewust GEEN productie-pad: in de bedrade
 /// versie leeft het corpus in Postgres <c>eval_case</c> en genereert rb-ai
 /// kandidaat-cases uit set/errata-diffs → reviewqueue. Het JSON-bestand is de

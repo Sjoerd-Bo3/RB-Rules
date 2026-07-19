@@ -2,7 +2,7 @@ using RbRules.Domain;
 
 namespace RbRules.Tests;
 
-/// <summary>Rondt de voorbeeld-gouden-set (docs/eval/poracle-eval-seed.json, #231)
+/// <summary>Rondt de voorbeeld-gouden-set (RbRules.Tests/Fixtures/poracle-eval-seed.json, #231)
 /// door de echte parser — bewijst dat de seed-vorm deserialiseert naar <see
 /// cref="EvalCase"/>-records en dat de levenscyclus-velden (shadow-status,
 /// claim-niveau errata-verval, gekwalificeerde-interactie-support) correct
