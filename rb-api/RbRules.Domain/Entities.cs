@@ -201,6 +201,13 @@ public class Correction
     /// bij in-chat-rulings, optioneel voor oudere/andere ontstaanswegen van
     /// een Correction. Sanitize gebeurt bij weergave, niet bij opslag.</summary>
     public string? SourceRef { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): het model waarmee
+    /// <see cref="Embedding"/> is berekend (verwacht bge-m3) en de SHA-256 van de
+    /// exacte geëmbedde tekst (<see cref="EmbeddingProvenance"/>). Beide null
+    /// zolang de rij niet (opnieuw) geëmbed is; de Ring-A-gate telt embeddings
+    /// zonder deze herkomst.</summary>
+    public string? EmbeddingModel { get; set; }
+    public string? EmbeddingContentHash { get; set; }
     // unverified | verified | rejected. "rejected" (#177 hybride poort) is een
     // tombstone: een beheerder-afwijzing van een pending clarify-item die de
     // mining respecteert (zie ClarificationMiningService — een rejected rij op
@@ -264,6 +271,9 @@ public class Card
     /// <summary>S1-fundament: kaart-embedding voor semantisch zoeken.</summary>
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }         // provenance (model-wissel-guard)
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de exacte
+    /// geëmbedde tekst — de her-embed-sleutel (tekst gewijzigd ⇒ hash wijzigt).</summary>
+    public string? EmbeddingContentHash { get; set; }
     /// <summary>Alt-art/promo/herdruk-groepering: null = canonieke printing,
     /// anders het RiftboundId van de canonieke kaart met dezelfde naam.</summary>
     public string? VariantOf { get; set; }
@@ -284,6 +294,8 @@ public class RuleChunk
     public required string Text { get; set; }
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
 }
 
 public class RunLog
@@ -360,6 +372,8 @@ public class KnowledgeDoc
     public string Status { get; set; } = "draft";       // draft | approved
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
     /// <summary>Wanneer de relatie-mining (#116) dit doc als anker verwerkte;
     /// null = nog niet. Zelf-invaliderend: een run pakt docs waarvan
     /// relations_mined_at vóór updated_at ligt vanzelf opnieuw op.</summary>
@@ -594,6 +608,8 @@ public class Claim
     public DateTimeOffset? ArchivedAt { get; set; }
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
     public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
 }
