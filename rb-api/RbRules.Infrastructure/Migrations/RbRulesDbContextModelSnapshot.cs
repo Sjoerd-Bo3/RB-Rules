@@ -21,6 +21,7 @@ namespace RbRules.Infrastructure.Migrations
                 .HasAnnotation("ProductVersion", "10.0.9")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
+            NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "pg_trgm");
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
@@ -262,6 +263,87 @@ namespace RbRules.Infrastructure.Migrations
                     b.ToTable("ask_trace", (string)null);
                 });
 
+            modelBuilder.Entity("RbRules.Domain.Assertion", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("AssertedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("asserted_at");
+
+                    b.Property<long?>("DerivedFromDocumentId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("derived_from_document_id");
+
+                    b.Property<string>("DerivedFromRef")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("derived_from_ref");
+
+                    b.Property<int?>("EmbeddingDim")
+                        .HasColumnType("integer")
+                        .HasColumnName("embedding_dim");
+
+                    b.Property<string>("EmbeddingModel")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_model");
+
+                    b.Property<string>("EvidenceSpan")
+                        .HasColumnType("text")
+                        .HasColumnName("evidence_span");
+
+                    b.Property<string>("FactKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("fact_kind");
+
+                    b.Property<string>("MiningRunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("mining_run_id");
+
+                    b.Property<string>("Model")
+                        .HasColumnType("text")
+                        .HasColumnName("model");
+
+                    b.Property<string>("PromptVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("prompt_version");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("subject");
+
+                    b.Property<DateTimeOffset?>("ValidFrom")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("valid_from");
+
+                    b.Property<string>("Verdict")
+                        .HasColumnType("text")
+                        .HasColumnName("verdict");
+
+                    b.Property<string>("Verifier")
+                        .HasColumnType("text")
+                        .HasColumnName("verifier");
+
+                    b.HasKey("Id")
+                        .HasName("pk_assertion");
+
+                    b.HasIndex("DerivedFromDocumentId")
+                        .HasDatabaseName("ix_assertion_derived_from_document_id");
+
+                    b.HasIndex("MiningRunId")
+                        .HasDatabaseName("ix_assertion_mining_run_id");
+
+                    b.HasIndex("FactKind", "Subject")
+                        .HasDatabaseName("ix_assertion_fact_kind_subject");
+
+                    b.ToTable("assertion", (string)null);
+                });
+
             modelBuilder.Entity("RbRules.Domain.BanEntry", b =>
                 {
                     b.Property<long>("Id")
@@ -482,6 +564,91 @@ namespace RbRules.Infrastructure.Migrations
                     b.ToTable("benchmark_run", (string)null);
                 });
 
+            modelBuilder.Entity("RbRules.Domain.CanonicalEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.PrimitiveCollection<string[]>("AltLabels")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("alt_labels");
+
+                    b.Property<string>("CanonicalLabel")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("canonical_label");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByRunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("created_by_run_id");
+
+                    b.Property<string>("Definition")
+                        .HasColumnType("text")
+                        .HasColumnName("definition");
+
+                    b.Property<Vector>("Embedding")
+                        .HasColumnType("vector(1024)")
+                        .HasColumnName("embedding");
+
+                    b.Property<string>("EmbeddingContentHash")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_content_hash");
+
+                    b.Property<int?>("EmbeddingDim")
+                        .HasColumnType("integer")
+                        .HasColumnName("embedding_dim");
+
+                    b.Property<string>("EmbeddingModel")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_model");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<DateTimeOffset?>("MergedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("merged_at");
+
+                    b.Property<long?>("MergedIntoId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("merged_into_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id")
+                        .HasName("pk_canonical_entity");
+
+                    b.HasIndex("Kind")
+                        .HasDatabaseName("ix_canonical_entity_kind");
+
+                    b.HasIndex("MergedIntoId")
+                        .HasDatabaseName("ix_canonical_entity_merged_into_id");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_canonical_entity_status");
+
+                    b.HasIndex("Kind", "CanonicalLabel")
+                        .IsUnique()
+                        .HasDatabaseName("ix_canonical_entity_kind_canonical_label");
+
+                    b.ToTable("canonical_entity", (string)null);
+                });
+
             modelBuilder.Entity("RbRules.Domain.Card", b =>
                 {
                     b.Property<string>("RiftboundId")
@@ -504,6 +671,10 @@ namespace RbRules.Infrastructure.Migrations
                     b.Property<Vector>("Embedding")
                         .HasColumnType("vector(1024)")
                         .HasColumnName("embedding");
+
+                    b.Property<string>("EmbeddingContentHash")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_content_hash");
 
                     b.Property<string>("EmbeddingModel")
                         .HasColumnType("text")
@@ -751,6 +922,10 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("vector(1024)")
                         .HasColumnName("embedding");
 
+                    b.Property<string>("EmbeddingContentHash")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_content_hash");
+
                     b.Property<string>("EmbeddingModel")
                         .HasColumnType("text")
                         .HasColumnName("embedding_model");
@@ -937,6 +1112,14 @@ namespace RbRules.Infrastructure.Migrations
                     b.Property<Vector>("Embedding")
                         .HasColumnType("vector(1024)")
                         .HasColumnName("embedding");
+
+                    b.Property<string>("EmbeddingContentHash")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_content_hash");
+
+                    b.Property<string>("EmbeddingModel")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_model");
 
                     b.Property<string>("Provenance")
                         .HasColumnType("text")
@@ -1186,6 +1369,398 @@ namespace RbRules.Infrastructure.Migrations
                     b.ToTable("erratum", (string)null);
                 });
 
+            modelBuilder.Entity("RbRules.Domain.EvalBaselineRecord", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("GitSha")
+                        .HasColumnType("text")
+                        .HasColumnName("git_sha");
+
+                    b.Property<double>("Mean")
+                        .HasColumnType("double precision")
+                        .HasColumnName("mean");
+
+                    b.Property<string>("Metric")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("character varying(48)")
+                        .HasColumnName("metric");
+
+                    b.Property<string>("PromptContractHash")
+                        .HasColumnType("text")
+                        .HasColumnName("prompt_contract_hash");
+
+                    b.Property<string>("QueryType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("query_type");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recorded_at");
+
+                    b.Property<string>("Ring")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("ring");
+
+                    b.Property<int>("SampleCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("sample_count");
+
+                    b.Property<double>("StdDev")
+                        .HasColumnType("double precision")
+                        .HasColumnName("std_dev");
+
+                    b.HasKey("Id")
+                        .HasName("pk_eval_baseline");
+
+                    b.HasIndex("Ring", "QueryType", "Metric")
+                        .IsUnique()
+                        .HasDatabaseName("ix_eval_baseline_ring_query_type_metric");
+
+                    b.ToTable("eval_baseline", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.EvalRunRecord", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("id");
+
+                    b.Property<int>("CaseCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("case_count");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("GatingFailureCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("gating_failure_count");
+
+                    b.Property<string>("GitSha")
+                        .HasColumnType("text")
+                        .HasColumnName("git_sha");
+
+                    b.Property<string>("LlmModel")
+                        .HasColumnType("text")
+                        .HasColumnName("llm_model");
+
+                    b.Property<string>("Memo")
+                        .HasColumnType("text")
+                        .HasColumnName("memo");
+
+                    b.Property<bool>("Passed")
+                        .HasColumnType("boolean")
+                        .HasColumnName("passed");
+
+                    b.Property<string>("PromptVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("prompt_version");
+
+                    b.Property<string>("Ring")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("ring");
+
+                    b.Property<int>("ShadowCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("shadow_count");
+
+                    b.HasKey("Id")
+                        .HasName("pk_eval_run");
+
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("ix_eval_run_created_at");
+
+                    b.HasIndex("Ring", "Passed")
+                        .HasDatabaseName("ix_eval_run_ring_passed");
+
+                    b.ToTable("eval_run", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.GraphRag.AnswerTrace", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("id");
+
+                    b.Property<double>("Beta")
+                        .HasColumnType("double precision")
+                        .HasColumnName("beta");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("EmbeddingRev")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_rev");
+
+                    b.Property<string>("FallbackReason")
+                        .HasColumnType("text")
+                        .HasColumnName("fallback_reason");
+
+                    b.Property<string>("GateMemo")
+                        .HasColumnType("text")
+                        .HasColumnName("gate_memo");
+
+                    b.Property<string>("GraphEpoch")
+                        .HasColumnType("text")
+                        .HasColumnName("graph_epoch");
+
+                    b.Property<string>("LlmModel")
+                        .HasColumnType("text")
+                        .HasColumnName("llm_model");
+
+                    b.Property<string>("PrimaryChannel")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("primary_channel");
+
+                    b.Property<string>("PromptVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("prompt_version");
+
+                    b.Property<string>("Question")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("question");
+
+                    b.Property<string>("QuestionType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("question_type");
+
+                    b.Property<string>("RetrievalMode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("retrieval_mode");
+
+                    b.HasKey("Id")
+                        .HasName("pk_answer_trace");
+
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("ix_answer_trace_created_at");
+
+                    b.HasIndex("PrimaryChannel")
+                        .HasDatabaseName("ix_answer_trace_primary_channel");
+
+                    b.ToTable("answer_trace", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.GraphRag.AnswerTraceSupport", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("AnswerTraceId")
+                        .IsRequired()
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("answer_trace_id");
+
+                    b.Property<int>("CitationN")
+                        .HasColumnType("integer")
+                        .HasColumnName("citation_n");
+
+                    b.Property<string>("SubjectRef")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("subject_ref");
+
+                    b.Property<string>("Tier")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("tier");
+
+                    b.Property<double>("TrustWeightAtQuery")
+                        .HasColumnType("double precision")
+                        .HasColumnName("trust_weight_at_query");
+
+                    b.Property<string>("WidgetMarker")
+                        .HasColumnType("text")
+                        .HasColumnName("widget_marker");
+
+                    b.HasKey("Id")
+                        .HasName("pk_answer_trace_support");
+
+                    b.HasIndex("AnswerTraceId")
+                        .HasDatabaseName("ix_answer_trace_support_answer_trace_id");
+
+                    b.HasIndex("SubjectRef")
+                        .HasDatabaseName("ix_answer_trace_support_subject_ref");
+
+                    b.ToTable("answer_trace_support", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.Interaction", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("AgentRef")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("agent_ref");
+
+                    b.Property<string>("CreatedByRunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("created_by_run_id");
+
+                    b.Property<DateTimeOffset>("DetectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("detected_at");
+
+                    b.Property<string>("GovernedByRef")
+                        .HasColumnType("text")
+                        .HasColumnName("governed_by_ref");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("PatientRef")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("patient_ref");
+
+                    b.Property<DateTimeOffset?>("PromotedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("promoted_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StatusReason")
+                        .HasColumnType("text")
+                        .HasColumnName("status_reason");
+
+                    b.HasKey("Id")
+                        .HasName("pk_interaction");
+
+                    b.HasIndex("AgentRef")
+                        .HasDatabaseName("ix_interaction_agent_ref");
+
+                    b.HasIndex("PatientRef")
+                        .HasDatabaseName("ix_interaction_patient_ref");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_interaction_status");
+
+                    b.HasIndex("AgentRef", "PatientRef", "Kind")
+                        .IsUnique()
+                        .HasDatabaseName("ix_interaction_agent_ref_patient_ref_kind");
+
+                    b.ToTable("interaction", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.InteractionCondition", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<long>("InteractionId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("interaction_id");
+
+                    b.Property<string>("OnKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("on_kind");
+
+                    b.Property<string>("Operator")
+                        .HasColumnType("text")
+                        .HasColumnName("operator");
+
+                    b.Property<string>("SubjectRole")
+                        .HasColumnType("text")
+                        .HasColumnName("subject_role");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("value");
+
+                    b.HasKey("Id")
+                        .HasName("pk_interaction_condition");
+
+                    b.HasIndex("InteractionId")
+                        .HasDatabaseName("ix_interaction_condition_interaction_id");
+
+                    b.ToTable("interaction_condition", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.InteractionDecision", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("DecidedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("decided_at");
+
+                    b.Property<long>("InteractionId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("interaction_id");
+
+                    b.Property<string>("Memo")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("memo");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("outcome");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_interaction_decision");
+
+                    b.HasIndex("InteractionId")
+                        .HasDatabaseName("ix_interaction_decision_interaction_id");
+
+                    b.ToTable("interaction_decision", (string)null);
+                });
+
             modelBuilder.Entity("RbRules.Domain.KnowledgeDoc", b =>
                 {
                     b.Property<long>("Id")
@@ -1203,6 +1778,10 @@ namespace RbRules.Infrastructure.Migrations
                     b.Property<Vector>("Embedding")
                         .HasColumnType("vector(1024)")
                         .HasColumnName("embedding");
+
+                    b.Property<string>("EmbeddingContentHash")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_content_hash");
 
                     b.Property<string>("EmbeddingModel")
                         .HasColumnType("text")
@@ -1251,6 +1830,86 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_knowledge_doc_kind_topic");
 
                     b.ToTable("knowledge_doc", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.LifecycleEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("actor");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("FactKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("fact_kind");
+
+                    b.Property<string>("FromState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("from_state");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("RestorePath")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("restore_path");
+
+                    b.Property<bool>("Reverted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("reverted");
+
+                    b.Property<DateTimeOffset?>("RevertedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reverted_at");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("SubjectRef")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("subject_ref");
+
+                    b.Property<string>("SupersededByRef")
+                        .HasColumnType("text")
+                        .HasColumnName("superseded_by_ref");
+
+                    b.Property<string>("ToState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("to_state");
+
+                    b.HasKey("Id")
+                        .HasName("pk_lifecycle_event");
+
+                    b.HasIndex("Reverted")
+                        .HasDatabaseName("ix_lifecycle_event_reverted");
+
+                    b.HasIndex("ToState")
+                        .HasDatabaseName("ix_lifecycle_event_to_state");
+
+                    b.HasIndex("SubjectRef", "CreatedAt")
+                        .HasDatabaseName("ix_lifecycle_event_subject_ref_created_at");
+
+                    b.ToTable("lifecycle_event", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.LoginToken", b =>
@@ -1339,6 +1998,395 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_mechanic_keyword_term");
 
                     b.ToTable("mechanic_keyword", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.MechanicPredicateAssertion", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByRunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("created_by_run_id");
+
+                    b.Property<string>("ObjectToken")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("object_token");
+
+                    b.Property<string>("Predicate")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("predicate");
+
+                    b.Property<DateTimeOffset?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StatusReason")
+                        .HasColumnType("text")
+                        .HasColumnName("status_reason");
+
+                    b.Property<long>("SubjectEntityId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("subject_entity_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mechanic_predicate");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_mechanic_predicate_status");
+
+                    b.HasIndex("SubjectEntityId")
+                        .HasDatabaseName("ix_mechanic_predicate_subject_entity_id");
+
+                    b.HasIndex("SubjectEntityId", "Predicate", "ObjectToken")
+                        .IsUnique()
+                        .HasDatabaseName("ix_mechanic_predicate_subject_entity_id_predicate_object_token");
+
+                    b.ToTable("mechanic_predicate", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.MergeCandidate", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("EntityAId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("entity_a_id");
+
+                    b.Property<long>("EntityBId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("entity_b_id");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<DateTimeOffset?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<int>("SignalCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("signal_count");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Verdict")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("verdict");
+
+                    b.HasKey("Id")
+                        .HasName("pk_merge_candidate");
+
+                    b.HasIndex("EntityBId")
+                        .HasDatabaseName("ix_merge_candidate_entity_b_id");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_merge_candidate_status");
+
+                    b.HasIndex("EntityAId", "EntityBId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_merge_candidate_entity_a_id_entity_b_id");
+
+                    b.ToTable("merge_candidate", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.MergeDecision", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("DecidedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("decided_at");
+
+                    b.Property<string>("DecidedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("decided_by");
+
+                    b.Property<string>("Memo")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("memo");
+
+                    b.PrimitiveCollection<string[]>("MovedAltLabels")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("moved_alt_labels");
+
+                    b.Property<bool>("Reverted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("reverted");
+
+                    b.Property<DateTimeOffset?>("RevertedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reverted_at");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<long>("SourceEntityId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("source_entity_id");
+
+                    b.Property<long>("TargetEntityId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("target_entity_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_merge_decision");
+
+                    b.HasIndex("SourceEntityId")
+                        .HasDatabaseName("ix_merge_decision_source_entity_id");
+
+                    b.HasIndex("TargetEntityId")
+                        .HasDatabaseName("ix_merge_decision_target_entity_id");
+
+                    b.ToTable("merge_decision", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.MiningRun", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Candidates")
+                        .HasColumnType("integer")
+                        .HasColumnName("candidates");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<string>("EmbeddingModel")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_model");
+
+                    b.Property<string>("GitSha")
+                        .HasColumnType("text")
+                        .HasColumnName("git_sha");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("LlmModel")
+                        .HasColumnType("text")
+                        .HasColumnName("llm_model");
+
+                    b.Property<string>("PromptVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("prompt_version");
+
+                    b.Property<int>("Rejected")
+                        .HasColumnType("integer")
+                        .HasColumnName("rejected");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<int>("Verified")
+                        .HasColumnType("integer")
+                        .HasColumnName("verified");
+
+                    b.Property<string>("VocabSnapshot")
+                        .HasColumnType("text")
+                        .HasColumnName("vocab_snapshot");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mining_run");
+
+                    b.HasIndex("Kind")
+                        .HasDatabaseName("ix_mining_run_kind");
+
+                    b.HasIndex("StartedAt")
+                        .HasDatabaseName("ix_mining_run_started_at");
+
+                    b.ToTable("mining_run", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.Ontology.OntologyVersionRecord", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("AppliedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("applied_at");
+
+                    b.Property<string>("BumpKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("bump_kind");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("fingerprint");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("notes");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id")
+                        .HasName("pk_ontology_version");
+
+                    b.HasIndex("AppliedAt")
+                        .HasDatabaseName("ix_ontology_version_applied_at");
+
+                    b.HasIndex("Version")
+                        .IsUnique()
+                        .HasDatabaseName("ix_ontology_version_version");
+
+                    b.ToTable("ontology_version", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.Ontology.SchemaProposal", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("BumpKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("bump_kind");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("HasRuleSectionEvidence")
+                        .HasColumnType("boolean")
+                        .HasColumnName("has_rule_section_evidence");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Memo")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("memo");
+
+                    b.Property<string>("MigratedInVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("migrated_in_version");
+
+                    b.Property<int>("OfficialCardCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("official_card_count");
+
+                    b.Property<string>("ParentType")
+                        .HasColumnType("text")
+                        .HasColumnName("parent_type");
+
+                    b.Property<string>("ProposedName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("proposed_name");
+
+                    b.Property<string>("ReviewNote")
+                        .HasColumnType("text")
+                        .HasColumnName("review_note");
+
+                    b.Property<DateTimeOffset?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("ReviewedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("reviewed_by");
+
+                    b.Property<string>("RuleSectionRef")
+                        .HasColumnType("text")
+                        .HasColumnName("rule_section_ref");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id")
+                        .HasName("pk_schema_proposal");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_schema_proposal_status");
+
+                    b.HasIndex("Kind", "ProposedName")
+                        .IsUnique()
+                        .HasDatabaseName("ix_schema_proposal_kind_proposed_name");
+
+                    b.ToTable("schema_proposal", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.PasskeyChallenge", b =>
@@ -1472,6 +2520,154 @@ namespace RbRules.Infrastructure.Migrations
                         .HasName("pk_push_subscription");
 
                     b.ToTable("push_subscription", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.Reasoning.ReasoningConflict", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("channel");
+
+                    b.Property<string>("CounterRef")
+                        .HasColumnType("text")
+                        .HasColumnName("counter_ref");
+
+                    b.Property<string>("DedupeKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("dedupe_key");
+
+                    b.Property<DateTimeOffset>("DetectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("detected_at");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Memo")
+                        .HasColumnType("text")
+                        .HasColumnName("memo");
+
+                    b.Property<string>("PatternId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("pattern_id");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("SubjectRef")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("subject_ref");
+
+                    b.HasKey("Id")
+                        .HasName("pk_reasoning_conflict");
+
+                    b.HasIndex("Channel")
+                        .HasDatabaseName("ix_reasoning_conflict_channel");
+
+                    b.HasIndex("DedupeKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_reasoning_conflict_dedupe_key");
+
+                    b.HasIndex("Kind")
+                        .HasDatabaseName("ix_reasoning_conflict_kind");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_reasoning_conflict_status");
+
+                    b.ToTable("reasoning_conflict", (string)null);
+                });
+
+            modelBuilder.Entity("RbRules.Domain.RejectionTombstone", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("actor");
+
+                    b.Property<string>("AgentRef")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("agent_ref");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DedupeKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("dedupe_key");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<bool>("Lifted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("lifted");
+
+                    b.Property<DateTimeOffset?>("LiftedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lifted_at");
+
+                    b.Property<string>("PatientRef")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("patient_ref");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("RestorePath")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("restore_path");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_rejection_tombstone");
+
+                    b.HasIndex("DedupeKey")
+                        .HasDatabaseName("ix_rejection_tombstone_dedupe_key");
+
+                    b.HasIndex("Lifted")
+                        .HasDatabaseName("ix_rejection_tombstone_lifted");
+
+                    b.ToTable("rejection_tombstone", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.Relation", b =>
@@ -1625,6 +2821,10 @@ namespace RbRules.Infrastructure.Migrations
                     b.Property<Vector>("Embedding")
                         .HasColumnType("vector(1024)")
                         .HasColumnName("embedding");
+
+                    b.Property<string>("EmbeddingContentHash")
+                        .HasColumnType("text")
+                        .HasColumnName("embedding_content_hash");
 
                     b.Property<string>("EmbeddingModel")
                         .HasColumnType("text")
@@ -1981,6 +3181,24 @@ namespace RbRules.Infrastructure.Migrations
                     b.ToTable("user_session", (string)null);
                 });
 
+            modelBuilder.Entity("RbRules.Domain.Assertion", b =>
+                {
+                    b.HasOne("RbRules.Domain.Document", null)
+                        .WithMany()
+                        .HasForeignKey("DerivedFromDocumentId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_assertion_document_derived_from_document_id");
+
+                    b.HasOne("RbRules.Domain.MiningRun", "MiningRun")
+                        .WithMany()
+                        .HasForeignKey("MiningRunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_assertion_mining_run_mining_run_id");
+
+                    b.Navigation("MiningRun");
+                });
+
             modelBuilder.Entity("RbRules.Domain.BenchmarkResult", b =>
                 {
                     b.HasOne("RbRules.Domain.BenchmarkQuestion", "Question")
@@ -2000,6 +3218,15 @@ namespace RbRules.Infrastructure.Migrations
                     b.Navigation("Question");
 
                     b.Navigation("Run");
+                });
+
+            modelBuilder.Entity("RbRules.Domain.CanonicalEntity", b =>
+                {
+                    b.HasOne("RbRules.Domain.CanonicalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("MergedIntoId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_canonical_entity_canonical_entity_merged_into_id");
                 });
 
             modelBuilder.Entity("RbRules.Domain.Change", b =>
@@ -2084,6 +3311,76 @@ namespace RbRules.Infrastructure.Migrations
                     b.Navigation("Source");
                 });
 
+            modelBuilder.Entity("RbRules.Domain.GraphRag.AnswerTraceSupport", b =>
+                {
+                    b.HasOne("RbRules.Domain.GraphRag.AnswerTrace", "AnswerTrace")
+                        .WithMany("Supports")
+                        .HasForeignKey("AnswerTraceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_answer_trace_support_answer_trace_answer_trace_id");
+
+                    b.Navigation("AnswerTrace");
+                });
+
+            modelBuilder.Entity("RbRules.Domain.InteractionCondition", b =>
+                {
+                    b.HasOne("RbRules.Domain.Interaction", "Interaction")
+                        .WithMany("Conditions")
+                        .HasForeignKey("InteractionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_interaction_condition_interaction_interaction_id");
+
+                    b.Navigation("Interaction");
+                });
+
+            modelBuilder.Entity("RbRules.Domain.MechanicPredicateAssertion", b =>
+                {
+                    b.HasOne("RbRules.Domain.CanonicalEntity", "SubjectEntity")
+                        .WithMany()
+                        .HasForeignKey("SubjectEntityId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_mechanic_predicate_canonical_entity_subject_entity_id");
+
+                    b.Navigation("SubjectEntity");
+                });
+
+            modelBuilder.Entity("RbRules.Domain.MergeCandidate", b =>
+                {
+                    b.HasOne("RbRules.Domain.CanonicalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("EntityAId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_merge_candidate_canonical_entity_entity_a_id");
+
+                    b.HasOne("RbRules.Domain.CanonicalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("EntityBId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_merge_candidate_canonical_entity_entity_b_id");
+                });
+
+            modelBuilder.Entity("RbRules.Domain.MergeDecision", b =>
+                {
+                    b.HasOne("RbRules.Domain.CanonicalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("SourceEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_merge_decision_canonical_entity_source_entity_id");
+
+                    b.HasOne("RbRules.Domain.CanonicalEntity", null)
+                        .WithMany()
+                        .HasForeignKey("TargetEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_merge_decision_canonical_entity_target_entity_id");
+                });
+
             modelBuilder.Entity("RbRules.Domain.PasskeyCredential", b =>
                 {
                     b.HasOne("RbRules.Domain.AppUser", "User")
@@ -2127,6 +3424,16 @@ namespace RbRules.Infrastructure.Migrations
                         .HasConstraintName("fk_user_session_app_user_user_id");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("RbRules.Domain.GraphRag.AnswerTrace", b =>
+                {
+                    b.Navigation("Supports");
+                });
+
+            modelBuilder.Entity("RbRules.Domain.Interaction", b =>
+                {
+                    b.Navigation("Conditions");
                 });
 #pragma warning restore 612, 618
         }

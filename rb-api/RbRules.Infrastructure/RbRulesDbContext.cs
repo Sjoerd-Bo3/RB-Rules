@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RbRules.Domain;
+using RbRules.Domain.GraphRag;
+using RbRules.Domain.Reasoning;
 
 namespace RbRules.Infrastructure;
 
@@ -42,6 +44,38 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<BenchmarkQuestion> BenchmarkQuestions => Set<BenchmarkQuestion>();
     public DbSet<BenchmarkRun> BenchmarkRuns => Set<BenchmarkRun>();
     public DbSet<BenchmarkResult> BenchmarkResults => Set<BenchmarkResult>();
+    // Provenance-ruggengraat (fase 0a, #233).
+    public DbSet<MiningRun> MiningRuns => Set<MiningRun>();
+    public DbSet<Assertion> Assertions => Set<Assertion>();
+    // Canonieke entiteiten & entity-resolution (fase 1, #225).
+    public DbSet<CanonicalEntity> CanonicalEntities => Set<CanonicalEntity>();
+    public DbSet<MergeDecision> MergeDecisions => Set<MergeDecision>();
+    public DbSet<MergeCandidate> MergeCandidates => Set<MergeCandidate>();
+    // Reïficatie & gekwalificeerde relaties (fase 2, #226).
+    public DbSet<Interaction> Interactions => Set<Interaction>();
+    public DbSet<InteractionCondition> InteractionConditions => Set<InteractionCondition>();
+    public DbSet<RejectionTombstone> RejectionTombstones => Set<RejectionTombstone>();
+    public DbSet<InteractionDecision> InteractionDecisions => Set<InteractionDecision>();
+    // Getypeerde mechanic-predicaten (fase 5, #229): het structurele signaal voor
+    // de abductieve hypothese-motor.
+    public DbSet<MechanicPredicateAssertion> MechanicPredicates => Set<MechanicPredicateAssertion>();
+    // Redeneer-laag (fase 3, #227): door de reasoner gedetecteerde tegenspraken.
+    public DbSet<ReasoningConflict> ReasoningConflicts => Set<ReasoningConflict>();
+
+    // GraphRAG-retrieval (fase 4, #228): het immutable auditspoor per /ask-antwoord.
+    public DbSet<AnswerTrace> AnswerTraces => Set<AnswerTrace>();
+    public DbSet<AnswerTraceSupport> AnswerTraceSupports => Set<AnswerTraceSupport>();
+
+    // Governance & levenscyclus (fase 6, #230): geversioneerde ontologie, staging-
+    // voorstellen en het geconsolideerde levenscyclus-gebeurtenis-log.
+    public DbSet<Domain.Ontology.OntologyVersionRecord> OntologyVersions => Set<Domain.Ontology.OntologyVersionRecord>();
+    public DbSet<Domain.Ontology.SchemaProposal> SchemaProposals => Set<Domain.Ontology.SchemaProposal>();
+    public DbSet<LifecycleEvent> LifecycleEvents => Set<LifecycleEvent>();
+
+    // Eval-industrialisatie (fase 7, #231): de per-klasse-baseline waartegen de
+    // baseline-diff-gate diff't, en de rollup-samenvatting per harness-gate-run.
+    public DbSet<EvalBaselineRecord> EvalBaselines => Set<EvalBaselineRecord>();
+    public DbSet<EvalRunRecord> EvalRuns => Set<EvalRunRecord>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -349,5 +383,280 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.HasIndex(x => x.RunId);
             e.HasIndex(x => x.QuestionId);
         });
+
+        // Provenance-ruggengraat (fase 0a, #233): PROV-O-Activity + gereïficeerd
+        // feit-met-herkomst. Postgres is de bron van waarheid; de Neo4j-projectie
+        // is idempotent herbouwbaar (GraphSyncService).
+        b.Entity<MiningRun>(e =>
+        {
+            e.ToTable("mining_run");
+            e.HasKey(x => x.Id);
+            // "Welke feiten kwamen uit deze run" + tijd-sortering (ULID is al
+            // sorteerbaar, maar StartedAt is de operationele as).
+            e.HasIndex(x => x.StartedAt);
+            e.HasIndex(x => x.Kind);
+        });
+
+        b.Entity<Assertion>(e =>
+        {
+            e.ToTable("assertion");
+            e.HasKey(x => x.Id);
+            // WAS_GENERATED_BY: verwijderen van een run mag de afgeleide feiten
+            // niet stil weesmaken — Restrict dwingt bewuste opschoning af
+            // (provenance is geen wegwerp-administratie).
+            e.HasOne(x => x.MiningRun).WithMany().HasForeignKey(x => x.MiningRunId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Document>().WithMany().HasForeignKey(x => x.DerivedFromDocumentId)
+                .OnDelete(DeleteBehavior.SetNull);
+            // "Heeft dit feit al provenance?" — de Ring-A-audit zoekt op subject.
+            e.HasIndex(x => new { x.FactKind, x.Subject });
+            e.HasIndex(x => x.MiningRunId);
+        });
+
+        // Canonieke entiteiten & entity-resolution (fase 1, #225). Postgres is de
+        // bron van waarheid; de Neo4j-projectie is idempotent herbouwbaar (MERGE op
+        // de canonieke id). pg_trgm staat als extensie klaar voor het lexicale
+        // schaal-pad (§3.2) — de fase-1-scorer draait in-memory en gate-consistent.
+        b.HasPostgresExtension("pg_trgm");
+        b.Entity<CanonicalEntity>(e =>
+        {
+            e.ToTable("canonical_entity");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Kind);
+            e.HasIndex(x => x.Status);
+            // Eén canonieke rij per (kind, label): de harde borg tegen duplicatie
+            // (#1) náást de service-resolutie. Case-collisie is de service's taak
+            // (genormaliseerd resolven vóór insert); dit vangt exacte duplicaten.
+            e.HasIndex(x => new { x.Kind, x.CanonicalLabel }).IsUnique();
+            e.Property(x => x.Embedding).HasColumnType(vectorType);
+            // Tombstone-verwijzing naar de overlevende entiteit (self-FK). Restrict:
+            // een doel met tombstones eromheen mag niet stil verdwijnen — dat zou
+            // het herstelpad (unconsolidate) breken.
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.MergedIntoId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<MergeDecision>(e =>
+        {
+            e.ToTable("merge_decision");
+            e.HasKey(x => x.Id);
+            // "Welke merge(s) raakten deze entiteit" + het herstelpad-zoekpad.
+            e.HasIndex(x => x.SourceEntityId);
+            e.HasIndex(x => x.TargetEntityId);
+            // Merge-beslissing verwijst naar entiteiten die als tombstone blijven
+            // bestaan; nooit cascade-deleten (audit-spoor is heilig).
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.SourceEntityId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.TargetEntityId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<MergeCandidate>(e =>
+        {
+            e.ToTable("merge_candidate");
+            e.HasKey(x => x.Id);
+            // Ongeordend uniek paar (service ordent A<B) — nooit twee spiegelrijen.
+            e.HasIndex(x => new { x.EntityAId, x.EntityBId }).IsUnique();
+            e.HasIndex(x => x.Status);
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.EntityAId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.EntityBId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Reïficatie & gekwalificeerde relaties (fase 2, #226): de gereïficeerde
+        // interactie is de canonieke opslagvorm (SoT in Postgres). De Neo4j-
+        // projectie (:Interaction/:Condition + de RELATES_TO-cache) is idempotent
+        // herbouwbaar uit deze rijen — de cache is nooit de bron.
+        b.Entity<Interaction>(e =>
+        {
+            e.ToTable("interaction");
+            e.HasKey(x => x.Id);
+            // Eén gerichte (agent, patient, kind)-interactie: de service dedupet
+            // genormaliseerd, de index borgt het hard tegen dubbele reïficaties.
+            e.HasIndex(x => new { x.AgentRef, x.PatientRef, x.Kind }).IsUnique();
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => x.AgentRef);
+            e.HasIndex(x => x.PatientRef);
+        });
+
+        b.Entity<InteractionCondition>(e =>
+        {
+            e.ToTable("interaction_condition");
+            e.HasKey(x => x.Id);
+            // Condities verdwijnen met hun interactie (ze bestaan er niet los van).
+            e.HasOne(x => x.Interaction).WithMany(x => x.Conditions)
+                .HasForeignKey(x => x.InteractionId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.InteractionId);
+        });
+
+        b.Entity<RejectionTombstone>(e =>
+        {
+            e.ToTable("rejection_tombstone");
+            e.HasKey(x => x.Id);
+            // De poort raadpleegt de dedupe-sleutel vóór ze een kandidaat overweegt.
+            e.HasIndex(x => x.DedupeKey);
+            e.HasIndex(x => x.Lifted);
+        });
+
+        b.Entity<InteractionDecision>(e =>
+        {
+            e.ToTable("interaction_decision");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.InteractionId);
+        });
+
+        // Getypeerde mechanic-predicaten (fase 5, #229, §5): het structurele signaal
+        // (triggers_on/prevents/grants/requires_target) waarop de abductieve hypothese-
+        // motor redeneert. Postgres = SoT; gemined+gereviewd, elk predicaat draagt eigen
+        // provenance en review-status (afzonderlijk weerlegbaar).
+        b.Entity<MechanicPredicateAssertion>(e =>
+        {
+            e.ToTable("mechanic_predicate");
+            e.HasKey(x => x.Id);
+            // Eén (subject, predicaat, object) — de service dedupet genormaliseerd,
+            // de unieke index borgt het hard tegen dubbele predicaten.
+            e.HasIndex(x => new { x.SubjectEntityId, x.Predicate, x.ObjectToken }).IsUnique();
+            e.HasIndex(x => x.Status);
+            // De hypothese-motor leest de predicaten van een entiteit op.
+            e.HasIndex(x => x.SubjectEntityId);
+            // Predicaat verdwijnt met zijn canonieke entiteit (het bestaat er niet los
+            // van); een merge behoudt de entiteit als tombstone, dus geen wees-predicaten.
+            e.HasOne(x => x.SubjectEntity).WithMany().HasForeignKey(x => x.SubjectEntityId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Redeneer-laag (fase 3, #227, §5): door de reasoner gedetecteerde
+        // tegenspraken. Postgres = SoT ook hier — de detectie draait tegen de
+        // Neo4j-projectie, maar het resultaat leeft (herbouwbaar) in Postgres.
+        // Bewust een eigen tabel naast bron-niveau "conflict" (die draagt FK's
+        // naar source): een redeneer-tegenspraak verwijst naar graf-knopen via
+        // BrainRefs, niet naar bron-rijen.
+        b.Entity<ReasoningConflict>(e =>
+        {
+            e.ToTable("reasoning_conflict");
+            e.HasKey(x => x.Id);
+            // Idempotentie over runs heen: dezelfde tegenspraak opnieuw detecteren
+            // maakt geen tweede rij (de service dedupet, de index borgt het hard).
+            e.HasIndex(x => x.DedupeKey).IsUnique();
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => x.Channel);
+            e.HasIndex(x => x.Kind);
+        });
+
+        // GraphRAG-AnswerTrace (fase 4, #228, §6/#236): immutable auditspoor. ULID-
+        // PK (tijd-sorteerbaar); de dragende feiten hangen er als child-rijen aan,
+        // cascade-verwijderd met de trace (het spoor is atomair, niet los te knippen).
+        b.Entity<AnswerTrace>(e =>
+        {
+            e.ToTable("answer_trace");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(Domain.Ulid.Length);
+            e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => x.PrimaryChannel);
+            e.HasMany(x => x.Supports).WithOne(x => x.AnswerTrace!)
+                .HasForeignKey(x => x.AnswerTraceId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<AnswerTraceSupport>(e =>
+        {
+            e.ToTable("answer_trace_support");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.AnswerTraceId).HasMaxLength(Domain.Ulid.Length);
+            e.HasIndex(x => x.AnswerTraceId);
+            // "Verantwoord dit antwoord"-query (§6): welke antwoorden leunden op een
+            // feit dat inmiddels deprecated/getombstoned is.
+            e.HasIndex(x => x.SubjectRef);
+        });
+
+        // Governance & levenscyclus (fase 6, #230, §6). Postgres = SoT; de ontologie
+        // is een geversioneerd, herbouwbaar artefact. De has-pending-ontology-poort
+        // zelf is PUUR (code vs. checked-in baseline) — deze tabellen dragen de
+        // runtime-historie en de reviewqueue, niet de CI-gate.
+        b.Entity<Domain.Ontology.OntologyVersionRecord>(e =>
+        {
+            e.ToTable("ontology_version");
+            e.HasKey(x => x.Id);
+            // Eén rij per vastgelegde versie — de service sorteert semver in-memory
+            // (string-sort ≠ semver-sort), de index borgt uniciteit hard.
+            e.HasIndex(x => x.Version).IsUnique();
+            e.HasIndex(x => x.AppliedAt);
+        });
+
+        b.Entity<Domain.Ontology.SchemaProposal>(e =>
+        {
+            e.ToTable("schema_proposal");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Status);
+            // Eén open voorstel per (soort, naam): de service dedupet, de index borgt
+            // het hard tegen dubbele staging-voorstellen voor hetzelfde type.
+            e.HasIndex(x => new { x.Kind, x.ProposedName }).IsUnique();
+        });
+
+        b.Entity<LifecycleEvent>(e =>
+        {
+            e.ToTable("lifecycle_event");
+            e.HasKey(x => x.Id);
+            // "Wat is er met dit feit gebeurd" (het geconsolideerde tombstone-spoor).
+            e.HasIndex(x => new { x.SubjectRef, x.CreatedAt });
+            e.HasIndex(x => x.ToState);
+            e.HasIndex(x => x.Reverted);
+        });
+
+        // Eval-industrialisatie (fase 7, #231, spec §7). De baseline-diff-gate zelf is
+        // PUUR (code vs. vastgelegde baseline); deze tabellen dragen de runtime-
+        // baseline en de run-historie, niet de CI-gate-logica.
+        b.Entity<EvalBaselineRecord>(e =>
+        {
+            e.ToTable("eval_baseline");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Ring).HasMaxLength(8);
+            e.Property(x => x.QueryType).HasMaxLength(32);
+            e.Property(x => x.Metric).HasMaxLength(48);
+            // Eén actieve baseline per (ring × question_class × metric) — de gate
+            // diff't tegen precies één cel; de index borgt dat hard.
+            e.HasIndex(x => new { x.Ring, x.QueryType, x.Metric }).IsUnique();
+        });
+
+        b.Entity<EvalRunRecord>(e =>
+        {
+            e.ToTable("eval_run");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(Domain.Ulid.Length);
+            e.Property(x => x.Ring).HasMaxLength(8);
+            // "Sluipende degradatie over runs" — sorteren op tijd, filteren op uitslag.
+            e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => new { x.Ring, x.Passed });
+        });
+    }
+
+    /// <summary>Schrijfpoort (fase 0a, #233) — de .NET-helft van het dubbele
+    /// write-guard: een <see cref="Assertion"/> die de provenance-shape niet
+    /// haalt (geen WAS_GENERATED_BY of DERIVED_FROM) wordt hard geweigerd, ook
+    /// als een caller de <see cref="AssertionProvenanceGuard"/> zou vergeten.
+    /// Faalmodus #4 wordt zo een invariant, geen discipline.</summary>
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        GuardAssertions();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        GuardAssertions();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void GuardAssertions()
+    {
+        foreach (var entry in ChangeTracker.Entries<Assertion>())
+        {
+            if (entry.State is not (EntityState.Added or EntityState.Modified)) continue;
+            var result = AssertionProvenanceGuard.Validate(entry.Entity);
+            if (!result.IsValid)
+                throw new InvalidOperationException(
+                    $"Assertion '{entry.Entity.Id}' weigert de provenance-poort: {result.Reason}");
+        }
     }
 }

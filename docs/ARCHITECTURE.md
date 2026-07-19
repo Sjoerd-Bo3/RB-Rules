@@ -314,6 +314,129 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `Object` maar de object-kaarttypes erven van beide (multi-parent), zodat
   `Spell ⟂ Object` vervulbaar blijft. Nog geen endpoint, EF-migratie of
   Neo4j-write — puur, volledig unit-getest (`OntologySchemaTests`).
+- **`RbRules.Domain/Provenance.cs` + `ProvenanceAuditService` — provenance-
+  ruggengraat (fase 0a, #233).** Versla faalmodus #4 (ontbrekende provenance)
+  als schema-invariant, niet als discipline. Twee nieuwe entiteiten (Postgres,
+  bron van waarheid): `MiningRun` (PROV-O-*Activity* — welk model/prompt-versie/
+  vocab-snapshot leidde feiten af; vult het gat tussen het te-grove `RunLog` en
+  de losse feiten) en `Assertion` (gereïficeerd feit-met-herkomst: `Subject` =
+  BrainRef van het feit, `WAS_GENERATED_BY`→`MiningRun`, `DERIVED_FROM`=BrainRef
+  van de bron, plus model/prompt/embedding-stempel en lichte valid-time — bewust
+  géén volledige bitemporaliteit). Het **dubbele write-guard**: de pure
+  `AssertionProvenanceGuard` (Domain) + een `RbRulesDbContext.SaveChanges`-poort
+  die 'm afdwingt (een Assertion zonder zowel `WAS_GENERATED_BY` als
+  `DERIVED_FROM` faalt hard), náást de Neo4j-uniciteitsconstraint (een
+  relatie-existentie-constraint is Enterprise-only, dus de garantie leeft in
+  Postgres + de deterministische projectie). `EmbeddingProvenance` levert de
+  content-hash (SHA-256 van de geëmbede tekst) op elke embedding-rij; de dim is
+  structureel 1024 (getypte vector-kolom). `ProvenanceAudit`/`ProvenanceAuditService`
+  zijn de **Ring-A-gate** (€0, geen LLM): tel afgeleide feiten zonder Assertion
+  en embeddings zonder herkomst, gesplitst in "nieuw" (ná de cutoff — moet 0
+  zijn) en "legacy" (geïnventariseerd voor backfill). Puur/EF-vertaalbaar getest
+  (`ProvenanceBackboneTests`).
+- **`RbRules.Domain/EntityResolution.cs` + `CanonicalEntities.cs` +
+  `CanonicalDrift.cs` + `EntityResolutionService` — canonieke entiteiten &
+  entity-resolution (fase 1, #225).** Versla faalmodus #1 (duplicatie) en #2
+  (synoniem-proliferatie). Drie nieuwe entiteiten (Postgres = SoT, additief
+  bovenop `Card.Mechanics[]` — bestaande strings blijven ongemoeid):
+  `CanonicalEntity` (één rij per mechanic/keyword/concept — kind uit de
+  Concept-tak van de ontologie — met `CanonicalLabel`, het `AltLabels`-
+  alias-lexicon, `Definition`+embedding, `Status` candidate/canonical/merged,
+  `MergedIntoId`-tombstone en `CreatedByRunId`-0a-provenance), `MergeDecision`
+  (expliciete merge-beslissing als first-class knoop: bron/doel, `DecidedBy`
+  auto|admin, `Memo` met signaal-uitslag en — cruciaal voor het herstelpad —
+  `MovedAltLabels` zodat `Unconsolidate` exact díe labels terugtrekt) en
+  `MergeCandidate` (voorgesteld paar → reviewqueue; telt als duplicatie-schuld).
+  De **pure** bouwstenen (`EntityResolution.cs`, IO-loos, volledig unit-getest):
+  `AliasNormalizer` (case/whitespace/underscore/koppelteken-collapse — het
+  canonicalisatie-oppervlak), `Magnitude` (splitst de trailing integer af zodat
+  `Assault 2`/`Assault 3` de FAMILIE `Assault` delen met de magnitude als
+  parameter — kritiek Risico 2a: nooit weggestript tot aparte entiteit),
+  `Trigrams` (Jaccard-similarity, spiegelt `pg_trgm` zodat de gate exact de
+  productie-beslissing meet), `EntityResolutionClassifier` (drietraps-signalen
+  blocking→trigram→embedding-cosine: 3/3 = auto-merge-kandidaat, 2/3 = review,
+  minder = geen match — NOOIT auto-merge op alleen embedding), `EntityResolutionGate`
+  (auto-merge standaard UIT — mag pas schrijven ná een gemeten ER-gouden-set-
+  precisie ≥ 0,95 ÉN labels ≥ 4 tekens; kritiek Risico 2b) en
+  `EntityResolutionGoldSet` (gelabelde merge/niet-merge-paren + precisie-meting,
+  patroon eval-scaffold #235). De **service** hangt de IO eromheen: `ResolveAsync`/
+  `ResolveOrRegisterAsync` (resolve tegen `CanonicalLabel ∪ AltLabels` VÓÓR
+  kandidaat-creatie — stopt synoniem-proliferatie over sets heen),
+  `RegisterExistingMechanicsAsync` (additieve, niet-destructieve backfill uit
+  `Card.Mechanics`/geaccepteerde `MechanicKeyword`s), `ScanForMergeCandidatesAsync`
+  (blocking in-memory bij fase-1-cardinaliteit, gate-consistent; `pg_trgm`+GIN
+  staan als schaal-pad in de migratie), `MergeAsync`/`UnconsolidateAsync`
+  (tombstone + Decision-memo + omkeerbaar herstelpad — rode draad #236) en
+  `DriftSnapshotAsync` (`CanonicalDriftSnapshot`: node-count per kind, singletons,
+  duplicatie-schuld — queryable voor inzicht #236). EF-migratie
+  `CanonicalEntities225`; getest in `EntityResolutionTests`.
+- **`RbRules.Domain/ReifiedInteractions.cs` + `InteractionPromotionGate.cs` +
+  `InteractionProjection.cs` + `InteractionExtraction.cs` +
+  `InteractionPromotionService` — reïficatie & gekwalificeerde relaties (fase 2,
+  #226).** Versla faalmodus #3 (structuurverlies): een kale
+  `(:Card)-[:COUNTERS]->(:Card)`-edge is verboden, elk COUNTERS/MODIFIES/GRANTS/
+  REQUIRES-feit leeft als gereïficeerde **`Interaction`** (Postgres = SoT) met
+  rollen agent/patient (BrainRefs naar Card/Keyword), een `Kind` uit de
+  reïficatie-verplichte ontologie-relaties, een optionele `GovernedByRef` naar de
+  RuleSection en een `Status` ∈ {candidate, verified, promoted, rejected,
+  **model_hypothesized_unruled**}. Condities (window/status/cost) zijn losse,
+  individueel weerlegbare **`InteractionCondition`**-knopen met expliciete
+  `SubjectRole` i.p.v. platgeslagen in proza. De **reïficatie-vorm-poort**
+  (`OntologyValidationService.ValidateReifiedInteraction`, fase 0b) dwingt de rol-
+  range en de kale-edge-dwang af. De **promotie-poort**
+  (`InteractionPromotionGate`, puur) is deterministisch: `schema ∧ (lexicaal ∨
+  consensus≥N) ∧ verdict` → promoted; anders reviewqueue met een `StatusReason`
+  die zégt welke poort faalde. Twee bindende bijzonderheden: (a) een levende
+  **`RejectionTombstone`** (op de `agent|patient|kind`-dedupe-sleutel) blokkeert
+  stil-heropenen — herstel is een expliciete beheerdersactie
+  (`LiftTombstonesAsync`); (b) cold-start (kritiek Risico 1) — een emergente
+  card×card-hypothese zonder lexicale/consensus-steun wordt NIET verworpen maar
+  getierd als `model_hypothesized_unruled` (eigen trust-label, micro-reviewqueue),
+  nooit stil weggegooid. Elke acceptatie legt een `Assertion` (0a-provenance,
+  subject `interaction:{id}`) én een **`InteractionDecision`**-memo vast (rode
+  draad #236 — niets levert onzichtbare state). `InteractionProjection` bouwt de
+  gedenormaliseerde `RELATES_TO`-qualifier-cache (window/actor_status/cost_delta/
+  tier) — herbouwbaar uit de reïficatie, nooit de bron; bij ≥2 condities per as of
+  een patient-rol markeert ze `reifiedOnly`. `InteractionExtraction` definieert de
+  tool-forced `emit_interactions`-structured-output-vorm met enum-poorten uit de
+  ontologie (`RelationTypeConstraint`); de live rb-ai-call is bewust
+  integratie-follow-up (de bestaande `InteractionMiner` kent geen condities en
+  tool-forcing vereist een rb-ai-uitbreiding — de promotie-pipeline + structuur
+  staan er). EF-migratie `ReifiedInteractions226`; getest in
+  `ReifiedInteractionTests` (30 tests).
+- **`RbRules.Domain/Reasoning/*` + `ReasoningService` — de redeneer-laag (fase 3,
+  #227, §5).** VASTGELEGDE BESLISSING: **één engine, Neo4j-native** — Cypher voor
+  monotone inferentie, contradictie via bounded `WHERE NOT EXISTS`, **géén apart
+  C#-Datalog** en geen OWL-runtime in de hot-path. `InferenceRuleRegistry` genereert
+  de inferentie-regels DETERMINISTISCH uit de ontologie (de ÉNE schema-bron, geen
+  losse regel-lijst ernaast): **isa-closure** (GOVERNED_BY-overerving over de
+  type-lattice uit `OntologySchema.Ancestors`), **property-chain** (ketens die uit de
+  relatie-domain/range in een GOVERNED_BY→RuleSection uitkomen, bv.
+  `HAS_KEYWORD ∘ INVOKES ∘ GOVERNED_BY` — een Deflect-vraag bereikt §7.4 in één hop),
+  **symmetrische sluiting** (uit de `Symmetric`-trait: INTERACTS_WITH/CONTRADICTS) en
+  **subproperty-collapse** (alias-kind → canonieke super-property uit
+  `OntologySchema.RelatesToKindSubProperties`, v0 leeg). De denorm-cache RELATES_TO en
+  de kennis-loze INTERACTS_WITH-hint zijn geen inferentie-hop (uit een niet-bron leid
+  je geen kennis af). Elke afgeleide edge draagt verplicht `derived=true` +
+  `derivedByRule` + run-provenance (`DerivedEdgeProvenance`, inzicht #236); afgeleide
+  edges zijn **nooit bron** — ze worden bij elke run gewist en opnieuw
+  gematerialiseerd, nooit als Postgres-feit gepersisteerd (SoT = de basisfeiten).
+  `ContradictionDetector` bouwt bounded read-only patronen — **claim-contradicts-
+  official** (community-claim tegen een RuleSection zonder officiële dekking →
+  misvattingen-kanaal), **ruling-collision** (botsende geverifieerde rulings →
+  escalatie) en, gegenereerd uit `OntologySchema.AreDisjoint`, één **disjointness-
+  violation**-patroon per effectief disjunct labelpaar (`:Unit:Spell` vangt kaart-sync-
+  schade à la #150 → reviewqueue). Treffers worden via `ConflictRouter` gerouteerd en
+  door `ToConflict` naar **`ReasoningConflict`**-rijen (Postgres = SoT ook hier, eigen
+  tabel naast bron-niveau `Conflict`) vertaald, idempotent op een dedupe-sleutel.
+  `ReasoningService` (job `reason`, ná `graph`) hangt de Cypher-executie eromheen —
+  best-effort, want Neo4j zit niet in CI/lokaal; **live-Cypher-executie is
+  integratie-follow-up** (zoals de fase-2-projectie), de pure regel-/patroon-generatie
+  en de conflict-vertaling zijn wél getest (`InferenceRuleRegistryTests`,
+  `ContradictionDetectorTests`). `OntologyConsistencyAudit` (job `owlaudit`, optioneel,
+  nooit in "alles") is de **OWL2-RL-nachtaudit-skeleton**: een pure zelf-toets van de
+  afgedwongen schema-bron (acyclisch, disjointness vervulbaar, geen dangling
+  domain/range) — geen OWL-runtime. EF-migratie `Reasoner227`.
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
@@ -841,7 +964,18 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
 
 - **Postgres + pgvector** — source of truth. Getypeerde `vector(1024)` met
   HNSW; snake_case; EF-migraties bij opstart (`RbRulesDbContext`, `Migrations/`,
-  `Program.cs`).
+  `Program.cs`). Sinds fase 1 (#225) ook de `pg_trgm`-extensie — voorlopig als
+  gedocumenteerd schaal-pad voor het lexicale entity-resolution-signaal (de
+  fase-1-scorer draait in-memory en gate-consistent). Sinds fase 4 (#228) het
+  immutable `answer_trace` (+ `answer_trace_support`, cascade) — het GraphRAG-
+  auditspoor per /ask-antwoord (§6/#236, migratie `AnswerTrace228`). Sinds fase 5
+  (#229) `mechanic_predicate` — de getypeerde mechanic-predicaten
+  (triggers_on/prevents/grants/requires_target) die de abductieve hypothese-motor
+  voeden (migratie `MechanicPredicates229`). Sinds fase 6 (#230) `ontology_version`
+  (semver-historie + structuur-vingerafdruk per toegepaste migratie),
+  `schema_proposal` (de `:Proposed`-staging-reviewqueue) en `lifecycle_event` (het
+  geconsolideerde, herstelbare tombstone-/deprecatie-/staleness-log) — migratie
+  `Governance230`.
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
@@ -1066,6 +1200,31 @@ herkomst. Elke knoop draagt een `ref`-property volgens de
 `BrainRef`-conventie. Wees-opruiming verwijdert kaarten/facetten die geen
 canonieke printing meer zijn (#57).
 
+Sinds fase 0a (#233) projecteert dezelfde transactie ook de provenance-tak:
+`MiningRun`- en `Assertion`-knopen met `(:Assertion)-[:WAS_GENERATED_BY]->(:MiningRun)`
+en `(:Assertion)-[:DERIVED_FROM]->(bron-knoop op `ref`)`. Idempotent herbouwbaar
+uit Postgres (bron van waarheid); de DERIVED_FROM-doelen (Source/RuleSection/
+Card/…) bestaan al vóór deze stap, dus de label-loze ref-match resolveert
+(zelfde patroon als `RELATES_TO`). De provenance-shape-garantie (elke Assertion
+draagt beide edges) leeft in de Postgres-schrijfpoort, niet in een Neo4j-
+constraint.
+
+Sinds fase 2 (#226) projecteert dezelfde transactie ook de reïficatie-tak
+(`InteractionProjection.BuildProjectionRows`, puur + getest): niet-verworpen
+`Interaction`-knopen (`:Interaction:Concept`) met `HAS_ROLE {role}`-edges naar de
+agent/patient-fillers, `REQUIRES_CONDITION`-edges naar `:Condition`-knopen, een
+optionele `GOVERNED_BY`-edge naar de RuleSection, en — alleen voor verankerde
+(promoted/verified) interacties — de gedenormaliseerde
+`RELATES_TO {kind, window, actorStatus, costDelta, tier, reifiedOnly,
+source:'interaction'}`-qualifier-cache. Die cache is NOOIT de bron: ze is volledig
+herbouwbaar uit de reïficatie, en bij ≥2 condities per as of een patient-rol
+markeert `reifiedOnly` dat consumenten de `Interaction` moeten lezen. Rejected
+interacties leven alleen als `RejectionTombstone` (herstelpad), niet als knoop.
+Let op: dit is een additieve uitbreiding op dezelfde transactionele rebuild als de
+provenance-tak — nog niet geverifieerd tegen een live Neo4j (geen lokale instance),
+wel via dezelfde batched-UNWIND/dictionaries-only-patronen als de bewezen
+Assertion-projectie.
+
 Changeconsolidatie (#206) is bewust NIET in deze projectie verwerkt: de
 `Change`-query hierboven selecteert nog steeds ALLE rijen, dus zowel een
 primaire als een geconsolideerde secundaire krijgen elk hun eigen `Change`-
@@ -1073,6 +1232,42 @@ knoop + `AFFECTS`-edges, en `Change.ConsolidatedWithId` wordt geen
 graph-property. Consolidatie is feed-presentatie (welke kaart de gebruiker
 ziet), geen kennisrelatie — de graph blijft de volledige, ongefilterde
 brontrail tonen.
+
+### 6.4 De reasoner (redeneer-run)
+
+`ReasoningService.RunAsync` (job `reason`, logisch ná `graph`) geeft Neo4j zijn
+eerste echte lees-reden: hij *leidt af* i.p.v. *op te slaan* (fase 3, #227, §5).
+VASTGELEGDE BESLISSING: **één engine, Neo4j-native** (Cypher; géén C#-Datalog). De
+run opent met een deterministische `MiningRun` (kind "reasoning", geen LLM/embedding)
+als provenance-anker, en verloopt in drie stappen. **(1)** Afgeleide edges opruimen:
+`MATCH ()-[r]->() WHERE r.derived = true DELETE r` — afgeleide edges zijn nooit bron,
+ze worden elke run herberekend (basisfeiten blijven ongemoeid). **(2)** Monotone
+inferentie: elke regel uit `InferenceRuleRegistry.All` draait als idempotente,
+batched Cypher-MERGE (dictionaries-only params) die de afgeleide edge tagt met
+`derived=true`, `derivedByRule=<regel-id>` en de run-provenance
+(`runId`/`model='deterministic'`/`derivedAt`). **(3)** Bounded contradictie-detectie:
+elk read-only `ContradictionDetector`-patroon RETURNt treffers; die worden via
+`ConflictRouter` naar het juiste kanaal (misvattingen/reviewqueue/escalatie) en door
+`ToConflict` naar `ReasoningConflict`-rijen in Postgres vertaald — idempotent op de
+`patternId|subject|counter`-dedupe-sleutel, zodat een herhaalde run geen dubbele
+rijen maakt.
+
+Neo4j-uitval is een verwacht pad: de graaf-stappen zijn best-effort
+(`Neo4jException`/driver-fout → de run doet niets en meldt "graph niet beschikbaar"),
+Postgres blijft leidend en de afgeleide edges zijn bij de volgende run herberekenbaar.
+Net als de fase-2-reïficatie-projectie is de **live-Cypher-executie nog niet tegen een
+draaiende Neo4j geverifieerd** (geen lokale instance): de regel- en patroon-generatie
+uit de ontologie, de derived-edge-tagging en de treffer→conflict-vertaling zijn puur
+en getest (`InferenceRuleRegistryTests`, `ContradictionDetectorTests`), de executie is
+integratie-follow-up. Sommige inferentie-regels (isa-overerving, property-chains)
+veronderstellen bron-edges die de huidige projectie nog niet materialiseert
+(bv. `Mechanic-[:GOVERNED_BY]->RuleSection`, class-anchor-labels) — die projectie-
+uitbreiding hoort bij dezelfde follow-up; de regels staan er al, correct getagd.
+
+De **OWL2-RL-nachtaudit** (`OntologyConsistencyAudit`, job `owlaudit`) is per beslissing
+een **skeleton**: geen OWL/Turtle-runtime, maar een pure zelf-toets van de afgedwongen
+schema-bron (`OntologySchema`) op acycliciteit, vervulbare disjointness en
+niet-danglende domain/range. Optioneel en nooit in de "alles"-keten.
 
 ---
 
@@ -1222,6 +1417,113 @@ kan rb-api eerder starten dan Postgres klaar is.
   (`card:…`, `section:sourceId/code`, `claim:…`) over pgvector, Neo4j én
   API-contracten (`BrainRef.cs`). De brein-API (`/api/brain/*`) biedt zes
   koppelvlakken; rb-ai's agentic taak bevraagt ze als MCP-tools.
+- **GraphRAG-retrieval-laag** (fase 4, #228 — `RbRules.Domain/GraphRag/*`). De
+  flat fan-out van `/ask` wordt vervangen door één `RetrievalOrchestrator` die
+  de pure beslislogica orkestreert: `MentionDetector`/`EntityLinker`
+  (gazetteer + fuzzy + embedding-cos + **co-mention-coherentie** als graaf-truc
+  om homoniemen te breken; elke keuze → een `LinkDecision`-provenance,
+  hergebruikt de fase-1-`CanonicalEntity`/aliassen), de **β(q)-router**
+  (`BetaRouter`: `S_final = β·S_graph + (1−β)·S_comm`, `β(q) =
+  sigmoid(w1·entity-dichtheid − w2·abstractie)` — entity-dicht → graph-kanaal,
+  abstract → community-kanaal), de vier retrieval-modi
+  (`ModeSelector` → Local/Global/Path/Drift + directe BanLookup, per §4-tabel),
+  de **trust-gating** (`TrustGate`, beslissing #229: route op "is er officiële
+  dekking?" — zo niet mag een goed-onderbouwde community-claim primair zijn
+  **mét badge**; authority is tie-breaker/labeler, GÉÉN multiplicatieve
+  annihilator; de echo-kamer-discount zit in `Corroboration.NoisyOr`, dedup op
+  idee-niveau), de trust-vector (`Trust.cs`: authority·verification·
+  corroboration·recency, λ-verval per tier), de **pad-scoring**
+  (`PathScoring`/`PathCitations`: k-shortest op `1/(trust·confidence)` — het
+  stevigst onderbouwde pad, niet het kortste; het pad *wordt* de citatie met
+  `[[card:…]]`/`[[rule:…]]`/`[[interaction:…]]`-widget-markers; `NoPath` →
+  eerlijk geen interactie i.p.v. hallucineren), de **context-bundeling**
+  (`ContextBundler`: trust-geordend, MMR per laag, harde token-afkap van
+  onderaf — community/meta vallen eerst weg — met machine-leesbare labels
+  `[OFFICIEEL]`/`[COMMUNITY trust=… corrob=…]`), en de **begrotings-poort**
+  (`RetrievalGuard`, beslissing #232: HARD latency-budget → terugval naar
+  Local-only; k-shortest alléén op een warme, vooraf-geprojecteerde GDS-named-
+  graph). Elk antwoord produceert een immutable `AnswerTrace` (§6/#236) die
+  vastlegt welke subgraaf/paden/edges/trust-gewichten-toen het antwoord droegen
+  ("verantwoord dit antwoord"). **Al deze logica is PUUR en getest zonder
+  Neo4j/pgvector**; de daadwerkelijke Neo4j/GDS/live-pgvector-queries lopen via
+  poorten (`IGazetteerSource`, `INodeContextSimilarity`, `INodeAdjacency`,
+  `IGraphRetriever` in `RetrievalContracts.cs`) waarvan de Infrastructure-
+  adapters een bewuste **integratie-follow-up** zijn (Neo4j/GDS draaien niet in
+  CI). Fase 4 bouwt nog géén hypothese-motor (fase 5).
+- **Hypothese-motor & trust-vector** (fase 5, #229 — `RbRules.Domain/*`,
+  `RbRules.Domain/GraphRag/TrustConflict.cs`). De kandidaatgeneratie voor
+  interacties gaat van LEXICALE overlap (fase 3) naar GETYPEERD property-
+  antagonisme. Elke mechanic/keyword (`CanonicalEntity`) draagt gemined+gereviewde
+  `MechanicPredicateAssertion`'s (`triggers_on`/`prevents`/`grants`/
+  `requires_target`; extractie-vorm `MechanicPredicateExtraction`, tool-forced als
+  fase 2). De `HypothesisEngine` indexeert die predicaten geïnverteerd op
+  (predicaat, token) en past alléén complementair-vervullende paren
+  (`triggers_on(X,exhaust) ∧ prevents(Y,exhaust) ⇒ nonbo(X,Y)`) — O(n·k) i.p.v.
+  blind N², met `deck_domain_compatible` als prune. Elke `InteractionHypothesis`
+  draagt haar deterministische bewijs (regel-id + antecedent-tuples) en gaat naar
+  GERICHTE LLM-verificatie; `HypothesisPromotion` koppelt haar aan de ONVERANDERDE
+  fase-2-poort, zodat een positief verdict ZONDER onafhankelijke lexicale/consensus-
+  steun in `model_hypothesized_unruled` (cold-start) landt — nooit een stille
+  promotie op enkel structuur+LLM (rode draad #236). `HypothesisYield` maakt de
+  precisie-/kostenwinst MEETBAAR uit de data (blinde N²-baseline vs. werkelijk
+  kandidaataantal, precisie tegen een gouden set — geen verzonnen vaste factor,
+  kritiek B7). Een BEGRENSD residueel embedding-cosine-kanaal
+  (`ResidualInteractionChannel`, laag-prioriteit, cosine-vloer + top-K + hard
+  budgetplafond) pikt interacties zónder structurele signatuur op zonder terug te
+  vallen in de N²-scan. De trust-vector wordt afgerond: `ProvenanceCluster` leidt de
+  idee-niveau onafhankelijkheids-sleutel (thread ≻ auteur ≻ site) af die
+  `Corroboration.NoisyOr` compleet maakt (echo-kamer-dedup), en
+  `TrustConflictResolver` beslecht conflicten CONTEXT-afhankelijk (cross-tier →
+  authority-veto; within-tier-temporeel → recentste-gezaghebbende via SUPERSEDES;
+  detectie-botsing → vroegste-detectie via ALIAS_OF — bewust de #168/#206-precedentie
+  met de per-context juiste tie-break-richting), elk met een expliciete
+  `TrustDecision`. **Al deze logica is PUUR en getest**; de live rb-ai-mining, de
+  Neo4j-projectie en de persistentie van de Decision-knopen zijn een bewuste
+  integratie-follow-up. Fase 5 bouwt nog géén governance/eval (fase 6/7).
+- **Governance, levenscyclus & schema-evolutie per set** (fase 6, #230 —
+  `RbRules.Domain/Ontology/OntologyVersion.cs`, `SchemaProposal.cs`,
+  `RbRules.Domain/KnowledgeLifecycle.cs`, `ErrataLifecycle.cs`,
+  `ModelUpgradeInvalidation.cs`; `RbRules.Infrastructure/OntologyGovernanceService.cs`,
+  `KnowledgeLifecycleService.cs`). De ontologie is een first-class, **semver**-
+  geversioneerd artefact (`SemVer`, bump-regels: patch = nieuwe instanties,
+  minor = additief relatietype/subklasse, major = klasse-split/disjointness-
+  wijziging). `OntologySnapshot` reduceert `OntologySchema` (fase 0b, de ENIGE
+  schema-bron) tot een ordening-stabiele **structuur-vingerafdruk**; de
+  **has-pending-ontology-poort** (`OntologyChangeGate`) toetst die code-vingerafdruk
+  tegen de checked-in `OntologyBaseline` — puur, €0, geschikt als CI-gate, exact
+  spiegelbeeld van `has-pending-model-changes`. Een nieuwe set die een onbekend
+  keyword/relatietype meebrengt breekt niets: mining zet het als `:Proposed` in de
+  **staging-namespace** (`StagingNamespace`, retrieval-zichtbaar, lage weging, kan
+  niets harden). Promotie vereist deterministisch bewijs (`SchemaProposalGate`: ≥N
+  officiële kaarten ÉN een verankerende Core-Rules/glossary-sectie) → reviewqueue →
+  versioned migratie-Activity (`OntologyVersionRecord`); een LLM-vermoeden hardt
+  nooit alléén een schema-wijziging, en een nieuw gekwalificeerd relatie-voorstel
+  wordt default gereïficeerd (`RelationProposalPolicy`) — een eigen edge-type
+  alleen bij hoge frequentie + retrieval-waarde, via review. De **kennis-
+  levenscyclus** krijgt één canoniek toestand-vocabulaire (`LifecycleState`:
+  active/stale/deprecated/superseded/tombstoned/restored) met bewaakte transities
+  (nooit hard-delete, heropenen alléén via een expliciete `Restored`-stap), een
+  tier-bewuste **staleness-evaluator** (`StalenessEvaluator`, λ per tier: officieel
+  vervalt niet op leeftijd, meta agressief; triggers op leeftijd/model/embedding-
+  upgrade/corroboratie-daling/errata/negatieve-ask-signalen), en een
+  geconsolideerd, herstelbaar **`LifecycleEvent`-log** dat de verspreide fase-1/2-
+  tombstones overkoepelt (`KnowledgeLifecycleService`). De **errata-mid-set-flow**
+  (`ErrataLifecycle`) zet een geërraterde ruling via SUPERSEDES op `superseded`
+  (blijft bestaan voor dossier-historie) en invalideert de afhankelijke feiten/
+  eval-cases naar `stale` (koppeling aan het eval-scaffold #231/#235:
+  forbidden_claim-verval). De **gerichte model-upgrade-invalidatie MÉT kostengate**
+  (`ModelUpgradeInvalidation`, BESLISSING #232) selecteert bij een model-bump
+  uitsluitend de puur-LLM-ongesteunde feiten (geen menselijke goedkeuring, geen
+  onafhankelijke corroboratie — precies de §6-Cypher) en her-mint ze **incrementeel
+  met een budgetplafond** op het abonnement-token; nooit een blinde N²-re-mine.
+  Bitemporaliteit blijft **licht** (kritiek B8): valid-time + transaction-time zitten
+  al op `Assertion`, niet overal. **Al deze logica is PUUR en getest** (`Ontology
+  GovernanceTests`, `KnowledgeLifecycleTests`, `GovernanceServiceTests`; de
+  service-schil op InMemory-DbContext); de live Neo4j-projectie van de
+  `:Proposed`/`:Superseded`/`:Tombstone`-labels, de daadwerkelijke code-migratie bij
+  promotie en het her-minen van de schaduw-mine-batch zijn bewuste integratie-
+  follow-ups. Fase 6 bouwt nog géén eval-industrialisatie; die volgt in fase 7
+  (hieronder — de errata-mid-set-flow koppelt er via `ErrataEvalExpiry` op aan).
 - **Degradatiepaden** — AI-uitval is een verwacht pad: `RbAiClient` geeft null,
   de aanroeper degradeert (`docs/CONVENTIONS.md`, `AskService`, `RbAiClient`).
   Neo4j-uitval maakt `neighbors`/`path` een nette Problem-response terwijl de
@@ -1352,6 +1654,73 @@ kan rb-api eerder starten dan Postgres klaar is.
   door. De isolatietest (`AskServiceBenchmarkIsolationTests`) blijft ongewijzigd
   van toepassing: `Model` verandert niets aan welke tabellen wel/niet
   geschreven worden, alleen welk model het antwoord genereert.
+- **Eval-industrialisatie & meta** (fase 7, #231, brein-epic #223 — LAATSTE
+  fase) — bouwt op het eval-scaffold voort tot de volledige meet-industrie.
+  Het **scaffold** (nog altijd de kern): `EvalCase` (de meeteenheid — vraag +
+  `EvalQueryType` (Factoid/Inference/Comparison/Temporal) + `GoldSupport`
+  (recall-noemer) + `GoldConditionSupport` (de conditie-dragende deelverzameling
+  voor path-recall) + `ExpectedCitations` + `ForbiddenClaims` + levenscyclus),
+  `EvalRunResult` (geabstraheerde run-uitkomst: opgehaalde/geciteerde/
+  geproduceerde ids — géén graaf-koppeling), `EvalScoringService` (pure
+  Relevancy/Recall/F1/CitationPrecision/ContradictionRecall) en
+  `EvalGateEvaluator` (de deterministische **Ring-A**-poort: citation-validity
+  100% + nul actieve forbidden claims). Twee Kritiek-mitigaties zijn ingebakken:
+  **cold-start-shadow** (een `EvalStatus.Shadow`-case scoort en wordt
+  gerapporteerd maar blokkeert de gate nooit — een half-gereviewde nieuwe set
+  breekt de CI van `main` niet, B4) en **errata-invalidatie** op twee niveaus
+  (case-niveau `SupersededByErratum`/`ValidUntil` → overslaan; claim-niveau
+  `ForbiddenClaim.SupersededByErratum` → een door een erratum waar-geworden
+  claim telt niet meer als contradictie, C). De voorbeeld-gouden-set staat als
+  seed in `docs/eval/poracle-eval-seed.json` (via `EvalSeed.Parse`); het echte
+  corpus komt in Postgres `eval_case` met rb-ai-kandidaten uit set/errata-diffs.
+  **Fase 7 legt daar bovenop** (alles PURE Domain, `RbRules.Domain/Eval*.cs`;
+  KRITIEK — live-graaf/rb-ai/pgvector niet in CI):
+  - **Ring B/C-scoring** (`RetrievalQualityScoring`, `EvalRing`/`EvalMetricNames`,
+    `EvalHarness`): naast de kale set-recall meet Ring B **path-recall op
+    gekwalificeerde interacties** (structuurverlies, faalmodus 3 — een pad dat de
+    `window=showdown`-conditie mist scoort < 1.0), **citation-support/
+    groundedness** (geciteerd ∈ opgehaalde subgraaf), en **answer-faithfulness**
+    via geabstraheerde judge-verdicten (`JudgedClaim`, SUPPORTED/CONTRADICTED/
+    NOT_IN_CONTEXT) **mét deterministisch vangnet** (een SUPPORTED claim die naar
+    ongehaalde support citeert wint niet — de structurele check verslaat de
+    judge). Ring C voegt **answer-consistency onder parafrase** toe (paarsgewijze
+    Jaccard over de claim-sets). `EvalHarness` bindt de scorers per ring en
+    vertaalt case-runs naar `ClassifiedSample`s. De judge zelf is een integratie-
+    follow-up (rb-ai niet in CI); de scoring is €0 en volledig getest.
+  - **Baseline-diff-per-klasse-gate** (`EvalBaseline`, `BaselineDiffGate`):
+    vergelijkt het huidige per-(question_class × metric)-gemiddelde tegen een
+    vastgelegde baseline en blokkeert bij een regressie (`mean < baselineMean −
+    kσ`, default 2σ) op ENIGE meetellende klasse — sluipende degradatie die het
+    gemiddelde verbergt wordt zo gevangen. Shadow-samples worden apart
+    geaggregeerd en gerapporteerd maar gaten nooit; een klasse zonder baseline
+    kan niet gaten (cold-start op metriek-niveau); een deterministische metriek
+    (σ 0) mag niet zakken (de harde citation-validity-gate als diff uitgedrukt).
+  - **Auto-gegenereerde eval-cases uit set-diffs** (`SetDiffCaseGenerator`):
+    nieuwe kaart → Factoid, nieuw keyword/mechanic → Inference, erratum →
+    Temporal mét de oude bewoording als `ForbiddenClaim` — ALTIJD in
+    `EvalStatus.Shadow` (cold-start), deterministische ids (idempotente
+    reviewqueue). De koppeling fase 6 → fase 7 zit in `ErrataEvalExpiry`: een
+    fase-6 `ErrataLifecycle.Plan` laat matchende forbidden_claims (claim-niveau)
+    en hele cases (case-niveau) vervallen — forbidden_claim-verval.
+  - **Ops-observability** (`ObservabilityReport`/`ObservabilityRollups`,
+    `CommunityStability`, inzicht #236): queryable admin-tegel-rollups —
+    mining-precisie per (soort × model) uit `MiningRun`, kosten/latency per
+    retrieval-modus uit fase-4-`AnswerTrace`, community-modularity/stabiliteit
+    (label-onafhankelijk, Leiden hernummert), plus hergebruik van de bestaande
+    fase-1-snapshots (`GraphDrift`, `CanonicalDriftSnapshot`) en de fase-5-
+    `HypothesisYield` — geen duplicatie.
+  - **Deck-integratie CO_OCCURS** (`DeckCoOccurrence`, #15): kruis-valideert
+    structureel voorspelde combo-paden (fase 5) met de echte Piltover-meta —
+    per paar co-decks/support/lift + een corroboratie-rate (precisie van de
+    structuurvoorspelling tegen de meta) als meetbaar signaal.
+  - **Persistentie** (`EvalBaselineRecord`/`EvalRunRecord`, migratie
+    `EvalIndustrialization231`): `eval_baseline` (één rij per ring × klasse ×
+    metric, uniek geïndexeerd — de gate diff't tegen precies één cel) en
+    `eval_run` (rollup-samenvatting per gate-run, voor "sluipende degradatie over
+    runs"). De baseline-diff-gate zelf blijft puur; deze tabellen dragen alleen
+    de runtime-baseline en run-historie. De live retrieval-runs, de LLM-judge en
+    de graaf-metrieken (Leiden-modularity, echte latency/token-metering) zijn
+    bewuste integratie-follow-ups; fase 7 levert de pure, geteste meet-kern.
 
 ---
 
@@ -1419,6 +1788,108 @@ kwalificerende vraag achter flag `ASK_AGENTIC`, met een klassieke single-pass
 als vangnet en meting per pad. **Gevolg.** Kosten/latency onder controle,
 nooit een slechter antwoord. `AgenticGate`, `AskService`, `rb-ai/src/ai.ts`.
 
+### ADR-11 — Provenance als schema-invariant, dubbel bewaakt (#233)
+**Context.** Afgeleide feiten (relaties, interacties, embeddings) droegen geen
+herkomst — faalmodus #4 uit de brein-architectuur. **Besluit.** Elk afgeleid
+feit hangt aan een gereïficeerde `Assertion` met verplichte `WAS_GENERATED_BY`
+(→`MiningRun`) én `DERIVED_FROM`; de shape wordt dubbel afgedwongen — de pure
+`AssertionProvenanceGuard` plus een `RbRulesDbContext.SaveChanges`-poort die 'm
+altijd draait. Postgres blijft de bron van waarheid (ADR-2); de Neo4j-projectie
+is idempotent herbouwbaar en een relatie-existentie-constraint (Enterprise-only)
+is bewust niet de garantie. Wat "nieuw werk" runtime afdwingt is de
+schrijfpoort: elke `Assertion` zónder complete provenance faalt hard op
+`SaveChanges`. Daarnaast is er een deterministische Ring-A-audit (€0, geen LLM,
+`ProvenanceAuditService.AuditAsync`) die afgeleide feiten zónder Assertion en
+embeddings zonder herkomst telt, gesplitst in "nieuw" (moet 0 zijn) en "legacy
+backfill"; die audit is een aparte, herhaalbare uitspraak — nog niet aan een
+job/CI-stap gekoppeld (dat is latere fase-bedrading). **Gevolg.** Een `Assertion`
+zonder herkomst is onmogelijk; een afgeleid feit dat helemáál geen Assertion
+krijgt is niet door de schrijfpoort te vangen, maar wordt door de Ring-A-audit
+zichtbaar gemaakt i.p.v. stil gedoogd. Legacy-feiten worden geïnventariseerd
+voor backfill. `Provenance.cs`, `ProvenanceAuditService`, `GraphSyncService`,
+`GraphSchema`.
+
+### ADR-12 — Gekwalificeerde relaties altijd gereïficeerd, promotie via een deterministische poort (#226)
+**Context.** Gekwalificeerde relaties (COUNTERS/MODIFIES/GRANTS/REQUIRES) dragen
+condities (window/status/cost); als kale edge of vrije-tekst-`Explanation` gaat
+die structuur verloren (faalmodus #3). **Besluit.** Elk zo'n feit leeft als
+gereïficeerde `Interaction` (Postgres = SoT) met rollen agent/patient en losse
+`Condition`-knopen; een kale gekwalificeerde edge wordt door
+`OntologyValidationService` geweigerd, de gereïficeerde vorm afgedwongen. Promotie
+loopt door een **deterministische poort** (`InteractionPromotionGate`): nooit
+LLM-alleen — `schema ∧ (lexicaal ∨ consensus≥N) ∧ verdict`. Twee harde regels:
+(a) een levende `RejectionTombstone` blokkeert stil-heropenen, herstel is een
+expliciete beheerdersactie; (b) een emergente card×card-hypothese zonder steun
+wordt NIET verworpen maar getierd als `model_hypothesized_unruled` (cold-start,
+kritiek Risico 1), nooit stil weggegooid. De `RELATES_TO`-qualifier-cache is een
+gedenormaliseerde projectie, nooit de bron. **Gevolg.** "Deflect countert Assault
+alleen in een showdown" is queryable i.p.v. begraven in proza; geen promotie of
+verwerping zonder deterministisch bewijs + memo + herstelpad (rode draad #236).
+De live rb-ai-extractie (tool-forced `emit_interactions`) is als integratie-
+follow-up afgesplitst — de vorm staat in `InteractionExtraction`, de pipeline in
+`InteractionPromotionService`. `ReifiedInteractions.cs`,
+`InteractionPromotionGate.cs`, `InteractionProjection.cs`,
+`InteractionExtraction.cs`, `InteractionPromotionService`.
+
+### ADR-13 — Redeneer-laag: één engine, Neo4j-native; afgeleide edges nooit bron (#227)
+
+**Context.** De graaf moest *leesbaar* worden — inheritance, property-chains en
+tegenspraken afleiden i.p.v. alles apart minen. De lenzen botsten op de techniek
+(stratified Datalog vs. Cypher vs. OWL-RL). **Besluit.** **Één engine, Neo4j-native:**
+Cypher-MERGE voor monotone inferentie, bounded `WHERE NOT EXISTS` voor contradictie —
+**géén apart C#-Datalog** en **geen OWL-runtime in de hot-path** (onze edges zijn
+gekwalificeerd; OWL zou reïficatie/blank-nodes afdwingen → structuurverlies, en
+.NET-OWL-tooling is dun). De inferentie-regels worden DETERMINISTISCH uit de ontologie
+gegenereerd (`InferenceRuleRegistry` uit `OntologySchema` — de ÉNE schema-bron): geen
+met-de-hand-lijst die uit sync raakt. Drie harde regels: (a) **afgeleide edges zijn
+nooit bron** — ze dragen `derived=true`+`derivedByRule`+run-provenance en worden bij
+elke run gewist en opnieuw gematerialiseerd, nooit als Postgres-feit gepersisteerd
+(SoT = de basisfeiten); (b) een reasoner-regel draagt **nooit een LLM-oordeel** — puur
+deterministisch (`model='deterministic'`); (c) een gedetecteerde tegenspraak levert
+**geen edge maar een `ReasoningConflict`-rij** (Postgres = SoT), gerouteerd naar
+misvattingen-kanaal/reviewqueue/escalatie en idempotent op een dedupe-sleutel — een
+beslissing levert nooit onzichtbare state (rode draad #236). OWL2-RL blijft als
+**optionele nachtaudit-skeleton** (`OntologyConsistencyAudit`) die de afgedwongen
+schema-bron zelf toetst. **Gevolg.** "Welke regels gelden voor deze Deflect-kaart?"
+wordt één graaf-hop; een `:Unit:Spell`-knoop (kaart-sync-schade à la #150) valt op als
+disjointness-tegenspraak. Neo4j zit niet in CI — de live-Cypher-executie is
+integratie-follow-up (best-effort, degradeerbaar), de pure regel-/patroon-generatie en
+conflict-vertaling zijn getest. EF-migratie `Reasoner227`.
+`RbRules.Domain/Reasoning/*` (`InferenceRuleRegistry`, `DerivedEdgeProvenance`,
+`ContradictionDetector`, `ReasoningConflict`, `OntologyConsistencyAudit`),
+`ReasoningService`.
+
+### ADR-14 — Ontologie als semver-artefact met has-pending-gate; kostengegate model-upgrade (#230, #232)
+
+**Context.** De ontologie moet met elke set meegroeien zonder dat een nieuwe
+set-mining stil het schema verbouwt (faalmodus 2/3) of een model-bump een blinde,
+peperdure N²-re-mine ontketent. **Besluit.** De ontologie is een **semver**-
+geversioneerd first-class artefact. `OntologySchema` (fase 0b, de ENIGE schema-bron)
+wordt tot een ordening-stabiele **structuur-vingerafdruk** gereduceerd; de
+**has-pending-ontology-poort** (`OntologyChangeGate`) toetst die puur tegen een
+checked-in `OntologyBaseline` — het exacte spiegelbeeld van EF's
+`has-pending-model-changes`, geschikt als CI-gate zonder DB/Neo4j/LLM. Een
+schema-wijziging is een **event**, geen instantie: een onbekend keyword/relatietype
+uit een nieuwe set landt eerst als `:Proposed` in de **staging-namespace** (lage
+weging, kan niets harden) en promoveert alléén via deterministisch bewijs
+(`SchemaProposalGate`: ≥N officiële kaarten ÉN een verankerende sectie) → reviewqueue
+→ versioned migratie — nooit op een LLM-vermoeden alleen (rode draad #236). Bump-regels:
+patch = instanties, minor = additief relatietype/subklasse, major = klasse-split/
+disjointness-wijziging. De **kennis-levenscyclus** consolideert de verspreide fase-1/2-
+tombstones tot één herstelbaar `LifecycleEvent`-log (tombstoning i.p.v. hard-delete
+overal); errata deprecieert via SUPERSEDES (ruling blijft bestaan) en invalideert
+afhankelijke feiten/eval-cases. Een **model-upgrade** her-mint (BESLISSING #232)
+uitsluitend de puur-LLM-ongesteunde feiten, **incrementeel met een budgetplafond** op
+het abonnement-token — feiten met menselijke goedkeuring of onafhankelijke steun
+blijven staan. **Gevolg.** Een nieuwe set breekt niets; schema-drift valt in CI om;
+een model-bump kost een begrensde batch i.p.v. de hele graaf. De live Neo4j-projectie
+van de staging-/tombstone-labels, de code-migratie bij promotie en het her-minen zelf
+zijn integratie-follow-ups; de versionering, poorten, levenscyclus-services en
+kostengate zijn puur en getest. EF-migratie `Governance230`.
+`RbRules.Domain/Ontology/OntologyVersion.cs`, `SchemaProposal.cs`,
+`RbRules.Domain/KnowledgeLifecycle.cs`, `ErrataLifecycle.cs`,
+`ModelUpgradeInvalidation.cs`, `OntologyGovernanceService`, `KnowledgeLifecycleService`.
+
 ---
 
 ## 10. Kwaliteitsscenario's
@@ -1457,6 +1928,13 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 - **Neo4j is jong als lees-consument.** Pas sinds #104/#105 wordt de graph
   gelezen (brein-API); drift tussen Postgres en Neo4j wordt gemeten, niet
   vermeden (`KnowledgeGapsService`).
+- **Reasoner-executie nog niet live geverifieerd (#227).** De fase-3-inferentie-
+  regels + contradictie-patronen zijn puur getest, maar de Cypher draaide nog niet
+  tegen een echte Neo4j (geen CI/lokale instance) — zelfde schuld als de fase-2-
+  projectie. Bovendien veronderstellen enkele regels (isa-overerving, property-
+  chains) bron-edges/class-anchor-labels die `GraphSyncService` nog niet
+  materialiseert; die projectie-uitbreiding + een integratietest tegen een echte
+  Neo4j is de openstaande follow-up (`ReasoningService`, `InferenceRuleRegistry`).
 - **Openstaande architectuurrakende issues.** O.a. #122 (periodieke
   zelfverrijking in de scheduler), #121 (echte token-metering), #124/#125
   (reviewqueue-/misvattingen-laag), #127 (publieke databank), #15 (decks:
@@ -1485,12 +1963,29 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | BrainRef | Canonieke tekstuele identiteit (`card:…`, `section:…`) over pgvector + Neo4j + API |
 | Brein / brein-API | Unified vector+graph-kennismodel + de zes koppelvlakken `/api/brain/*` |
 | Agentic ask | Meer-beurten AI-pad dat zelf het brein bevraagt via MCP-tools |
+| GraphRAG | Retrieval waarbij de getypeerde graaf de index is: entity-linking → β(q)-router → Local/Global/Path/Drift-modi → trust-gating → bundeling (fase 4, #228) |
+| β(q)-router | Weegt het graph- vs. community-kanaal: entity-dicht → graph, abstract → community (`BetaRouter`) |
+| AnswerTrace | Immutable auditspoor per /ask: welke subgraaf/paden/trust-gewichten-toen het antwoord droegen (§6/#236) |
+| Mechanic-predicaat | Getypeerde mechanic-eigenschap (triggers_on/prevents/grants/requires_target) op een `CanonicalEntity`; het structurele signaal voor de hypothese-motor (fase 5, #229) |
+| Hypothese-motor | Abductieve kandidaatgeneratie: complementair property-antagonisme ⇒ gerichte interactie-hypothese (O(n·k) i.p.v. blind N²), naar LLM-verificatie (`HypothesisEngine`, fase 5) |
+| Cold-start (model_hypothesized_unruled) | Tier voor een emergente card×card-hypothese die de LLM bevestigt maar die geen officiële/onafhankelijke steun heeft — geparkeerd voor micro-review, nooit stil weg (fase 2/5) |
+| Residueel kanaal | Begrensd, laag-prioriteit embedding-cosine-kanaal voor interacties zonder structurele signatuur (cosine-vloer + top-K + budgetplafond, `ResidualInteractionChannel`, fase 5) |
+| TrustDecision | Expliciete, context-afhankelijke conflict-resolutie-knoop (cross-tier-veto / supersede / alias) met memo — nooit een hard-delete (`TrustConflictResolver`, fase 5) |
 | RRF | Reciprocal Rank Fusion; fuseert vector- en full-text-ranglijsten |
 | bge-m3 | Meertalig embeddingmodel (1024-dim) dat lokaal via Ollama draait |
 | Canonieke printing | De naamloze basis-printing van een kaart; alt-arts zijn varianten (#57) |
 | Set-release-keten | Geautomatiseerde keten die bij een nieuwe set alle afgeleiden bijwerkt |
 | Cadence | Scan-interval per bron |
 | Sidecar | rb-ai: de interne AI-container op het Claude-abonnement |
+| Reïficatie | Een gekwalificeerde relatie als eigen knoop (`Interaction`) i.p.v. kale edge, zodat condities niet verloren gaan (fase 2, #226) |
+| `model_hypothesized_unruled` | Cold-start-trust-tier: emergente card×card-hypothese zonder officiële/community-steun — geparkeerd, niet weggegooid |
+| RejectionTombstone | Grafsteen op een verworpen interactie die stil-heropenen blokkeert; opheffen is een expliciete beheerdersactie (herstelpad) |
+| Reasoner / redeneer-laag | Neo4j-native inferentie-run (fase 3, #227): leidt edges af (isa-closure, property-chain, symmetrie, subproperty-collapse) en detecteert tegenspraken — één engine, Cypher, geen Datalog |
+| Afgeleide edge | Een door de reasoner gematerialiseerde edge (`derived=true`+`derivedByRule`+provenance); nooit bron van waarheid, elke run herberekend |
+| `ReasoningConflict` | Postgres-rij voor een door de reasoner gedetecteerde tegenspraak (claim↔officieel, botsende rulings, disjointness), gerouteerd naar misvattingen/reviewqueue/escalatie |
+| Eval-ring (A/B/C) | De drie CI-ringen van de eval-harness (fase 7, #231): A deterministisch/€0/elke PR, B LLM-judge op de kern-set, C volledig+meta nachtelijk |
+| Baseline-diff-per-klasse | Eval-gate die per (question_class × metric) tegen een vastgelegde baseline diff't (`mean < baselineMean − kσ`) i.p.v. een absolute drempel — vangt sluipende degradatie die het gemiddelde verbergt (fase 7, #231) |
+| CO_OCCURS-signaal | Kruisvalidatie van structureel voorspelde combo-paden (fase 5) met de echte Piltover-deck-meta: co-decks/support/lift + corroboratie-rate (fase 7, #231/#15) |
 
 ---
 

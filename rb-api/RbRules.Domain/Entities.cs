@@ -12,6 +12,18 @@ public static class EmbeddingConfig
     public const string Model = "bge-m3";
 }
 
+/// <summary>Gedeeld embedding-contract (fase 0a, #233): elke embedding-dragende
+/// tabel biedt vector + model + content-hash. Zo kan de provenance-audit één
+/// getypeerde, EF-vertaalbare query per tabel draaien (filter direct op de
+/// entiteit-kolommen) i.p.v. een record-projectie die niet naar SQL vertaalt
+/// (#233-review).</summary>
+public interface IEmbeddable
+{
+    Vector? Embedding { get; }
+    string? EmbeddingModel { get; }
+    string? EmbeddingContentHash { get; }
+}
+
 public class Source
 {
     public required string Id { get; set; }
@@ -183,7 +195,7 @@ public class Conflict
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class Correction
+public class Correction : IEmbeddable
 {
     public long Id { get; set; }
     // card | rule_section | answer (chat-ruling/review-notitie-scopes) |
@@ -201,6 +213,13 @@ public class Correction
     /// bij in-chat-rulings, optioneel voor oudere/andere ontstaanswegen van
     /// een Correction. Sanitize gebeurt bij weergave, niet bij opslag.</summary>
     public string? SourceRef { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): het model waarmee
+    /// <see cref="Embedding"/> is berekend (verwacht bge-m3) en de SHA-256 van de
+    /// exacte geëmbedde tekst (<see cref="EmbeddingProvenance"/>). Beide null
+    /// zolang de rij niet (opnieuw) geëmbed is; de Ring-A-gate telt embeddings
+    /// zonder deze herkomst.</summary>
+    public string? EmbeddingModel { get; set; }
+    public string? EmbeddingContentHash { get; set; }
     // unverified | verified | rejected. "rejected" (#177 hybride poort) is een
     // tombstone: een beheerder-afwijzing van een pending clarify-item die de
     // mining respecteert (zie ClarificationMiningService — een rejected rij op
@@ -237,7 +256,7 @@ public class CardSet
     public DateTimeOffset SyncedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class Card
+public class Card : IEmbeddable
 {
     public required string RiftboundId { get; set; }    // 'ogn-011-298'
     public required string Name { get; set; }
@@ -264,13 +283,16 @@ public class Card
     /// <summary>S1-fundament: kaart-embedding voor semantisch zoeken.</summary>
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }         // provenance (model-wissel-guard)
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de exacte
+    /// geëmbedde tekst — de her-embed-sleutel (tekst gewijzigd ⇒ hash wijzigt).</summary>
+    public string? EmbeddingContentHash { get; set; }
     /// <summary>Alt-art/promo/herdruk-groepering: null = canonieke printing,
     /// anders het RiftboundId van de canonieke kaart met dezelfde naam.</summary>
     public string? VariantOf { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class RuleChunk
+public class RuleChunk : IEmbeddable
 {
     public long Id { get; set; }
     public long DocumentId { get; set; }
@@ -284,6 +306,8 @@ public class RuleChunk
     public required string Text { get; set; }
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
 }
 
 public class RunLog
@@ -348,7 +372,7 @@ public class AskMetric
 /// <summary>Kennisbank-document (docs/KNOWLEDGE.md). Kind "primer" =
 /// gedistilleerd spelbegrip; draft → door de beheerder approved, daarna
 /// doet het doc mee in de /ask-context.</summary>
-public class KnowledgeDoc
+public class KnowledgeDoc : IEmbeddable
 {
     public long Id { get; set; }
     public required string Kind { get; set; }           // primer | (later: claim-samenvatting …)
@@ -360,6 +384,8 @@ public class KnowledgeDoc
     public string Status { get; set; } = "draft";       // draft | approved
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
     /// <summary>Wanneer de relatie-mining (#116) dit doc als anker verwerkte;
     /// null = nog niet. Zelf-invaliderend: een run pakt docs waarvan
     /// relations_mined_at vóór updated_at ligt vanzelf opnieuw op.</summary>
@@ -566,7 +592,7 @@ public class Erratum
 /// hoe een regel/kaart/mechaniek/conventie in de praktijk werkt, met
 /// corroboratie (hoeveel onafhankelijke bronnen hetzelfde zeggen) en een
 /// gewogen trust-score. Interpretatief — officieel (laag 0) wint altijd.</summary>
-public class Claim
+public class Claim : IEmbeddable
 {
     public long Id { get; set; }
     public required string TopicType { get; set; }      // card|mechanic|section|concept
@@ -594,6 +620,8 @@ public class Claim
     public DateTimeOffset? ArchivedAt { get; set; }
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
     public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
 }
