@@ -971,7 +971,11 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
   auditspoor per /ask-antwoord (§6/#236, migratie `AnswerTrace228`). Sinds fase 5
   (#229) `mechanic_predicate` — de getypeerde mechanic-predicaten
   (triggers_on/prevents/grants/requires_target) die de abductieve hypothese-motor
-  voeden (migratie `MechanicPredicates229`).
+  voeden (migratie `MechanicPredicates229`). Sinds fase 6 (#230) `ontology_version`
+  (semver-historie + structuur-vingerafdruk per toegepaste migratie),
+  `schema_proposal` (de `:Proposed`-staging-reviewqueue) en `lifecycle_event` (het
+  geconsolideerde, herstelbare tombstone-/deprecatie-/staleness-log) — migratie
+  `Governance230`.
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
@@ -1476,6 +1480,49 @@ kan rb-api eerder starten dan Postgres klaar is.
   `TrustDecision`. **Al deze logica is PUUR en getest**; de live rb-ai-mining, de
   Neo4j-projectie en de persistentie van de Decision-knopen zijn een bewuste
   integratie-follow-up. Fase 5 bouwt nog géén governance/eval (fase 6/7).
+- **Governance, levenscyclus & schema-evolutie per set** (fase 6, #230 —
+  `RbRules.Domain/Ontology/OntologyVersion.cs`, `SchemaProposal.cs`,
+  `RbRules.Domain/KnowledgeLifecycle.cs`, `ErrataLifecycle.cs`,
+  `ModelUpgradeInvalidation.cs`; `RbRules.Infrastructure/OntologyGovernanceService.cs`,
+  `KnowledgeLifecycleService.cs`). De ontologie is een first-class, **semver**-
+  geversioneerd artefact (`SemVer`, bump-regels: patch = nieuwe instanties,
+  minor = additief relatietype/subklasse, major = klasse-split/disjointness-
+  wijziging). `OntologySnapshot` reduceert `OntologySchema` (fase 0b, de ENIGE
+  schema-bron) tot een ordening-stabiele **structuur-vingerafdruk**; de
+  **has-pending-ontology-poort** (`OntologyChangeGate`) toetst die code-vingerafdruk
+  tegen de checked-in `OntologyBaseline` — puur, €0, geschikt als CI-gate, exact
+  spiegelbeeld van `has-pending-model-changes`. Een nieuwe set die een onbekend
+  keyword/relatietype meebrengt breekt niets: mining zet het als `:Proposed` in de
+  **staging-namespace** (`StagingNamespace`, retrieval-zichtbaar, lage weging, kan
+  niets harden). Promotie vereist deterministisch bewijs (`SchemaProposalGate`: ≥N
+  officiële kaarten ÉN een verankerende Core-Rules/glossary-sectie) → reviewqueue →
+  versioned migratie-Activity (`OntologyVersionRecord`); een LLM-vermoeden hardt
+  nooit alléén een schema-wijziging, en een nieuw gekwalificeerd relatie-voorstel
+  wordt default gereïficeerd (`RelationProposalPolicy`) — een eigen edge-type
+  alleen bij hoge frequentie + retrieval-waarde, via review. De **kennis-
+  levenscyclus** krijgt één canoniek toestand-vocabulaire (`LifecycleState`:
+  active/stale/deprecated/superseded/tombstoned/restored) met bewaakte transities
+  (nooit hard-delete, heropenen alléén via een expliciete `Restored`-stap), een
+  tier-bewuste **staleness-evaluator** (`StalenessEvaluator`, λ per tier: officieel
+  vervalt niet op leeftijd, meta agressief; triggers op leeftijd/model/embedding-
+  upgrade/corroboratie-daling/errata/negatieve-ask-signalen), en een
+  geconsolideerd, herstelbaar **`LifecycleEvent`-log** dat de verspreide fase-1/2-
+  tombstones overkoepelt (`KnowledgeLifecycleService`). De **errata-mid-set-flow**
+  (`ErrataLifecycle`) zet een geërraterde ruling via SUPERSEDES op `superseded`
+  (blijft bestaan voor dossier-historie) en invalideert de afhankelijke feiten/
+  eval-cases naar `stale` (koppeling aan het eval-scaffold #231/#235:
+  forbidden_claim-verval). De **gerichte model-upgrade-invalidatie MÉT kostengate**
+  (`ModelUpgradeInvalidation`, BESLISSING #232) selecteert bij een model-bump
+  uitsluitend de puur-LLM-ongesteunde feiten (geen menselijke goedkeuring, geen
+  onafhankelijke corroboratie — precies de §6-Cypher) en her-mint ze **incrementeel
+  met een budgetplafond** op het abonnement-token; nooit een blinde N²-re-mine.
+  Bitemporaliteit blijft **licht** (kritiek B8): valid-time + transaction-time zitten
+  al op `Assertion`, niet overal. **Al deze logica is PUUR en getest** (`Ontology
+  GovernanceTests`, `KnowledgeLifecycleTests`, `GovernanceServiceTests`; de
+  service-schil op InMemory-DbContext); de live Neo4j-projectie van de
+  `:Proposed`/`:Superseded`/`:Tombstone`-labels, de daadwerkelijke code-migratie bij
+  promotie en het her-minen van de schaduw-mine-batch zijn bewuste integratie-
+  follow-ups. Fase 6 bouwt nog géén eval-industrialisatie (fase 7).
 - **Degradatiepaden** — AI-uitval is een verwacht pad: `RbAiClient` geeft null,
   de aanroeper degradeert (`docs/CONVENTIONS.md`, `AskService`, `RbAiClient`).
   Neo4j-uitval maakt `neighbors`/`path` een nette Problem-response terwijl de
@@ -1743,6 +1790,37 @@ conflict-vertaling zijn getest. EF-migratie `Reasoner227`.
 `RbRules.Domain/Reasoning/*` (`InferenceRuleRegistry`, `DerivedEdgeProvenance`,
 `ContradictionDetector`, `ReasoningConflict`, `OntologyConsistencyAudit`),
 `ReasoningService`.
+
+### ADR-14 — Ontologie als semver-artefact met has-pending-gate; kostengegate model-upgrade (#230, #232)
+
+**Context.** De ontologie moet met elke set meegroeien zonder dat een nieuwe
+set-mining stil het schema verbouwt (faalmodus 2/3) of een model-bump een blinde,
+peperdure N²-re-mine ontketent. **Besluit.** De ontologie is een **semver**-
+geversioneerd first-class artefact. `OntologySchema` (fase 0b, de ENIGE schema-bron)
+wordt tot een ordening-stabiele **structuur-vingerafdruk** gereduceerd; de
+**has-pending-ontology-poort** (`OntologyChangeGate`) toetst die puur tegen een
+checked-in `OntologyBaseline` — het exacte spiegelbeeld van EF's
+`has-pending-model-changes`, geschikt als CI-gate zonder DB/Neo4j/LLM. Een
+schema-wijziging is een **event**, geen instantie: een onbekend keyword/relatietype
+uit een nieuwe set landt eerst als `:Proposed` in de **staging-namespace** (lage
+weging, kan niets harden) en promoveert alléén via deterministisch bewijs
+(`SchemaProposalGate`: ≥N officiële kaarten ÉN een verankerende sectie) → reviewqueue
+→ versioned migratie — nooit op een LLM-vermoeden alleen (rode draad #236). Bump-regels:
+patch = instanties, minor = additief relatietype/subklasse, major = klasse-split/
+disjointness-wijziging. De **kennis-levenscyclus** consolideert de verspreide fase-1/2-
+tombstones tot één herstelbaar `LifecycleEvent`-log (tombstoning i.p.v. hard-delete
+overal); errata deprecieert via SUPERSEDES (ruling blijft bestaan) en invalideert
+afhankelijke feiten/eval-cases. Een **model-upgrade** her-mint (BESLISSING #232)
+uitsluitend de puur-LLM-ongesteunde feiten, **incrementeel met een budgetplafond** op
+het abonnement-token — feiten met menselijke goedkeuring of onafhankelijke steun
+blijven staan. **Gevolg.** Een nieuwe set breekt niets; schema-drift valt in CI om;
+een model-bump kost een begrensde batch i.p.v. de hele graaf. De live Neo4j-projectie
+van de staging-/tombstone-labels, de code-migratie bij promotie en het her-minen zelf
+zijn integratie-follow-ups; de versionering, poorten, levenscyclus-services en
+kostengate zijn puur en getest. EF-migratie `Governance230`.
+`RbRules.Domain/Ontology/OntologyVersion.cs`, `SchemaProposal.cs`,
+`RbRules.Domain/KnowledgeLifecycle.cs`, `ErrataLifecycle.cs`,
+`ModelUpgradeInvalidation.cs`, `OntologyGovernanceService`, `KnowledgeLifecycleService`.
 
 ---
 
