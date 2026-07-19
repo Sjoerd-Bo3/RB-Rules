@@ -966,7 +966,9 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
   HNSW; snake_case; EF-migraties bij opstart (`RbRulesDbContext`, `Migrations/`,
   `Program.cs`). Sinds fase 1 (#225) ook de `pg_trgm`-extensie — voorlopig als
   gedocumenteerd schaal-pad voor het lexicale entity-resolution-signaal (de
-  fase-1-scorer draait in-memory en gate-consistent).
+  fase-1-scorer draait in-memory en gate-consistent). Sinds fase 4 (#228) het
+  immutable `answer_trace` (+ `answer_trace_support`, cascade) — het GraphRAG-
+  auditspoor per /ask-antwoord (§6/#236, migratie `AnswerTrace228`).
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
@@ -1408,6 +1410,39 @@ kan rb-api eerder starten dan Postgres klaar is.
   (`card:…`, `section:sourceId/code`, `claim:…`) over pgvector, Neo4j én
   API-contracten (`BrainRef.cs`). De brein-API (`/api/brain/*`) biedt zes
   koppelvlakken; rb-ai's agentic taak bevraagt ze als MCP-tools.
+- **GraphRAG-retrieval-laag** (fase 4, #228 — `RbRules.Domain/GraphRag/*`). De
+  flat fan-out van `/ask` wordt vervangen door één `RetrievalOrchestrator` die
+  de pure beslislogica orkestreert: `MentionDetector`/`EntityLinker`
+  (gazetteer + fuzzy + embedding-cos + **co-mention-coherentie** als graaf-truc
+  om homoniemen te breken; elke keuze → een `LinkDecision`-provenance,
+  hergebruikt de fase-1-`CanonicalEntity`/aliassen), de **β(q)-router**
+  (`BetaRouter`: `S_final = β·S_graph + (1−β)·S_comm`, `β(q) =
+  sigmoid(w1·entity-dichtheid − w2·abstractie)` — entity-dicht → graph-kanaal,
+  abstract → community-kanaal), de vier retrieval-modi
+  (`ModeSelector` → Local/Global/Path/Drift + directe BanLookup, per §4-tabel),
+  de **trust-gating** (`TrustGate`, beslissing #229: route op "is er officiële
+  dekking?" — zo niet mag een goed-onderbouwde community-claim primair zijn
+  **mét badge**; authority is tie-breaker/labeler, GÉÉN multiplicatieve
+  annihilator; de echo-kamer-discount zit in `Corroboration.NoisyOr`, dedup op
+  idee-niveau), de trust-vector (`Trust.cs`: authority·verification·
+  corroboration·recency, λ-verval per tier), de **pad-scoring**
+  (`PathScoring`/`PathCitations`: k-shortest op `1/(trust·confidence)` — het
+  stevigst onderbouwde pad, niet het kortste; het pad *wordt* de citatie met
+  `[[card:…]]`/`[[rule:…]]`/`[[interaction:…]]`-widget-markers; `NoPath` →
+  eerlijk geen interactie i.p.v. hallucineren), de **context-bundeling**
+  (`ContextBundler`: trust-geordend, MMR per laag, harde token-afkap van
+  onderaf — community/meta vallen eerst weg — met machine-leesbare labels
+  `[OFFICIEEL]`/`[COMMUNITY trust=… corrob=…]`), en de **begrotings-poort**
+  (`RetrievalGuard`, beslissing #232: HARD latency-budget → terugval naar
+  Local-only; k-shortest alléén op een warme, vooraf-geprojecteerde GDS-named-
+  graph). Elk antwoord produceert een immutable `AnswerTrace` (§6/#236) die
+  vastlegt welke subgraaf/paden/edges/trust-gewichten-toen het antwoord droegen
+  ("verantwoord dit antwoord"). **Al deze logica is PUUR en getest zonder
+  Neo4j/pgvector**; de daadwerkelijke Neo4j/GDS/live-pgvector-queries lopen via
+  poorten (`IGazetteerSource`, `INodeContextSimilarity`, `INodeAdjacency`,
+  `IGraphRetriever` in `RetrievalContracts.cs`) waarvan de Infrastructure-
+  adapters een bewuste **integratie-follow-up** zijn (Neo4j/GDS draaien niet in
+  CI). Fase 4 bouwt nog géén hypothese-motor (fase 5).
 - **Degradatiepaden** — AI-uitval is een verwacht pad: `RbAiClient` geeft null,
   de aanroeper degradeert (`docs/CONVENTIONS.md`, `AskService`, `RbAiClient`).
   Neo4j-uitval maakt `neighbors`/`path` een nette Problem-response terwijl de
@@ -1749,6 +1784,9 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | BrainRef | Canonieke tekstuele identiteit (`card:…`, `section:…`) over pgvector + Neo4j + API |
 | Brein / brein-API | Unified vector+graph-kennismodel + de zes koppelvlakken `/api/brain/*` |
 | Agentic ask | Meer-beurten AI-pad dat zelf het brein bevraagt via MCP-tools |
+| GraphRAG | Retrieval waarbij de getypeerde graaf de index is: entity-linking → β(q)-router → Local/Global/Path/Drift-modi → trust-gating → bundeling (fase 4, #228) |
+| β(q)-router | Weegt het graph- vs. community-kanaal: entity-dicht → graph, abstract → community (`BetaRouter`) |
+| AnswerTrace | Immutable auditspoor per /ask: welke subgraaf/paden/trust-gewichten-toen het antwoord droegen (§6/#236) |
 | RRF | Reciprocal Rank Fusion; fuseert vector- en full-text-ranglijsten |
 | bge-m3 | Meertalig embeddingmodel (1024-dim) dat lokaal via Ollama draait |
 | Canonieke printing | De naamloze basis-printing van een kaart; alt-arts zijn varianten (#57) |
