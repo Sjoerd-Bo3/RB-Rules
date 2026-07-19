@@ -7,7 +7,8 @@ namespace RbRules.Infrastructure;
 public record GraphSyncResult(
     int Cards, int Domains, int Tags, int Mechanics,
     int Sections, int Concepts, int Claims, int Sources, int Errata, int Changes,
-    int Relations, int Rulings, int MiningRuns = 0, int Assertions = 0);
+    int Relations, int Rulings, int MiningRuns = 0, int Assertions = 0,
+    int Interactions = 0, int Conditions = 0);
 
 /// <summary>Neo4j-sync met batched UNWIND (audit-fix: de PoP deed ~4 queries
 /// per kaart; dit zijn er een handvol totaal). Tag ≠ Mechanic: facties/tribes
@@ -129,6 +130,16 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
                 a.Model, a.EmbeddingModel, a.EmbeddingDim, a.Verifier, a.Verdict, a.AssertedAt,
             })
             .ToListAsync(ct);
+
+        // Reïficatie & gekwalificeerde relaties (fase 2, #226): de gereïficeerde
+        // interacties (SoT in Postgres) + hun condities → :Interaction/:Condition
+        // + de gedenormaliseerde RELATES_TO-qualifier-cache. Rejected interacties
+        // leven alleen als tombstone, niet als knoop (InteractionProjection).
+        var interactions = await db.Interactions.AsNoTracking()
+            .Include(x => x.Conditions)
+            .Where(x => x.Status != InteractionStatus.Rejected)
+            .ToListAsync(ct);
+        var interactionRows = InteractionProjection.BuildProjectionRows(interactions);
 
         // Dynamische relaties (#116): LLM-relaties gaan nooit rechtstreeks de
         // graph in — hier projecteert de rebuild wat de reviewpoort doorlaat.
@@ -481,7 +492,7 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             """
             MATCH (n) WHERE n:RuleSection OR n:Concept OR n:Claim
               OR n:Source OR n:Erratum OR n:Change OR n:Ruling
-              OR n:MiningRun OR n:Assertion
+              OR n:MiningRun OR n:Assertion OR n:Interaction OR n:Condition
             DETACH DELETE n
             """);
 
@@ -614,6 +625,57 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             """,
             new Dictionary<string, object> { ["rows"] = relationRows });
 
+        // Reïficatie & gekwalificeerde relaties (fase 2, #226): eerst de
+        // :Interaction- en :Condition-knopen (verwijderd in de DETACH DELETE
+        // hierboven, dus CREATE), dan de HAS_ROLE-/REQUIRES_CONDITION-/
+        // GOVERNED_BY-edges (fillers/secties bestaan al) en tot slot de
+        // gedenormaliseerde RELATES_TO-cache. De cache is nooit de bron — ze is
+        // volledig herbouwbaar uit deze knopen (InteractionProjection).
+        await RunRowsAsync(tx,
+            """
+            CREATE (ix:Interaction:Concept {ref: row.ref, kind: row.kind,
+                                            status: row.status, statusReason: row.statusReason})
+            """,
+            [.. interactionRows.Nodes]);
+        await RunRowsAsync(tx,
+            "CREATE (c:Condition {ref: row.ref, onKind: row.onKind, subjectRole: row.subjectRole, value: row.value, operator: row.operator})",
+            [.. interactionRows.ConditionNodes]);
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (ix:Interaction {ref: row.interaction})
+            MATCH (c:Condition {ref: row.ref})
+            MERGE (ix)-[:REQUIRES_CONDITION]->(c)
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.ConditionNodes });
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (ix:Interaction {ref: row.interaction})
+            MATCH (f {ref: row.filler})
+            MERGE (ix)-[r:HAS_ROLE {role: row.role}]->(f)
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.RoleEdges });
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (ix:Interaction {ref: row.interaction})
+            MATCH (s:RuleSection {ref: row.section})
+            MERGE (ix)-[:GOVERNED_BY]->(s)
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.GovernedByEdges });
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (a {ref: row.from})
+            MATCH (b {ref: row.to})
+            MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)
+              SET r.window = row.window, r.actorStatus = row.actorStatus,
+                  r.costDelta = row.costDelta, r.tier = row.tier,
+                  r.reifiedOnly = row.reifiedOnly, r.source = 'interaction'
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.RelatesToCache });
+
         await tx.CommitAsync();
 
         return new(
@@ -630,7 +692,9 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             relationRows.Count,
             rulingRows.Count,
             miningRunRows.Count,
-            assertionRows.Count);
+            assertionRows.Count,
+            interactionRows.Nodes.Count,
+            interactionRows.ConditionNodes.Count);
     }
 
     private static async Task RunPairsAsync(

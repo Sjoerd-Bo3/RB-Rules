@@ -49,6 +49,11 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<CanonicalEntity> CanonicalEntities => Set<CanonicalEntity>();
     public DbSet<MergeDecision> MergeDecisions => Set<MergeDecision>();
     public DbSet<MergeCandidate> MergeCandidates => Set<MergeCandidate>();
+    // Reïficatie & gekwalificeerde relaties (fase 2, #226).
+    public DbSet<Interaction> Interactions => Set<Interaction>();
+    public DbSet<InteractionCondition> InteractionConditions => Set<InteractionCondition>();
+    public DbSet<RejectionTombstone> RejectionTombstones => Set<RejectionTombstone>();
+    public DbSet<InteractionDecision> InteractionDecisions => Set<InteractionDecision>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -435,6 +440,48 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
                 .OnDelete(DeleteBehavior.Cascade);
             e.HasOne<CanonicalEntity>().WithMany().HasForeignKey(x => x.EntityBId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Reïficatie & gekwalificeerde relaties (fase 2, #226): de gereïficeerde
+        // interactie is de canonieke opslagvorm (SoT in Postgres). De Neo4j-
+        // projectie (:Interaction/:Condition + de RELATES_TO-cache) is idempotent
+        // herbouwbaar uit deze rijen — de cache is nooit de bron.
+        b.Entity<Interaction>(e =>
+        {
+            e.ToTable("interaction");
+            e.HasKey(x => x.Id);
+            // Eén gerichte (agent, patient, kind)-interactie: de service dedupet
+            // genormaliseerd, de index borgt het hard tegen dubbele reïficaties.
+            e.HasIndex(x => new { x.AgentRef, x.PatientRef, x.Kind }).IsUnique();
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => x.AgentRef);
+            e.HasIndex(x => x.PatientRef);
+        });
+
+        b.Entity<InteractionCondition>(e =>
+        {
+            e.ToTable("interaction_condition");
+            e.HasKey(x => x.Id);
+            // Condities verdwijnen met hun interactie (ze bestaan er niet los van).
+            e.HasOne(x => x.Interaction).WithMany(x => x.Conditions)
+                .HasForeignKey(x => x.InteractionId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.InteractionId);
+        });
+
+        b.Entity<RejectionTombstone>(e =>
+        {
+            e.ToTable("rejection_tombstone");
+            e.HasKey(x => x.Id);
+            // De poort raadpleegt de dedupe-sleutel vóór ze een kandidaat overweegt.
+            e.HasIndex(x => x.DedupeKey);
+            e.HasIndex(x => x.Lifted);
+        });
+
+        b.Entity<InteractionDecision>(e =>
+        {
+            e.ToTable("interaction_decision");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.InteractionId);
         });
     }
 

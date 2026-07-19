@@ -114,4 +114,7 @@ public static class FactKinds
     public const string CardInteraction = "card_interaction";
     public const string Mechanic = "mechanic";
     public const string Embedding = "embedding";
+    /// <summary>Gereïficeerde, gekwalificeerde interactie (fase 2, #226) — subject
+    /// <c>interaction:{id}</c>.</summary>
+    public const string Interaction = "interaction";
 }
