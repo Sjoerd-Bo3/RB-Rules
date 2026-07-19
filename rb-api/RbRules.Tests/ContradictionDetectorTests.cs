@@ -149,4 +149,52 @@ public class ContradictionDetectorTests
         // vervulbaar, geen dangling domain/range. Consistent ⇒ geen bevindingen.
         Assert.Empty(OntologyConsistencyAudit.Run());
     }
+
+    // De drie detectie-takken tegen een VERZONNEN inconsistent schema (#227-review,
+    // finding #3): tegen de statische, per-constructie-consistente OntologySchema
+    // vuurt geen tak ooit — daarom voedt elke test hieronder de pure check expliciet
+    // een inconsistente invoer, zodat de tak zelf bewezen kan afgaan.
+
+    [Fact]
+    public void OntologyConsistencyAudit_VangtEenSubclassCyclus()
+    {
+        // Ancestors is strikt-exclusief van zichzelf, dus tegen een geldige DAG is
+        // deze tak dood; injecteer een voorouder-verzameling die het type zelf bevat.
+        var findings = OntologyConsistencyAudit.CheckAcyclicHierarchy(
+            [EntityType.Unit],
+            _ => [EntityType.Unit]);                 // Unit ∈ voorouders(Unit) → cyclus
+
+        var f = Assert.Single(findings);
+        Assert.Equal("subclass-cycle", f.Code);
+    }
+
+    [Fact]
+    public void OntologyConsistencyAudit_VangtEenOnvervulbareKlasse()
+    {
+        // Een type dat subklasse is van BEIDE kanten van een disjunct paar.
+        var findings = OntologyConsistencyAudit.CheckDisjointnessSatisfiable(
+            [EntityType.Unit],
+            [(EntityType.Object, EntityType.Spell)],
+            (_, _) => true);                         // Unit ⊑ zowel Object als Spell
+
+        var f = Assert.Single(findings);
+        Assert.Equal("unsatisfiable-class", f.Code);
+    }
+
+    [Fact]
+    public void OntologyConsistencyAudit_VangtDanglingDomainEnRange()
+    {
+        // Een relatie met een niet-geregistreerd domein- én range-type.
+        var rel = new OntologyRelation(
+            RelationType.RelatesTo, "X_REL",
+            Domain: [EntityType.Unit], Range: [EntityType.Spell],
+            MinCardinality: 0, MaxCardinality: null,
+            Traits: RelationTraits.None, Parameters: []);
+
+        var findings = OntologyConsistencyAudit.CheckRelationDomainsRegistered(
+            [rel], _ => false);                      // niets geregistreerd
+
+        Assert.Contains(findings, x => x.Code == "dangling-domain");
+        Assert.Contains(findings, x => x.Code == "dangling-range");
+    }
 }

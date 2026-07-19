@@ -8,8 +8,6 @@ namespace RbRules.Domain.Reasoning;
 /// edge draagt zijn familie + regel-id (inzicht #236).</summary>
 public enum InferenceFamily
 {
-    /// <summary>Overerving van governance over de type-lattice (subclass-overerving).</summary>
-    IsaClosure,
     /// <summary>Property-chain: samenstelling van ontologie-relaties die in een
     /// GOVERNED_BY naar een RuleSection uitkomt.</summary>
     PropertyChain,
@@ -63,76 +61,37 @@ public static class InferenceRuleRegistry
 
     public static bool IsSafeRuleId(string id) => id is not null && SafeRuleId.IsMatch(id);
 
-    /// <summary>Alle regels, in een stabiele familie-volgorde (isa → property-chain →
+    /// <summary>Alle regels, in een stabiele familie-volgorde (property-chain →
     /// symmetrie → subproperty). Volgorde is deterministisch zodat een reasoner-run
     /// reproduceerbaar is.</summary>
     public static IReadOnlyList<InferenceRule> All =>
     [
-        .. IsaClosureRules(),
         .. PropertyChainRules(),
         .. SymmetricClosureRules(),
         .. SubpropertyCollapseRules(OntologySchema.RelatesToKindSubProperties),
     ];
 
-    // ── isa-closure (subclass-overerving van governance) ─────────────────────
-
-    /// <summary>De subclass-overerving van GOVERNED_BY over de type-lattice: een
-    /// RuleSection die een superklasse bestuurt, bestuurt via overerving elke
-    /// (multi-label-)subklasse-instantie. §3.4 "an exhausted Object cannot be
-    /// committed…" ⇒ afgeleid GOVERNED_BY voor elke Unit/Legend/Gear (⊑ Object) —
-    /// maar disjoint(spell,object) laat Spell het niet erven (die krijgt het label
-    /// nooit). De (sub, super)-paren komen uit <see cref="OntologySchema.Ancestors"/>;
-    /// de super-kant is beperkt tot de bestuurbare spel-entiteit-klassen
-    /// (Object/Concept/Card/Interaction-tak) — een RuleSection erft niet "naar
-    /// beneden" over de normatieve of provenance-tak.</summary>
-    public static IReadOnlyList<InferenceRule> IsaClosureRules()
-    {
-        var rows = IsaPairs();
-        if (rows.Count == 0) return [];
-        const string id = "isa-closure";
-        var cypher = $$"""
-            UNWIND $rows AS pair
-            MATCH (super) WHERE pair.super IN labels(super)
-            MATCH (super)-[:{{OntologySchema.Relations[RelationType.GovernedBy].EdgeName}}]->(s:RuleSection)
-            MATCH (n) WHERE pair.sub IN labels(n)
-            MERGE (n)-[g:{{OntologySchema.Relations[RelationType.GovernedBy].EdgeName}}]->(s)
-            {{DerivedEdgeProvenance.SetClause("g", id)}}
-            """;
-        return
-        [
-            new(id, "Isa-closure (GOVERNED_BY-overerving)", InferenceFamily.IsaClosure,
-                OntologySchema.Relations[RelationType.GovernedBy].EdgeName,
-                "Erft GOVERNED_BY van een superklasse naar elke subklasse-instantie over de type-lattice.",
-                cypher, rows),
-        ];
-    }
-
-    /// <summary>De (sub-label, super-label)-paren voor isa-overerving, puur uit de
-    /// ontologie: voor elk type en elke STRIKTE voorouder die een bestuurbare
-    /// spel-entiteit-klasse is (⊑ Object/Concept/Card/Interaction), behalve de
-    /// wortel Thing. Bv. Unit → {Card, Object}, Mechanic → {Concept}. Dictionaries-
-    /// only (batched UNWIND).</summary>
-    public static List<Dictionary<string, object?>> IsaPairs()
-    {
-        EntityType[] governableRoots =
-            [EntityType.Object, EntityType.Concept, EntityType.Card, EntityType.Interaction];
-        var rows = new List<Dictionary<string, object?>>();
-        foreach (var type in Enum.GetValues<EntityType>())
-        {
-            if (!OntologySchema.Classes.ContainsKey(type)) continue;
-            foreach (var super in OntologySchema.Ancestors(type))
-            {
-                if (super == EntityType.Thing) continue;                 // wortel bestuurt niets zinnigs
-                if (!governableRoots.Any(root => OntologySchema.IsA(super, root))) continue;
-                rows.Add(new() { ["sub"] = type.ToString(), ["super"] = super.ToString() });
-            }
-        }
-        // Deterministische volgorde (sub, super) — reproduceerbare run.
-        return rows
-            .OrderBy(r => (string)r["sub"]!, StringComparer.Ordinal)
-            .ThenBy(r => (string)r["super"]!, StringComparer.Ordinal)
-            .ToList();
-    }
+    // ── isa-closure: bewust GÉÉN materialisatie-regel ────────────────────────
+    //
+    // #227-review (finding #1/#2): een eerdere isa-closure-regel probeerde
+    // GOVERNED_BY van een superklasse naar elke subklasse-instantie te erven, maar
+    // deed dat met twee ONGEJOINDE MATCH-clausules (een 'super'-knoop én een losse
+    // 'n'-knoop, zonder relatie ertussen) → een cartesisch product: élke
+    // co-getypeerde instantie kreeg een afgeleide GOVERNED_BY naar élke sectie die
+    // een wíllekeurige superklasse-instantie bestuurde. Concreet op de live-graaf:
+    // Interaction-knopen dragen :Concept (GraphSyncService) én de enige basis-
+    // GOVERNED_BY-edges; het paar (Mechanic, Concept) liet dáárdoor élke Mechanic
+    // 'geregeerd' worden door de sectie van een toevallig co-gelabelde Interaction.
+    // Een gedeeld label is geen subklasse-relatie TÚSSEN instanties.
+    //
+    // Er is geen sluitende instance-level materialisatie voor deze overerving: in
+    // het multi-label model (§2.1, :Object:Card:Unit) draagt een subklasse-
+    // instantie de superklasse-labels al, dus subclass-polymorfie is een
+    // QUERY-TIME zaak (MATCH (:Object) matcht Units) — materialiseren voegt niets
+    // toe, en een correcte same-node-join zou een no-op zijn die bovendien de
+    // provenance van een bestaande basis-edge zou herschrijven. Governance-
+    // overerving die WÉL nieuwe, verbonden kennis oplevert loopt uitsluitend via
+    // de property-chain-regels (Card → … → GOVERNED_BY) hieronder.
 
     // ── property-chain → GOVERNED_BY ─────────────────────────────────────────
 

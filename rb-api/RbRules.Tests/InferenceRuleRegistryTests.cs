@@ -10,36 +10,26 @@ namespace RbRules.Tests;
 /// live-executie is integratie-follow-up.</summary>
 public class InferenceRuleRegistryTests
 {
-    // ── isa-closure (subclass-overerving) ────────────────────────────────────
+    // ── isa-closure: bewust géén materialisatie-regel (regressie #227-review) ─
 
     [Fact]
-    public void IsaPairs_ErftGovernanceVanBestuurbareVoorouders()
+    public void GovernedByAfleiding_MaterialiseertGeenCartesischCrossProduct()
     {
-        var pairs = InferenceRuleRegistry.IsaPairs()
-            .Select(p => ((string)p["sub"]!, (string)p["super"]!))
-            .ToHashSet();
+        // Finding #1/#2: de verwijderde isa-closure-regel koppelde via twee
+        // ONGEJOINDE MATCH-clausules ('super'-knoop los van 'n'-knoop) élke
+        // co-getypeerde instantie aan ELKE sectie die een willekeurige
+        // superklasse-instantie bestuurde. Pin: elke GOVERNED_BY-afleidende regel
+        // vertrekt vanaf één anker langs een VERBONDEN pad — nooit meer een losse
+        // tweede knoop-match op label-lidmaatschap (de cross-product-tell).
+        var governedByRules = InferenceRuleRegistry.All
+            .Where(r => r.DerivedEdge == "GOVERNED_BY")
+            .ToList();
 
-        // Unit ⊑ Card én ⊑ Object → erft van beide bestuurbare superklassen.
-        Assert.Contains(("Unit", "Object"), pairs);
-        Assert.Contains(("Unit", "Card"), pairs);
-        // Mechanic ⊑ Concept.
-        Assert.Contains(("Mechanic", "Concept"), pairs);
-    }
-
-    [Fact]
-    public void IsaPairs_ErftNooitVanDeWortelThing()
-    {
-        Assert.DoesNotContain(InferenceRuleRegistry.IsaPairs(),
-            p => (string)p["super"]! == nameof(EntityType.Thing));
-    }
-
-    [Fact]
-    public void IsaPairs_ZijnAllemaalGeldigeGeregistreerdeTypen()
-    {
-        foreach (var p in InferenceRuleRegistry.IsaPairs())
+        Assert.NotEmpty(governedByRules);           // de property-chain-afleiding blijft
+        foreach (var rule in governedByRules)
         {
-            Assert.NotNull(OntologySchema.ParseEntityType((string)p["sub"]!));
-            Assert.NotNull(OntologySchema.ParseEntityType((string)p["super"]!));
+            Assert.Contains("MATCH (c:Card)", rule.Cypher);
+            Assert.DoesNotContain("IN labels(", rule.Cypher);
         }
     }
 
@@ -153,6 +143,26 @@ public class InferenceRuleRegistryTests
         Assert.All(ids, id => Assert.True(InferenceRuleRegistry.IsSafeRuleId(id),
             $"regel-id '{id}' is niet Cypher-veilig"));
     }
+
+    [Theory]
+    [InlineData("isa-closure")]                             // huis-vorm: kleine letters + '-'
+    [InlineData("pc:has_keyword-invokes-governed_by")]      // ':' '_' '-' zijn veilig
+    public void IsSafeRuleId_AccepteertHetVeiligeAlfabet(string id) =>
+        Assert.True(InferenceRuleRegistry.IsSafeRuleId(id));
+
+    [Theory]
+    [InlineData("bad'; MATCH (x) DETACH DELETE x //")]      // Cypher-injectie via een quote
+    [InlineData("has space")]                               // spaties zijn niet veilig
+    [InlineData("UpperCase")]                               // hoofdletters buiten het alfabet
+    [InlineData("komma,injectie")]                          // komma buiten het alfabet
+    [InlineData("regel$met#tekens")]                        // overige leestekens
+    [InlineData("")]                                        // leeg matcht '+' niet
+    public void IsSafeRuleId_WeigertOnveiligeIds(string id) =>
+        Assert.False(InferenceRuleRegistry.IsSafeRuleId(id));
+
+    [Fact]
+    public void IsSafeRuleId_WeigertNull() =>
+        Assert.False(InferenceRuleRegistry.IsSafeRuleId(null!));
 
     [Fact]
     public void All_ElkeAfgeleideEdgeIsGetagdMetRegelIdEnProvenance()

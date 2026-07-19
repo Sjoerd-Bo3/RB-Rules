@@ -19,53 +19,73 @@ public sealed record OntologyAuditFinding(string Code, string Message);
 public static class OntologyConsistencyAudit
 {
     /// <summary>Draait de volledige zelf-toets tegen <see cref="OntologySchema"/>.
-    /// Lege lijst = consistent.</summary>
+    /// Lege lijst = consistent. De drie deel-checks zijn PUUR (nemen hun invoer als
+    /// parameter) zodat elke detectie-tak los toetsbaar is met een verzonnen
+    /// inconsistent schema — de statische <see cref="OntologySchema"/> is per
+    /// constructie consistent, dus alleen daartegen zou geen tak ooit vuren
+    /// (#227-review, finding #3).</summary>
     public static IReadOnlyList<OntologyAuditFinding> Run()
     {
         var findings = new List<OntologyAuditFinding>();
-        CheckAcyclicHierarchy(findings);
-        CheckDisjointnessSatisfiable(findings);
-        CheckRelationDomainsRegistered(findings);
+        findings.AddRange(CheckAcyclicHierarchy(OntologySchema.Classes.Keys, OntologySchema.Ancestors));
+        findings.AddRange(CheckDisjointnessSatisfiable(
+            OntologySchema.Classes.Keys, OntologySchema.DisjointPairs, OntologySchema.IsA));
+        findings.AddRange(CheckRelationDomainsRegistered(
+            OntologySchema.Relations.Values, OntologySchema.Classes.ContainsKey));
         return findings;
     }
 
     /// <summary>De hiërarchie mag geen cyclus bevatten: geen type is zijn eigen
     /// (transitieve) voorouder.</summary>
-    private static void CheckAcyclicHierarchy(List<OntologyAuditFinding> findings)
+    public static IReadOnlyList<OntologyAuditFinding> CheckAcyclicHierarchy(
+        IEnumerable<EntityType> types,
+        Func<EntityType, IReadOnlyCollection<EntityType>> ancestors)
     {
-        foreach (var type in OntologySchema.Classes.Keys)
-            if (OntologySchema.Ancestors(type).Contains(type))
+        var findings = new List<OntologyAuditFinding>();
+        foreach (var type in types)
+            if (ancestors(type).Contains(type))
                 findings.Add(new("subclass-cycle",
                     $"{type} is (transitief) zijn eigen voorouder — de hiërarchie is niet acyclisch."));
+        return findings;
     }
 
     /// <summary>Elke disjointness-as moet vervulbaar zijn: geen enkel type mag een
     /// (voorouder-)subklasse zijn van BEIDE kanten van een gedeclareerd disjunct
     /// paar (dat zou de klasse onvervulbaar/leeg maken — het Card⊑Object-scenario
     /// dat de ontologie juist vermijdt).</summary>
-    private static void CheckDisjointnessSatisfiable(List<OntologyAuditFinding> findings)
+    public static IReadOnlyList<OntologyAuditFinding> CheckDisjointnessSatisfiable(
+        IEnumerable<EntityType> types,
+        IEnumerable<(EntityType A, EntityType B)> disjointPairs,
+        Func<EntityType, EntityType, bool> isA)
     {
-        foreach (var (a, b) in OntologySchema.DisjointPairs)
-            foreach (var type in OntologySchema.Classes.Keys)
-                if (OntologySchema.IsA(type, a) && OntologySchema.IsA(type, b))
+        var findings = new List<OntologyAuditFinding>();
+        var typeList = types as IReadOnlyList<EntityType> ?? types.ToList();
+        foreach (var (a, b) in disjointPairs)
+            foreach (var type in typeList)
+                if (isA(type, a) && isA(type, b))
                     findings.Add(new("unsatisfiable-class",
                         $"{type} is subklasse van zowel {a} als {b}, maar die zijn disjunct — onvervulbare klasse."));
+        return findings;
     }
 
     /// <summary>Elk domain-/range-type van elke relatie moet een geregistreerde
     /// klasse zijn (geen dangling type-verwijzing in het schema).</summary>
-    private static void CheckRelationDomainsRegistered(List<OntologyAuditFinding> findings)
+    public static IReadOnlyList<OntologyAuditFinding> CheckRelationDomainsRegistered(
+        IEnumerable<OntologyRelation> relations,
+        Func<EntityType, bool> isRegistered)
     {
-        foreach (var rel in OntologySchema.Relations.Values)
+        var findings = new List<OntologyAuditFinding>();
+        foreach (var rel in relations)
         {
             foreach (var d in rel.Domain)
-                if (!OntologySchema.Classes.ContainsKey(d))
+                if (!isRegistered(d))
                     findings.Add(new("dangling-domain",
                         $"{rel.EdgeName} verwijst naar een niet-geregistreerd domein-type {d}."));
             foreach (var r in rel.Range)
-                if (!OntologySchema.Classes.ContainsKey(r))
+                if (!isRegistered(r))
                     findings.Add(new("dangling-range",
                         $"{rel.EdgeName} verwijst naar een niet-geregistreerd range-type {r}."));
         }
+        return findings;
     }
 }
