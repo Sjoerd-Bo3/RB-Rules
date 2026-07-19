@@ -56,6 +56,9 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<InteractionCondition> InteractionConditions => Set<InteractionCondition>();
     public DbSet<RejectionTombstone> RejectionTombstones => Set<RejectionTombstone>();
     public DbSet<InteractionDecision> InteractionDecisions => Set<InteractionDecision>();
+    // Getypeerde mechanic-predicaten (fase 5, #229): het structurele signaal voor
+    // de abductieve hypothese-motor.
+    public DbSet<MechanicPredicateAssertion> MechanicPredicates => Set<MechanicPredicateAssertion>();
     // Redeneer-laag (fase 3, #227): door de reasoner gedetecteerde tegenspraken.
     public DbSet<ReasoningConflict> ReasoningConflicts => Set<ReasoningConflict>();
 
@@ -490,6 +493,26 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.ToTable("interaction_decision");
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.InteractionId);
+        });
+
+        // Getypeerde mechanic-predicaten (fase 5, #229, §5): het structurele signaal
+        // (triggers_on/prevents/grants/requires_target) waarop de abductieve hypothese-
+        // motor redeneert. Postgres = SoT; gemined+gereviewd, elk predicaat draagt eigen
+        // provenance en review-status (afzonderlijk weerlegbaar).
+        b.Entity<MechanicPredicateAssertion>(e =>
+        {
+            e.ToTable("mechanic_predicate");
+            e.HasKey(x => x.Id);
+            // Eén (subject, predicaat, object) — de service dedupet genormaliseerd,
+            // de unieke index borgt het hard tegen dubbele predicaten.
+            e.HasIndex(x => new { x.SubjectEntityId, x.Predicate, x.ObjectToken }).IsUnique();
+            e.HasIndex(x => x.Status);
+            // De hypothese-motor leest de predicaten van een entiteit op.
+            e.HasIndex(x => x.SubjectEntityId);
+            // Predicaat verdwijnt met zijn canonieke entiteit (het bestaat er niet los
+            // van); een merge behoudt de entiteit als tombstone, dus geen wees-predicaten.
+            e.HasOne(x => x.SubjectEntity).WithMany().HasForeignKey(x => x.SubjectEntityId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // Redeneer-laag (fase 3, #227, §5): door de reasoner gedetecteerde
