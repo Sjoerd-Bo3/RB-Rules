@@ -54,6 +54,16 @@ public static class JobCatalog
             new("rules", RulesAsync),
             new("bans", BansAsync),
             new("graph", GraphAsync),
+            // Redeneer-laag (#227, §5): Neo4j-native inferentie (afgeleide edges)
+            // + bounded contradictie-detectie (→ misvattingen/reviewqueue). Loopt
+            // logisch ná "graph" (de projectie moet er zijn); bewust GEEN stap in
+            // de "alles"-keten — de reasoner is Neo4j-afhankelijk en draait als
+            // expliciete beheerdersactie (zelfde lijn als "graph" die apart staat).
+            new("reason", ReasonAsync),
+            // OWL2-RL-nachtaudit (#227) — SKELETON per beslissing: een pure
+            // zelf-toets van de afgedwongen schema-bron (OntologySchema), geen
+            // OWL-runtime. Optioneel, nooit in "alles".
+            new("owlaudit", OwlAuditAsync),
             new("primer", PrimerAsync),
             new("interactions", InteractionsAsync),
             // Bronnenjacht (#63, stap 2): rb-ai doorzoekt het web (task
@@ -273,6 +283,27 @@ public static class JobCatalog
             + $"{r.Sections} secties, {r.Concepts} concepten, {r.Claims} claims, "
             + $"{r.Sources} bronnen, {r.Errata} errata, {r.Changes} changes, "
             + $"{r.Relations} relaties, {r.MiningRuns} runs, {r.Assertions} assertions");
+    }
+
+    private static async Task<JobOutcome> ReasonAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        report("monotone inferentie draaien + bounded contradictie-detectie");
+        var r = await sp.GetRequiredService<ReasoningService>().RunAsync(progress: report, ct: ct);
+        return new(r.Summary);
+    }
+
+    private static Task<JobOutcome> OwlAuditAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        // Pure zelf-toets tegen de afgedwongen schema-bron — geen IO, geen Neo4j.
+        report("ontologie-consistentie toetsen (OntologySchema)");
+        var findings = Domain.Reasoning.OntologyConsistencyAudit.Run();
+        var detail = findings.Count == 0
+            ? "ontologie consistent (geen bevindingen)"
+            : $"{findings.Count} bevinding(en): " +
+              string.Join("; ", findings.Select(f => $"{f.Code} — {f.Message}"));
+        return Task.FromResult(new JobOutcome(detail));
     }
 
     private static async Task<JobOutcome> PrimerAsync(

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RbRules.Domain;
+using RbRules.Domain.Reasoning;
 
 namespace RbRules.Infrastructure;
 
@@ -54,6 +55,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<InteractionCondition> InteractionConditions => Set<InteractionCondition>();
     public DbSet<RejectionTombstone> RejectionTombstones => Set<RejectionTombstone>();
     public DbSet<InteractionDecision> InteractionDecisions => Set<InteractionDecision>();
+    // Redeneer-laag (fase 3, #227): door de reasoner gedetecteerde tegenspraken.
+    public DbSet<ReasoningConflict> ReasoningConflicts => Set<ReasoningConflict>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -482,6 +485,24 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.ToTable("interaction_decision");
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.InteractionId);
+        });
+
+        // Redeneer-laag (fase 3, #227, §5): door de reasoner gedetecteerde
+        // tegenspraken. Postgres = SoT ook hier — de detectie draait tegen de
+        // Neo4j-projectie, maar het resultaat leeft (herbouwbaar) in Postgres.
+        // Bewust een eigen tabel naast bron-niveau "conflict" (die draagt FK's
+        // naar source): een redeneer-tegenspraak verwijst naar graf-knopen via
+        // BrainRefs, niet naar bron-rijen.
+        b.Entity<ReasoningConflict>(e =>
+        {
+            e.ToTable("reasoning_conflict");
+            e.HasKey(x => x.Id);
+            // Idempotentie over runs heen: dezelfde tegenspraak opnieuw detecteren
+            // maakt geen tweede rij (de service dedupet, de index borgt het hard).
+            e.HasIndex(x => x.DedupeKey).IsUnique();
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => x.Channel);
+            e.HasIndex(x => x.Kind);
         });
     }
 
