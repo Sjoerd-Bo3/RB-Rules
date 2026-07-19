@@ -599,6 +599,18 @@ de globale duur-vangrail).
   kanaal blijft altijd gedegradeerd (leeg kanaal + trace-marker), nooit een
   500; de uitkomst (antwoord, citaties, prompt) blijft byte-voor-byte gelijk
   aan de oude seriële pipeline.
+- **Brein-GraphRAG-retrieval (achter flag, default UIT)** (#228) — een
+  optionele verrijking die de context aanvult met de kennisgraaf: de
+  fase-4-`RetrievalOrchestrator` (entity-linking → β(q)-router →
+  Local/Global/Path/Drift → gegate trust → context-bundeling) voegt één
+  trust-gelabeld `BREIN-CONTEXT`-blok (subgraaf-fragmenten, pad-onderbouwing als
+  citaties, gating-beslissing) aan de prompt toe en legt een `AnswerTrace`
+  vast (verantwoording per antwoord, zichtbaar in de Brein-verkenner). Zit
+  achter de feature-flag `BREIN_RETRIEVAL_ENABLED`: **default UIT ⇒ `/ask`
+  gedraagt zich exact zoals hierboven** (geen brein-call, geen extra latency).
+  Staat de flag aan, dan is de verrijking best-effort met hard latency-budget en
+  nette terugval op de bestaande retrieval bij elke fout — nooit een 500 voor de
+  gebruiker.
 - **Eigen ask-geschiedenis** — uitklap-paneel "Mijn eerdere vragen" op `/ask`
   (dicht standaard): de laatste 20 eigen vragen met tijdstip, vraagtype en het
   antwoord (gerenderd zoals het origineel, met dezelfde sanitize/widgets),

@@ -1590,9 +1590,34 @@ kan rb-api eerder starten dan Postgres klaar is.
   ("verantwoord dit antwoord"). **Al deze logica is PUUR en getest zonder
   Neo4j/pgvector**; de daadwerkelijke Neo4j/GDS/live-pgvector-queries lopen via
   poorten (`IGazetteerSource`, `INodeContextSimilarity`, `INodeAdjacency`,
-  `IGraphRetriever` in `RetrievalContracts.cs`) waarvan de Infrastructure-
-  adapters een bewuste **integratie-follow-up** zijn (Neo4j/GDS draaien niet in
-  CI). Fase 4 bouwt nog géén hypothese-motor (fase 5).
+  `IGraphRetriever` in `RetrievalContracts.cs`). Fase 4 bouwt nog géén
+  hypothese-motor (fase 5).
+- **Brein-GraphRAG-retrieval in `/ask`** (fase ask-retrieval, #228 —
+  `BreinRetrievalService`, `BreinContextFormatter`, `BreinRetrievalGate`,
+  `RbRules.Infrastructure/GraphRag/*`). De `RetrievalOrchestrator` is bedraad in
+  de bestaande `AskService.AskCoreAsync` **achter een DEFAULT-UIT feature-flag**
+  (`BREIN_RETRIEVAL_ENABLED`, `BreinRetrievalSettings.FromEnvironment`). Flag UIT
+  (de default, en de meeste constructors geven de service niet eens mee) ⇒ `/ask`
+  draait EXACT zoals voorheen: géén brein-call, géén extra latency, géén
+  gedragswijziging — de poort schakelt de hele laag uit vóórdat er ook maar één
+  adapter geraakt wordt. Flag AAN ⇒ `BreinRetrievalService.EnrichAsync` draait de
+  orchestrator (naast de bestaande lees-kanalen, zodat het overlapt i.p.v.
+  serieel latency toe te voegen) en `BreinContextFormatter` voegt één
+  trust-gelabeld `BREIN-CONTEXT`-blok (subgraaf-chunks + `[cit:N]`-pad-
+  onderbouwing + gating-beslissing + evt. terugval-reden) ná de bestaande
+  kennispiramide-blokken aan de prompt toe; de retrieval produceert een
+  `AnswerTrace` die AskService best-effort in `answer_trace(_support)` persisteert
+  (zichtbaar in de Brein-verkenner, #236). **Nette degradatie is hard**: elke
+  brein-fout (Neo4j/pgvector weg, timeout) → `EnrichAsync` slikt hem, logt en geeft
+  null terug → `/ask` valt terug op de bestaande flow, NOOIT een 500; alleen een
+  echte client-abort bubbelt door. Een benchmarkrun (#158) blijft eveneens buiten
+  schot (isolatie). De vier poort-adapters (`PostgresGazetteerSource`,
+  `PgVectorNodeSimilarity`, `Neo4jNodeAdjacency`, `BreinGraphRetriever`) draaien
+  tegen de live Neo4j + pgvector en zijn een **integratie-follow-up** (niet in CI —
+  verifieerbaar bij de eerste run met flag aan); elke adapter degradeert bij uitval
+  naar leeg/neutraal. De wiring, de flag-gating, de terugval en de
+  AnswerTrace-opbouw zijn PUUR en getest (`BreinRetrievalTests`,
+  `AskServiceBreinRetrievalTests`, mock-adapters).
 - **Hypothese-motor & trust-vector** (fase 5, #229 — `RbRules.Domain/*`,
   `RbRules.Domain/GraphRag/TrustConflict.cs`). De kandidaatgeneratie voor
   interacties gaat van LEXICALE overlap (fase 3) naar GETYPEERD property-
