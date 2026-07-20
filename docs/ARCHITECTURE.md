@@ -2067,6 +2067,55 @@ nachtrun:
      rol-ref. Dat vult `Interaction.GovernedByRef` (GOVERNED_BY), dat sinds #226
      bestond maar in de praktijk altijd `null` bleef.
 
+  **Review-ronde op #286 (vijf punten).**
+  11. **De tier-verdeling wordt VOORAF uitgerekend**, niet achteraf weggesneden. Zo
+     geldt per constructie `1 + printed + buren + partners ≤ MaxRefs` en is elke
+     gekozen partner gegarandeerd óók een ref. Dat sluit een echt gat: een partner die
+     ná het scoren uit de refs viel telde bij het scoren wél als identiteits-anker,
+     terwijl `BuildOffer` hem in de prompt geen ref-header geeft — `Anchor()` levert
+     dan nooit `Identity` en de buur die zijn gewicht aan die kaart ontleende is per
+     constructie onpromoveerbaar. `OfferedRefBudget.Apply` blijft staan als vangnet
+     voor een toekomstige rol-bron, niet meer als scheidsrechter.
+  12. **De Context-tier heeft een reserve** (`ReservedPartnerCards` = 2). Partner-
+     kaarten waren het EERSTE dat de begroting weggooide, dus bij ≥8 gedrukte keywords
+     bleef `card:focus` als enige kaart-ref over — en dan draait de kaart-pass wél maar
+     kan hij kaart↔kaart en kaart↔andermans-keyword per constructie niet vinden,
+     precies de twee gevallen die hem van de mechanic-pass onderscheiden. De reserve
+     draait de voorrang om: de gedrukte keywords wijken, want de paren die zíj
+     opleveren (eigen-keyword↔eigen-keyword) zijn sinds #286 het werk van de
+     mechanic-pass, die ze uitputtender dekt dan één kaart ooit kon. Welke gedrukte
+     keywords bij krapte voorgaan is bovendien geen alfabetische loterij meer: wat
+     LETTERLIJK in de kaarttekst staat wint van wat de kaart alleen via
+     `Card.Mechanics` draagt.
+  13. **`PickSections` is anker-relatief en draait vóór het scoren.** De regel was "≥2
+     AANGEBODEN labels" en kon dus pas ná de buurkeuze draaien; daardoor werd er
+     gescoord tegen alle (tot twaalf) kandidaat-secties terwijl er hooguit drie worden
+     aangeboden, en kon een buur zijn gewicht ontlenen aan een sectie die de prompt
+     nooit zag. Nu is de gekozen sectie-verzameling exact de verzameling waartegen
+     gescoord wordt.
+  14. **`CanonicalEntity.Definition` telt mee bij het kiezen van de buren.** Zij ging al
+     als bewijs de prompt in en de lexicale poort las er al op, maar stond niet in de
+     scoring-units — dus een mech↔mech-paar dat ALLEEN in de officiële keyword-definitie
+     samen staat werd nooit aangeboden, terwijl het de poort wél zou passeren. Dat is de
+     kortste trust-tier-1-regelzin die het keyword introduceert; de beste bron lag
+     ongebruikt.
+  15. **Eerlijk over wat de ordening wél en niet is.** Binnen een tier beslist bij
+     gelijk gewicht `StringComparer.Ordinal`, en omdat een aanbieding maar een handvol
+     bewijs-eenheden telt scoren de meeste buren 1 of 2 — het alfabet kiest dus vaak
+     wélke vier meegaan. Dat is deterministisch (de uitkomst mag niet van corpusvolgorde
+     afhangen) maar niet hetzelfde als relevant. Bewust geaccepteerd: een rijkere
+     rangschikking is pas te verdedigen als een meting laat zien dat de huidige keuze
+     dekking kost.
+
+  **Wat NIET gemeten kon worden.** De review vroeg om de verdeling
+  gedrukte-keywords-per-kaart over de live pool, om te bepalen of punt 12 een voetnoot
+  of een echt probleem is. Die meting kon hier niet: het enige kaartcorpus in de repo is
+  een 9-kaarts fixture, en de live verdeling zit in de productie-database. In plaats van
+  op een ongemeten staart te gokken is de begroting daarom zó verdeeld dat de uitkomst
+  niet van die verdeling afhangt — de reserve garandeert de kaart-rollen ongeacht hoeveel
+  keywords een kaart draagt. Blijkt de staart later dik, dan is dat een reden om
+  `ReservedPartnerCards` te herijken, niet om een dekkingsgat te repareren.
+
   **Meting ingebouwd** (acceptatiecriterium): elke rb-ai-call wordt geteld met zijn
   **wandkloktijd** en het aantal aangeboden refs, uitgesplitst per fase, en dat komt
   als `CallMetrics` in het run-detail — bv. `meting: mechanic 12× (gem. 11,3s
@@ -2076,6 +2125,17 @@ nachtrun:
   precies de tijd waartegen de 90 s-timeout afrekent. Zonder deze drie getallen is
   elke uitspraak over "de vraag is nu goedkoper" een gok, en gokken is hier al drie
   keer misgegaan.
+
+  **`PromptVersion` is een stempel, geen stale-conditie** (#286-review). De bump naar
+  `breinmine-interactions-v3` legt in de `mining_run`-provenance vast wélke vraagvorm een
+  feit voortbracht, maar NIETS leest hem als her-mine-trigger: de selectie kijkt alleen
+  naar `interactions_mined_at`. Kaarten die onder v2 een watermark kregen worden dus
+  nooit vanzelf met de goedkopere aanbieding herbevraagd — alleen de GEFAALDE komen
+  terug (die kregen immers geen watermark). Bij de uitval van dit moment is dat toevallig
+  het merendeel, maar de enige manier om ook de geslaagde v2-kaarten opnieuw te bevragen
+  is de expliciete `breinreset-interacties`. Wie hier ooit een echte stale-conditie van
+  wil maken, hangt hem aan een `PromptVersion`-vergelijking in de focus-selectie —
+  hetzelfde patroon als `Source.StripVersion` in `IngestService`.
 - `breinmine-predicaten` (`BreinPredicateMiningService`). Per canonieke
   mechanic/keyword-entiteit (het subject IS al geresolveerd) haalt getypeerde
   predicaten (`triggers_on`/`prevents`/`grants`/`requires_target` + object-token)

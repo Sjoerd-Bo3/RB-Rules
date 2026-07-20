@@ -362,6 +362,18 @@ public static class InteractionOffering
     /// aan die per constructie nooit een relatie-bewijs kunnen krijgen — en we laten er
     /// ook geen weg die dat wél kan.
     ///
+    /// <b>Eerlijk over de ordening</b> (#286-review): het gewicht is het aantal
+    /// bewijs-eenheden, en die aanbieding telt er hooguit een handvol — dus de meeste
+    /// buren scoren 1 of 2 en de tie-break (<c>StringComparer.Ordinal</c> op het label)
+    /// beslist in de praktijk wélke vier van de kandidaten meegaan. Dat is
+    /// DETERMINISTISCH, en dat is precies wat het moet zijn (de uitkomst mag niet van
+    /// corpusvolgorde afhangen), maar het is niet hetzelfde als RELEVANT: bij gelijke
+    /// co-occurrence kiest het alfabet. Dat is bewust geaccepteerd — een rijkere
+    /// rangschikking (bv. op embedding-nabijheid) is pas te verdedigen als er een meting
+    /// ligt die zegt dat de huidige keuze dekking kost. Ga er tot die tijd niet van uit
+    /// dat de vier "beste" buren zijn gekozen; het zijn de vier die het bewijs het
+    /// vaakst noemt, en daarna de alfabetisch eerste.
+    ///
     /// Het gewicht is het aantal eenheden waar dat gebeurt. Woordgrens-bewust
     /// (<see cref="TermMatch.ContainsWord"/>), zodat "Tank" niet op willekeurig
     /// regelproza valt. Nul = geen buur: zulke labels worden niet aangeboden.</summary>
