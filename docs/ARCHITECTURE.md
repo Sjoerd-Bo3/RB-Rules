@@ -1399,9 +1399,10 @@ sequenceDiagram
         A->>DB: vector-kanaal (RuleChunks, per query)
         A->>DB: FTS-her-run (alleen als de rewrite iets wezenlijks veranderde)
         A->>DB: primer + rulings + kaartcontext + claims + misvattingen
+        A->>DB: deck-meta (alléén kaart-/lijstvraag mét herkende kaartnaam, #267)
     end
     A->>A: alle kanaalslots innen; RRF-fusie (bron-bias per vraagtype)
-    A->>A: prompt-piramide (officieel > primer > community)
+    A->>A: prompt-piramide (officieel > primer > community > deck-meta)
     alt agentic-escalatie (gate: Ruling met 2+ kaarten / lege retrieval — of gebruiker: Grondig binnen dagtegoed)
         A->>AI: task=agentic (brein-tools)
         AI-->>A: antwoord + brein-stappen (of vangnet)
@@ -1425,7 +1426,7 @@ Kernpunten (`AskService.cs`):
    wordt nooit gecacht. Uitval blijft het bestaande pad → rauwe vraag.
 2. **Parallelle retrieval-kanalen** (#152): de onafhankelijke lees-kanalen
    (vector per query, FTS, primer, rulings, kaartcontext, banlijst, claims,
-   misvattingen) draaien concurrent, elk op een eigen `RbRulesDbContext` uit
+   deck-meta, misvattingen) draaien concurrent, elk op een eigen `RbRulesDbContext` uit
    `IDbContextFactory` (een DbContext is niet thread-safe). Zonder factory
    (unit-tests op EF InMemory) draaien dezelfde kanalen sequentieel op de
    scoped context — functioneel identiek, alleen niet concurrent. Elk kanaal
@@ -1435,10 +1436,16 @@ Kernpunten (`AskService.cs`):
 3. **Multi-channel retrieval**: vector (pgvector per query), full-text
    (Postgres FTS), gefuseerd met **RRF** (`RrfFusion`, Domain) plus bron-bias
    per vraagtype; daarnaast primer (top-3 approved), geverifieerde rulings,
-   kaartcontext (naam/mechaniek/lexicaal/semantisch), banlijst en
-   community-claims (`ClaimRetrieval.TakeFor`, afstandsplafond).
-4. **Prompt-piramide**: blokken staan in vaste volgorde officieel > primer >
-   community, elk expliciet gelabeld (`docs/KNOWLEDGE.md`).
+   kaartcontext (naam/mechaniek/lexicaal/semantisch), banlijst,
+   community-claims (`ClaimRetrieval.TakeFor`, afstandsplafond) en — alléén
+   bij een kaart-/lijstvraag mét herkende kaartnaam
+   (`DeckMetaRetrieval.ShouldRetrieve`, Domain; de poort kost zelf geen
+   query) — **deck-meta** (#267): het deck-gebruikssignaal van het
+   kaartdossier via de gedeelde `DeckPopularityQuery`. Elke andere vraag
+   doet géén enkele deck-query (hotpath-eis).
+4. **Prompt-piramide**: blokken staan in vaste volgorde officieel > primer
+   (laag 1) > community (laag 2) > deck-meta (laag 3, de zwakste — #267),
+   elk expliciet gelabeld (`docs/KNOWLEDGE.md`).
 5. **Per-fase-instrumentatie** (#152): wandkloktijd van rewrite/embed/
    retrieval/AI als compacte JSON op `AskTrace.PhaseTimings` (`AskPhases`,
    Domain) — zichtbaar in de beheer-trace-uitklap en als gemiddelde

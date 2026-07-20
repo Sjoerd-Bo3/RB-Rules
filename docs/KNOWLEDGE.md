@@ -123,10 +123,15 @@ definitie binnen als community-/meta-laag, nooit als officiële laag.
 
 ## Laag 3 — Meta & tactiek
 
-Bouwt op decks-backlog (#15): archetype-detectie uit decklijsten,
-combo-frequentie (co-occurrence die we al minen als INTERACTS_WITH),
-guide-extractie via dezelfde claims-pipeline met topic_type="tactic".
-Graph-edges: Card—STAPLE_IN→Archetype. Pas oppakken als laag 1+2 staan.
+Bouwt op decks-backlog (#15). Eerste snede staat (#267): het
+deck-gebruikssignaal uit de Piltover Archive-bank (aandeel recente decks,
+gemiddeld aantal exemplaren, top-co-occurrence — `DeckPopularityQuery`,
+gedeeld met het kaartdossier) gaat als expliciet gelabeld laag-3-blok mee
+in /ask, uitsluitend bij kaart-/lijstvragen mét herkende kaartnaam
+(`DeckMetaRetrieval`, Domain — de hotpath doet anders geen deck-query).
+Nog open: archetype-detectie uit decklijsten (onderzoeksproject, geen
+feature), guide-extractie via dezelfde claims-pipeline met
+topic_type="tactic", en graph-edges Card—STAPLE_IN→Archetype.
 
 ## Wat dit oplevert voor het geobserveerde probleem
 
@@ -230,4 +235,5 @@ deck-advies, "wat verandert er voor mijn deck door deze errata", enz.
    kennis-gaten-rapport (#52).
 5. **Brein-API + agentic ask**: unified graph-schema + tools voor de
    ask-agent (#53).
-6. Meta-laag na decks (#15).
+6. Meta-laag na decks (#15) — eerste snede gedaan (#267, deck-meta-blok
+   in /ask).
