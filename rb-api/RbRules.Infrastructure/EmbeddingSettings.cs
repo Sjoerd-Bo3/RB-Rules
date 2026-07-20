@@ -67,6 +67,24 @@ public sealed record EmbeddingSettings(
     /// draaien in de achtergrond, en een OOM-kill wist een hele bron.</summary>
     public const int DefaultBatchChars = 6000;
 
+    /// <summary>Het hoogste dat <c>EMBED_BATCH_CHARS</c> via de env mag worden: 6300,
+    /// oftewel 10% onder <see cref="MeasuredSafeMaxBatchChars"/> (#303).
+    ///
+    /// WAAROM NIET 7000. #293 verlaagde het plafond van 100000 naar de meetwaarde 7000
+    /// — een grote verbetering, maar het zette de knop precies op de waarde die diezelfde
+    /// PR "de klifrand zelf, en geen veilige plek" noemt: 7000 is de laatste waarde die
+    /// het HAALDE, dus de echte grens ligt daar ergens boven en schuift mee met wat
+    /// Postgres/Neo4j/rb-ai op dat moment van de 8 GB-VM claimen. De default kreeg
+    /// daarom marge (6000) en de handmatige knop niet — inconsistent, en juist de knop
+    /// wordt gebruikt op een moment dat het al misgaat.
+    ///
+    /// WAAROM NIET GELIJK AAN DE DEFAULT. Dan is de knop alleen nog een noodrem omlaag
+    /// en kan een beheerder niet meer bijstellen zonder een deploy. 6300 laat een
+    /// beperkte marge omhoog en houdt tegelijk ~10% onder de laatste geslaagde meting.
+    /// Écht hoger willen betekent de <c>memory:</c>-cap van <c>rb-v2-ollama</c>
+    /// verzetten — een compose-wijziging, en dan verhuizen deze constanten mee.</summary>
+    public const int MaxConfigurableBatchChars = MeasuredSafeMaxBatchChars * 9 / 10;
+
     /// <summary>Na 3 opeenvolgende gefaalde batches ligt Ollama eruit, niet één batch.
     /// Doorgaan kost dan alleen tijd: bij een timeout is dat 5 minuten per batch, en
     /// de pijplijn draait synchroon in de scheduler-lus én achter de één-job-gate van
@@ -82,19 +100,20 @@ public sealed record EmbeddingSettings(
     /// de embed-pijplijn niet stilletjes op 1 tekst per verzoek zetten (traag) of
     /// ontgrendelen (OOM).
     ///
-    /// Het plafond van <c>EMBED_BATCH_CHARS</c> is sinds #293 de MEETWAARDE
-    /// <see cref="MeasuredSafeMaxBatchChars"/> en niet meer een ruime 100000: boven de
-    /// klip is de knop geen experimenteerruimte maar een garantie op een OOM-kill, en
-    /// hem hoger zetten heeft alleen zin ná het verhogen van de <c>memory:</c>-cap van
-    /// <c>rb-v2-ollama</c> — wat sowieso een compose-wijziging is, dus dan mag deze
-    /// constante meeverhuizen. Omláág bijstellen (de noodrem) kan gewoon via de env.</summary>
+    /// Het plafond van <c>EMBED_BATCH_CHARS</c> is sinds #293 geen ruime 100000 meer:
+    /// boven de klip is de knop geen experimenteerruimte maar een garantie op een
+    /// OOM-kill. Sinds #303 is dat plafond <see cref="MaxConfigurableBatchChars"/> en
+    /// niet meer de meetwaarde zelf — die is de klifrand, geen veilige plek. Hoger
+    /// willen heeft alleen zin ná het verhogen van de <c>memory:</c>-cap van
+    /// <c>rb-v2-ollama</c> — wat sowieso een compose-wijziging is, dus dan mogen deze
+    /// constanten meeverhuizen. Omláág bijstellen (de noodrem) kan gewoon via de env.</summary>
     /// <param name="warn">Krijgt een regel per genegeerde waarde. In een PR over
     /// stille degradatie mag een `EMBED_BATCH_SIZE=100` niet zonder één woord op 8
     /// terugvallen — dan denk je dat je iets hebt bijgesteld terwijl er niets
     /// veranderde (dezelfde klasse fout als de NIGHTLY_ENABLED-noodrem, #268).</param>
     public static EmbeddingSettings FromEnvironment(Action<string>? warn = null) => new(
         Parse("EMBED_BATCH_SIZE", DefaultBatchSize, 1, 64, warn),
-        Parse("EMBED_BATCH_CHARS", DefaultBatchChars, 500, MeasuredSafeMaxBatchChars, warn),
+        Parse("EMBED_BATCH_CHARS", DefaultBatchChars, 500, MaxConfigurableBatchChars, warn),
         DefaultMaxConsecutiveFailures);
 
     private static int Parse(

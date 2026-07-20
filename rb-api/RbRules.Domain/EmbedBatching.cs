@@ -32,8 +32,14 @@ public static class EmbedBatching
     /// <param name="Texts">De teksten, elk hoogstens <c>maxChars</c> lang.</param>
     /// <param name="CappedCount">Hoeveel teksten daadwerkelijk zijn ingekort. 0 = de
     /// normale toestand; alles daarboven hoort in de run-melding.</param>
-    /// <param name="LongestOriginal">De lengte van de langste ORIGINELE tekst, zodat de
-    /// melding laat zien hoe ver eroverheen we zaten (en niet alleen dát er gekapt is).</param>
+    /// <param name="LongestOriginal">De lengte van de langste ORIGINELE tekst — óók als
+    /// er niets gekapt is. Bedraad in de run-melding sinds #302: "12 chunk(s) afgekapt
+    /// op 6000 tekens (langste invoer 20000)" zegt hoe ver eroverheen we zaten en dus of
+    /// het budget knelt of ruim zit; alleen de kaplengte zegt dat niet. Let op de
+    /// samenhang die dat getal bruikbaar maakt: zodra er íets gekapt is, is de langste
+    /// originele tekst per definitie zélf een gekapte — hij ligt immers boven het
+    /// budget. De melding noemt hem dus alleen bij <see cref="CappedCount"/> &gt; 0, waar
+    /// hij ook echt over de kapping gaat.</param>
     public sealed record CappedItems(
         IReadOnlyList<string> Texts, int CappedCount, int LongestOriginal);
 

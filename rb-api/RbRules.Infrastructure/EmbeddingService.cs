@@ -9,25 +9,100 @@ namespace RbRules.Infrastructure;
 /// alléén gevuld bij <see cref="EmbedCallOutcome.Ok"/> — nooit een half resultaat, om
 /// dezelfde reden als bij <see cref="AiExtraction"/>: een deels gevulde uitslag zou
 /// vectoren aan de verkeerde entiteit koppelen.</summary>
+/// <param name="Capped">Hoeveel van de aangeboden teksten door de budget-kap zijn
+/// ingekort vóór verzending (#301). 0 = de normale toestand. Dit is de enige manier
+/// waarop een aanroeper kán weten dat zijn vector op een deel van de invoer slaat —
+/// zonder dit veld zou de kap op servicenniveau precies de stille degradatie zijn die
+/// #282/#284 wegnamen.</param>
+/// <param name="CappedAt">Op hoeveel tekens er gekapt is — het budget van dat moment,
+/// zodat de aanroeper het op de rij kan vastleggen zonder zelf de instellingen te
+/// hoeven kennen. 0 als er niets gekapt is.</param>
+/// <param name="LongestOriginal">Lengte van de langste ORIGINELE tekst in deze aanroep,
+/// zodat de melding "hoe ver eroverheen" kan zeggen (#302).</param>
 public sealed record EmbedBatchResult(
-    Vector[]? Vectors, EmbedCallOutcome Outcome, int? StatusCode, string? Error)
+    Vector[]? Vectors, EmbedCallOutcome Outcome, int? StatusCode, string? Error,
+    int Capped = 0, int CappedAt = 0, int LongestOriginal = 0)
 {
     public bool Ok => Outcome == EmbedCallOutcome.Ok && Vectors is not null;
 }
 
 /// <summary>Embeddings via lokale Ollama (bge-m3 — meertalig, NL↔EN).
 /// Dimensie-guard: een antwoord met de verkeerde dimensie is een harde fout
-/// (audit-fix: nooit meer stille dimensie-mixen in pgvector).</summary>
-public class EmbeddingService(HttpClient http)
+/// (audit-fix: nooit meer stille dimensie-mixen in pgvector).
+///
+/// HIER LIGT DE GEHEUGENGARANTIE (#301). #293 zette de kap op het budget in
+/// <c>CardEmbeddingPipeline</c> en <c>RuleChunkPipeline</c> en noemde dat "élk verzoek
+/// blijft binnen het gemeten veilige bereik" — maar dat gold voor 2 van de ~12
+/// aanroepplekken. De overige tien gingen via <see cref="EmbedOneAsync"/>/
+/// <see cref="EmbedAsync"/> ongelimiteerd naar Ollama. De reële daarvan is de
+/// primer-draft-bewerking in <c>AdminEndpoints</c>: die her-embedt <c>Title + Body</c>
+/// nadat een reviewer de tekst heeft geplakt, zónder lengtegrens. 8000 tekens is daar
+/// geen mislukte embed maar een OOM-kill van <c>llama-server</c> — een VM-breed
+/// geheugenincident (Ollama deelt de 8 GB met Postgres, Neo4j en rb-ai), terwijl de
+/// <c>catch</c> op die plek het als een hikje laat ogen.
+///
+/// Vandaar dat <see cref="TryEmbedAsync"/> zélf kapt én splitst. Een garantie die de
+/// aanroeper moet naleven is geen garantie; deze kan niemand omzeilen, want er is geen
+/// pad naar Ollama dat er niet doorheen gaat. De pijplijnen kappen nog steeds vóóraf —
+/// niet omdat het hier nog nodig is (het is er dan een no-op), maar omdat zij moeten
+/// weten WELKE rij gekapt is om dat op de rij vast te leggen (#299).</summary>
+public class EmbeddingService(HttpClient http, EmbeddingSettings? settings = null)
 {
+    private readonly EmbeddingSettings _settings = settings ?? EmbeddingSettings.Default;
+
     private record EmbedResponse(float[][]? Embeddings);
 
     /// <summary>Embed, met de UITVALS-OORZAAK als data in plaats van als exception
     /// (#282). Voor pijplijnen die per batch willen doorlopen en achteraf per oorzaak
     /// willen rapporteren; interactieve paden (/ask, zoeken) gebruiken gewoon
-    /// <see cref="EmbedAsync"/> en degraderen op de exception.</summary>
+    /// <see cref="EmbedAsync"/> en degraderen op de exception.
+    ///
+    /// Begrenst het verzoek op BEIDE assen (#301), met dezelfde
+    /// <see cref="EmbeddingSettings"/> die de pijplijnen gebruiken: elke tekst wordt op
+    /// <c>BatchChars</c> gekapt (anders duwt één uitschieter llama-server om) én de
+    /// aanroep wordt in deelverzoeken van hoogstens <c>BatchSize</c> teksten /
+    /// <c>BatchChars</c> tekens geknipt (anders doet een aanroeper die tien teksten
+    /// tegelijk aanbiedt dat alsnog). Per-item kappen alléén zou het gat maar half
+    /// dichten: <c>AskService</c> stuurt de query-rewrites in één aanroep, en 10 × 6000
+    /// is net zo goed 60000 tekens in één verzoek.
+    ///
+    /// Deelverzoeken zijn ALLES-OF-NIETS: faalt er één, dan komt die uitkomst terug en
+    /// blijven de vectoren leeg. Half terugkomen zou de index-koppeling breken, en dat
+    /// is precies de fout die <see cref="EmbedBatchResult"/> uitsluit.</summary>
     public async Task<EmbedBatchResult> TryEmbedAsync(
         string[] texts, CancellationToken ct = default)
+    {
+        var capped = EmbedBatching.CapItems(texts, _settings.BatchChars);
+        var ranges = EmbedBatching.Split(
+            capped.Texts, _settings.BatchSize, _settings.BatchChars);
+
+        var vectors = new List<Vector>(texts.Length);
+        foreach (var range in ranges)
+        {
+            var (offset, count) = range.GetOffsetAndLength(capped.Texts.Count);
+            var part = await PostAsync([.. capped.Texts.Skip(offset).Take(count)], ct);
+            // Ook een MISLUKTE aanroep draagt de kap-feiten mee: een aanroeper die op
+            // grond van de uitkomst iets op de rij zet mag niet de indruk krijgen dat
+            // er niets gekapt is puur omdat Ollama daarna omviel.
+            if (!part.Ok)
+                return part with
+                {
+                    Capped = capped.CappedCount,
+                    CappedAt = capped.CappedCount > 0 ? _settings.BatchChars : 0,
+                    LongestOriginal = capped.CappedCount > 0 ? capped.LongestOriginal : 0,
+                };
+            vectors.AddRange(part.Vectors!);
+        }
+
+        return new([.. vectors], EmbedCallOutcome.Ok, 200, null,
+            capped.CappedCount, capped.CappedCount > 0 ? _settings.BatchChars : 0,
+            capped.CappedCount > 0 ? capped.LongestOriginal : 0);
+    }
+
+    /// <summary>Eén HTTP-verzoek naar Ollama. Alles wat de grootte bewaakt zit in
+    /// <see cref="TryEmbedAsync"/>; hier gaat het alleen nog om de uitkomst.</summary>
+    private async Task<EmbedBatchResult> PostAsync(
+        string[] texts, CancellationToken ct)
     {
         HttpResponseMessage res;
         try

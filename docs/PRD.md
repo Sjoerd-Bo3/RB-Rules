@@ -915,6 +915,30 @@ de globale duur-vangrail).
   "model niet gepulld?" als eerste hypothese maar de OOM-hypothese, mét Ollama's
   ruwe foutbody erbij. *Route* `/admin` (paneel "Embeddings onvolledig" +
   logtabel) · *endpoint* `/api/admin/status` (`lastEmbed`).
+- **De budgetgarantie geldt voor élke aanroeper, en een kap laat een spoor na**
+  (#301/#299/#302/#303) — de kap uit #293 zat in de twee embed-pijplijnen, maar
+  de tien andere aanroepplekken kenden het budget niet. De reële: een reviewer
+  die een primer-draft bewerkt liet de geplakte tekst ongemeten embedden, en bij
+  8000+ tekens is dat geen mislukte embed maar een OOM-kill van `llama-server` —
+  een VM-breed geheugenincident dat als een hikje oogde. De begrenzing zit nu
+  één laag lager, in de embed-service zelf: elke tekst wordt op het budget
+  gekapt én elke aanroep in deelverzoeken geknipt, zodat geen enkele aanroeper
+  er nog omheen kan. Een handmatige snee van 1500 tekens elders (de ad-hoc
+  variant van hetzelfde probleem) is daarmee vervallen. **Een gekapte vector is
+  voortaan herkenbaar op de rij** (`embedding_truncated_at` op kaarten,
+  regel-chunks en primer-docs: null = volledige tekst, een getal = de kaplengte
+  van dat moment), zodat "welke vectoren zijn partieel?" ook over een half jaar
+  beantwoordbaar is en die rijen gericht her-embed kunnen worden zodra het
+  budget omhoog kan — de markering verdwijnt vanzelf zodra de tekst weer past.
+  Een run die kapte maar verder slaagde krijgt status `warn` in plaats van `ok`
+  en verschijnt in beheer als eigen waarschuwing (kleur + tekst, geen fout); een
+  echte uitval wint altijd. De melding noemt naast de kaplengte nu ook de
+  **langste originele invoer** ("afgekapt op 6000 tekens (langste invoer
+  20000)"), want alleen dát zegt of het budget knelt of ruim zit. En het
+  env-plafond staat niet langer op 7000 — de waarde die de code zelf de klifrand
+  noemt — maar op 6300, tien procent daaronder: bijstellen blijft mogelijk,
+  jezelf op de rand zetten niet. *Route* `/admin` (paneel "Embeddings deels
+  afgekapt") · *endpoint* `/api/admin/status` (`lastEmbed`).
 - **Lopende job afbreken** (#253) — naast de "Nu bezig"-voortgangsbalk staat
   een **Afbreken**-knop (met bevestiging) die de lopende job of het lopende
   pad coöperatief stopt; binnen enkele seconden is `running` weer leeg en kan
@@ -1595,6 +1619,15 @@ openstaande PR.
   marge onder de gemeten klip, env-plafond op de meetwaarde, misleidende
   "model niet gepulld?"-hint vervangen door de OOM-hypothese + de ruwe foutbody,
   en een harde (gemelde) kap op de lengte van één embed-item.
+- **#301 / #299 / #302 / #303** Vier bevindingen uit de adversariële review op
+  #293, samen opgelost omdat ze dezelfde embed-laag raken — *in-flight*, zie
+  §4.5. De budgetkap verhuist naar de embed-service zelf, zodat alle ~12
+  aanroepplekken hem krijgen in plaats van alleen de twee pijplijnen (#301, met
+  als reële geval de primer-draft die een reviewer bewerkt); een gekapte vector
+  krijgt provenance op de rij (`embedding_truncated_at`) en de run een
+  `warn`-status die het beheer-paneel toont (#299); de run-melding noemt de
+  langste originele invoer in plaats van alleen de kaplengte (#302); en het
+  env-plafond zakt van 7000 — de klifrand zelf — naar 6300 (#303).
 - **#292** Twee logregels in rb-ai omzeilden de redactie-poort — *in-flight*,
   zie §4.5. De agentic tool-log schreef de vraagtekst van de bezoeker naar de
   containerlog en het warmpool-faalpad een rauwe SDK-fout. Beide lopen nu door

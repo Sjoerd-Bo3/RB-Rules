@@ -327,6 +327,26 @@ public class Card : IEmbeddable
     /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de exacte
     /// geëmbedde tekst — de her-embed-sleutel (tekst gewijzigd ⇒ hash wijzigt).</summary>
     public string? EmbeddingContentHash { get; set; }
+    /// <summary>Embedding-provenance, deel 2 (#299): op hoeveel tekens de
+    /// EMBED-INVOER gekapt was toen deze vector berekend werd, of null als de
+    /// vector de volledige tekst dekt (de normale toestand).
+    ///
+    /// WAAROM DIT EEN KOLOM IS EN GEEN LOGREGEL. Een gekapte vector is materieel
+    /// een provenance-VARIANT: hij zegt iets anders dan de andere vectoren in
+    /// dezelfde kolom, want hij kent alleen de eerste N tekens. Tot #299 stond
+    /// dat alleen in de run-melding — per RUN, nooit per RIJ — en run_log-rijen
+    /// verouderen. Over een half jaar was "welke vectoren zijn partieel?" dus
+    /// onbeantwoordbaar, en zelfs niet te reconstrueren: het budget kan intussen
+    /// verschoven zijn, dus de kaplengte van tóén is nergens meer af te leiden.
+    /// Vandaar de kaplengte zelf en niet een vlag — met een verhoogd budget is
+    /// direct te zien welke rijen daar baat bij hebben.
+    ///
+    /// EF-vertaalbaar en dus bruikbaar als filter:
+    /// <c>Where(c =&gt; c.EmbeddingTruncatedAt != null)</c> geeft precies de
+    /// her-embeddeerbare rijen zodra het budget omhoog kan. Wordt bij ELKE
+    /// (her)embed geschreven, óók naar null — anders blijft een rij die intussen
+    /// wél past voor altijd als partieel gemarkeerd.</summary>
+    public int? EmbeddingTruncatedAt { get; set; }
     /// <summary>Alt-art/promo/herdruk-groepering: null = canonieke printing,
     /// anders het RiftboundId van de canonieke kaart met dezelfde naam.</summary>
     public string? VariantOf { get; set; }
@@ -367,6 +387,13 @@ public class RuleChunk : IEmbeddable
     public string? EmbeddingModel { get; set; }
     /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
     public string? EmbeddingContentHash { get; set; }
+    /// <summary>Kaplengte van de embed-invoer, of null als de vector de volledige
+    /// tekst dekt — zie <see cref="Card.EmbeddingTruncatedAt"/> (#299). Juist hier
+    /// nodig: <c>RuleSectionParser.MaxSectionLength</c> (2400) is een streefwaarde,
+    /// geen grens — <c>SplitLong</c> knipt op zinsgrens en laat één langere zin heel,
+    /// en Card Errata heeft al een chunk van 3908 tekens. <see cref="Text"/> zelf
+    /// blijft altijd volledig; alleen de vector kijkt naar de eerste N tekens.</summary>
+    public int? EmbeddingTruncatedAt { get; set; }
 }
 
 public class RunLog
@@ -467,6 +494,13 @@ public class KnowledgeDoc : IEmbeddable
     public string? EmbeddingModel { get; set; }
     /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
     public string? EmbeddingContentHash { get; set; }
+    /// <summary>Kaplengte van de embed-invoer, of null als de vector de volledige
+    /// tekst dekt — zie <see cref="Card.EmbeddingTruncatedAt"/> (#299). Staat hier
+    /// omdat dit dé aanroepplek is die #301 "de reële" noemt: een reviewer plakt een
+    /// primer-body en die gaat rechtstreeks, ongemeten, de embed-laag in. De kap
+    /// voorkomt sindsdien de OOM-kill; deze kolom zorgt dat de reviewer niet
+    /// bedrogen uitkomt met een vector die maar de helft van zijn tekst kent.</summary>
+    public int? EmbeddingTruncatedAt { get; set; }
     /// <summary>Wanneer de relatie-mining (#116) dit doc als anker verwerkte;
     /// null = nog niet. Zelf-invaliderend: een run pakt docs waarvan
     /// relations_mined_at vóór updated_at ligt vanzelf opnieuw op.</summary>

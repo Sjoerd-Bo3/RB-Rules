@@ -11,8 +11,12 @@ namespace RbRules.Infrastructure;
 /// blijft volledig — de bezoeker ziet dus nooit een afgekapte regeltekst; het is de
 /// vector die op de eerste N tekens gebaseerd is. Hoort desondanks in de melding:
 /// stil invoerverlies is precies wat #282/#284 wegnamen.</param>
+/// <param name="CappedLongest">De langste ORIGINELE chunk-tekst van deze bron (#302) —
+/// het getal dat zegt hoe ver eroverheen we zaten, en dus of het budget knelt of ruim
+/// zit. 0 als er niets gekapt is.</param>
 public record RuleIndexResult(
-    string SourceId, int Chunks, string FailureSummary = "", int Capped = 0)
+    string SourceId, int Chunks, string FailureSummary = "", int Capped = 0,
+    int CappedLongest = 0)
 {
     public bool Failed => FailureSummary.Length > 0;
 }
@@ -41,11 +45,21 @@ public static class RuleIndexResults
         // Afkappen is geen fout maar wel invoerverlies, dus het staat er altijd bij
         // (#293) — óók in een verder geslaagde run.
         var capped = results.Sum(r => r.Capped);
-        return capped == 0
-            ? head
-            : head + $" · {capped} chunk(s) te lang voor het embed-budget, "
-                + "alleen de embed-invoer afgekapt (opgeslagen tekst blijft volledig)";
+        if (capped == 0) return head;
+        // De langste ORIGINELE chunk erbij (#302): "alleen de embed-invoer afgekapt"
+        // zegt niet of het om 6001 of om 20000 tekens ging, en dat is juist wat een
+        // beheerder nodig heeft om te wegen of het budget knelt.
+        var longest = results.Max(r => r.CappedLongest);
+        return head + $" · {capped} chunk(s) te lang voor het embed-budget "
+            + $"(langste invoer {longest}), alleen de embed-invoer afgekapt "
+            + "(opgeslagen tekst blijft volledig)";
     }
+
+    /// <summary>Kapte deze run ergens? Bepaalt de <c>warn</c>-status van de
+    /// run_log-regel (#299) — zonder die status hangt de melding onder "ok" en toont
+    /// het beheer-paneel haar nooit.</summary>
+    public static bool AnyCapped(this IReadOnlyList<RuleIndexResult> results) =>
+        results.Any(r => r.Capped > 0);
 }
 
 /// <summary>Indexeert het nieuwste document per bron: sectie-parse → chunks met
@@ -117,6 +131,10 @@ public class RuleChunkPipeline(
             // Dus kappen we de embed-INVOER op het budget. c.Text blijft ongemoeid: de
             // opgeslagen en getoonde regeltekst is volledig, alleen de vector kijkt
             // naar de eerste N tekens.
+            // Sinds #301 kapt EmbeddingService sowieso, ongeacht de aanroeper — deze
+            // kap is daar een no-op naast. Hij blijft staan omdat de pijplijn moet
+            // weten WELKE chunk gekapt is, om dat per rij vast te leggen
+            // (RuleChunk.EmbeddingTruncatedAt, #299).
             var capped = EmbedBatching.CapItems(
                 [.. chunks.Select(c => c.Text)], _settings.BatchChars);
             var texts = capped.Texts;
@@ -143,6 +161,15 @@ public class RuleChunkPipeline(
                 {
                     chunks[offset + k].Embedding = result.Vectors![k];
                     chunks[offset + k].EmbeddingModel = EmbeddingConfig.Model;
+                    // Provenance op de RIJ (#299) — LET OP: dit is de kaplengte, niet
+                    // de tekst. `chunks[i].Text` blijft het volledige origineel; alleen
+                    // de vector kijkt naar de eerste N tekens, en dat staat vanaf nu
+                    // ook op de rij in plaats van alleen in een verouderende
+                    // run_log-regel.
+                    chunks[offset + k].EmbeddingTruncatedAt =
+                        texts[offset + k].Length < chunks[offset + k].Text.Length
+                            ? texts[offset + k].Length
+                            : null;
                 }
             }
 
@@ -153,7 +180,8 @@ public class RuleChunkPipeline(
                 // oude index laten staan en het melden. De chunks zijn nooit aan de
                 // context toegevoegd, dus er valt niets terug te draaien — ze
                 // verdwijnen met de lus-iteratie.
-                results.Add(new(src.Id, 0, tally.Summary, capped.CappedCount));
+                results.Add(new(src.Id, 0, tally.Summary, capped.CappedCount,
+                    capped.CappedCount > 0 ? capped.LongestOriginal : 0));
                 continue;
             }
 
@@ -164,7 +192,8 @@ public class RuleChunkPipeline(
                 await db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
             }
-            results.Add(new(src.Id, chunks.Count, Capped: capped.CappedCount));
+            results.Add(new(src.Id, chunks.Count, Capped: capped.CappedCount,
+                CappedLongest: capped.CappedCount > 0 ? capped.LongestOriginal : 0));
         }
 
         // Niets gedaan = geen nieuws (alle bronnen al geïndexeerd, de normale tick).
@@ -187,7 +216,10 @@ public class RuleChunkPipeline(
             {
                 Kind = "embed",
                 Ref = "rules",
-                Status = anyFailed ? "error" : "ok",
+                // "warn" bij kapping (#299), zelfde afweging als in
+                // CardEmbeddingPipeline: geen fout (de bron is geïndexeerd), maar ook
+                // geen "ok" — onder "ok" bleef de melding onzichtbaar in beheer.
+                Status = anyFailed ? "error" : results.AnyCapped() ? "warn" : "ok",
                 Detail = results.Summarize()
                     + (anyFailed ? " — bestaande regelindex blijft staan" : ""),
             });

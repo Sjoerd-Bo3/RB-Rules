@@ -22,9 +22,14 @@ namespace RbRules.Infrastructure;
 /// verlies van invoer, en stil verlies is precies wat #282/#284 wegnamen.</param>
 /// <param name="CappedAt">Op hoeveel tekens er gekapt is — het budget van dat moment,
 /// zodat de melding klopt ook als <c>EMBED_BATCH_CHARS</c> afwijkt van de default.</param>
+/// <param name="CappedLongest">De langste ORIGINELE kaarttekst van deze run (#302).
+/// Alleen zinvol naast <paramref name="CappedAt"/>: "afgekapt op 6000 tekens (langste
+/// invoer 20000)" zegt hoe ver we eroverheen zaten en dus of het budget knelt of ruim
+/// zit; alleen de kaplengte zegt dat niet.</param>
 public record EmbedRunResult(
     int Embedded, int Skipped, int Failed = 0, string FailureSummary = "",
-    bool Aborted = false, int Remaining = 0, int Capped = 0, int CappedAt = 0)
+    bool Aborted = false, int Remaining = 0, int Capped = 0, int CappedAt = 0,
+    int CappedLongest = 0)
 {
     public bool HasFailures => Failed > 0 || FailureSummary.Length > 0;
 
@@ -37,7 +42,10 @@ public record EmbedRunResult(
             ? $"{Embedded} geembed, {Skipped} al actueel, {Failed} mislukt ({FailureSummary})"
                 + (Aborted ? $", afgebroken — {Remaining} niet geprobeerd" : "")
             : $"{Embedded} geembed, {Skipped} al actueel")
-        + (Capped > 0 ? $" · {Capped} kaarttekst(en) afgekapt op {CappedAt} tekens" : "");
+        + (Capped > 0
+            ? $" · {Capped} kaarttekst(en) afgekapt op {CappedAt} tekens "
+                + $"(langste invoer {CappedLongest})"
+            : "");
 }
 
 /// <summary>S1-fundament F2: embed kaarten in batches. Idempotent — alleen
@@ -88,8 +96,14 @@ public class CardEmbeddingPipeline(
         // omdat een kaart zonder embedding elke run opnieuw aan de beurt komt is dat
         // een OOM-kill per run. Het budget is óók de itemgrens, dus élk verzoek blijft
         // binnen het gemeten veilige bereik.
-        var capped = EmbedBatching.CapItems(
-            [.. todo.Select(CardText.Compose)], _settings.BatchChars);
+        //
+        // De kap zélf is sinds #301 een no-op op deze plek — EmbeddingService kapt
+        // hoe dan ook, ongeacht de aanroeper. Hij blijft staan omdat de pijplijn moet
+        // weten WELKE kaart gekapt is: dat legt hij hieronder per rij vast
+        // (Card.EmbeddingTruncatedAt, #299). Een aantal terug uit de service zou dat
+        // niet kunnen — dan weet je dát er gekapt is, niet bij wie.
+        var originals = todo.Select(CardText.Compose).ToList();
+        var capped = EmbedBatching.CapItems(originals, _settings.BatchChars);
         var texts = capped.Texts;
         var batches = EmbedBatching.Split(texts, _settings.BatchSize, _settings.BatchChars);
         var tally = new EmbedOutcomeTally();
@@ -129,6 +143,14 @@ public class CardEmbeddingPipeline(
                 {
                     todo[offset + k].Embedding = result.Vectors![k];
                     todo[offset + k].EmbeddingModel = EmbeddingConfig.Model;
+                    // Provenance op de RIJ (#299): deze vector kent alleen de eerste N
+                    // tekens, en dat moet over een half jaar nog te zien zijn. Altijd
+                    // schrijven, óók null — een kaart die na een budgetverhoging wél
+                    // past zou anders voor eeuwig als partieel gemarkeerd blijven.
+                    todo[offset + k].EmbeddingTruncatedAt =
+                        texts[offset + k].Length < originals[offset + k].Length
+                            ? texts[offset + k].Length
+                            : null;
                 }
                 await db.SaveChangesAsync(ct);
                 embedded += count;
@@ -141,14 +163,13 @@ public class CardEmbeddingPipeline(
             // "bewust zonder token"-afronding — daarom CancellationToken.None. Daarna
             // gewoon doorgooien; JobRunner zet de run op 'cancelled'.
             var partial = Result(
-                embedded, skipped, tally, aborted: false, todo.Count - attempted,
-                capped.CappedCount);
+                embedded, skipped, tally, aborted: false, todo.Count - attempted, capped);
             if (partial.HasFailures) await LogRunAsync(partial, CancellationToken.None);
             throw;
         }
 
         var run = Result(
-            embedded, skipped, tally, aborted, todo.Count - attempted, capped.CappedCount);
+            embedded, skipped, tally, aborted, todo.Count - attempted, capped);
         // Niets te doen én niets misgegaan = geen nieuws; anders zou de scheduler-tick
         // elk uur een lege regel schrijven.
         if (todo.Count > 0 || run.HasFailures) await LogRunAsync(run, ct);
@@ -157,9 +178,11 @@ public class CardEmbeddingPipeline(
 
     private EmbedRunResult Result(
         int embedded, int skipped, EmbedOutcomeTally tally, bool aborted, int remaining,
-        int capped) =>
+        EmbedBatching.CappedItems capped) =>
         new(embedded, skipped, tally.TextsLost, tally.Summary, aborted, remaining,
-            capped, capped > 0 ? _settings.BatchChars : 0);
+            capped.CappedCount,
+            capped.CappedCount > 0 ? _settings.BatchChars : 0,
+            capped.CappedCount > 0 ? capped.LongestOriginal : 0);
 
     /// <summary>Elke run mét werk landt in run_log — welke aanroeper de pijplijn ook
     /// startte (beheer-knop, job, scheduler-tick).
@@ -178,7 +201,14 @@ public class CardEmbeddingPipeline(
             {
                 Kind = "embed",
                 Ref = "cards",
-                Status = run.HasFailures ? "error" : "ok",
+                // "warn" (#299): een run die kapte maar verder slaagde is géén fout —
+                // de kaart is geembed — maar hij is ook geen "ok". Onder "ok" was de
+                // kapping in beheer ONZICHTBAAR: het paneel hangt aan status 'error',
+                // dus de melding stond alleen in de logtabel en zakte daar na 15
+                // rijen uit het venster. Dat is de "alarm dat alleen door veroudering
+                // dooft"-klasse uit de #282-review, nu aan de andere kant: niet een
+                // fout die wegzakt, maar een waarschuwing die nooit opkwam.
+                Status = run.HasFailures ? "error" : run.Capped > 0 ? "warn" : "ok",
                 Detail = run.HasFailures
                     ? run.Summary + " — blijven staan voor de volgende run"
                     : run.Summary,

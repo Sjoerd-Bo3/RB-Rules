@@ -87,7 +87,15 @@ public class PrimerService(
             var refs = string.Join(", ", chunks.Select(c => c.SectionCode));
             // Embedding blijft op de canonieke Engelse tekst — de Nederlandse
             // weergave doet niet mee in retrieval of /ask-context.
-            var docEmbedding = await embeddings.EmbedOneAsync($"{topic.Title}\n{body}", ct);
+            // TryEmbedAsync i.p.v. EmbedOneAsync (#299): de kap zit sinds #301 in
+            // EmbeddingService, en een gekapte vector hoort op de rij te landen —
+            // anders is "welke vectoren zijn partieel?" over een half jaar
+            // onbeantwoordbaar. Gooit nog steeds bij uitval, zoals dit pad altijd al
+            // deed; alleen de kap-feiten komen er nu bij.
+            var docEmbed = await embeddings.TryEmbedAsync([$"{topic.Title}\n{body}"], ct);
+            if (!docEmbed.Ok)
+                throw new InvalidOperationException(
+                    $"Embedding mislukt ({docEmbed.Outcome}): {docEmbed.Error ?? "onbekende fout"}");
             var doc = existing;
             if (doc is null)
             {
@@ -98,8 +106,9 @@ public class PrimerService(
                 db.KnowledgeDocs.Add(doc);
             }
             PrimerDraft.Apply(doc, topic.Title, body, bodyNl, refs, DateTimeOffset.UtcNow);
-            doc.Embedding = docEmbedding;
+            doc.Embedding = docEmbed.Vectors![0];
             doc.EmbeddingModel = EmbeddingConfig.Model;
+            doc.EmbeddingTruncatedAt = docEmbed.Capped > 0 ? docEmbed.CappedAt : null;
             await db.SaveChangesAsync(ct);
             written++;
         }

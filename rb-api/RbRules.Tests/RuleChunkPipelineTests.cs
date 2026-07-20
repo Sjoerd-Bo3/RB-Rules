@@ -177,6 +177,77 @@ public class RuleChunkPipelineTests
         Assert.Contains("opgeslagen tekst blijft volledig", summary);
     }
 
+    // ── #302: de melding noemt de langste ORIGINELE invoer ───────────────────
+
+    [Fact]
+    public void Summarize_NoemtHoeVerErovereenWeZaten()
+    {
+        // "afgekapt op 6000 tekens" zegt niet of het om 6001 of om 20.000 ging, en dat
+        // is juist wat een beheerder nodig heeft om te wegen of het budget knelt.
+        // Meerdere bronnen: de LANGSTE telt, niet de laatste of de eerste.
+        var results = new List<RuleIndexResult>
+        {
+            new("errata", 12, Capped: 1, CappedLongest: 6400),
+            new("core", 30, Capped: 2, CappedLongest: 20_000),
+        };
+
+        var summary = results.Summarize();
+
+        Assert.Contains("3 chunk(s) te lang voor het embed-budget (langste invoer 20000)",
+            summary);
+    }
+
+    [Fact]
+    public void Summarize_ZonderKapping_ZwijgtOverDeLengte()
+    {
+        // Anders staat er bij élke run een lengte in de melding, en dan zegt het getal
+        // niets meer.
+        var summary = new List<RuleIndexResult> { new("core", 30) }.Summarize();
+
+        Assert.DoesNotContain("langste invoer", summary);
+        Assert.DoesNotContain("afgekapt", summary);
+    }
+
+    // ── #299: kapping is een 'warn', geen 'ok' ───────────────────────────────
+
+    [Fact]
+    public void AnyCapped_OnderscheidtEenGekapteRunVanEenSchone()
+    {
+        // Dit is wat de run_log-status bepaalt. Onder 'ok' hangt de melding buiten het
+        // beheer-paneel (dat op de status kijkt) en zakt ze uit het 15-rijen-venster van
+        // de logtabel — een waarschuwing die nooit opkomt.
+        Assert.True(new List<RuleIndexResult> { new("core", 30, Capped: 1) }.AnyCapped());
+        Assert.False(new List<RuleIndexResult> { new("core", 30) }.AnyCapped());
+    }
+
+    [Fact]
+    public async Task Index_ChunkBovenHetBudget_MeldtDeLangsteOrigineleInvoer()
+    {
+        await using var db = NewDb();
+        db.Sources.Add(Src("errata"));
+        var lang = "101. " + string.Concat(Enumerable.Repeat("token ", 3000));
+        db.Documents.Add(new Document
+        {
+            Id = 1, SourceId = "errata", ContentHash = "h1", Content = lang,
+        });
+        await db.SaveChangesAsync();
+
+        // 5xx ná het parsen: EF InMemory kent geen ExecuteDeleteAsync, dus het
+        // geslaagde swap-pad is hier niet te draaien (zie klasse-toelichting). De
+        // kap-boekhouding wordt vóór het embedden gedaan en komt dus wél terug.
+        var results = await Pipeline(db, _ => new HttpResponseMessage(HttpStatusCode.InternalServerError))
+            .RunAsync(force: true);
+
+        var r = Assert.Single(results);
+        Assert.Equal(1, r.Capped);
+        // Onafhankelijk uitgerekend: de parser laat deze ene puntloze "zin" heel, dus
+        // de langste originele chunk is minstens zo lang als het budget — en zeker niet 0.
+        Assert.True(r.CappedLongest > EmbeddingSettings.DefaultBatchChars,
+            $"CappedLongest ({r.CappedLongest}) hoort de ORIGINELE lengte te zijn, niet 0 "
+            + "of de kaplengte");
+        Assert.Contains($"(langste invoer {r.CappedLongest})", results.Summarize());
+    }
+
     // ── Samenvatting voor de aanroepers ──────────────────────────────────────
 
     [Fact]

@@ -402,6 +402,49 @@ met quota en rate-limiting.
   een ruime bovengrens — verhogen kan dan niet zonder de bijbehorende
   `memory:`-cap ook aan te raken. Let op: die meting is alleen geldig bij de
   huidige Ollama-cap (2560m); verzet je die, dan is de reeks verlopen.
+- **Een garantie die de AANROEPER moet naleven is geen garantie** (#301). #293 zette
+  de embed-kap in de twee pijplijnen en noemde dat "élk verzoek blijft binnen het
+  gemeten veilige bereik" — maar `EmbedAsync`/`EmbedOneAsync` kenden het budget niet,
+  dus tien andere aanroepplekken gingen er ongelimiteerd langs. De reële was de
+  primer-draft-bewerking: een reviewer plakt een body, die gaat ongemeten naar Ollama,
+  en bij 8000+ tekens is dat geen mislukte embed maar een OOM-kill van llama-server —
+  een VM-BREED incident dat de `catch` als hikje liet ogen. Tel bij zo'n claim altijd
+  de aanroepplekken (`grep` op de publieke methodes) en zet de begrenzing op de laagste
+  laag waar niemand eromheen kan. Twee scherpe randen: (a) **per item kappen dicht het
+  gat maar half** — een aanroeper die tien teksten in één call aanbiedt maakt er alsnog
+  10 × budget van, dus de service moet óók splitsen, en dan zijn deelverzoeken
+  alles-of-niets zodat de koppeling vector↔entiteit niet verschuift; (b) een handmatige
+  snee elders in de codebase (`InteractionService` sneed op 1500, een getal dat nergens
+  anders voorkomt) is het BEWIJS dat het probleem ad hoc werd opgelost — die snee mag
+  weg zodra de echte garantie er staat.
+- **Een provenance-variant hoort op de RIJ, niet in een run-melding** (#299). Een
+  vector die over AFGEKAPTE invoer is berekend zegt iets anders dan zijn buren in
+  dezelfde kolom, maar #293 legde dat alleen per RUN vast. run_log-rijen verouderen,
+  dus "welke vectoren zijn partieel?" was een half jaar later niet eens te
+  reconstrueren — het budget kan intussen verschoven zijn. Vandaar
+  `embedding_truncated_at` (nullable int, additief) op card/rule_chunk/knowledge_doc:
+  de KAPLENGTE en niet een vlag, zodat je bij een verhoogd budget direct ziet welke
+  rijen baat hebben, en EF-vertaalbaar zodat de her-embed-lijst één `Where` is. Schrijf
+  hem bij ELKE (her)embed, óók naar null — anders heet een rij die intussen past voor
+  eeuwig partieel. Tweede helft: een run die kapte maar verder slaagde schreef `ok`,
+  terwijl het beheer-paneel alléén op `error` reageert — een waarschuwing die nooit
+  opkwam, de spiegelvorm van "een alarm dat alleen door veroudering dooft". Zulke runs
+  krijgen `warn`; een echte fout wint altijd, anders maskeert de nieuwe waarschuwing
+  het oude alarm.
+- **Dood veld + commentaar dat gedrag belooft = comment-rot** (#302). `CappedItems.
+  LongestOriginal` werd buiten de tests nergens gelezen, terwijl het doc-commentaar
+  beloofde dat de melding hem gebruikte. Kies dan bewust: bedraden of weghalen, nooit
+  laten staan. Hier bedraden, want "afgekapt op 6000 tekens" zegt niet of het om 6001
+  of om 20000 ging — en juist dát zegt of het budget knelt. Wel alleen tonen waar het
+  ergens over gaat: een lengte in élke run-melding maakt het getal betekenisloos.
+- **Een plafond op de meetwaarde zet de beheerder op de klifrand** (#303 — correctie op
+  de #293-les hieronder). #293 verlaagde het `EMBED_BATCH_CHARS`-plafond van 100000 naar
+  `MeasuredSafeMaxBatchChars` (7000) en dat is een grote verbetering, maar 7000 is de
+  laatste waarde die het HAALDE: de code noemt het zelf "de klifrand, geen veilige
+  plek". De default kreeg marge (6000), de knop niet — en juist die knop wordt gebruikt
+  op een moment dat het al misgaat. Nu `MaxConfigurableBatchChars` = meetwaarde × 9/10 =
+  6300. Bewust NIET gelijk aan de default: dan is de knop alleen nog een noodrem omlaag
+  en kun je niet meer bijstellen zonder deploy.
 - **Een 4xx van Ollama betekent niet "model niet gepulld"** (#293). Dat was de
   hint in `EmbedOutcomeTally`, en hij stuurde de beheerder de verkeerde kant op:
   het model stónd er (`bge-m3:latest`, 1,2 GB). Een OOM-kill van de model-runner
