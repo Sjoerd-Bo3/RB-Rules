@@ -14,6 +14,18 @@ public sealed record EntityResolution(
 /// open + lange labels) en hoeveel naar review gingen.</summary>
 public sealed record MergeScanResult(int Proposed, int AutoMerged, int Queued, bool GateOpen);
 
+/// <summary>Uitkomst van het vullen van de canonieke entiteitenlaag (#250):
+/// hoeveel distinct surface-forms het vocabulaire aandroeg, hoeveel daarvan als
+/// NIEUWE kandidaat-entiteit zijn geregistreerd, hoeveel er al bestonden, en hoeveel
+/// entiteiten (nieuw of bestaand) een definitie uit de officiële regeltekst kregen.
+/// Herhaald draaien levert <c>Created = 0</c> — de registratie is idempotent.</summary>
+public sealed record EntityRegistrationResult(int Surfaces, int Created, int Existing, int Defined)
+{
+    public string Summary =>
+        $"{Surfaces} termen uit het vocabulaire, {Created} nieuwe canonieke entiteiten " +
+        $"(kandidaat), {Existing} bestonden al, {Defined} definitie(s) uit de regeltekst";
+}
+
 /// <summary>Fase 1 (#225) — entity-resolution &amp; canonicalisatie. Hangt de IO
 /// (Postgres = SoT) om de pure bouwstenen in <see cref="Domain.EntityResolution"/>:
 /// resolveert surface-forms tegen het alias-lexicon VÓÓR er een nieuwe kandidaat
@@ -91,13 +103,30 @@ public class EntityResolutionService(RbRulesDbContext db)
         return entity;
     }
 
-    /// <summary>Additieve backfill: registreert bestaande mechanic-strings
-    /// (<c>Card.Mechanics[]</c> + geaccepteerde <see cref="MechanicKeyword"/>-termen)
-    /// als canonieke entiteiten, zonder de bronvelden aan te raken (NIET-destructief;
-    /// scope-eis #225). Elke term resolvet eerst tegen het lexicon — al bekende
-    /// termen leveren geen duplicaat. Retourneert het aantal nieuw aangemaakte
-    /// entiteiten.</summary>
-    public async Task<int> RegisterExistingMechanicsAsync(string kind, CancellationToken ct = default)
+    /// <summary>Het expliciete VUL-PAD van de canonieke entiteitenlaag (#225-backfill,
+    /// #250): registreert bestaande mechanic-strings (<c>Card.Mechanics[]</c> +
+    /// geaccepteerde <see cref="MechanicKeyword"/>-termen) als canonieke entiteiten,
+    /// zonder de bronvelden aan te raken (NIET-destructief; scope-eis #225).
+    ///
+    /// Waarom een eigen pad (#250): <c>BreinInteractionMiningService</c> RESOLVEERT
+    /// alleen tegen bestaande entiteiten en registreert er bewust nooit een — zonder
+    /// deze stap blijft <c>canonicalEntities = 0</c>, vindt <c>breinmine-predicaten</c>
+    /// nul subjects en tonen de mechanic-hovers geen definitie, terwijl er honderden
+    /// interacties naar <c>mechanic:{label}</c> verwijzen.
+    ///
+    /// Elke nieuwe rij krijgt status <c>candidate</c> en de <see cref="MiningRun"/>-id
+    /// als provenance (<see cref="CanonicalEntity.CreatedByRunId"/>) — geen stille
+    /// promotie naar <c>canonical</c> (rode draad #236); dat blijft de review-poort.
+    /// Definities komen deterministisch uit de officiële regeltekst
+    /// (<see cref="KeywordDefinition"/>): alleen een sectie die de term daadwerkelijk
+    /// definieert telt, anders blijft het veld leeg. Ook een REEDS bestaande entiteit
+    /// zonder definitie wordt zo alsnog aangevuld (de hover vult zich bij een volgende
+    /// run) — dat raakt alleen het beschrijvende veld, nooit de status.
+    ///
+    /// Idempotent: elke term resolvet eerst tegen het alias-lexicon, dus herhaald
+    /// draaien maakt geen duplicaten en levert <c>Created = 0</c>.</summary>
+    public async Task<EntityRegistrationResult> RegisterExistingMechanicsAsync(
+        string kind, Action<string>? progress = null, CancellationToken ct = default)
     {
         if (!CanonicalEntityKinds.IsValid(kind))
             throw new ArgumentException($"Onbekend canoniek kind '{kind}'.", nameof(kind));
@@ -120,34 +149,61 @@ public class EntityResolutionService(RbRulesDbContext db)
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .ToList();
 
-        var created = 0;
+        // Officiële regeltekst als definitie-bron: één keer geladen, per term
+        // in-memory doorzocht (zelfde patroon als de partner-pool in de mining —
+        // geen query per term, en de poort zelf is puur/Domain).
+        var sectionTexts = await db.RuleChunks.AsNoTracking()
+            .Where(c => c.Text != "")
+            .OrderBy(c => c.SourceId).ThenBy(c => c.ChunkIndex)
+            .Select(c => c.Text)
+            .ToListAsync(ct);
+
+        int created = 0, existing = 0, defined = 0, processed = 0;
         // Genormaliseerde basis dedupe binnen deze run (zodat twee kaarten met
         // dezelfde mechanic niet twee entiteiten maken vóór de eerste is opgeslagen).
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var surface in surfaceForms)
         {
-            var normalizedBase = AliasNormalizer.Normalize(Magnitude.Parse(surface).BaseLabel);
+            var baseLabel = Magnitude.Parse(surface).BaseLabel;
+            var normalizedBase = AliasNormalizer.Normalize(baseLabel);
             if (normalizedBase.Length == 0 || !seen.Add(normalizedBase)) continue;
 
+            processed++;
+            progress?.Invoke($"canonieke entiteiten registreren: {processed} termen");
+
+            var definition = KeywordDefinition.Find(baseLabel, sectionTexts);
             var resolution = await ResolveAsync(surface, kind, ct);
-            if (resolution.Matched) continue;
+            if (resolution.Entity is { } known)
+            {
+                existing++;
+                // Alleen aanvullen, nooit overschrijven: een handmatig/eerder
+                // vastgelegde definitie blijft staan.
+                if (string.IsNullOrWhiteSpace(known.Definition) && definition is not null)
+                {
+                    known.Definition = definition;
+                    defined++;
+                }
+                continue;
+            }
 
             db.CanonicalEntities.Add(new CanonicalEntity
             {
                 Kind = kind,
-                CanonicalLabel = Magnitude.Parse(surface).BaseLabel,
+                CanonicalLabel = baseLabel,
                 AltLabels = [],
+                Definition = definition,
                 Status = CanonicalEntityStatus.Candidate,
                 CreatedByRunId = run.Id,
             });
             created++;
+            if (definition is not null) defined++;
         }
 
         run.Candidates = surfaceForms.Count;
         run.Verified = created;
         run.CompletedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
-        return created;
+        return new(processed, created, existing, defined);
     }
 
     // ── Dedup: drietraps-signalen, GEEN agressieve auto-merge ────────────────

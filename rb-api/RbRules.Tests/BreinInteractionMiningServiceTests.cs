@@ -247,15 +247,77 @@ public class BreinInteractionMiningServiceTests
         Assert.Equal(InteractionStatus.Candidate, ix.Status);
     }
 
-    // ── Card→keyword promoveert op kaart-eigen tekst, niet op de kaartnaam (#226) ─
+    // ── #249: kaart↔EIGEN keyword levert géén promoveerbare Interaction meer ─────
+    // Regressie op de kernbevinding: 264 van 383 live interacties (69%) waren
+    // kaart↔eigen-keyword. Dat feit staat al deterministisch in de graph
+    // (HAS_KEYWORD uit Card.Mechanics) en verdrong de gekwalificeerde interacties
+    // waar de tabel voor bedoeld is. De lexicale poort beloonde het bovendien
+    // triviaal: de kaart ís de ene rol en haar keyword staat in haar eigen tekst.
     [Fact]
-    public async Task RunAsync_CardKeyword_LexicaleSteunOpKaarttekst_ZonderKaartnaam()
+    public async Task RunAsync_KaartMetEigenKeyword_LevertGeenInteractie()
     {
         using var db = NewDb();
-        // De kaartnaam "Vanguard Sentinel" staat NIET in de kaarttekst; het keyword
-        // "Deflect" wel. De kaart ís het bewijs voor haar eigen card-rol.
+        // Precies de live-vorm: "Cloth Armor REQUIRES Equip" terwijl Equip gewoon
+        // in Card.Mechanics staat.
+        await SeedCardAsync(db, "ogn-040", "Cloth Armor", "Gear",
+            "[Equip] Attach to a unit. It gets +1 might.", ["Quick-Draw", "Equip"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "card:ogn-040", to = "mechanic:Equip", kind = "REQUIRES", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(0, r.Promoted);
+        Assert.Equal(0, r.Candidates);
+        Assert.Equal(0, r.Hypothesized);
+        Assert.Equal(0, r.Extracted);       // geen kandidaat: herkauwde kennis
+        Assert.Equal(1, r.SkippedKnown);    // wél zichtbaar geteld
+        Assert.Empty(await db.Interactions.ToListAsync());
+        Assert.Empty(await db.Assertions.ToListAsync());
+        // Géén grafsteen: er is niets verworpen dat later gegrond kan blijken — de
+        // kennis leeft gewoon deterministisch in de graph.
+        Assert.Empty(await db.RejectionTombstones.ToListAsync());
+    }
+
+    // De deterministische kaart→keyword-projectie blijft ONGEMOEID: Card.Mechanics
+    // is de bron waar GraphSyncService de HAS_KEYWORD-edges uit bouwt, en de mining
+    // raakt dat bronveld niet aan (#249-acceptatie).
+    [Fact]
+    public async Task RunAsync_LaatCardMechanicsOngemoeid_GraphProjectieBlijftIntact()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-040", "Cloth Armor", "Gear",
+            "[Equip] Attach to a unit.", ["Quick-Draw", "Equip"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "card:ogn-040", to = "mechanic:Equip", kind = "REQUIRES", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        await svc.RunAsync(maxFocusCards: 1);
+
+        var card = await db.Cards.SingleAsync();
+        Assert.Equal(["Quick-Draw", "Equip"], card.Mechanics!);
+    }
+
+    // ── #249: card↔ANDERMANS keyword blijft wél een geldige interactie ───────────
+    // De poort mag niet doorslaan: een kaart die een keyword beïnvloedt dat zij
+    // zelf NIET draagt, is precies wel een echte relatie — en die staat letterlijk
+    // in haar tekst.
+    [Fact]
+    public async Task RunAsync_CardKeyword_NietHaarEigen_PromoveertOpKaarttekst()
+    {
+        using var db = NewDb();
+        // De kaartnaam staat NIET in de tekst; het keyword "Deflect" wel — maar
+        // Deflect is een keyword van de PARTNER, niet van de focus-kaart zelf.
         await SeedCardAsync(db, "ogn-040", "Vanguard Sentinel", "Unit",
-            "This unit counters Deflect.", ["Deflect"]);
+            "This unit counters Deflect.", ["Tank"]);
+        await SeedCardAsync(db, "ogn-041", "Shieldbearer", "Unit",
+            "Deflect prevents damage.", ["Tank", "Deflect"]);
 
         var svc = Service(db, () => Interactions(new
         {
@@ -265,13 +327,93 @@ public class BreinInteractionMiningServiceTests
 
         var r = await svc.RunAsync(maxFocusCards: 1);
 
-        // Vroeger eiste de poort de kaartnaam in de tekst ⇒ nooit steun ⇒ eeuwig
-        // kandidaat. Nu telt de kaart-eigen tekst en promoveert de interactie.
         Assert.Equal(1, r.Promoted);
+        Assert.Equal(0, r.SkippedKnown);
         var ix = await db.Interactions.SingleAsync();
         Assert.Equal("card:ogn-040", ix.AgentRef);
         Assert.Equal("mechanic:Deflect", ix.PatientRef);
         Assert.Equal(InteractionStatus.Promoted, ix.Status);
+    }
+
+    // ── #249: buurt-keywords worden aangeboden ⇒ mech↔mech kan ontstaan ──────────
+    // Vroeger boden we alleen de keywords van de FOCUS-kaart aan; een keyword van
+    // een partner viel buiten de enum en het model kón het paar niet noemen (live:
+    // mech↔mech was 5 van 383). Nu draagt de aanbieding de keywords van de hele
+    // gedeelde-mechaniek-buurt.
+    [Fact]
+    public async Task RunAsync_BiedtBuurtKeywordsAan_MechMechParenZijnMogelijk()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-050", "Alpha", "Unit",
+            "Tank reduces the damage that Assault would deal.", ["Tank"]);
+        // Assault is een keyword van de PARTNER (gedeelde mechaniek: Tank).
+        await SeedCardAsync(db, "ogn-051", "Beta", "Unit", "Assault deals damage.", ["Tank", "Assault"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Assault", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        // Beide labels staan in de tekst van de focus-kaart ⇒ relatie-bewijs.
+        Assert.Equal(1, r.Promoted);
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal("mechanic:Tank", ix.AgentRef);
+        Assert.Equal("mechanic:Assault", ix.PatientRef);
+    }
+
+    // ── #249: een regelsectie is bewijs voor een mech↔mech-relatie ───────────────
+    // De officiële regeltekst is waar keyword↔keyword-relaties daadwerkelijk staan
+    // opgeschreven; zonder die bewijsbron bleven zulke paren eeuwig 'kandidaat'.
+    [Fact]
+    public async Task RunAsync_RegelsectieAlsBewijs_PromoveertMechMech()
+    {
+        using var db = NewDb();
+        // De kaarttekst noemt de labels NIET — alleen de regelsectie doet dat.
+        await SeedCardAsync(db, "ogn-060", "Gamma", "Unit", "It has some ability.", ["Snipe", "Tank"]);
+        db.RuleChunks.Add(new RuleChunk
+        {
+            SourceId = "core-rules-pdf", SectionCode = "704.2", ChunkIndex = 1,
+            Text = "Tank reduces incoming damage before Snipe assigns its damage.",
+        });
+        await db.SaveChangesAsync();
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Snipe", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        // Vroeger: geen bewijs in de kaarttekst ⇒ kandidaat. Nu draagt de officiële
+        // regelsectie het bewijs en promoveert het paar.
+        Assert.Equal(1, r.Promoted);
+        Assert.Equal(0, r.Candidates);
+    }
+
+    // ── #249: twee identiteits-ankers zijn geen relatie-bewijs ───────────────────
+    [Fact]
+    public async Task RunAsync_AlleenIdentiteitsAnkers_GeenLexicaleSteun()
+    {
+        using var db = NewDb();
+        // Kaart A noemt kaart B niet bij naam; beide zijn alleen "zichzelf".
+        await SeedCardAsync(db, "ogn-070", "Alpha", "Unit", "Some effect.", ["Fury"]);
+        await SeedCardAsync(db, "ogn-071", "Beta", "Unit", "Another effect.", ["Fury"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "card:ogn-070", to = "card:ogn-071", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        // Cold-start-tier, niet gepromoveerd: er is geen bewijszin die de relatie uitdrukt.
+        Assert.Equal(0, r.Promoted);
+        Assert.Equal(1, r.Hypothesized);
     }
 
     // ── Negatief verdict + deterministische steun → Rejected + tombstone, geen knoop ─
@@ -329,6 +471,42 @@ public class BreinInteractionMiningServiceTests
         Assert.Equal(0, run.Verified);
     }
 
+    // ── #251: de uitvals-OORZAAK staat in de samenvatting (run-detail/cockpit) ──
+    [Fact]
+    public async Task RunAsync_RbAiUitval_SplitstDeOorzaakUitInDeSamenvatting()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        // Aanhoudende rate-limit: vroeger telde dit als een kale "1 rb-ai-uitval"
+        // en was niet te zien dat het om 429's ging.
+        var svc = new BreinInteractionMiningService(
+            db, RateLimitedAi(), new EntityResolutionService(db), new InteractionPromotionService(db));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Failed);
+        Assert.Equal("429 rate-limit×1", r.FailureDetail);
+        Assert.Contains("(429 rate-limit×1)", r.Summary);
+    }
+
+    [Fact]
+    public async Task RunAsync_ZonderUitval_HeeftGeenOorzaakStaart()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        var svc = Service(db, () => Interactions());
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(0, r.Failed);
+        Assert.Null(r.FailureDetail);
+        Assert.EndsWith("0 rb-ai-uitval", r.Summary);   // geen oorzaak-staart
+    }
+
     // ── Nachtrun-deadline (#245) ───────────────────────────────────────────────
     [Fact]
     public async Task RunAsync_DeadlineVerstreken_StoptDirect_GeenHalfFeit_MeerWerk()
@@ -377,6 +555,16 @@ public class BreinInteractionMiningServiceTests
             HttpRequestMessage request, CancellationToken ct) =>
             Task.FromResult(respond(request));
     }
+
+    /// <summary>rb-ai dat structureel 429 geeft (#251), met een no-op backoff zodat
+    /// de test niet echt wacht.</summary>
+    private static RbAiClient RateLimitedAi() => new(
+        new HttpClient(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)))
+        { BaseAddress = new Uri("http://rb-ai.test") },
+        NullLogger<RbAiClient>.Instance)
+    {
+        RetryDelay = (_, _) => Task.CompletedTask,
+    };
 
     private static RbAiClient Ai(Func<string?> body) => new(
         new HttpClient(new StubHandler(_ => body() is { } b

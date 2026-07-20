@@ -184,7 +184,7 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
 
         var domainPairs = Pairs(cards, c => c.Domains, BrainRef.Domain);
         var tagPairs = Pairs(cards, c => c.Tags, BrainRef.Tag);
-        var mechanicPairs = Pairs(cards, c => c.Mechanics ?? [], BrainRef.Mechanic);
+        var mechanicPairs = MechanicPairs(cards);
 
         var sectionRows = sections.Select(s => (object)new Dictionary<string, object?>
         {
@@ -720,6 +720,16 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             $"UNWIND $pairs AS p {matchMergeClause}",
             new Dictionary<string, object> { ["pairs"] = pairs });
     }
+
+    /// <summary>De DETERMINISTISCHE kaart→mechanic-projectie (HAS_MECHANIC): één rij
+    /// per (kaart, mechanic), recht uit <see cref="Card.Mechanics"/> — geen LLM, geen
+    /// Interaction-tabel. Als eigen, intern-zichtbare methode zodat een regressietest
+    /// (#249) kan vastleggen dat déze laag blijft bestaan: de brein-mining mag
+    /// kaart↔eigen-keyword niet meer als <c>Interaction</c> herkauwen, maar de
+    /// kaart↔keyword-structuur in de graph moet daar ongewijzigd doorheen komen —
+    /// dat netwerk ís de graph-verkenner.</summary>
+    internal static List<object> MechanicPairs(IEnumerable<Card> cards) =>
+        Pairs(cards, c => c.Mechanics ?? [], BrainRef.Mechanic);
 
     private static List<object> Pairs(
         IEnumerable<Card> cards, Func<Card, string[]> selector, Func<string, BrainRef> refFor) =>

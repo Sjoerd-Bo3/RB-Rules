@@ -18,6 +18,7 @@
 		mechanicPredicates: number;
 		mineInteractionsRun: JobRun | null;
 		minePredicatesRun: JobRun | null;
+		registerEntitiesRun: JobRun | null;
 		canonicalEntities: number;
 		projectionRun: JobRun | null;
 		conflicts: number;
@@ -70,11 +71,20 @@
 		return `laatste run ${fmtAgo(run.at)} geleden${tail}`;
 	}
 
-	// De twee extractie-jobs (stap 1), als config zodat de twee job-rijen niet
-	// dupliceren. n=0 → "nog niet gedraaid — leeg" als teller-tekst.
+	// De extractie-jobs (stap 1), als config zodat de job-rijen niet dupliceren.
+	// n=0 → "nog niet gedraaid — leeg" als teller-tekst. De entiteiten-registratie
+	// staat vooraan: zij vult de canonieke laag waartegen de mining resolveert —
+	// zonder die rijen vindt de predicaat-mining nul subjects (#250).
 	const step1jobs = $derived(
 		cockpit
 			? [
+					{
+						name: 'breinentiteiten',
+						label: 'Canonieke entiteiten registreren',
+						n: cockpit.canonicalEntities,
+						unit: 'entiteiten',
+						run: cockpit.registerEntitiesRun
+					},
 					{
 						name: 'breinmine-interacties',
 						label: 'Interacties minen',
@@ -92,7 +102,12 @@
 				]
 			: []
 	);
-	const step1empty = $derived(!!cockpit && cockpit.interactions === 0 && cockpit.mechanicPredicates === 0);
+	const step1empty = $derived(
+		!!cockpit &&
+			cockpit.interactions === 0 &&
+			cockpit.mechanicPredicates === 0 &&
+			cockpit.canonicalEntities === 0
+	);
 
 	// Pill-toon (kleur + tekst, geen emoji) per stap uit de laatste-run.
 	function stepPill(run: JobRun | null | undefined, okText: string): { tone: string; text: string } {
@@ -105,6 +120,7 @@
 	const reasonPill = $derived(stepPill(cockpit?.reasonRun, 'gedraaid'));
 
 	const startedLabel: Record<string, string> = {
+		breinentiteiten: 'Canonieke entiteiten registreren',
 		'breinmine-interacties': 'Interacties minen',
 		'breinmine-predicaten': 'Mechanic-predicaten minen',
 		breinprojectie: 'Projectie naar Neo4j',
@@ -239,8 +255,9 @@
 						<h3 class="step-title">Extractie</h3>
 						<span class="tier {step1empty ? '' : 'ok'}">{step1empty ? 'nog niet gedraaid — leeg' : 'gevuld'}</span>
 					</div>
-					<p class="step-desc">Tool-forced, ontologie-begrensde mining via rb-ai: gereïficeerde
-						interacties en mechanic-predicaten uit de kaarten.</p>
+					<p class="step-desc">Eerst de canonieke entiteiten registreren (deterministisch, uit
+						het mechanic-vocabulaire en de regeltekst), daarna tool-forced, ontologie-begrensde
+						mining via rb-ai: gereïficeerde interacties en mechanic-predicaten.</p>
 					<div class="jobrows">
 						{#each step1jobs as j (j.name)}
 							<div class="jobrow">

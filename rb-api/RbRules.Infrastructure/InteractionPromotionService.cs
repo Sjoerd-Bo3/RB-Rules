@@ -12,6 +12,10 @@ namespace RbRules.Infrastructure;
 /// <param name="DerivedFromRef">DERIVED_FROM (verplicht, geldige BrainRef): de bron
 /// waaruit het feit is afgeleid — de gecite RuleSection, de bronkaart, of het
 /// brondocument.</param>
+/// <param name="IsCardOwnKeywordPair">Is dit paar een kaart met haar EIGEN keyword
+/// (#249)? De aanroeper weet dat (hij kent <c>Card.Mechanics</c>); de poort weigert
+/// het dan als al-deterministisch-bekend feit. Default false — het is een
+/// aanvullende guard, geen verplichting voor bestaande aanroepers.</param>
 public sealed record InteractionPromotionRequest(
     string AgentRef, EntityType AgentType,
     string PatientRef, EntityType PatientType,
@@ -21,7 +25,8 @@ public sealed record InteractionPromotionRequest(
     IReadOnlyList<InteractionConditionInput> Conditions,
     bool LexicalSupport,
     int ConsensusCount,
-    bool LlmVerdictInteracts);
+    bool LlmVerdictInteracts,
+    bool IsCardOwnKeywordPair = false);
 
 /// <summary>Eén conditie-invoer (window/status/cost) op een promotie-verzoek.</summary>
 public sealed record InteractionConditionInput(
@@ -100,7 +105,11 @@ public class InteractionPromotionService(RbRulesDbContext db)
             ConsensusThreshold: consensusThreshold,
             LlmVerdictInteracts: request.LlmVerdictInteracts,
             IsEmergentCardCardPair: isCardCard,
-            HasBlockingTombstone: hasBlockingTombstone);
+            HasBlockingTombstone: hasBlockingTombstone,
+            // Rollen-poort (#249): self-loop is hier gratis vast te stellen; de
+            // kaart↔eigen-keyword-vlag komt van de aanroeper (die kent Card.Mechanics).
+            RolesDistinct: !string.Equals(request.AgentRef, request.PatientRef, StringComparison.Ordinal),
+            IsCardOwnKeywordPair: request.IsCardOwnKeywordPair);
 
         var gate = InteractionPromotionGate.Evaluate(signals);
 

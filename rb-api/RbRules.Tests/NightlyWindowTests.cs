@@ -96,4 +96,71 @@ public class NightlyWindowTests
         // (zelfde vangnet als ScanSchedulerScheduleTests voor de JobSchedules).
         Assert.NotNull(JobCatalog.Find("nachtrun"));
     }
+
+    // ── NIGHTLY_ENABLED: de noodrem op de automatische nachtrun ──────────────
+
+    [Fact]
+    public void Settings_ZonderEnvVar_StaatDeNachtrunAan()
+    {
+        WithEnabled(null, () => Assert.True(NightlyRunSettings.FromEnvironment().Enabled));
+        Assert.True(NightlyRunSettings.Default.Enabled);
+    }
+
+    [Theory]
+    [InlineData("false")]
+    [InlineData("FALSE")]
+    [InlineData("0")]
+    [InlineData("no")]
+    [InlineData("off")]
+    [InlineData(" false ")]
+    public void Settings_ExplicieteUitWaarde_PauzeertDeNachtrun(string value) =>
+        WithEnabled(value, () => Assert.False(NightlyRunSettings.FromEnvironment().Enabled));
+
+    [Theory]
+    [InlineData("true")]
+    [InlineData("1")]
+    [InlineData("")]
+    [InlineData("misschien")]   // typfout mag de keten niet stil stilleggen
+    public void Settings_OverigeWaarden_LatenDeNachtrunAan(string value) =>
+        WithEnabled(value, () => Assert.True(NightlyRunSettings.FromEnvironment().Enabled));
+
+    [Fact]
+    public void Settings_OngeldigVenster_LaatDePauzeKeuzeIntact()
+    {
+        // Het venster valt terug op de default, maar een bewuste NIGHTLY_ENABLED=false
+        // mag daar niet door ongedaan gemaakt worden.
+        var start = Environment.GetEnvironmentVariable("NIGHTLY_START_HOUR");
+        var end = Environment.GetEnvironmentVariable("NIGHTLY_END_HOUR");
+        try
+        {
+            Environment.SetEnvironmentVariable("NIGHTLY_START_HOUR", "22");
+            Environment.SetEnvironmentVariable("NIGHTLY_END_HOUR", "6");
+            WithEnabled("false", () =>
+            {
+                var s = NightlyRunSettings.FromEnvironment();
+                Assert.Equal(0, s.StartHour);
+                Assert.Equal(11, s.EndHour);
+                Assert.False(s.Enabled);
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NIGHTLY_START_HOUR", start);
+            Environment.SetEnvironmentVariable("NIGHTLY_END_HOUR", end);
+        }
+    }
+
+    private static void WithEnabled(string? value, Action assert)
+    {
+        var previous = Environment.GetEnvironmentVariable("NIGHTLY_ENABLED");
+        try
+        {
+            Environment.SetEnvironmentVariable("NIGHTLY_ENABLED", value);
+            assert();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NIGHTLY_ENABLED", previous);
+        }
+    }
 }

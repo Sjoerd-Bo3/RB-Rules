@@ -9,12 +9,15 @@ namespace RbRules.Infrastructure;
 /// cap geraakt is (drain-signaal, #190).</summary>
 public sealed record BreinInteractionMiningResult(
     int FocusCards, int Extracted, int Promoted, int Candidates,
-    int Hypothesized, int Rejected, int Failed, bool CapHit)
+    int Hypothesized, int Rejected, int Failed, bool CapHit,
+    int SkippedKnown = 0, string? FailureDetail = null)
 {
     public string Summary =>
         $"{FocusCards} kaarten, {Extracted} kandidaten geëxtraheerd → " +
         $"{Promoted} gepromoveerd, {Candidates} kandidaat, {Hypothesized} hypothese, " +
-        $"{Rejected} verworpen, {Failed} rb-ai-uitval";
+        $"{Rejected} verworpen, {SkippedKnown} al-bekend (kaart↔eigen-keyword), " +
+        $"{Failed} rb-ai-uitval" +
+        (string.IsNullOrEmpty(FailureDetail) ? "" : $" ({FailureDetail})");
 }
 
 /// <summary>Brein-mining-orkestratie voor gekwalificeerde interacties (#226, §3.1 +
@@ -31,7 +34,28 @@ public sealed record BreinInteractionMiningResult(
 /// Degradatie is het verwachte pad: rb-ai null → die focus-kaart wordt overgeslagen
 /// (Failed++), er wordt GEEN half feit geschreven, en de job rondt netjes af. De
 /// selectie is bewust bounded (cap per run) en idempotent via de dedupe-sleutel van
-/// de promotie-poort — herhaald draaien maakt geen duplicaten.</summary>
+/// de promotie-poort — herhaald draaien maakt geen duplicaten.
+///
+/// Herijkt in #249. De meting op 383 live interacties liet zien dat 69% kaart↔
+/// eigen-keyword was — een feit dat al gratis en deterministisch bestaat
+/// (<c>GraphSyncService</c> projecteert <c>Card.Mechanics[]</c> als HAS_KEYWORD),
+/// terwijl mech↔mech (het échte doel) op 1,3% bleef en 77% geen enkele conditie
+/// droeg. De oorzaak zat in de aanbieding én in de poort: we boden vooral een kaart
+/// mét haar eigen keywords aan, en de lexicale poort beloonde precies die
+/// tautologie (de kaart ís de ene rol; haar keyword staat gebracket in haar eigen
+/// tekst). Drie wijzigingen, samen:
+/// <list type="number">
+/// <item>kaart↔eigen-keyword wordt niet meer geminded (overgeslagen ná parse, vóór
+/// promotie) én de promotie-poort weigert het als guard;</item>
+/// <item>de aanbieding draagt nu de keywords van de HELE buurt (focus + partners)
+/// plus relevante regelsecties als bewijstekst, zodat mech↔mech-interacties
+/// überhaupt kunnen ontstaan en een officieel anker kunnen hebben;</item>
+/// <item>de lexicale poort eist dat het bewijs een RELATIE uitdrukt: beide rollen
+/// verankerd in ÉÉN bewijs-eenheid én minstens één van beide textueel
+/// (<see cref="InteractionEvidence"/>) — twee identiteits-ankers tellen niet.</item>
+/// </list>
+/// De deterministische graph-projectie blijft ONGEMOEID: kaart→mechanic-edges
+/// bestaan gewoon door, ze komen alleen niet meer uit een dure LLM-omweg.</summary>
 public class BreinInteractionMiningService(
     RbRulesDbContext db, RbAiClient ai, EntityResolutionService entityResolution,
     InteractionPromotionService promotion)
@@ -39,9 +63,17 @@ public class BreinInteractionMiningService(
     private const int DefaultMaxFocusCards = 40;
     private const int DefaultMaxPartners = 4;
 
+    /// <summary>Maximaal aantal regelsecties dat als bewijstekst meegaat per focus-
+    /// kaart (#249). Alleen secties die MINSTENS TWEE aangeboden keyword-labels
+    /// noemen: dat is precies waar een keyword↔keyword-relatie officieel staat
+    /// opgeschreven, en het houdt de prompt begrensd.</summary>
+    private const int MaxRuleSections = 3;
+
     /// <summary>De prompt-versie-stempel op de <see cref="MiningRun"/> — bump bij een
-    /// wijziging aan de extractie-prompt/vorm (stale-conditie voor her-mining, §3.5).</summary>
-    public const string PromptVersion = "breinmine-interactions-v1";
+    /// wijziging aan de extractie-prompt/vorm (stale-conditie voor her-mining, §3.5).
+    /// v2 (#249): andere aanbieding (buurt-keywords + regelsecties) en een
+    /// aangescherpte systeem-prompt.</summary>
+    public const string PromptVersion = "breinmine-interactions-v2";
 
     public async Task<BreinInteractionMiningResult> RunAsync(
         int maxFocusCards = DefaultMaxFocusCards, int maxPartners = DefaultMaxPartners,
@@ -95,9 +127,21 @@ public class BreinInteractionMiningService(
                 .ToListAsync(ct)
             : [];
 
+        // Officiële regeltekst als bewijsbron (#249): één keer geladen, per focus-
+        // kaart in-memory gefilterd (zelfde patroon als de partner-pool). Dit is de
+        // bron waar keyword↔keyword-relaties daadwerkelijk staan opgeschreven — de
+        // kaartteksten alleen leverden vrijwel geen mech↔mech op.
+        var ruleSections = await db.RuleChunks.AsNoTracking()
+            .Where(c => c.Text != "")
+            .OrderBy(c => c.SourceId).ThenBy(c => c.ChunkIndex)
+            .Select(c => new SectionLite(c.SourceId, c.SectionCode, c.Text))
+            .ToListAsync(ct);
+
         var run = await StartRunAsync(windowLexicon, statusLexicon, ct);
 
         int extracted = 0, promoted = 0, candidates = 0, hypothesized = 0, rejected = 0, failed = 0;
+        var skippedKnown = 0;
+        var aiTally = new AiOutcomeTally();   // uitval per oorzaak (#251)
         var processed = 0;
         var deadlineHit = false;
         foreach (var card in focus)
@@ -108,14 +152,14 @@ public class BreinInteractionMiningService(
             processed++;
             progress?.Invoke($"interacties extraheren via rb-ai: {processed}/{focus.Count}");
 
-            var offered = await BuildOfferedRefsAsync(card, partnerPool, maxPartners, ct);
+            var offered = await BuildOfferedRefsAsync(card, partnerPool, ruleSections, maxPartners, ct);
             if (offered.Refs.Count < 2) continue; // niets zinnigs om over te redeneren
 
             var vocab = new ExtractionVocab(
                 offered.Refs.Select(r => new OfferedRef(r.Ref, r.Label, r.Type)).ToList(),
                 windowLexicon, statusLexicon);
 
-            var raw = await ai.ExtractStructuredAsync(
+            var call = await ai.ExtractStructuredDetailedAsync(
                 "/extract/interactions",
                 new
                 {
@@ -129,35 +173,52 @@ public class BreinInteractionMiningService(
                     statusLexicon,
                 }, ct);
 
-            if (raw is null)
+            if (call.Raw is null)
             {
-                // Degradatie: rb-ai weg → geen half feit, sla deze kaart over.
+                // Degradatie: rb-ai weg → geen half feit, sla deze kaart over. De
+                // OORZAAK wordt wel geteld (#251) zodat het run-detail laat zien of
+                // dit rate-limits, timeouts of onleesbare antwoorden waren.
                 failed++;
+                aiTally.Add(call.Outcome);
                 continue;
             }
 
             var byRef = offered.Refs.ToDictionary(r => r.Ref, StringComparer.Ordinal);
-            foreach (var ix in InteractionExtraction.Parse(raw, vocab))
+            var parsed = InteractionExtraction.Parse(call.Raw, vocab);
+            // Geldig antwoord zonder kandidaten is geslaagd werk, geen uitval —
+            // apart geteld zodat "rb-ai gaf niets" en "rb-ai wist niets" niet meer
+            // op één hoop belanden.
+            aiTally.Add(parsed.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
+            foreach (var ix in parsed)
             {
                 if (!byRef.TryGetValue(ix.FromRef, out var from)
                     || !byRef.TryGetValue(ix.ToRef, out var to))
                     continue; // buiten de aangeboden set — parse gate't dit al, dubbel slot
+
+                // Tautologie-poort (#249): kaart↔eigen-keyword is al deterministisch
+                // bekend (HAS_KEYWORD uit Card.Mechanics, GraphSyncService) — niet
+                // minen, niet promoveren, en ook niet als "geëxtraheerd" tellen: het
+                // is geen kandidaat maar herkauwde kennis. Apart geteld zodat de
+                // cockpit ziet hoe vaak het model er nog naartoe trekt.
+                if (InteractionTautology.IsCardOwnKeywordPair(from.Ref, to.Ref, offered.OwnKeywordRefs))
+                {
+                    skippedKnown++;
+                    continue;
+                }
                 extracted++;
 
                 var conditions = ix.Conditions
                     .Select(c => new InteractionConditionInput(c.OnKind, c.SubjectRole, c.Value, c.Operator))
                     .ToList();
 
-                // Lexicale steun (§3.4, versla defect 3/4): bestaat er ÉÉN aangeboden
-                // kaart waarvan de tekst BEIDE rollen verankert? Een rol is verankerd
-                // wanneer die kaart de rol ZÉLF is (een card-rol draagt zijn bewijs in
-                // zijn eigen tekst — de kaartnaam hoeft er niet in te staan) of wanneer
-                // het rol-label letterlijk in die kaarttekst staat. Zo telt cross-card-
-                // aanwezigheid (twee termen in VERSCHILLENDE kaarten) niet als steun, en
-                // promoveert een card→keyword-interactie op de kaart-eigen tekst i.p.v.
-                // op de nooit-in-de-tekst-staande kaartnaam.
-                var lexical = offered.EvidenceCards.Any(ec =>
-                    RoleAnchored(ec, from) && RoleAnchored(ec, to));
+                // Lexicale steun (§3.4, versla defect 3/4; verscherpt in #249):
+                // bestaat er ÉÉN bewijs-eenheid — een aangeboden kaart óf een
+                // regelsectie — die een RELATIE tussen beide rollen uitdrukt? Beide
+                // rollen moeten er verankerd zijn (co-occurrence binnen één eenheid,
+                // geen cross-card-toeval) én minstens één van beide TEXTUEEL: een
+                // kaart die alleen zichzelf verankert bewijst niets over een relatie.
+                var lexical = offered.Evidence.Any(unit => InteractionEvidence.ExpressesRelation(
+                    Anchor(unit, from), Anchor(unit, to)));
 
                 var request = new InteractionPromotionRequest(
                     AgentRef: from.Ref, AgentType: from.Type,
@@ -190,43 +251,71 @@ public class BreinInteractionMiningService(
         // FocusCards = daadwerkelijk verwerkt (bij een deadline-stop < focus.Count).
         // CapHit ⇔ er blijft vers werk liggen: cap geraakt óf deadline afgekapt.
         return new(processed, extracted, promoted, candidates, hypothesized, rejected, failed,
-            capHit || deadlineHit);
+            capHit || deadlineHit, skippedKnown,
+            aiTally.Summary is { Length: > 0 } detail ? detail : null);
     }
 
-    /// <summary>De aangeboden refs (enum-vocabulaire) + de per-kaart bewijsteksten voor
-    /// één focus-kaart: de kaart zelf, partner-kaarten die ≥1 mechaniek delen (bounded,
-    /// uit de vooraf geladen <paramref name="partnerPool"/>), en de entity-geresolvete
-    /// keyword-refs van de focus-kaart. Entity-resolutie (fase 1) draait VÓÓR de refs
-    /// ontstaan zodat synoniem-varianten ("Deflect"/"Deflecting") op één ref landen
-    /// (versla #2). De bewijsteksten blijven per kaart gescheiden zodat de lexicale
-    /// poort co-occurrence binnen ÉÉN kaart eist, niet over de samengevoegde tekst
-    /// (versla defect 3).</summary>
+    /// <summary>De aangeboden refs (enum-vocabulaire) + de bewijs-eenheden voor één
+    /// focus-kaart. Herzien in #249 om mech↔mech mogelijk te maken:
+    /// <list type="bullet">
+    /// <item>de focus-kaart en partner-kaarten die ≥1 mechaniek delen (bounded, uit
+    /// de vooraf geladen <paramref name="partnerPool"/>) — de card-rollen;</item>
+    /// <item>de entity-geresolvete keyword-refs van de HELE buurt (focus + partners),
+    /// niet alleen van de focus-kaart. Alleen focus-keywords aanbieden maakte
+    /// kaart↔eigen-keyword vrijwel de enige mogelijke uitkomst; met de buurt-
+    /// keywords ontstaan er überhaupt keyword-PAREN om over te redeneren;</item>
+    /// <item>regelsecties die minstens twee aangeboden keyword-labels noemen, als
+    /// BEWIJSTEKST (niet als rol — de HAS_ROLE-range is Card/Keyword, een
+    /// RuleSection kan geen agent/patient zijn). Dáár staat een keyword↔keyword-
+    /// relatie officieel opgeschreven.</item>
+    /// </list>
+    /// Entity-resolutie (fase 1) draait VÓÓR de refs ontstaan zodat synoniem-
+    /// varianten ("Deflect"/"Deflecting") op één ref landen (versla #2). De
+    /// bewijsteksten blijven per eenheid gescheiden zodat de lexicale poort
+    /// co-occurrence binnen ÉÉN eenheid eist, niet over de samengevoegde tekst
+    /// (versla defect 3). <see cref="OfferedSet.OwnKeywordRefs"/> legt per kaart-ref
+    /// vast welke keyword-refs haar EIGEN mechanics zijn — de tautologie-poort.</summary>
     private async Task<OfferedSet> BuildOfferedRefsAsync(
-        Card card, IReadOnlyList<CardLite> partnerPool, int maxPartners, CancellationToken ct)
+        Card card, IReadOnlyList<CardLite> partnerPool, IReadOnlyList<SectionLite> ruleSections,
+        int maxPartners, CancellationToken ct)
     {
         var refs = new List<OfferedRefRow>();
-        var promptParts = new List<string>();      // met ref-headers, naar rb-ai
-        var evidenceCards = new List<EvidenceCard>(); // rauwe kaarttekst per kaart, lexicale poort
+        var promptParts = new List<string>();       // met ref-headers, naar rb-ai
+        var evidence = new List<EvidenceUnit>();    // rauwe tekst per eenheid, lexicale poort
+        var ownKeywords = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
 
         // Focus-kaart.
         var focusRef = BrainRef.Card(card.RiftboundId).Format();
         refs.Add(new(focusRef, card.Name, CardEntityType(card.Type)));
         promptParts.Add($"[{focusRef} — {card.Name}] {card.TextPlain}");
-        evidenceCards.Add(new(focusRef, card.TextPlain ?? ""));
+        evidence.Add(new(focusRef, card.TextPlain ?? ""));
 
         var mechanics = card.Mechanics ?? [];
 
-        // Keyword-refs, entity-geresolvet (canoniek label → één ref).
+        // Keyword-refs, entity-geresolvet (canoniek label → één ref). Per kaart
+        // onthouden welke refs HAAR eigen mechanics zijn (tautologie-poort, #249).
         var seenKeyword = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var surface in mechanics.Where(m => !string.IsNullOrWhiteSpace(m)))
+        async Task<IReadOnlySet<string>> AddKeywordsAsync(IEnumerable<string> surfaces)
         {
-            var label = await ResolveKeywordLabelAsync(surface, ct);
-            if (label.Length == 0 || !seenKeyword.Add(label)) continue;
-            refs.Add(new(BrainRef.Mechanic(label).Format(), label, EntityType.Keyword));
+            var own = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var surface in surfaces.Where(m => !string.IsNullOrWhiteSpace(m)))
+            {
+                var label = await ResolveKeywordLabelAsync(surface, ct);
+                if (label.Length == 0) continue;
+                var kwRef = BrainRef.Mechanic(label).Format();
+                own.Add(kwRef);
+                if (seenKeyword.Add(label))
+                    refs.Add(new(kwRef, label, EntityType.Keyword));
+            }
+            return own;
         }
 
+        ownKeywords[focusRef] = await AddKeywordsAsync(mechanics);
+
         // Partner-kaarten die een mechaniek delen (deterministische kandidaat-buurt) —
-        // in-memory uit de vooraf geladen pool (versla defect 5).
+        // in-memory uit de vooraf geladen pool (versla defect 5). Hun keywords komen
+        // óók in de aanbieding: dat maakt kruisverbanden (mech↔mech, kaart↔ANDERS
+        // kaarts keyword) mogelijk in plaats van alleen de eigen-keyword-tautologie.
         if (maxPartners > 0 && mechanics.Length > 0)
         {
             var mechSet = mechanics.Select(m => m.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -239,15 +328,37 @@ public class BreinInteractionMiningService(
                 var pRef = BrainRef.Card(p.RiftboundId).Format();
                 refs.Add(new(pRef, p.Name, CardEntityType(p.Type)));
                 promptParts.Add($"[{pRef} — {p.Name}] {p.TextPlain}");
-                evidenceCards.Add(new(pRef, p.TextPlain ?? ""));
+                evidence.Add(new(pRef, p.TextPlain ?? ""));
+                ownKeywords[pRef] = await AddKeywordsAsync(p.Mechanics ?? []);
                 picked++;
             }
         }
 
+        // Regelsecties als bewijs (#249): alleen secties die ≥2 aangeboden keyword-
+        // labels noemen — daar staat een relatie tussen twee keywords officieel
+        // beschreven. Ze zijn GEEN offered ref (een RuleSection is geen geldige
+        // HAS_ROLE-filler), alleen tekst waarop de lexicale poort mag steunen.
+        var keywordLabels = refs.Where(r => r.Type == EntityType.Keyword)
+            .Select(r => r.Label).ToList();
+        if (keywordLabels.Count >= 2)
+        {
+            var pickedSections = 0;
+            foreach (var s in ruleSections)
+            {
+                if (pickedSections >= MaxRuleSections) break;
+                if (keywordLabels.Count(l => TextContains(s.Text, l)) < 2) continue;
+                var label = s.SectionCode is { Length: > 0 } code
+                    ? $"{s.SourceId} §{code}" : s.SourceId;
+                promptParts.Add($"[regels {label}] {s.Text}");
+                evidence.Add(new(CardRef: null, s.Text));
+                pickedSections++;
+            }
+        }
+
         // Prompt-tekst draagt de ref-headers zodat het model refs↔kaarten mapt; de
-        // evidence-teksten zijn de RAUWE kaartteksten (per kaart) — de lexicale poort
+        // evidence-teksten zijn de RAUWE bron-teksten (per eenheid) — de lexicale poort
         // mag niet triviaal slagen op een label dat we zelf in een header plakten.
-        return new(refs, string.Join("\n", promptParts), evidenceCards);
+        return new(refs, string.Join("\n", promptParts), evidence, ownKeywords);
     }
 
     /// <summary>Resolveert een keyword-surface-form tegen de canonieke laag (fase 1):
@@ -285,23 +396,37 @@ public class BreinInteractionMiningService(
             && OntologySchema.IsA(et, EntityType.Card)
             ? et : EntityType.Card;
 
-    /// <summary>Is rol <paramref name="role"/> verankerd in bewijskaart
-    /// <paramref name="ec"/> (versla defect 3/4)? Waar wanneer de kaart de rol zélf is
-    /// (een card-rol draagt zijn bewijs in zijn eigen tekst — de kaartnaam hoeft er niet
-    /// in te staan) of wanneer het rol-label letterlijk in díe kaarttekst voorkomt
-    /// (co-occurrence binnen ÉÉN kaart, geen cross-card-toeval).</summary>
-    private static bool RoleAnchored(EvidenceCard ec, OfferedRefRow role) =>
-        string.Equals(ec.Ref, role.Ref, StringComparison.Ordinal)
-        || TextContains(ec.Text, role.Label);
+    /// <summary>Hoe sterk verankert bewijs-eenheid <paramref name="unit"/> rol
+    /// <paramref name="role"/> (versla defect 3/4; #249)? <see cref="EvidenceAnchor.Identity"/>
+    /// wanneer de eenheid de rol ZÉLF is (een card-rol draagt zijn bewijs in zijn eigen
+    /// tekst — de kaartnaam hoeft er niet in te staan), <see cref="EvidenceAnchor.Textual"/>
+    /// wanneer het rol-label letterlijk in díe tekst voorkomt (co-occurrence binnen ÉÉN
+    /// eenheid, geen cross-card-toeval), anders <see cref="EvidenceAnchor.None"/>.
+    /// Het onderscheid identity/textueel is wat #249 nodig had: alleen een textueel
+    /// anker kan bewijs voor een RELATIE zijn.</summary>
+    private static EvidenceAnchor Anchor(EvidenceUnit unit, OfferedRefRow role) =>
+        string.Equals(unit.CardRef, role.Ref, StringComparison.Ordinal)
+            ? EvidenceAnchor.Identity
+            : TextContains(unit.Text, role.Label)
+                ? EvidenceAnchor.Textual
+                : EvidenceAnchor.None;
 
     private static bool TextContains(string text, string term) =>
         !string.IsNullOrWhiteSpace(term)
         && text.Contains(term.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private sealed record OfferedRefRow(string Ref, string Label, EntityType Type);
-    private sealed record EvidenceCard(string Ref, string Text);
+
+    /// <summary>Eén bewijs-eenheid voor de lexicale poort: een kaarttekst
+    /// (<paramref name="CardRef"/> gezet — die kaart is dan zijn eigen identiteits-
+    /// anker) of een regelsectie (<paramref name="CardRef"/> null, alleen tekst).</summary>
+    private sealed record EvidenceUnit(string? CardRef, string Text);
+
     private sealed record CardLite(
         string RiftboundId, string Name, string? Type, string[]? Mechanics, string? TextPlain);
+    private sealed record SectionLite(string SourceId, string? SectionCode, string Text);
     private sealed record OfferedSet(
-        IReadOnlyList<OfferedRefRow> Refs, string PromptText, IReadOnlyList<EvidenceCard> EvidenceCards);
+        IReadOnlyList<OfferedRefRow> Refs, string PromptText,
+        IReadOnlyList<EvidenceUnit> Evidence,
+        IReadOnlyDictionary<string, IReadOnlySet<string>> OwnKeywordRefs);
 }

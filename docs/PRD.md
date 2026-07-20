@@ -963,7 +963,25 @@ de globale duur-vangrail).
   het watermark). Overdag blijven de losse jobs gecapt. Ook handmatig te
   starten in **beheer → Brein → "Volledige nachtrun"** (die knop toont ook de
   laatste nachtrun-afronding); handmatig buiten het venster draait zonder
-  deadline (volledige drain).
+  deadline (volledige drain). **Noodrem** (#249): `NIGHTLY_ENABLED=false` zet
+  de automatische start uit zonder code-wijziging of deploy — handmatig
+  starten via de knop blijft werken. Default aan; alleen een expliciete
+  uit-waarde schakelt uit, zodat een typfout de keten niet stil stillegt.
+- **Brein-extractie herijkt** (#249/#250/#251) — een meting op 383 live
+  interacties liet zien dat 69% kaart↔**eigen** keyword was: kennis die al
+  gratis en deterministisch bestaat (de graph projecteert `Card.Mechanics[]`
+  al als kaart→mechanic-edges), terwijl mech↔mech — het eigenlijke doel — op
+  1,3% bleef. Drie wijzigingen: dat paar wordt niet meer gemined (apart geteld,
+  géén grafsteen), de aanbieding kijkt naar de hele gedeelde-mechaniek-buurt
+  plus regelsecties als bewijstekst (niet als rol), en de poort eist een échte
+  relatie in plaats van twee identiteits-ankers. Nieuw is de deterministische
+  job **`breinentiteiten`**: het enige pad dat canonieke entiteiten aandraagt —
+  zonder die stap bleef de laag leeg, vond predicaat-mining nul subjects en
+  bleven mechanic-hovers zonder definitie. Definities komen uit de officiële
+  regeltekst en alleen als een sectie mét de term ópent; anders leeg (een
+  verzonnen definitie is erger dan geen). **rb-ai-uitval wordt nu per oorzaak
+  geteld** (rate-limit/timeout/serverfout/parsefout/leeg) en staat in het
+  run-detail en de cockpit, met bounded retry bij rate-limits.
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
   er ook als signaalregel op (#171, `SourceDossierCompleteness`), met

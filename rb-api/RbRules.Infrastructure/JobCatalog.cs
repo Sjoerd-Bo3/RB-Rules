@@ -82,6 +82,14 @@ public static class JobCatalog
             // beheerdersbeslissing, zelfde lijn als "graph"/"reason"/"claims"). De
             // extractie is de eerste live rb-ai-koppeling van de fase-2/5-vorm; de
             // promotie-poort en atomaire persistentie zijn al bewezen (ReifiedInteractionTests).
+            // Canonieke entiteitenlaag vullen (#250): het ENIGE pad dat
+            // CanonicalEntity-rijen aandraagt. De mining resolveert bewust alleen
+            // (leest), dus zonder deze stap blijft de entiteitenlaag leeg en vindt
+            // "breinmine-predicaten" nul subjects. Deterministisch (vocabulaire +
+            // regeltekst, geen LLM), idempotent en goedkoop — daarom staat hij
+            // logisch vóór de twee mining-jobs en als eerste brein-stap in de
+            // nachtrun.
+            new("breinentiteiten", BreinRegisterEntitiesAsync),
             new("breinmine-interacties", BreinMineInteractionsAsync),
             new("breinmine-predicaten", BreinMinePredicatesAsync),
             // Nachtrun (#245): de volledige ONGECAPTE keten in één job —
@@ -228,8 +236,8 @@ public static class JobCatalog
     /// Deadline = venster-einde (<see cref="NightlyRunSettings"/>) als binnen het
     /// venster gestart, anders geen deadline (handmatige volledige drain — bv. de
     /// beheer-knop overdag). Elke stap best-effort in volgorde: alles bijwerken
-    /// (ongecapte mechaniek-mining) → brein-interacties → brein-predicaten →
-    /// projectie → reason. De mining-services stoppen zelf netjes op de deadline;
+    /// (ongecapte mechaniek-mining) → canonieke entiteiten (#250) → brein-interacties
+    /// → brein-predicaten → projectie → reason. De mining-services stoppen zelf netjes op de deadline;
     /// hun watermark bewaart de voortgang voor de volgende nacht.</summary>
     private static async Task<JobOutcome> RunNightlyAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
@@ -254,17 +262,24 @@ public static class JobCatalog
         await Stage("alles bijwerken (ongecapt)", async () =>
             (await RunAllAsync(sp, p => report($"nachtrun · {p}"), ct,
                 mechanicMaxBatches: Domain.NightlyWindow.UncappedBatches, deadline: deadline)).Detail);
-        // 2. Brein-interacties, ongecapt.
+        // 2. Canonieke entiteiten registreren (#250) — deterministisch en goedkoop,
+        // maar wél de voorwaarde voor stap 4: zonder entiteiten vindt de predicaat-
+        // mining nul subjects. Draait ná de kaart-sync (nieuwe set = nieuwe keywords)
+        // en vóór de mining, die alleen tegen deze laag resolveert.
+        await Stage("canonieke entiteiten", async () =>
+            (await sp.GetRequiredService<EntityResolutionService>().RegisterExistingMechanicsAsync(
+                Domain.CanonicalEntityKinds.Keyword, p => report($"nachtrun · {p}"), ct)).Summary);
+        // 3. Brein-interacties, ongecapt.
         await Stage("brein-interacties (ongecapt)", async () =>
             (await sp.GetRequiredService<BreinInteractionMiningService>().RunAsync(
                 maxFocusCards: Domain.NightlyWindow.UncappedItems, deadline: deadline,
                 progress: p => report($"nachtrun · {p}"), ct: ct)).Summary);
-        // 3. Brein-predicaten, ongecapt.
+        // 4. Brein-predicaten, ongecapt.
         await Stage("brein-predicaten (ongecapt)", async () =>
             (await sp.GetRequiredService<BreinPredicateMiningService>().RunAsync(
                 maxSubjects: Domain.NightlyWindow.UncappedItems, deadline: deadline,
                 progress: p => report($"nachtrun · {p}"), ct: ct)).Summary);
-        // 4. Projectie + reason (Neo4j, geen LLM) op wat er nu staat.
+        // 5. Projectie + reason (Neo4j, geen LLM) op wat er nu staat.
         await Stage("brein-projectie", async () =>
             (await sp.GetRequiredService<BreinProjectionService>().ProjectAsync(progress: report, ct: ct)).Summary);
         await Stage("reason", async () =>
@@ -405,6 +420,16 @@ public static class JobCatalog
         var r = await sp.GetRequiredService<InteractionService>()
             .MineAsync(progress: report, ct: ct);
         return new($"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd");
+    }
+
+    private static async Task<JobOutcome> BreinRegisterEntitiesAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<EntityResolutionService>()
+            .RegisterExistingMechanicsAsync(Domain.CanonicalEntityKinds.Keyword, report, ct);
+        // Ongecapt: het vocabulaire is klein (tientallen termen) en de stap doet
+        // geen LLM-werk — één run verwerkt altijd alles.
+        return new(r.Summary);
     }
 
     private static async Task<JobOutcome> BreinMineInteractionsAsync(

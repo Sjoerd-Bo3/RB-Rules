@@ -7,11 +7,12 @@ namespace RbRules.Infrastructure;
 /// nieuw aangedragen predicaten, overgeslagen (dedupe/geen-tekst) en rb-ai-uitval,
 /// plus of de per-run-cap geraakt is.</summary>
 public sealed record BreinPredicateMiningResult(
-    int Subjects, int Mined, int Skipped, int Failed, bool CapHit)
+    int Subjects, int Mined, int Skipped, int Failed, bool CapHit, string? FailureDetail = null)
 {
     public string Summary =>
         $"{Subjects} mechanics/keywords, {Mined} predicaten aangedragen (ter review), " +
-        $"{Skipped} overgeslagen, {Failed} rb-ai-uitval";
+        $"{Skipped} overgeslagen, {Failed} rb-ai-uitval" +
+        (string.IsNullOrEmpty(FailureDetail) ? "" : $" ({FailureDetail})");
 }
 
 /// <summary>Brein-mining-orkestratie voor getypeerde mechanic-predicaten (#226/#229,
@@ -75,6 +76,7 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
             .ToList();
 
         int mined = 0, skipped = 0, failed = 0;
+        var aiTally = new AiOutcomeTally();   // uitval per oorzaak (#251)
         var processed = 0;
         var deadlineHit = false;
         foreach (var subject in subjects)
@@ -93,7 +95,7 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
             }
 
             var subjectRef = subject.Ref.Format();
-            var raw = await ai.ExtractStructuredAsync(
+            var call = await ai.ExtractStructuredDetailedAsync(
                 "/extract/predicates",
                 new
                 {
@@ -105,9 +107,10 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
                     objectHints,
                 }, ct);
 
-            if (raw is null)
+            if (call.Raw is null)
             {
-                failed++; // degradatie: geen half feit
+                failed++;                  // degradatie: geen half feit
+                aiTally.Add(call.Outcome); // maar de oorzaak wordt geteld (#251)
                 continue;
             }
 
@@ -123,7 +126,10 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
 
             var toAdd = new List<MechanicPredicateAssertion>();
             var seenThisSubject = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var p in MechanicPredicateExtraction.Parse(raw))
+            var parsed = MechanicPredicateExtraction.Parse(call.Raw);
+            // Geldig antwoord zonder predicaten is geslaagd werk, geen uitval.
+            aiTally.Add(parsed.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
+            foreach (var p in parsed)
             {
                 var key = MechanicPredicateDedupe.Key(subject.Id, p.Predicate, p.ObjectToken);
                 if (existingKeys.Contains(key) || !seenThisSubject.Add(key))
@@ -156,7 +162,8 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
 
         // Subjects = daadwerkelijk verwerkt (bij deadline-stop < subjects.Count);
         // CapHit ⇔ er blijft vers werk liggen: cap geraakt óf deadline afgekapt.
-        return new(processed, mined, skipped, failed, capHit || deadlineHit);
+        return new(processed, mined, skipped, failed, capHit || deadlineHit,
+            aiTally.Summary is { Length: > 0 } detail ? detail : null);
     }
 
     /// <summary>Bewijstekst voor één subject: de <see cref="CanonicalEntity.Definition"/>

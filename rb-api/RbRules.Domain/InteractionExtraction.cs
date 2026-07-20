@@ -52,6 +52,19 @@ public static class InteractionExtraction
         - conditions: alleen als de regel een voorwaarde stelt (window/status/cost);
           laat leeg als de interactie onvoorwaardelijk is. Pers geen ambigue conditie
           plat — laat die dan weg.
+
+        Waar het om gaat:
+        - ZOEK VOORAL naar relaties TUSSEN KEYWORDS (mechanic:X ↔ mechanic:Y): hoe
+          grijpen twee mechanieken op elkaar in? Dat is de kennis die nergens anders
+          staat.
+        - Meld NOOIT dat een kaart haar eigen keyword heeft. Dat een kaart met
+          [Equip] het keyword Equip draagt is al bekend en wordt weggegooid — het is
+          geen interactie maar een eigenschap.
+        - Een kaart-rol is alleen zinvol tegenover iets ANDERS dan haar eigen
+          keywords: een andere kaart, of een keyword dat zij beïnvloedt zonder het
+          zelf te dragen.
+        - Regelteksten in de invoer ("[regels …]") zijn BEWIJS, geen rol: gebruik ze
+          om een relatie te onderbouwen, maar noem ze niet als from/to.
         """;
 
     /// <summary>De reïficatie-verplichte relatie-kinds als enum-vocabulaire
