@@ -240,6 +240,47 @@ met quota en rate-limiting.
   `rb-ai/src/failure.ts` doet dat nu op één plek. Diagnostiek gaat verplicht
   door `safeDetail`/`redactSecrets` — groottes en aantallen loggen mag,
   prompt-inhoud en het token nooit.
+- **Een poort die je kunt omzeilen is geen poort — en redactie is geen
+  privacy** (#292). #281 zette de redactie-poort neer, maar twee oudere
+  `console.log`'s in `ai.ts` liepen er gewoon omheen; geen enkele test zag dat,
+  want ze testten allemaal de poort zelf. Twee regels sindsdien. (a) In rb-ai
+  schrijft **alleen `failure.ts`** naar stdout (`logEvent`); wil je iets melden,
+  gebruik die. (b) Door `safeDetail` halen is niet altijd genoeg: die haalt
+  SECRETS eruit, geen **gebruikersinvoer**. De agentic tool-argumenten zijn bij
+  `semantic_search` in de praktijk de vraagtekst van de bezoeker — daar is de
+  oplossing niet "beter redacteren" maar de inhoud **niet meegeven** (toolnaam +
+  argument-MAAT; de volledige stap gaat naar `AskTrace.BrainSteps`, achter de
+  admin-poort). Vraag bij elke nieuwe logregel dus twee dingen: kan hier een
+  secret in, én kan hier iets van een gebruiker in.
+- **Structurele en gedragstests dekken verschillende gaten — kies bewust welk**
+  (#292). Een grep-test op de broncode faalt op een pure refactor en ziet echte
+  bugs niet; #281 leerde dat al duur. Maar gedragstests kunnen per definitie
+  niet zien dat er een TWEEDE pad bestaat dat ze nooit aanroepen, en dat was
+  precies de bug van #292. Vandaar de splitsing: gedragstests op de poort en op
+  de privacy-beslissing, plus één structurele test op het enige dat gedrag niet
+  kan zien ("alleen `failure.ts` schrijft"). Formuleer zo'n structurele regel op
+  het GEVAAR (wie schrijft naar stdout), nooit op de VORM van de fix (geen
+  template-interpolatie) — die laatste mist een concatenatie of een `String(e)`
+  en struikelt over een hernoeming. Drie scherpe randen, alle drie duur betaald
+  in de review van #295: (a) een grep op de aanroepvorm heeft ALTIJD omzeilingen
+  (`globalThis.console.log`, `console["log"]`, `const c = console`,
+  `process.stdout.write.bind(…)` glippen alle vier langs `console\.\w+\(`) —
+  match op de identifier, en scan recursief; (b) commentaar meenemen geeft een
+  vals-positief op je eigen waarschuwing, maar naïef strippen geeft een blinde
+  vlek (`fetch("http://x"); console.log(y)`) — strip commentaar, strings én
+  regex-literalen met een scannertje; (c) zet het patroon op ÉÉN plek, anders
+  toetst de meta-test zijn eigen kopie in plaats van de echte scan.
+- **Een test die het secret zelf al vernietigt, kan niet falen** (#295-review) —
+  de scherpste variant van "vier PR's afgekeurd omdat de test de vorm van de fix
+  vastlegde". `logEvent` rende­rde niet-strings met `String(value)`, dus
+  `{ header: "Bearer <token>" }` werd `"[object Object]"`. De redactietest stopte
+  een token in precies zo'n object en was groen — niet omdat er geredacteerd
+  werd, maar omdat het token per constructie nooit in de regel kwam. De bug en
+  de test hieven elkaar op. Twee regels: serialiseer vóór je redacteert
+  (`JSON.stringify`, en `name: message (cause: …)` voor Errors — `String()`
+  redacteert niet, het VERNIETIGT, en dat is de stille-diagnostiekverlies-val
+  van #282), en laat een redactietest altijd óók asserteren dat de NIET-geheime
+  inhoud OVERLEEFT. Zonder die tweede assert bewijst hij niets.
 - **Reken een hypothese na op de wandkloktijd** (#281) — 40 kaarten in 43 min
   met 18 successen laat maar één oplossing toe: 22 × ~85 s, oftewel de
   90 s-timeout. Zulke rekensommen sluiten hele klassen verklaringen uit vóór je

@@ -1,5 +1,7 @@
-// Faaldiagnostiek voor rb-ai (#281). PUUR (geen Agent SDK, geen IO behalve één
-// console.log in `logCall`) zodat het volledig unit-testbaar is.
+// Faaldiagnostiek voor rb-ai (#281). PUUR (geen Agent SDK, geen IO behalve de
+// ene `console.log` in `logEvent`) zodat het volledig unit-testbaar is. Sinds
+// #292 is die ene regel ook letterlijk de enige stdout-schrijver van de hele
+// sidecar — zie {@link logEvent}.
 //
 // AANLEIDING. Een mining-run over 40 kaarten meldde `22 rb-ai-uitval (5xx×22)`
 // terwijl `docker logs rb-v2-ai` precies ÉÉN regel bevatte: de opstartregel.
@@ -205,26 +207,38 @@ const AUTH_PATTERNS = [
   /not logged in/i,
 ];
 
+/** De tekst waaruit we een geworpen fout beoordelen: `name: message (cause: …)`.
+ *
+ * BEWUST GEEN `e.stack` (#281-review): een stack trace draagt frames, paden en
+ * soms geïnterpoleerde argumenten mee — een onbegrensd kanaal waar van alles in
+ * kan zitten. `name` + `message` + `cause` is genoeg om de faalsoort te bepalen,
+ * en is begrensd tot wat de werper zelf formuleerde. Voeg `stack` hier niet toe
+ * "voor de diagnose": dat vergroot het lekoppervlak zonder de classificatie te
+ * verbeteren.
+ *
+ * `cause` draagt bij de SDK vaak de ECHTE systeemfout (spawn/ENOMEM) achter een
+ * generieke wrapper; zonder meelezen blijft die onzichtbaar. Eén helper voor
+ * {@link describeThrown} én {@link logEvent} (#295-review): die twee gaven
+ * eerst een tegengesteld oordeel over `cause` binnen hetzelfde bestand — de een
+ * las hem bewust wél, de ander gooide hem weg. NIET redacterend: elke aanroeper
+ * haalt het resultaat door {@link safeDetail}. */
+function renderThrown(e: unknown): string {
+  const name = e instanceof Error ? e.name : typeof e;
+  const message = e instanceof Error ? e.message : String(e);
+  const cause =
+    e instanceof Error && e.cause !== undefined
+      ? ` (cause: ${e.cause instanceof Error ? `${e.cause.name}: ${e.cause.message}` : String(e.cause)})`
+      : "";
+  return `${name}: ${message}${cause}`;
+}
+
 /** Vertaal een GEWORPEN fout naar een uitvalsoort. Wordt gebruikt op elk pad
  * waar `query()` of de omliggende bedrading daadwerkelijk gooit — anders dan
  * bij een mislukte run, die als resultaatbericht binnenkomt
  * (zie {@link resultFailure}). */
 export function describeThrown(e: unknown): AiFailure {
   const name = e instanceof Error ? e.name : typeof e;
-  // BEWUST GEEN `e.stack` (#281-review): een stack trace draagt frames, paden en
-  // soms geïnterpoleerde argumenten mee — een onbegrensd kanaal waar van alles
-  // in kan zitten. `name` + `message` + `cause` is genoeg om de faalsoort te
-  // bepalen, en is begrensd tot wat de werper zelf formuleerde. Voeg `stack`
-  // hier niet toe "voor de diagnose": dat vergroot het lekoppervlak zonder de
-  // classificatie te verbeteren.
-  const message = e instanceof Error ? e.message : String(e);
-  // `cause` draagt bij de SDK vaak de echte systeemfout (spawn/ENOMEM); zonder
-  // meelezen blijft die onzichtbaar achter een generieke wrapper.
-  const cause =
-    e instanceof Error && e.cause !== undefined
-      ? ` (cause: ${e.cause instanceof Error ? `${e.cause.name}: ${e.cause.message}` : String(e.cause)})`
-      : "";
-  const haystack = `${name}: ${message}${cause}`;
+  const haystack = renderThrown(e);
   const detail = safeDetail(haystack);
 
   if (name === "AbortError" || /\babort/i.test(haystack)) return { reason: "aborted", detail };
@@ -485,6 +499,76 @@ export function withStderr(failure: AiFailure, stderr: StderrTail): AiFailure {
   return { reason: failure.reason, detail: safeDetail(`${failure.detail} | stderr: ${tail}`) };
 }
 
+/** Render één logwaarde tot tekst die {@link safeDetail} kan redacteren.
+ *
+ * WAAROM `JSON.stringify` EN NIET `String` (#295-review): `String({a:1})` geeft
+ * `"[object Object]"`. Dat lekt niets — het VERNIETIGT de inhoud, wat iets
+ * anders is dan hem redacteren, en het is de stille diagnostiekverlies-val van
+ * #282: een toekomstige `logEvent("warmpool", { stats: pool.stats() })` zou
+ * `[object Object]` loggen en de meting onzichtbaar weggooien. Erger nog, het
+ * maakt een redactietest die een secret in een object stopt VACUÜM: `String`
+ * gooit dat secret per constructie weg, dus de test slaagt ook als de redactie
+ * kapot is. Serialiseren en dán redacteren behoudt de inhoud én laat de test
+ * echt falen op de bug die hij bewaakt.
+ *
+ * Errors gaan door {@link renderThrown} (dus mét `cause`): `JSON.stringify` op
+ * een Error geeft `{}` — name en message zijn niet-enumerable. */
+function renderValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  // Alleen niet-eindige getallen komen hier (de aanroeper vangt de rest af).
+  // Via JSON.stringify zouden ze `null` worden — precies de samenval die we
+  // wilden vermijden.
+  if (typeof value === "number") return String(value);
+  if (value instanceof Error) return renderThrown(value);
+  try {
+    // Kan gooien op circulaire structuren en op BigInt; een logregel mag nooit
+    // de aanroeper omver trekken, dus valt hij terug op de kale vorm.
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** DE ENIGE PLEK IN rb-ai DIE NAAR STDOUT SCHRIJFT (#292).
+ *
+ * Waarom die regel zo absoluut is: #281 zette hier een redactie-poort neer,
+ * maar twee oudere `console.log`'s in `ai.ts` liepen er gewoon omheen — de
+ * agentic tool-argumenten (in de praktijk de VRAAGTEKST van de gebruiker) en
+ * een rauwe `String(e)` uit het warmpool-faalpad. Een poort die je kunt
+ * omzeilen is geen poort. Sinds #292 gaat élke logregel van de sidecar hier
+ * doorheen, en {@link logCall} is er zelf ook gewoon een aanroeper van.
+ *
+ * Wat de poort garandeert:
+ *  - elke waarde die geen eindig getal en geen boolean is, wordt eerst
+ *    LEESBAAR gerenderd ({@link renderValue}) en gaat dan door
+ *    {@link safeDetail};
+ *  - `undefined`/`null` velden vallen weg (geen ruis, en `0` blijft staan);
+ *  - de eventnaam is onoverschrijfbaar: een veld `evt` wordt genegeerd;
+ *  - precies één parseerbare JSON-regel per aanroep.
+ *
+ * Wat de poort NIET garandeert (#292, expliciet): redactie is geen privacy.
+ * `safeDetail` haalt SECRETS eruit, niet gebruikersinvoer — een vraagtekst
+ * overleeft de poort ongeschonden. Inhoud die niet in de containerlog hoort,
+ * geef je hier dus simpelweg niet mee; log de MAAT (bytes/aantallen). */
+export function logEvent(evt: string, fields: Record<string, unknown> = {}): void {
+  const line: Record<string, unknown> = { evt };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null) continue;
+    // `evt` mag niet overschreven worden: de eventnaam is waarop gegrepd en
+    // geteld wordt, en een veld dat toevallig zo heet zou die stil kapen.
+    if (key === "evt") continue;
+    // NaN/Infinity vallen bewust NIET in de getallen-tak: `JSON.stringify`
+    // maakt er `null` van, en dan is een kapotte meting niet te onderscheiden
+    // van een ontbrekende (#282: een run die niet meldt wat er echt gebeurde,
+    // liegt). Als tekst blijven ze zichtbaar.
+    line[key] =
+      (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean"
+        ? value
+        : safeDetail(renderValue(value));
+  }
+  console.log(JSON.stringify(line));
+}
+
 /** Eén regel per rb-ai-aanroep, als JSON zodat hij te grepp'en en te tellen is
  * (`docker logs rb-v2-ai | grep ai_call`).
  *
@@ -522,18 +606,18 @@ export function logCall(entry: {
   /** Taaktype van een /ask-call (cheap/hard/research/agentic). */
   task?: string;
 }): void {
-  const line = {
-    evt: "ai_call",
+  logEvent("ai_call", {
     endpoint: entry.endpoint,
     ms: Math.round(entry.ms),
     status: entry.status,
     outcome: entry.outcome,
-    ...(entry.task ? { task: entry.task } : {}),
-    ...(entry.bytes !== undefined ? { bytes: entry.bytes } : {}),
-    ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
-    ...(entry.items !== undefined ? { items: entry.items } : {}),
-    ...(entry.reason ? { reason: entry.reason } : {}),
-    ...(entry.detail ? { detail: safeDetail(entry.detail) } : {}),
-  };
-  console.log(JSON.stringify(line));
+    task: entry.task,
+    bytes: entry.bytes,
+    refs: entry.refs,
+    items: entry.items,
+    reason: entry.reason,
+    // Lege toelichting weglaten in plaats van als "" loggen: `logEvent` filtert
+    // alleen undefined/null, want daar is `0` een betekenisvolle waarde.
+    detail: entry.detail || undefined,
+  });
 }

@@ -15,6 +15,7 @@ import { aiSemaphore, AI_QUEUE_WAIT_MS, ConcurrencyLimitError } from "./concurre
 import {
   AiRunError,
   describeThrown,
+  logEvent,
   resultFailure,
   RetryTracker,
   StderrTail,
@@ -98,12 +99,43 @@ const AGENT_ADDENDUM = `Je hebt zes brein-tools (semantic_search, get_node, neig
 - Wees zuinig met tool-calls (er is een harde limiet): stop met zoeken zodra je genoeg weet en geef dan je eindantwoord in het gevraagde format, met §-verwijzingen waar je die gevonden hebt.
 - Ontdek je tijdens het redeneren een verband tussen twee brein-knopen dat het brein nog niet als relatie kent, meld dat dan NA je volledige eindantwoord: één regel met exact "${RELATIONS_MARKER}" gevolgd door JSON in de vorm {"relations": [{"from": "<ref>", "to": "<ref>", "kind": "...", "explanation": "..."}]}. Alleen refs die letterlijk in je toolresultaten voorkwamen — verzin er geen. kind is kort, herbruikbaar en in kleine letters (bv. counters, enables, versterkt, wordt beperkt door, vereist, verduidelijkt); explanation is 1-2 zinnen in het Engels (#187: afgeleide kennis in de brontaal, dicht bij de officiële bewoording) die het verband onderbouwen vanuit je toolresultaten. Maximaal 5 sterke voorstellen; geen open deuren die de graph al kent. Niets ontdekt? Laat marker en blok dan helemaal weg.`;
 
+/** Meld één brein-tool-aanroep langs de twee kanalen die er zijn (#292).
+ *
+ * DE SPLITSING IS DE HELE POINTE. Tot #292 ging dezelfde regel — toolnaam PLUS
+ * argumenten — naar allebei, en bij `semantic_search` zijn die argumenten in de
+ * praktijk de VRAAGTEKST VAN DE GEBRUIKER. Die belandde onbewerkt in
+ * `docker logs rb-v2-ai`, een kanaal dat veel losser wordt behandeld dan de
+ * plek waar de vraag bewust wél staat (`ask_trace`, achter de admin-poort).
+ * Door `safeDetail` halen lost dat NIET op: die haalt secrets weg, geen
+ * gebruikersinvoer. De enige echte oplossing is de inhoud niet meegeven.
+ *
+ *  - `onStep` (→ server.ts `steps` → `AskTrace.BrainSteps`): de VOLLEDIGE stap,
+ *    ongewijzigd. Daar hoort hij thuis en daar verandert niets aan; het
+ *    verificatiepad van #106/#107 blijft intact.
+ *  - stdout: alleen de toolnaam (gesloten verzameling, {@link BRAIN_TOOLS}) en
+ *    de MAAT van de argumenten. Genoeg om te zien dát en hoe vaak de agent het
+ *    brein bevroeg — de vraag "welke tools riep hij aan, in welke volgorde" is
+ *    beantwoordbaar zonder één teken invoer te loggen.
+ *
+ * Geëxporteerd omdat dit de plek is waar de privacy-beslissing valt: zo is ze
+ * op GEDRAG te toetsen (schrijft de logregel echt geen argument-inhoud?) in
+ * plaats van met een grep op de broncode. */
+export function noteBrainStep(
+  toolName: string,
+  args: Record<string, unknown>,
+  onStep?: (step: string) => void,
+): string {
+  const rendered = compactJson(args);
+  const step = `${toolName} ${rendered.slice(0, 200)}`;
+  onStep?.(step);
+  logEvent("brain_step", { tool: toolName, bytes: Buffer.byteLength(rendered, "utf8") });
+  return step;
+}
+
 /** In-process MCP-server met de zes brein-tools (§2.4, createSdkMcpServer).
- * Per aanroep een verse sessie zodat de tool-call-cap per vraag telt. De
- * tool-call-log op stdout maakt agent-stappen zichtbaar in de containerlog
- * (verificatiepad #106); via `onStep` gaan dezelfde regels naar de aanroeper
- * zodat /ask ze als `steps` kan teruggeven — deelissue 4 (#107) maakt ze zo
- * meetbaar in AskTrace.BrainSteps.
+ * Per aanroep een verse sessie zodat de tool-call-cap per vraag telt. Stappen
+ * gaan via {@link noteBrainStep} naar de aanroeper (`steps` →
+ * `AskTrace.BrainSteps`, deelissue 4 #107) en inhoudsloos naar de containerlog.
  * Exported zodat de MCP-laag ook zonder LLM-call te smoken/testen is. */
 export function createBrainMcpServer(onStep?: (step: string) => void) {
   const session = createBrainSession({
@@ -117,9 +149,7 @@ export function createBrainMcpServer(onStep?: (step: string) => void) {
     tools: BRAIN_TOOLS.map((t) =>
       tool(t.name, t.description, t.schema, async (args) => {
         const a = args as Record<string, unknown>;
-        const step = `${t.name} ${compactJson(a).slice(0, 200)}`;
-        console.log(`[agentic] ${step}`);
-        onStep?.(step);
+        noteBrainStep(t.name, a, onStep);
         // session.run gooit nooit: fouten (rb-api plat, timeout, cap) komen
         // als leesbaar toolresultaat terug — fouten zijn data (§2.3).
         return { content: [{ type: "text" as const, text: await session.run(t.name, a) }] };
@@ -726,12 +756,21 @@ export async function askClaude(opts: {
           if (progress.sawOutput) return res;
           // Sessie eindigde zonder één output-bericht: subprocess was dood
           // bij de claim — er is geen API-call gedaan, dus koud is veilig.
-          console.log("[warmpool] warme sessie dood bij claim — transparant koud gestart");
+          logEvent("warmpool_fallback", { stage: "dood bij claim" });
         } catch (e) {
           if (progress.sawOutput || controller.signal.aborted || timedOut) throw e;
-          console.log(
-            `[warmpool] warme sessie faalde vóór output — transparant koud gestart: ${String(e).slice(0, 200)}`,
-          );
+          // Door dezelfde poort als elk ander faalpad sinds #281 (#292): een
+          // rauwe `String(e)` uit de SDK kan een auth-header of tokenfragment
+          // dragen, en levert bovendien geen classificatie op. `describeThrown`
+          // redacteert, kapt af én zegt WELKE knop dit is (spawn/auth/api_error)
+          // — precies het onderscheid waar de warme pool om vraagt als hij
+          // stelselmatig omvalt.
+          const failure = describeThrown(e);
+          logEvent("warmpool_fallback", {
+            stage: "faalde vóór output",
+            reason: failure.reason,
+            detail: failure.detail,
+          });
         }
         warmPool.noteDeadClaim();
         progress.sawOutput = false;

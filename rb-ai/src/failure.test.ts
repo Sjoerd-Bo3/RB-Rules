@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   AiRunError,
   describeThrown,
   failureOf,
   logCall,
+  logEvent,
   redactSecrets,
   resultFailure,
   RetryTracker,
@@ -508,4 +511,249 @@ test("failureOf behoudt een al vastgestelde reden en verzint er geen nieuwe", ()
   // bestaande fout-body van het agentic pad).
   assert.equal(String(known), "AiRunError: max_turns: subtype=error_max_turns");
   assert.equal(failureOf(new Error("spawn ENOMEM")).reason, "spawn");
+});
+
+// ── logEvent: de poort zelf (#292) ────────────────────────────────────────
+// #281 zette de redactie-poort neer, maar twee oudere console.log's in ai.ts
+// liepen er omheen. Deze tests toetsen de poort op GEDRAG: wat komt er echt uit
+// stdout als je hem probeert te voeden met iets gevaarlijks?
+
+test("logEvent redacteert ELK veld — ook eentje dat geen string is", () => {
+  const token = "sk-ant-oat01-YYYYYYYY-geheim-token-uit-een-object-77";
+  withEnv({ CLAUDE_CODE_OAUTH_TOKEN: token }, () => {
+    const lines = captureLog(() => {
+      logEvent("proef", {
+        tekst: `auth faalde met ${token}`,
+        brok: { header: `Bearer ${token}`, endpoint: "/extract/interactions", refs: 31 },
+        fout: new Error(`401 unauthorized voor ${token}`),
+      });
+    });
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].includes(token), false, lines[0]);
+    assert.doesNotMatch(lines[0], /geheim-token/, lines[0]);
+    const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+    assert.equal(parsed.evt, "proef");
+    assert.match(String(parsed.tekst), /auth faalde met \[redacted\]/);
+    assert.match(String(parsed.fout), /401 unauthorized/);
+
+    // DEZE DRIE ASSERTS DRAGEN DE TEST (#295-review). Zonder hen kan hij niet
+    // falen bij de bug die hij bewaakt: als het object stilletjes tot
+    // "[object Object]" wordt platgeslagen is het token er óók niet, en dan is
+    // "geen token in de regel" groen zonder dat er iets geredacteerd is.
+    // Precies de klasse test die deze PR zelf bekritiseert. Door te eisen dat
+    // de NIET-GEHEIME inhoud overleeft, bewijst hij dat er geserialiseerd én
+    // geredacteerd wordt in plaats van vernietigd.
+    assert.match(String(parsed.brok), /"endpoint":"\/extract\/interactions"/);
+    assert.match(String(parsed.brok), /"refs":31/);
+    assert.match(String(parsed.brok), /\[redacted\]/);
+  });
+});
+
+test("logEvent behoudt de cause-keten van een Error, net als describeThrown", () => {
+  // `describeThrown` leest `cause` bewust wél (de SDK stopt daar de echte
+  // systeemfout in). Toen `logEvent` `String(e)` gebruikte, gooide het die
+  // keten weg — twee helpers in één bestand met een tegengesteld oordeel
+  // (#295-review).
+  const lines = captureLog(() => {
+    logEvent("proef", {
+      fout: new Error("wrapper", { cause: new Error("ENOMEM spawn mislukt") }),
+    });
+  });
+  const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+  assert.match(String(parsed.fout), /wrapper/);
+  assert.match(String(parsed.fout), /ENOMEM spawn mislukt/, "de cause is de échte oorzaak");
+  assert.equal(describeThrown(new Error("w", { cause: new Error("ENOMEM") })).reason, "spawn");
+});
+
+test("logEvent: eventnaam is onoverschrijfbaar en NaN wordt geen null", () => {
+  const lines = captureLog(() => {
+    logEvent("ai_call", { evt: "iets_anders", ms: Number.NaN, refs: Number.POSITIVE_INFINITY });
+  });
+  const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+  assert.equal(parsed.evt, "ai_call", "een veld 'evt' mag de eventnaam niet kapen");
+  // Via de getallen-tak zou JSON.stringify hier `null` van maken, en dan is een
+  // kapotte meting niet te onderscheiden van een ontbrekende (#282).
+  assert.equal(parsed.ms, "NaN");
+  assert.equal(parsed.refs, "Infinity");
+});
+
+test("logEvent overleeft een circulaire structuur zonder te gooien", () => {
+  const kringetje: Record<string, unknown> = { naam: "slot" };
+  kringetje.zelf = kringetje;
+  const lines = captureLog(() => {
+    logEvent("proef", { brok: kringetje });
+  });
+  assert.equal(lines.length, 1, "een logregel mag de aanroeper nooit omver trekken");
+  assert.equal((JSON.parse(lines[0]) as Record<string, unknown>).evt, "proef");
+});
+
+test("logEvent laat getallen met rust en gooit lege velden weg — 0 blijft staan", () => {
+  const lines = captureLog(() => {
+    logEvent("proef", { bytes: 0, tools: 3, warm: false, weg: undefined, ook_weg: null });
+  });
+  const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+  assert.equal(parsed.bytes, 0, "een maat van 0 is informatie, geen 'onbekend'");
+  assert.equal(parsed.tools, 3);
+  assert.equal(parsed.warm, false);
+  assert.equal("weg" in parsed, false);
+  assert.equal("ook_weg" in parsed, false);
+});
+
+test("logEvent schrijft precies één parseerbare JSON-regel", () => {
+  const lines = captureLog(() => {
+    logEvent("proef", { detail: "regel1\n   regel2" });
+  });
+  assert.equal(lines.length, 1);
+  assert.equal((JSON.parse(lines[0]) as Record<string, unknown>).detail, "regel1 regel2");
+});
+
+// ── Eén poort, geen tweede pad (#292) ─────────────────────────────────────
+
+/** Wie verwijst naar stdout/stderr? Op de IDENTIFIER, niet op de aanroepvorm
+ * (#295-review): vier gemeten omzeilingen van een `console\.\w+\(`-patroon —
+ * `globalThis.console.log(…)`, `console["log"](…)`, `const c = console; c.log(…)`
+ * en `process.stdout.write.bind(…)` — moeten allemaal nog steeds de naam
+ * noemen, dus daar zit de regel op.
+ *
+ * ÉÉN definitie, gedeeld door de scan en de test die de scan toetst. Met een
+ * kopie in elk van beide kan de meta-test groen blijven terwijl de echte scan
+ * iets anders doet — dan toetst hij zichzelf in plaats van de scan. */
+const STDOUT_PATROON = String.raw`\bconsole\b|\bprocess\s*\.\s*std(?:out|err)\b`;
+
+/** Vervang commentaar, string-/template-literalen en regex-literalen door
+ * spaties, met behoud van nieuwe regels zodat regelnummers blijven kloppen.
+ *
+ * Nodig omdat de scan hieronder anders vals-positief gaat op de waarschuwing
+ * die je erover schrijft (#295-review) — en omdat naïef commentaar strippen
+ * juist een BLINDE VLEK maakt: `fetch("http://x"); console.log(y)` verliest bij
+ * een kale `//`-strip zijn echte aanroep. Vandaar een kleine scanner in plaats
+ * van een regex. Regex-literalen worden herkend met de gangbare heuristiek (een
+ * `/` na een operator/opener start een regex, anders is het deling), zodat een
+ * patroon met aanhalingstekens erin de string-state niet ontregelt.
+ *
+ * Bewuste grens: code binnen een `${…}`-interpolatie telt als string. Een
+ * console-aanroep verstoppen in een template-interpolatie is geen realistische
+ * omzeiling, en dit houdt de scanner klein. */
+function stripNonCode(src: string): string {
+  const uit: string[] = [];
+  const leeg = (van: number, tot: number) => {
+    for (let k = van; k < tot && k < src.length; k++) uit.push(src[k] === "\n" ? "\n" : " ");
+  };
+  // Na deze tekens is een `/` een regex-start; na een naam/getal/haakje-dicht
+  // is het deling.
+  const regexNa = /[=(,:[!&|?{};+\-*%~^<>]/;
+  let vorigeCode = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (c === "/" && d === "/") {
+      const eind = src.indexOf("\n", i);
+      const tot = eind === -1 ? src.length : eind;
+      leeg(i, tot);
+      i = tot;
+      continue;
+    }
+    if (c === "/" && d === "*") {
+      const eind = src.indexOf("*/", i + 2);
+      const tot = eind === -1 ? src.length : eind + 2;
+      leeg(i, tot);
+      i = tot;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
+      leeg(i, j + 1);
+      i = Math.min(j + 1, src.length);
+      vorigeCode = "x"; // een string gedraagt zich als waarde: `/` erna = deling
+      continue;
+    }
+    if (c === "/" && regexNa.test(vorigeCode)) {
+      let j = i + 1;
+      let inKlasse = false;
+      while (j < src.length && (inKlasse || src[j] !== "/")) {
+        if (src[j] === "\\") j++;
+        else if (src[j] === "[") inKlasse = true;
+        else if (src[j] === "]") inKlasse = false;
+        j++;
+      }
+      leeg(i, j + 1);
+      i = Math.min(j + 1, src.length);
+      vorigeCode = "x";
+      continue;
+    }
+    uit.push(c);
+    if (!/\s/.test(c)) vorigeCode = c;
+    i++;
+  }
+  return uit.join("");
+}
+
+test("failure.ts is de ENIGE module in rb-ai die naar stdout schrijft", () => {
+  // WAT DEZE TEST WEL EN NIET IS. Hij is structureel: hij leest broncode, geen
+  // gedrag. Dat maakt hem principieel zwakker dan de tests hierboven — hij ziet
+  // niet of een logregel geredacteerd is, alleen wie er schrijft, en een
+  // hernoeming of verplaatsing kan hem laten struikelen zonder dat er iets mis
+  // is. Hij staat hier voor precies één ding dat gedragstests niet kunnen
+  // dekken: het BESTAAN van een tweede stdout-pad. #292 ontstond niet doordat de
+  // poort verkeerd redacteerde, maar doordat twee regels er langs liepen — en
+  // geen enkele test kon dat zien, want ze testten alleen de poort.
+  //
+  // De regel is daarom bewust NIET "geen template-interpolatie in console.log"
+  // (die vorm-check faalt op een refactor en mist een concatenatie of een
+  // String(e)), maar "alleen failure.ts schrijft". Alles wat de sidecar wil
+  // melden gaat via logEvent/logCall; wie dat wil omzeilen moet deze test
+  // aanpassen, en dat is precies het moment waarop iemand moet nadenken.
+  // RECURSIEF (#295-review): een niet-recursieve scan mist `src/log/sneaky.ts`,
+  // en dan handhaaft de test iets smallers dan de regel die CLAUDE.md vastlegt.
+  const dir = fileURLToPath(new URL(".", import.meta.url));
+  const modules = readdirSync(dir, { recursive: true })
+    .map(String)
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== "failure.ts");
+  assert.ok(modules.length >= 5, `verwacht meerdere modules, kreeg ${modules.length}`);
+
+  const schrijvers = new RegExp(STDOUT_PATROON, "g");
+  for (const naam of modules) {
+    const src = readFileSync(`${dir}${naam}`, "utf8");
+    const treffers = [...stripNonCode(src).matchAll(schrijvers)].map((m) => {
+      const regel = src.slice(0, m.index ?? 0).split("\n").length;
+      return `${naam}:${regel}`;
+    });
+    assert.deepEqual(
+      treffers,
+      [],
+      `${treffers.join(", ")} verwijst rechtstreeks naar stdout/stderr. ` +
+        "Gebruik logEvent/logCall uit failure.ts — die redacteert (werkafspraak 7).",
+    );
+  }
+});
+
+test("de stdout-scan kijkt door commentaar en strings heen, en ziet omzeilingen", () => {
+  // De structurele test hierboven is een grep, en een grep is broos. Deze test
+  // meet die broosheid in beide richtingen, zodat we niet hoeven te gokken.
+  const heeftTreffer = (src: string) => new RegExp(STDOUT_PATROON).test(stripNonCode(src));
+
+  // VALS-POSITIEF (#295-review): wie de waarschuwing opschrijft die de nieuwe
+  // CLAUDE.md-valkuil uitnodigt, mag de build niet breken.
+  assert.equal(heeftTreffer("// Nooit console.log(step) gebruiken hier — zie #292.\nconst a = 1;"), false);
+  assert.equal(heeftTreffer("/* console.error is verboden */\nconst a = 1;"), false);
+  assert.equal(heeftTreffer('const uitleg = "gebruik geen console.log";'), false);
+  // Een `//` BINNEN een string mag de rest van de regel niet blind maken.
+  assert.equal(heeftTreffer('fetch("http://rb-api:8080"); console.log(x);'), true);
+  // Een regex-literal met aanhalingstekens mag de scanner niet ontsporen.
+  assert.equal(heeftTreffer("const r = /[\"']/g;\nconst a = 1;"), false);
+  assert.equal(heeftTreffer("const r = /[\"']/g;\nconsole.log(a);"), true);
+
+  // VALS-NEGATIEF: de vier gemeten omzeilingen.
+  for (const vorm of [
+    "console.log(x);",
+    'console["log"](x);',
+    "globalThis.console.log(x);",
+    "const c = console;\nc.log(x);",
+    "const w = process.stdout.write.bind(process.stdout);\nw(x);",
+    "process.stderr.write(x);",
+  ]) {
+    assert.equal(heeftTreffer(vorm), true, `omzeiling niet gezien: ${vorm}`);
+  }
 });
