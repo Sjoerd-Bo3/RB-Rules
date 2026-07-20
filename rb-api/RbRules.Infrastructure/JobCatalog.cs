@@ -424,7 +424,8 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<PrimerService>()
             .GenerateAsync(progress: report, ct: ct);
-        return new($"{r.Written} primer-docs geschreven (drafts), {r.Skipped} goedgekeurd gelaten, {r.Failed} mislukt");
+        return new($"{r.Written} primer-docs geschreven (drafts), {r.Skipped} goedgekeurd gelaten, "
+            + $"{r.Failed} mislukt, {r.Untranslated} zonder NL-weergave (tonen het Engels)");
     }
 
     private static async Task<JobOutcome> InteractionsAsync(

@@ -5,8 +5,12 @@ export interface PrimerDoc {
 	id: number;
 	kind: string;
 	topic: string;
+	/** Canonieke (Engelse) titel en tekst — wat opgeslagen is en /ask voedt. */
 	title: string;
 	body: string;
+	/** Nederlandse weergave (#266); null = nog geen vertaling, toon het Engels. */
+	titleNl: string | null;
+	bodyNl: string | null;
 	sectionRefs: string | null;
 	updatedAt: string;
 }

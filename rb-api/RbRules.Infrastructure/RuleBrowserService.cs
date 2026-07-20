@@ -192,7 +192,10 @@ public class RuleBrowserService(
             .Where(k => k.SectionRefs!
                 .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                 .Any(r => resolver.ResolveSection(r) is not null))
-            .Select(k => new SectionExplainsDoc(k.Topic, k.Title))
+            // Nederlandse conceptnaam waar we die hebben (#266): dit is een
+            // linklabel op een Nederlandse pagina, geen kennisinhoud.
+            .Select(k => new SectionExplainsDoc(
+                k.Topic, PrimerTopics.DutchTitle(k.Topic, k.Title) ?? k.Title))
             .ToList();
 
         // 3. Geaccepteerde claims over de sectie: claims dragen de §-code in

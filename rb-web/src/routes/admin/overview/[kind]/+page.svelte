@@ -67,6 +67,8 @@
 	}
 	interface KnowledgeItem {
 		id: number; kind: string; topic: string; title: string; body: string;
+		/** Nederlandse weergave (#266) — wat de bezoeker op /primer leest. */
+		bodyNl: string | null;
 		sectionRefs: string | null; status: string; updatedAt: string;
 	}
 	interface ClaimSourceItem {
@@ -866,12 +868,22 @@
 						>
 							<input type="hidden" name="id" value={k.id} />
 							<label>Titel <input name="title" value={k.title} required /></label>
-							<label>Tekst <textarea name="body" rows="14" required>{k.body}</textarea></label>
+							<label>Canonieke tekst (Engels) <textarea name="body" rows="14" required>{k.body}</textarea></label>
+							<!-- #266: de Nederlandse weergave is hier bewerkbaar omdat dít
+							     de tekst is die de bezoeker leest; leeglaten toont op
+							     /primer het Engels. -->
+							<label>
+								Nederlandse weergave
+								<textarea name="bodyNl" rows="14">{k.bodyNl ?? ''}</textarea>
+							</label>
 							{#if form?.error && formDocId === k.id}<p class="warn">{form.error}</p>{/if}
 							<div class="row">
 								<button type="submit">Opslaan</button>
 								<button type="button" class="ghost small" onclick={() => (editing = null)}>Annuleer</button>
-								<span class="meta">Opslaan embedt de tekst opnieuw; de status ({k.status === 'approved' ? 'goedgekeurd' : 'draft'}) blijft staan.</span>
+								<span class="meta">
+									Opslaan embedt de Engelse tekst opnieuw (die voedt de rulings); de Nederlandse
+									weergave is alleen presentatie. De status ({k.status === 'approved' ? 'goedgekeurd' : 'draft'}) blijft staan.
+								</span>
 							</div>
 						</form>
 					{:else}
@@ -880,6 +892,12 @@
 							<span class="badge {k.status === 'approved' ? 'ok-b' : 'warn-b'}">{k.status === 'approved' ? 'goedgekeurd' : 'draft'}</span>
 							<span class="meta">{k.topic} · {fmtDate(k.updatedAt)}</span>
 						</p>
+						{#if k.bodyNl}
+							<p class="pre"><RbText text={k.bodyNl} /></p>
+							<p class="meta">Canonieke Engelse tekst (embedding, /ask-context):</p>
+						{:else}
+							<p class="meta">Geen Nederlandse weergave — /primer toont hier het Engels.</p>
+						{/if}
 						<p class="pre"><RbText text={k.body} /></p>
 						{#if k.sectionRefs}<p class="meta refs">Gebaseerd op §{k.sectionRefs}</p>{/if}
 						<div class="row actions">

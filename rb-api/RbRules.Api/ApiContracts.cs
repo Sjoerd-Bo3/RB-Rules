@@ -25,8 +25,11 @@ public record FeedPatch(
     string? Name, string? Url, string? CategoryFilter, bool? AutoApprove,
     string? Cadence, bool? Enabled);
 
-/// <summary>Beheerder-bewerking van een kennisdoc (#70).</summary>
-public record KnowledgePatch(string? Title, string? Body);
+/// <summary>Beheerder-bewerking van een kennisdoc (#70).
+/// <paramref name="BodyNl"/> (#266) is de Nederlandse weergavetekst: leeg
+/// meesturen wist haar (de pagina toont dan het Engels), weglaten laat haar
+/// staan.</summary>
+public record KnowledgePatch(string? Title, string? Body, string? BodyNl = null);
 
 /// <summary>Approach (#153): "auto"|"fast"|"thorough" — alleen gehonoreerd
 /// voor een geauthenticeerde vrager (anders genegeerd); onbekende waarden

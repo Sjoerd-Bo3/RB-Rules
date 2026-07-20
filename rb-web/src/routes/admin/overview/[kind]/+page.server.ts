@@ -298,11 +298,14 @@ export const actions: Actions = {
 		const id = Number(form.get('id'));
 		const title = String(form.get('title') ?? '').trim();
 		const body = String(form.get('body') ?? '').trim();
+		// #266: leeg meesturen wist de Nederlandse weergave (de pagina toont
+		// dan het Engels) — dat is een geldige keuze, dus geen verplicht veld.
+		const bodyNl = String(form.get('bodyNl') ?? '').trim();
 		if (!title || !body) return fail(400, { error: 'Titel en tekst mogen niet leeg zijn', id });
 		try {
 			await adminApi(`/api/admin/knowledge/${id}`, {
 				method: 'PATCH',
-				body: JSON.stringify({ title, body })
+				body: JSON.stringify({ title, body, bodyNl })
 			});
 			return { ok: true };
 		} catch (e) {
