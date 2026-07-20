@@ -1084,20 +1084,23 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   vertalers (`describeThrown` voor een geworpen fout, `resultFailure` voor het
   SDK-resultaatbericht), de `RetryTracker` op `api_retry`-berichten, de
   `StderrTail` van het subprocess, en `logEvent` — **de enige stdout-schrijver
-  van de hele sidecar** (#292). Elke waarde die geen getal of boolean is gaat
-  door `safeDetail`; `logCall` is zelf gewoon een aanroeper en levert de
-  bekende regel per LLM-aanroep (`{"evt":"ai_call","endpoint":…,"ms":…,
-  "status":…,"outcome":…,"reason":…,"detail":…}`), greppelbaar met
-  `docker logs rb-v2-ai | grep ai_call`. Daarnaast schrijven `brain_step`
-  (agentic tool-aanroep: toolnaam + argument-MAAT), `warmpool_fallback`,
-  `warmpool` en `startup` via dezelfde poort.
-  `redactSecrets`/`safeDetail` zijn verplicht: env-waarden met
+  van de hele sidecar** (#292). Elke waarde die geen eindig getal en geen
+  boolean is wordt eerst leesbaar gerenderd (`JSON.stringify` voor objecten,
+  `name: message (cause: …)` voor Errors — `String()` zou de inhoud niet
+  redacteren maar vernietigen) en gaat dán door `safeDetail`; `logCall` is zelf
+  gewoon een aanroeper en levert de bekende regel per LLM-aanroep
+  (`{"evt":"ai_call","endpoint":…,"ms":…,"status":…,"outcome":…,"reason":…,
+  "detail":…}`), greppelbaar met `docker logs rb-v2-ai | grep ai_call`.
+  Daarnaast schrijven `brain_step` (agentic tool-aanroep: toolnaam +
+  argument-MAAT), `warmpool_fallback`, `warmpool` en `startup` via dezelfde
+  poort. `redactSecrets`/`safeDetail` zijn verplicht: env-waarden met
   TOKEN/KEY/SECRET in de naam, `sk-ant-…`, `Bearer …` en lange ondoorzichtige
   runs gaan eruit vóór er iets naar buiten gaat (werkafspraak 7, met een test
-  die vastlegt dat het token nooit in een logregel belandt). Prompt-inhoud
-  wordt nooit gelogd — `detail` komt uitsluitend uit foutmeldingen. Een
+  die vastlegt dat het token nooit in een logregel belandt). De garantie voor
+  SECRETS is hard, die voor prompt-inhoud bewust zwakker — **§6.6 heeft de
+  eerlijke formulering, met `StderrTail` als het ongecontroleerde kanaal.** Een
   structurele test bewaakt dat geen enkele andere module rechtstreeks naar
-  stdout/stderr schrijft. Zie §6.6 voor waaróm dit bestand bestaat.
+  stdout/stderr verwijst. Zie §6.6 voor waaróm dit bestand bestaat.
 - `src/extract.ts` — PUUR (zonder Agent SDK, unit-getest): de
   vocabulaire→zod-schema-vertaling voor de brein-extractie (#226). Bouwt de
   enum-poorten voor `emit_interactions`/`emit_mechanic_predicates` uit het door
@@ -1921,6 +1924,24 @@ doordat de poort verkeerd redacteerde, maar doordat er langs werd gelopen. Die
 test is expres geen vorm-check op template-interpolatie (die faalt op een
 refactor en mist een concatenatie of een `String(e)`), maar de simpele regel
 "alleen `failure.ts` schrijft".
+
+Drie dingen die de **review van #295** aan die opzet heeft bijgeschaafd, elk een
+val die vaker terugkomt. (a) *Een redactietest die een secret in een object
+stopt is vacuüm zolang de renderer `String()` gebruikt* — dan gooit de renderer
+het secret per constructie al weg en slaagt de test ook met kapotte redactie.
+Hij moet daarom eisen dat de NIET-geheime inhoud van dat object overleeft; pas
+dan bewijst hij dat er geredacteerd wordt in plaats van vernietigd. (b) *Een
+grep-regel op de aanroepvorm heeft altijd omzeilingen*: `globalThis.console.log`,
+`console["log"]`, `const c = console` en `process.stdout.write.bind(…)` glippen
+alle vier langs `console\.\w+\(`. Matchen op de IDENTIFIER, en de scan
+recursief over submappen laten lopen. (c) *Een grep die commentaar meeneemt gaat
+vals-positief op de waarschuwing die je erover schrijft* — maar naïef
+commentaar strippen maakt juist een blinde vlek, want een `//` binnen een string
+(`fetch("http://x"); console.log(y)`) zou de echte aanroep meenemen. Vandaar een
+kleine scanner die commentaar, strings én regex-literalen op spaties zet, met
+een meta-test die beide richtingen meet — en met het scan-patroon op ÉÉN plek,
+want een kopie in de meta-test zou die zichzelf laten toetsen in plaats van de
+scan.
 
 **rb-api-kant (mining-orkestratie).** Drie jobs in `JobCatalog`. De twee
 LLM-jobs staan bewust NIET in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk —

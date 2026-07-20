@@ -207,26 +207,38 @@ const AUTH_PATTERNS = [
   /not logged in/i,
 ];
 
+/** De tekst waaruit we een geworpen fout beoordelen: `name: message (cause: …)`.
+ *
+ * BEWUST GEEN `e.stack` (#281-review): een stack trace draagt frames, paden en
+ * soms geïnterpoleerde argumenten mee — een onbegrensd kanaal waar van alles in
+ * kan zitten. `name` + `message` + `cause` is genoeg om de faalsoort te bepalen,
+ * en is begrensd tot wat de werper zelf formuleerde. Voeg `stack` hier niet toe
+ * "voor de diagnose": dat vergroot het lekoppervlak zonder de classificatie te
+ * verbeteren.
+ *
+ * `cause` draagt bij de SDK vaak de ECHTE systeemfout (spawn/ENOMEM) achter een
+ * generieke wrapper; zonder meelezen blijft die onzichtbaar. Eén helper voor
+ * {@link describeThrown} én {@link logEvent} (#295-review): die twee gaven
+ * eerst een tegengesteld oordeel over `cause` binnen hetzelfde bestand — de een
+ * las hem bewust wél, de ander gooide hem weg. NIET redacterend: elke aanroeper
+ * haalt het resultaat door {@link safeDetail}. */
+function renderThrown(e: unknown): string {
+  const name = e instanceof Error ? e.name : typeof e;
+  const message = e instanceof Error ? e.message : String(e);
+  const cause =
+    e instanceof Error && e.cause !== undefined
+      ? ` (cause: ${e.cause instanceof Error ? `${e.cause.name}: ${e.cause.message}` : String(e.cause)})`
+      : "";
+  return `${name}: ${message}${cause}`;
+}
+
 /** Vertaal een GEWORPEN fout naar een uitvalsoort. Wordt gebruikt op elk pad
  * waar `query()` of de omliggende bedrading daadwerkelijk gooit — anders dan
  * bij een mislukte run, die als resultaatbericht binnenkomt
  * (zie {@link resultFailure}). */
 export function describeThrown(e: unknown): AiFailure {
   const name = e instanceof Error ? e.name : typeof e;
-  // BEWUST GEEN `e.stack` (#281-review): een stack trace draagt frames, paden en
-  // soms geïnterpoleerde argumenten mee — een onbegrensd kanaal waar van alles
-  // in kan zitten. `name` + `message` + `cause` is genoeg om de faalsoort te
-  // bepalen, en is begrensd tot wat de werper zelf formuleerde. Voeg `stack`
-  // hier niet toe "voor de diagnose": dat vergroot het lekoppervlak zonder de
-  // classificatie te verbeteren.
-  const message = e instanceof Error ? e.message : String(e);
-  // `cause` draagt bij de SDK vaak de echte systeemfout (spawn/ENOMEM); zonder
-  // meelezen blijft die onzichtbaar achter een generieke wrapper.
-  const cause =
-    e instanceof Error && e.cause !== undefined
-      ? ` (cause: ${e.cause instanceof Error ? `${e.cause.name}: ${e.cause.message}` : String(e.cause)})`
-      : "";
-  const haystack = `${name}: ${message}${cause}`;
+  const haystack = renderThrown(e);
   const detail = safeDetail(haystack);
 
   if (name === "AbortError" || /\babort/i.test(haystack)) return { reason: "aborted", detail };
@@ -487,6 +499,36 @@ export function withStderr(failure: AiFailure, stderr: StderrTail): AiFailure {
   return { reason: failure.reason, detail: safeDetail(`${failure.detail} | stderr: ${tail}`) };
 }
 
+/** Render één logwaarde tot tekst die {@link safeDetail} kan redacteren.
+ *
+ * WAAROM `JSON.stringify` EN NIET `String` (#295-review): `String({a:1})` geeft
+ * `"[object Object]"`. Dat lekt niets — het VERNIETIGT de inhoud, wat iets
+ * anders is dan hem redacteren, en het is de stille diagnostiekverlies-val van
+ * #282: een toekomstige `logEvent("warmpool", { stats: pool.stats() })` zou
+ * `[object Object]` loggen en de meting onzichtbaar weggooien. Erger nog, het
+ * maakt een redactietest die een secret in een object stopt VACUÜM: `String`
+ * gooit dat secret per constructie weg, dus de test slaagt ook als de redactie
+ * kapot is. Serialiseren en dán redacteren behoudt de inhoud én laat de test
+ * echt falen op de bug die hij bewaakt.
+ *
+ * Errors gaan door {@link renderThrown} (dus mét `cause`): `JSON.stringify` op
+ * een Error geeft `{}` — name en message zijn niet-enumerable. */
+function renderValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  // Alleen niet-eindige getallen komen hier (de aanroeper vangt de rest af).
+  // Via JSON.stringify zouden ze `null` worden — precies de samenval die we
+  // wilden vermijden.
+  if (typeof value === "number") return String(value);
+  if (value instanceof Error) return renderThrown(value);
+  try {
+    // Kan gooien op circulaire structuren en op BigInt; een logregel mag nooit
+    // de aanroeper omver trekken, dus valt hij terug op de kale vorm.
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 /** DE ENIGE PLEK IN rb-ai DIE NAAR STDOUT SCHRIJFT (#292).
  *
  * Waarom die regel zo absoluut is: #281 zette hier een redactie-poort neer,
@@ -497,10 +539,11 @@ export function withStderr(failure: AiFailure, stderr: StderrTail): AiFailure {
  * doorheen, en {@link logCall} is er zelf ook gewoon een aanroeper van.
  *
  * Wat de poort garandeert:
- *  - elke waarde die geen `number`/`boolean` is, gaat door {@link safeDetail} —
- *    ook een object, want `JSON.stringify` op een meegegeven object zou de
- *    redactie anders stilletjes overslaan;
+ *  - elke waarde die geen eindig getal en geen boolean is, wordt eerst
+ *    LEESBAAR gerenderd ({@link renderValue}) en gaat dan door
+ *    {@link safeDetail};
  *  - `undefined`/`null` velden vallen weg (geen ruis, en `0` blijft staan);
+ *  - de eventnaam is onoverschrijfbaar: een veld `evt` wordt genegeerd;
  *  - precies één parseerbare JSON-regel per aanroep.
  *
  * Wat de poort NIET garandeert (#292, expliciet): redactie is geen privacy.
@@ -511,10 +554,17 @@ export function logEvent(evt: string, fields: Record<string, unknown> = {}): voi
   const line: Record<string, unknown> = { evt };
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined || value === null) continue;
+    // `evt` mag niet overschreven worden: de eventnaam is waarop gegrepd en
+    // geteld wordt, en een veld dat toevallig zo heet zou die stil kapen.
+    if (key === "evt") continue;
+    // NaN/Infinity vallen bewust NIET in de getallen-tak: `JSON.stringify`
+    // maakt er `null` van, en dan is een kapotte meting niet te onderscheiden
+    // van een ontbrekende (#282: een run die niet meldt wat er echt gebeurde,
+    // liegt). Als tekst blijven ze zichtbaar.
     line[key] =
-      typeof value === "number" || typeof value === "boolean"
+      (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean"
         ? value
-        : safeDetail(typeof value === "string" ? value : String(value));
+        : safeDetail(renderValue(value));
   }
   console.log(JSON.stringify(line));
 }

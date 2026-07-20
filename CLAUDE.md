@@ -248,7 +248,26 @@ met quota en rate-limiting.
   kan zien ("alleen `failure.ts` schrijft"). Formuleer zo'n structurele regel op
   het GEVAAR (wie schrijft naar stdout), nooit op de VORM van de fix (geen
   template-interpolatie) — die laatste mist een concatenatie of een `String(e)`
-  en struikelt over een hernoeming.
+  en struikelt over een hernoeming. Drie scherpe randen, alle drie duur betaald
+  in de review van #295: (a) een grep op de aanroepvorm heeft ALTIJD omzeilingen
+  (`globalThis.console.log`, `console["log"]`, `const c = console`,
+  `process.stdout.write.bind(…)` glippen alle vier langs `console\.\w+\(`) —
+  match op de identifier, en scan recursief; (b) commentaar meenemen geeft een
+  vals-positief op je eigen waarschuwing, maar naïef strippen geeft een blinde
+  vlek (`fetch("http://x"); console.log(y)`) — strip commentaar, strings én
+  regex-literalen met een scannertje; (c) zet het patroon op ÉÉN plek, anders
+  toetst de meta-test zijn eigen kopie in plaats van de echte scan.
+- **Een test die het secret zelf al vernietigt, kan niet falen** (#295-review) —
+  de scherpste variant van "vier PR's afgekeurd omdat de test de vorm van de fix
+  vastlegde". `logEvent` rende­rde niet-strings met `String(value)`, dus
+  `{ header: "Bearer <token>" }` werd `"[object Object]"`. De redactietest stopte
+  een token in precies zo'n object en was groen — niet omdat er geredacteerd
+  werd, maar omdat het token per constructie nooit in de regel kwam. De bug en
+  de test hieven elkaar op. Twee regels: serialiseer vóór je redacteert
+  (`JSON.stringify`, en `name: message (cause: …)` voor Errors — `String()`
+  redacteert niet, het VERNIETIGT, en dat is de stille-diagnostiekverlies-val
+  van #282), en laat een redactietest altijd óók asserteren dat de NIET-geheime
+  inhoud OVERLEEFT. Zonder die tweede assert bewijst hij niets.
 - **Reken een hypothese na op de wandkloktijd** (#281) — 40 kaarten in 43 min
   met 18 successen laat maar één oplossing toe: 22 × ~85 s, oftewel de
   90 s-timeout. Zulke rekensommen sluiten hele klassen verklaringen uit vóór je
