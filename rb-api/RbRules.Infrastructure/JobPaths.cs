@@ -166,7 +166,46 @@ public static class JobPaths
     /// botst de padnaam met de job die rb-web, de docs en het run_log-grootboek
     /// al kennen.</summary>
     public static PathDefinition AllUpdate { get; } =
-        new("all", [.. IngestSteps, .. CardSteps], ContinueOnError: true);
+        new("all", UpdateChain(uncapped: false), ContinueOnError: true);
+
+    /// <summary>De bijwerk-keten waar zowel "all" als de nachtrun op staan:
+    /// kaart-stappen VÓÓR ingest, met de graph-afsluiter helemaal achteraan.
+    ///
+    /// Die volgorde is geen smaak (#287-review). Twee harde afhankelijkheden
+    /// wijzen tegengesteld, en simpelweg de twee paden achter elkaar plakken kan
+    /// er maar één bedienen:
+    /// <list type="bullet">
+    /// <item><c>bans</c> ná <c>cards</c>: <see cref="BanErrataSyncService"/>
+    /// snapshot de kaarttabel en resolvet elke ban/erratum naar een
+    /// <c>CardRiftboundId</c>, in een destructieve herbouw per run. Draait hij
+    /// vóór de kaart-sync, dan krijgt na een nieuwe set élke ban voor een nieuwe
+    /// kaart <c>null</c> — zichtbaar in BanLookup, het kaartdossier en de
+    /// effectieve kaarttekst van de resolver. Zelfherstellend na één cyclus, maar
+    /// een cyclus is hier een etmaal.</item>
+    /// <item><c>graph</c> als LAATSTE: de projectie schrijft niet alleen kaarten
+    /// maar ook regelsecties, dus hij moet ná <c>rules-index</c> komen. Stond hij
+    /// waar het kaart-pad hem heeft (aan het eind van de kaart-fase), dan zou hij
+    /// in de samengestelde keten midden in de rit draaien en de verse secties
+    /// pas een run later projecteren.</item>
+    /// </list>
+    /// De oude, met de hand geschreven <c>RunAllAsync</c> had precies deze
+    /// volgorde (kaarten → scan → regels → bans → … → graph); dat het een
+    /// impliciete afspraak wás is juist de reden om hem hier expliciet te maken.
+    /// De vier los startbare paden blijven ongewijzigd: elk is op zichzelf
+    /// correct (het kaart-pad eindigt terecht op zijn eigen graph-projectie).
+    /// <see cref="JobPathOrderTests"/> legt beide eisen vast.</summary>
+    private static PathStep[] UpdateChain(bool uncapped)
+    {
+        PathStep[] cardSteps = uncapped ? WithUncapped(CardSteps, "mine") : [.. CardSteps];
+        return
+        [
+            .. cardSteps.Where(s => s.JobName != GraphJob),
+            .. IngestSteps,
+            new PathStep(GraphJob),
+        ];
+    }
+
+    private const string GraphJob = "graph";
 
     /// <summary>De nachtrun-keten (#245, als pad sinds #258): dezelfde
     /// bouwstenen als "alles bijwerken", gevolgd door het brein-pad, met de
@@ -186,11 +225,10 @@ public static class JobPaths
     /// de jobnaam die de scheduler en het grootboek al kennen.</summary>
     public static PathDefinition Nightly { get; } = new("nachtrun",
     [
-        .. IngestSteps,
-        // Ongecapt i.p.v. gedraineerd: de mining-services stoppen zelf netjes
-        // op de deadline en hun watermark bewaart de voortgang voor de
-        // volgende nacht.
-        .. WithUncapped(CardSteps, "mine"),
+        // Dezelfde bijwerk-keten als "all", maar ongecapt: de mining-services
+        // stoppen zelf netjes op de deadline en hun watermark bewaart de
+        // voortgang voor de volgende nacht.
+        .. UpdateChain(uncapped: true),
         .. WithUncapped(BrainSteps, "breinmine-interacties", "breinmine-predicaten"),
     ], ContinueOnError: true);
 

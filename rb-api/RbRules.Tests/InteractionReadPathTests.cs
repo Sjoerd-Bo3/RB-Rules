@@ -131,6 +131,47 @@ public class InteractionReadPathTests
     }
 
     [Fact]
+    public async Task Leespad_VerlietstGeenKaartBuurAchterEenBergKaartKeywordRijen()
+    {
+        // REGRESSIETEST (#287-review): het "is dit kaart↔kaart?"-filter moet in de
+        // QUERY staan, niet stroomafwaarts in de projectie. Staat het erbuiten, dan
+        // eten card↔mechanic-rijen het Take-budget op en verdwijnt elke echte
+        // kaart-buur voorbij de afkap STIL.
+        //
+        // Dat is geen theoretisch geval: BreinInteractionMiningService biedt bewust
+        // de keywords van partnerkaarten aan, dus card↔mechanic is een BEDOELDE
+        // uitvoervorm (zie ook Leespad_SlaatKaartKeywordInteractiesOver hieronder).
+        // Vandaag staan er 8 rijen op productie en gebeurt er niets — de bug slaat
+        // pas aan zodra de mining opschaalt, precies wanneer de brug zich moet
+        // terugbetalen. Dezelfde stille blackout die deze PR wil voorkomen.
+        //
+        // take: 40 is de waarde die CardEndpoints gebruikt; 12 die van
+        // GraphQueryService.
+        // De ruis-rijen krijgen bewust een kind dat VÓÓR dat van de echte buur
+        // sorteert (COUNTERS < REQUIRES op de ThenBy(Kind) van de query), zodat de
+        // kaart-buur écht achter de afkap valt. Met een gunstiger sortering zou de
+        // test toevallig slagen zonder dat het filter er staat — dan bewijst hij niets.
+        using var db = NewDb();
+        db.Cards.AddRange(Card("ogn-001-298", "Viktor"), Card("ogn-002-298", "Jinx"));
+        for (var i = 0; i < 40; i++)
+            db.Interactions.Add(Reified(
+                "card:ogn-001-298", $"mechanic:Keyword{i:00}", InteractionKinds.Counters,
+                InteractionStatus.Promoted));
+        db.Interactions.Add(Reified(
+            "card:ogn-001-298", "card:ogn-002-298", InteractionKinds.Requires,
+            InteractionStatus.Promoted));
+        await db.SaveChangesAsync();
+
+        foreach (var take in new[] { 40, 12 })
+        {
+            var neighbors = await Service(db).NeighborsAsync("ogn-001-298", take);
+
+            var neighbor = Assert.Single(neighbors);
+            Assert.Equal("ogn-002-298", neighbor.OtherId);
+        }
+    }
+
+    [Fact]
     public async Task Leespad_IsVariantgroepBewust_InBeideLagen()
     {
         // #57: een alt-art-pagina toont de interacties van zijn canonieke

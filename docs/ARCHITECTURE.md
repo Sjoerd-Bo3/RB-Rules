@@ -766,8 +766,28 @@ Vier wijzigingen die #258 daarbij doorvoerde:
   zonder die stap NUL subjects vindt (#250).
 
 De twee samengestelde ketens staan bewust NIET in `AllPaths` (en dus niet op
-`/api/admin/paths`): `JobPaths.AllUpdate` is Ingest + Kaart en `JobPaths.Nightly`
-is Ingest + Kaart + Brein met de drie miners ongecapt. Ze dragen de naam van de
+`/api/admin/paths`): `JobPaths.AllUpdate` is de bijwerk-keten en
+`JobPaths.Nightly` diezelfde keten plus Brein, met de drie miners ongecapt.
+
+**De bijwerk-keten is géén simpele aaneenschakeling van de twee paden**
+(`JobPaths.UpdateChain`, #287-review). Twee harde afhankelijkheden wijzen
+tegengesteld, dus welke volgorde je ook kiest, plat concatenéren breekt er één:
+
+- `bans` moet ná `cards`. `BanErrataSyncService` snapshot de kaarttabel en
+  resolvet elke ban/erratum naar een `CardRiftboundId`, in een destructieve
+  herbouw per run. Draait hij eerst, dan krijgt na een nieuwe set élke ban voor
+  een nieuwe kaart `null` — zichtbaar in `BanLookup`, het kaartdossier en de
+  effectieve kaarttekst van de resolver. Zelfherstellend, maar pas een cyclus
+  later.
+- `graph` moet ná `rules-index`. De projectie schrijft ook regelsecties, dus de
+  graph-afsluiter van het kaart-pad zou midden in de keten vallen en verse
+  secties een run later projecteren.
+
+Daarom: kaart-stappen (zonder hun graph-afsluiter) → ingest-stappen → `graph`.
+Dat is exact de volgorde die de oude, handgeschreven `RunAllAsync` had; dat die
+afspraak impliciet wás is precies waarom `JobPathOrderTests` beide eisen nu
+vastlegt. De vier los startbare paden blijven ongewijzigd — elk is op zichzelf
+correct, en het kaart-pad eindigt terecht op zijn eigen graph-projectie. Ze dragen de naam van de
 job die ze uitvoert (`all`, `nachtrun`), zodat de per-stap-`run_log`-regels
 (Kind=padnaam) bij die job terug te vinden zijn en de padnaam niet botst met de
 jobnaam die rb-web, de docs en het grootboek al kennen. `Nightly` wordt
@@ -1610,10 +1630,12 @@ veronderstellen bron-edges die de huidige projectie nog niet materialiseert
 (bv. `Mechanic-[:GOVERNED_BY]->RuleSection`, class-anchor-labels) — die projectie-
 uitbreiding hoort bij dezelfde follow-up; de regels staan er al, correct getagd.
 
-De **OWL2-RL-nachtaudit** (`OntologyConsistencyAudit`, job `owlaudit`) is per beslissing
-een **skeleton**: geen OWL/Turtle-runtime, maar een pure zelf-toets van de afgedwongen
+De **OWL2-RL-nachtaudit** (`OntologyConsistencyAudit`) is per beslissing een
+**skeleton**: geen OWL/Turtle-runtime, maar een pure zelf-toets van de afgedwongen
 schema-bron (`OntologySchema`) op acycliciteit, vervulbare disjointness en
-niet-danglende domain/range. Optioneel en nooit in de "alles"-keten.
+niet-danglende domain/range. Draaide tot #258 als admin-job `owlaudit`; sindsdien is
+het een CI-assert (§6.4) — de toets leest geen data en raakt geen database, dus ze
+hoort vóór de merge te vuren en niet als beheerdersknop erna.
 
 ### 6.5 De brein-projectie
 

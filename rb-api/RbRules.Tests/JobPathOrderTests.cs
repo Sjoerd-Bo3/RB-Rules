@@ -92,6 +92,47 @@ public class JobPathOrderTests
     }
 
     [Fact]
+    public void SamengesteldeKetens_SynchroniserenKaartenVoorZeBansResolven()
+    {
+        // #287-review: BanErrataSyncService snapshot de kaarttabel en resolvet
+        // elke ban/erratum naar een CardRiftboundId, in een destructieve herbouw
+        // per run. Draait "bans" vóór "cards", dan krijgt na een nieuwe set élke
+        // ban voor een nieuwe kaart null — zichtbaar in BanLookup, het
+        // kaartdossier en de effectieve kaarttekst van de resolver. Het herstelt
+        // zich de volgende cyclus, maar een cyclus is hier een etmaal.
+        //
+        // De oude RunAllAsync deed kaarten als eerste stap; dat die afspraak
+        // impliciet was, is precies waarom hij hier expliciet wordt vastgelegd.
+        foreach (var path in new[] { JobPaths.AllUpdate, JobPaths.Nightly })
+        {
+            var steps = Steps(path).ToList();
+            Assert.True(steps.IndexOf("cards") < steps.IndexOf("bans"),
+                $"keten '{path.Name}': 'cards' moet vóór 'bans' — anders resolvet de "
+                + "ban-sync nieuwe kaarten naar null");
+        }
+    }
+
+    [Fact]
+    public void SamengesteldeKetens_ProjecterenDeGraphNaDeRegelindex()
+    {
+        // De andere kant van dezelfde medaille: GraphSyncService projecteert niet
+        // alleen kaarten maar ook regelsecties, dus hij moet ná "rules-index".
+        // Samen met de eis hierboven kun je de twee paden dus NIET simpelweg
+        // achter elkaar plakken — vandaar UpdateChain, die de graph-afsluiter
+        // naar het eind haalt.
+        foreach (var path in new[] { JobPaths.AllUpdate, JobPaths.Nightly })
+        {
+            var steps = Steps(path).ToList();
+            Assert.True(steps.IndexOf("rules-index") < steps.LastIndexOf("graph"),
+                $"keten '{path.Name}': 'graph' moet ná 'rules-index' — anders "
+                + "projecteert hij de verse regelsecties pas een run later");
+            // En de graph draait maar één keer per keten (geen dubbele,
+            // destructieve rebuild).
+            Assert.Equal(1, steps.Count(s => s == "graph"));
+        }
+    }
+
+    [Fact]
     public void Nachtrun_IsDeGecapteKetenMetDeCapsEraf_ZelfdeStappenInDezelfdeVolgorde()
     {
         // De nachtrun wordt programmatisch uit dezelfde bouwstenen afgeleid als

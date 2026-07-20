@@ -907,7 +907,15 @@ de globale duur-vangrail).
   verhuisde naar het Kennis-pad, waardoor het aparte pad "Volledige regeneratie"
   (dat het Kennis-pad plus primer wás) is vervallen; en het Brein-pad is nieuw.
   De wipe zit nog steeds in geen enkel pad — die blijft de losse
-  Gevarenzone-actie `regenerateknowledge` hieronder. Een per-run gecapte stap kan
+  Gevarenzone-actie `regenerateknowledge` hieronder.
+  **"Alles bijwerken" is daardoor wel duurder geworden**: er komen `classify` en
+  `consolidatechanges` bij (beide LLM-werk) en `mine` draineert nu in plaats van
+  één gecapte run te doen. In de normale situatie draineert die op run 1 — de
+  extra kosten treden alleen op als er écht een achterstand ligt, wat van deze
+  knop ook de bedoeling is. De keten synchroniseert bovendien eerst de kaarten en
+  sluit als laatste af met de graph-projectie: `bans` resolvet naar kaart-id's
+  (dus ná `cards`) en `graph` projecteert ook regelsecties (dus ná
+  `rules-index`). Een per-run gecapte stap kan
   **Drain**-gedrag hebben:
   `PathRunner` herhaalt diezelfde job tot `JobOutcome.Drained` true is (geen
   per-run-cap meer geraakt) — de les uit een handmatige Fase 2-

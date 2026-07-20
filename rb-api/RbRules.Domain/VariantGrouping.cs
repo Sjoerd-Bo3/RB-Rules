@@ -81,7 +81,11 @@ public record InteractionNeighbor(string OtherId, string OtherName, string Kind,
 /// blijft.</summary>
 public static class ReifiedInteractionDisplay
 {
-    private const string CardPrefix = "card:";
+    /// <summary>Het BrainRef-prefix van een kaart. Publiek omdat het leespad hem
+    /// in zijn EF-query nodig heeft: het kaart↔kaart-filter moet server-side
+    /// staan, vóór de Take (#287-review) — <see cref="IsCardRef"/> is de
+    /// in-memory tegenhanger voor wat de query al heeft opgehaald.</summary>
+    public const string CardRefPrefix = "card:";
 
     /// <summary>De statussen die het publieke leespad mag tonen: alleen wat de
     /// promotie-poort heeft goedgekeurd. <c>candidate</c> en
@@ -98,9 +102,9 @@ public static class ReifiedInteractionDisplay
     /// en wordt overgeslagen in plaats van naar een niet-bestaande kaartpagina te
     /// wijzen.</summary>
     public static bool IsCardRef(string? brainRef) =>
-        brainRef is not null && brainRef.StartsWith(CardPrefix, StringComparison.Ordinal);
+        brainRef is not null && brainRef.StartsWith(CardRefPrefix, StringComparison.Ordinal);
 
-    public static string CardIdOf(string brainRef) => brainRef[CardPrefix.Length..];
+    public static string CardIdOf(string brainRef) => brainRef[CardRefPrefix.Length..];
 
     /// <summary>Interactie-buren uit de gereïficeerde laag, met dezelfde
     /// canonicalisatie-afspraken als de oude laag (varianten → canoniek id, geen

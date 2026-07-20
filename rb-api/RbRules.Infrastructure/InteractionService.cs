@@ -167,11 +167,21 @@ public class InteractionService(
         // heeft goedgekeurd. De ref-vorm is "card:{id}" (BrainRef), dus de
         // groeps-ids worden naar refs vertaald vóór de query — StartsWith en
         // List.Contains vertalen allebei naar SQL (geen client-eval).
+        //
+        // Het kaart↔kaart-filter hoort HIER en niet stroomafwaarts in de projectie
+        // (#287-review): card↔mechanic is een bedoelde uitvoervorm van de mining
+        // (BreinInteractionMiningService biedt bewust partner-keywords aan), dus
+        // filteren ná de Take laat die rijen het budget opeten en gooit elke echte
+        // kaart-buur voorbij de afkap STIL weg. Regressietest:
+        // Leespad_VerlietstGeenKaartBuurAchterEenBergKaartKeywordRijen.
         var groupRefs = groupIds.Select(id => BrainRef.Card(id).Format()).ToList();
         var displayable = ReifiedInteractionDisplay.DisplayableStatuses;
+        var cardPrefix = ReifiedInteractionDisplay.CardRefPrefix;
         var reifiedRows = await db.Interactions.AsNoTracking()
             .Include(x => x.Conditions)
             .Where(x => displayable.Contains(x.Status)
+                && x.AgentRef.StartsWith(cardPrefix)
+                && x.PatientRef.StartsWith(cardPrefix)
                 && (groupRefs.Contains(x.AgentRef) || groupRefs.Contains(x.PatientRef)))
             .OrderByDescending(x => x.Status == InteractionStatus.Promoted)
             .ThenBy(x => x.Kind)

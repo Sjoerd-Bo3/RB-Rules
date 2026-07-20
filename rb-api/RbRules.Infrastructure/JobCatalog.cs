@@ -94,7 +94,7 @@ public static class JobCatalog
             // raakte geen database: hij kon alleen falen als de GECOMPILEERDE
             // OntologySchema intern inconsistent was. Dat is een unit-test, geen
             // beheerdersactie — sinds #258 draait hij als CI-assert
-            // (OntologyConsistencyAuditTests), waar hij een kapot schema
+            // (ContradictionDetectorTests), waar hij een kapot schema
             // tegenhoudt vóór de merge in plaats van erna.
             new("primer", PrimerAsync),
             // LEGACY (#258): de paar-lexicale, conditie-loze interactie-miner uit
