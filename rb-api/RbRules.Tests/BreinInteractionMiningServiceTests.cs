@@ -500,7 +500,10 @@ public class BreinInteractionMiningServiceTests
 
         Assert.Equal(0, r.Failed);
         Assert.Null(r.FailureDetail);
-        Assert.EndsWith("0 rb-ai-uitval", r.Summary);   // geen oorzaak-staart
+        // Geen oorzaak-staart: direct na "0 rb-ai-uitval" volgt de meting (#286), niet
+        // een "(…)"-uitsplitsing van uitvalsoorzaken.
+        Assert.Contains("0 rb-ai-uitval;", r.Summary);
+        Assert.DoesNotContain("0 rb-ai-uitval (", r.Summary);
     }
 
     // ── #281: rb-ai's REDEN staat in de samenvatting, niet alleen de laag ──────
@@ -773,10 +776,270 @@ public class BreinInteractionMiningServiceTests
         Assert.Equal(0, r.Candidates);
     }
 
+    // ══ #286: de vraag herijkt — minder vocabulaire, meer vragen, mechanic-niveau ══
+
+    /// <summary>DE regressietest van #286. Op productie stuurde één kaart-aanroep 39
+    /// refs mee (focus + 4 partners + de keywords van die HELE buurt) en liep daarmee
+    /// tegen de 90s-timeout van rb-ai; met 3 refs lukte dezelfde kaart in 49s. Het
+    /// aangeboden vocabulaire IS dus de kostenpost, en het groeit met elke set — een
+    /// schaalklip, geen vaste faalkans.
+    ///
+    /// Deze test bewaakt precies dat: een buurt met 24 verschillende buur-keywords mag
+    /// nooit als 24 refs de prompt in. Zodra iemand de begrenzing terugdraait — of een
+    /// nieuwe rol-bron ongelimiteerd toevoegt — valt hij om.</summary>
+    [Fact]
+    public async Task RunAsync_GroteBuurt_BiedtNooitHetHeleVocabulaireAan()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-000", "Focus", "Unit", "Tank reduces damage.", ["Tank"]);
+        // Twaalf partners die de mechaniek Tank delen en samen 24 eigen keywords
+        // dragen — de situatie die live 39 refs opleverde.
+        for (var i = 1; i <= 12; i++)
+            await SeedCardAsync(db, $"ogn-{i:000}", $"Partner {i}", "Unit",
+                $"Tank interacts with Kwaa{i} and Kwbb{i}.", ["Tank", $"Kwaa{i}", $"Kwbb{i}"]);
+
+        var bodies = new List<string>();
+        var svc = CapturingService(db, bodies, () => Interactions());
+
+        await svc.RunAsync(maxFocusCards: 1);
+
+        var refs = OfferedRefs(Assert.Single(bodies));
+        Assert.True(
+            refs.Count <= BreinInteractionMiningService.MaxOfferedRefsPerCard,
+            $"kaart-aanroep bood {refs.Count} refs aan, boven de begroting van " +
+            $"{BreinInteractionMiningService.MaxOfferedRefsPerCard} (#286)");
+
+        // En de begroting mag geen dekking kosten waar het om gaat: het GEDRUKTE
+        // keyword van de kaart zelf blijft altijd staan.
+        Assert.Contains("mechanic:Tank", refs);
+        Assert.Contains("card:ogn-000", refs);
+    }
+
+    /// <summary>Dekking mag niet dalen (#286): de begrensde aanbieding houdt de
+    /// buur-keywords die er inhoudelijk toe doen, en gooit alleen de rest weg. Hier
+    /// staat het relevante keyword in de tekst van de focus-kaart zélf, tussen 20
+    /// irrelevante keywords in de buurt.</summary>
+    [Fact]
+    public async Task RunAsync_GroteBuurt_HoudtHetRelevanteBuurKeyword()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-000", "Focus", "Unit",
+            "Tank reduces the damage that Assault would deal.", ["Tank"]);
+        await SeedCardAsync(db, "ogn-001", "Bearer", "Unit",
+            "Assault deals damage.", ["Tank", "Assault"]);
+        for (var i = 2; i <= 11; i++)
+            await SeedCardAsync(db, $"ogn-{i:000}", $"Noise {i}", "Unit",
+                $"Tank does something with Noisekw{i}.", ["Tank", $"Noisekw{i}"]);
+
+        var bodies = new List<string>();
+        var svc = CapturingService(db, bodies, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Assault", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        // Assault co-occurreert met Tank in de focus-tekst; de ruis-keywords doen dat
+        // alleen in hun eigen kaart. Het paar overleeft de begroting en promoveert.
+        Assert.Contains("mechanic:Assault", OfferedRefs(Assert.Single(bodies)));
+        Assert.Equal(1, r.Promoted);
+    }
+
+    /// <summary>De mechanic-niveau-vraag (#286): 38 mechanics tegenover 1311 kaarten,
+    /// dus mech↔mech hoort één keer per mechaniek gevraagd te worden — niet opnieuw bij
+    /// elke kaart. Het feit wordt uit de MECHANIEK afgeleid (DERIVED_FROM =
+    /// mechanic:…), niet uit een toevallige kaart.</summary>
+    [Fact]
+    public async Task RunAsync_MechanicNiveau_LevertMechMechUitEenSubject()
+    {
+        using var db = NewDb();
+        await SeedEntityAsync(db, "Tank");
+        await SeedEntityAsync(db, "Assault");
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Assault", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        // maxFocusCards: 0 isoleert de mechanic-pass — anders zou de kaart-pass
+        // hetzelfde paar (idempotent) nog eens aandragen. Eén subject, zodat het bij
+        // precies één aanroep en dus één provenance-Assertion blijft.
+        var r = await svc.RunAsync(maxFocusCards: 0, maxMechanicSubjects: 1);
+
+        Assert.Equal(1, r.MechanicSubjects);
+        Assert.Equal(0, r.FocusCards);
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal("mechanic:Tank", ix.AgentRef);
+        Assert.Equal("mechanic:Assault", ix.PatientRef);
+
+        var assertion = await db.Assertions.SingleAsync();
+        Assert.Equal("mechanic:Tank", assertion.DerivedFromRef);
+
+        // Watermark: het verwerkte subject komt niet terug (anders herkauwt de gecapte
+        // job eeuwig dezelfde kop van de wachtrij — het gat dat #249 op kaartniveau
+        // dichtte), het onaangeroerde subject juist wél.
+        var entities = await db.CanonicalEntities.OrderBy(e => e.Id).ToListAsync();
+        Assert.NotNull(entities[0].InteractionsMinedAt);
+        Assert.Null(entities[1].InteractionsMinedAt);
+    }
+
+    /// <summary>Op mechanic-niveau zijn ALLEEN keywords een rol; kaarten en
+    /// regelsecties zijn bewijs. Zonder die scheiding zou de pass terugvallen op de
+    /// kaart↔eigen-keyword-tautologie die #249 uitroeide.</summary>
+    [Fact]
+    public async Task RunAsync_MechanicNiveau_BiedtAlleenKeywordRollenAan()
+    {
+        using var db = NewDb();
+        await SeedEntityAsync(db, "Tank");
+        await SeedEntityAsync(db, "Assault");
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+
+        var bodies = new List<string>();
+        var svc = CapturingService(db, bodies, () => Interactions());
+
+        await svc.RunAsync(maxFocusCards: 0, maxMechanicSubjects: 1);
+
+        var refs = OfferedRefs(Assert.Single(bodies));
+        Assert.All(refs, r => Assert.StartsWith("mechanic:", r));
+        Assert.True(refs.Count <= OfferingLimits.Mechanic.MaxRefs);
+    }
+
+    /// <summary>Dekking, expliciet (#286): wat de mechanic-pass per constructie NIET
+    /// kan vinden, moet de kaart-pass blijven vinden. Een kaart↔kaart-paar heeft geen
+    /// enkele keyword-rol en bestaat dus alleen op kaartniveau.</summary>
+    [Fact]
+    public async Task RunAsync_MechanicPassDektGeenKaartKaart_KaartPassBlijftDatDoen()
+    {
+        using var db = NewDb();
+        await SeedEntityAsync(db, "Fury");
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit", "Some effect.", ["Fury"]);
+        await SeedCardAsync(db, "ogn-002", "Beta", "Unit", "Another effect.", ["Fury"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "card:ogn-001", to = "card:ogn-002", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        // De mechanic-pass kan dit paar niet aanbieden (geen keyword-rollen), de
+        // kaart-pass wel — als cold-start-hypothese, precies zoals vóór #286.
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Hypothesized);
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal("card:ogn-001", ix.AgentRef);
+        Assert.Equal("card:ogn-002", ix.PatientRef);
+    }
+
+    /// <summary>Rijkere vraag in dezelfde aanroep (#286): welke aangeboden regelsectie
+    /// verankert de interactie? Dat vult <c>Interaction.GovernedByRef</c> (GOVERNED_BY),
+    /// dat sinds #226 bestond maar altijd null bleef — en het kost niets, want die
+    /// sectie stond toch al als bewijs in de prompt.</summary>
+    [Fact]
+    public async Task RunAsync_GovernedBy_VultDeNormatieveAnkerRef()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-060", "Gamma", "Unit", "It has some ability.", ["Snipe", "Tank"]);
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.2",
+            "Tank reduces incoming damage before Snipe assigns its damage.");
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Snipe", kind = "COUNTERS", interacts = true,
+            governed_by = "section:core-rules-pdf/704.2",
+            conditions = Array.Empty<object>(),
+        }));
+
+        await svc.RunAsync(maxFocusCards: 1);
+
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal("section:core-rules-pdf/704.2", ix.GovernedByRef);
+    }
+
+    /// <summary>...en nooit een anker buiten het aangeboden lijstje (CLAUDE.md, de
+    /// gesloten LLM-vraag). Een verzonnen sectie-ref valt weg zoals een verzonnen
+    /// rol-ref dat doet — het feit blijft, alleen zonder normatief anker.</summary>
+    [Fact]
+    public async Task RunAsync_GovernedBy_BuitenDeAanbieding_ValtWeg()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-060", "Gamma", "Unit", "It has some ability.", ["Snipe", "Tank"]);
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.2",
+            "Tank reduces incoming damage before Snipe assigns its damage.");
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Snipe", kind = "COUNTERS", interacts = true,
+            governed_by = "section:verzonnen-bron/9.9",
+            conditions = Array.Empty<object>(),
+        }));
+
+        await svc.RunAsync(maxFocusCards: 1);
+
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Null(ix.GovernedByRef);
+    }
+
+    /// <summary>Meten, niet gokken (acceptatiecriterium #286): het run-detail draagt
+    /// het aantal aanroepen, de gemiddelde duur en het gemiddelde aantal aangeboden
+    /// refs — per fase. Zonder die drie is "de vraag is nu goedkoper" een gok.</summary>
+    [Fact]
+    public async Task RunAsync_RunDetail_DraagtDeMeting()
+    {
+        using var db = NewDb();
+        await SeedEntityAsync(db, "Tank");
+        await SeedEntityAsync(db, "Assault");
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Tank reduces the damage that Assault would deal.", ["Tank"]);
+
+        var svc = Service(db, () => Interactions());
+
+        var r = await svc.RunAsync(maxFocusCards: 1, maxMechanicSubjects: 1);
+
+        Assert.NotNull(r.CallMetrics);
+        Assert.Contains("mechanic 1×", r.CallMetrics);
+        Assert.Contains("kaart 1×", r.CallMetrics);
+        Assert.Contains("refs", r.CallMetrics);
+        Assert.Contains("meting:", r.Summary);
+    }
+
     // ── testinfra ─────────────────────────────────────────────────────────────
 
     private static BreinInteractionMiningService Service(RbRulesDbContext db, Func<string?> body) =>
         new(db, Ai(body), new EntityResolutionService(db), new InteractionPromotionService(db));
+
+    /// <summary>Als <see cref="Service"/>, maar legt elke rb-ai-payload vast zodat de
+    /// test kan zien WAT er is aangeboden — de enige manier om de begroting van #286 op
+    /// de echte productiecode te toetsen in plaats van op een tweede implementatie.</summary>
+    private static BreinInteractionMiningService CapturingService(
+        RbRulesDbContext db, List<string> bodies, Func<string?> body) =>
+        new(db, CapturingAi(bodies, body), new EntityResolutionService(db),
+            new InteractionPromotionService(db));
+
+    /// <summary>De <c>refs</c>-lijst uit een vastgelegde payload.</summary>
+    private static List<string> OfferedRefs(string payload)
+    {
+        using var doc = JsonDocument.Parse(payload);
+        return [.. doc.RootElement.GetProperty("refs").EnumerateArray()
+            .Select(r => r.GetProperty("ref").GetString()!)];
+    }
+
+    /// <summary>Een levende canonieke keyword-entiteit — het subject van de
+    /// mechanic-niveau-pass (#286).</summary>
+    private static async Task SeedEntityAsync(RbRulesDbContext db, string label)
+    {
+        db.CanonicalEntities.Add(new CanonicalEntity
+        {
+            Kind = CanonicalEntityKinds.Keyword, CanonicalLabel = label,
+            Status = CanonicalEntityStatus.Canonical, CreatedByRunId = Ulid.NewUlid(),
+        });
+        await db.SaveChangesAsync();
+    }
 
     private static string Interactions(params object[] items) =>
         JsonSerializer.Serialize(new { interactions = items });
@@ -836,6 +1099,21 @@ public class BreinInteractionMiningServiceTests
             HttpStatusCode.InternalServerError)
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        }))
+        { BaseAddress = new Uri("http://rb-ai.test") },
+        NullLogger<RbAiClient>.Instance);
+
+    /// <summary>Als <see cref="Ai"/>, maar bewaart elke verzonden payload.</summary>
+    private static RbAiClient CapturingAi(List<string> bodies, Func<string?> body) => new(
+        new HttpClient(new StubHandler(req =>
+        {
+            lock (bodies) bodies.Add(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            return body() is { } b
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(b, Encoding.UTF8, "application/json"),
+                }
+                : new HttpResponseMessage(HttpStatusCode.InternalServerError);
         }))
         { BaseAddress = new Uri("http://rb-ai.test") },
         NullLogger<RbAiClient>.Instance);

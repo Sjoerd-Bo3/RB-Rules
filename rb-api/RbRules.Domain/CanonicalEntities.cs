@@ -69,6 +69,18 @@ public class CanonicalEntity : IEmbeddable
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? MergedAt { get; set; }
 
+    /// <summary>Voortgangs-watermark van de MECHANIC-NIVEAU-interactie-extractie
+    /// (#286) — de tegenhanger van <see cref="Card.InteractionsMinedAt"/>. Gezet zodra
+    /// de extractie voor dit subject GESLAAGD is (rb-ai antwoordde, envelop parseerde),
+    /// ook zonder promotie; bewust NIET bij rb-ai-uitval of een kapotte envelop, zodat
+    /// zo'n subject juist terugkomt. Zonder dit veld zou de gecapte job eeuwig dezelfde
+    /// kop van de wachtrij herkauwen — exact het gat dat de #249-review op kaartniveau
+    /// dichtte.</summary>
+    public DateTimeOffset? InteractionsMinedAt { get; set; }
+
+    /// <summary>De run die het watermark zette (0a-provenance).</summary>
+    public string? InteractionsMinedByRunId { get; set; }
+
     public BrainRef Ref => Kind switch
     {
         CanonicalEntityKinds.Mechanic => BrainRef.Mechanic(CanonicalLabel),

@@ -132,6 +132,22 @@ met quota en rate-limiting.
   nooit een term buiten het aangeboden lijstje). Magnitudes horen bij hun
   familie — "Assault 2"/"Assault 3" zijn beide `Assault`, nooit een eigen
   entiteit.
+- **Bij een LLM-extractie is het aangeboden VOCABULAIRE de kostenpost, niet de
+  brontekst** (#286). Gemeten op productie: zelfde kaarttekst, 3 refs → 200 na
+  49,0s; 39 refs → afgekapt op de 90s-timeout. De 49s is grotendeels vaste
+  SDK-opstartkost, dus **méér vrágen per aanroep is bijna gratis en méér
+  vocabulaire is peperduur** — het vermenigvuldigt de redeneerruimte. Twee
+  gevolgen. (a) Bied per item alleen aan wat aantoonbaar relevant is (lees eerst
+  wat gedrukt is; scoren over het hele vocabulaire mag, want dat is O(n) leeswerk
+  — het AANBIEDEN moet begrensd). (b) Een aanbieding die met de kennisbank
+  meegroeit is een **schaalklip, geen vaste faalkans**: hoe meer het brein leert,
+  hoe meer extracties omvallen, en omdat een gefaalde kaart geen watermark krijgt
+  en terugkomt, verzwaart de pool zichzelf (uitval liep monotoon 45 → 47 → 55%).
+  Vraag daarom op het hoogste niveau dat de vraag toelaat — 38 mechanics i.p.v.
+  1311 kaarten — maar benoem expliciet wat dat niveau NIET dekt en laat het
+  lagere niveau daarvoor staan. Let bij het meten op: de Agent SDK gooit niet bij
+  een mislukte run en retryt intern tot 10× met backoff, dus wandkloktijd ≠
+  denktijd.
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`

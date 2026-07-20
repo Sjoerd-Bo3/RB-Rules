@@ -446,6 +446,10 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // (#1) náást de service-resolutie. Case-collisie is de service's taak
             // (genormaliseerd resolven vóór insert); dit vangt exacte duplicaten.
             e.HasIndex(x => new { x.Kind, x.CanonicalLabel }).IsUnique();
+            e.Property(x => x.InteractionsMinedByRunId).HasMaxLength(Domain.Ulid.Length);
+            // De subject-selectie van de mechanic-niveau-interactie-mining vraagt
+            // precies naar de nog-niet-verwerkte entiteiten (#286).
+            e.HasIndex(x => x.InteractionsMinedAt);
             e.Property(x => x.Embedding).HasColumnType(vectorType);
             // Tombstone-verwijzing naar de overlevende entiteit (self-FK). Restrict:
             // een doel met tombstones eromheen mag niet stil verdwijnen — dat zou

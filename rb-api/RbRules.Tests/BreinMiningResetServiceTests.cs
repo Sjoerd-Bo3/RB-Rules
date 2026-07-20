@@ -65,6 +65,40 @@ public class BreinMiningResetServiceTests
         Assert.Contains(UnminedCardId, pool);
     }
 
+    /// <summary>Het watermark is sinds #249/#286 niet meer één ding maar drie: de
+    /// afgeleide Assertion én de expliciete velden op <c>Card</c> en
+    /// <c>CanonicalEntity</c>. Wist de reset alleen de Assertions, dan is hij half —
+    /// de miner slaat dezelfde kaarten en subjecten alsnog over en de verbetering
+    /// waarvoor deze service bestaat ("zelfde pool, nieuwe extractie") is juist NIET
+    /// meetbaar. Deze test bewaakt alle drie.</summary>
+    [Fact]
+    public async Task Reset_WistOokDeExplicieteWatermarkVelden()
+    {
+        using var db = NewDb();
+        await SeedEverythingAsync(db);
+
+        var runId = Ulid.NewUlid();
+        var card = await db.Cards.SingleAsync(c => c.RiftboundId == MinedCardId);
+        card.InteractionsMinedAt = DateTimeOffset.UtcNow;
+        card.InteractionsMinedByRunId = runId;
+        db.CanonicalEntities.Add(new CanonicalEntity
+        {
+            Kind = CanonicalEntityKinds.Keyword, CanonicalLabel = "Deflect",
+            Status = CanonicalEntityStatus.Canonical, CreatedByRunId = runId,
+            InteractionsMinedAt = DateTimeOffset.UtcNow, InteractionsMinedByRunId = runId,
+        });
+        await db.SaveChangesAsync();
+
+        // Scope Interactions laat de canonieke laag staan — juist daarom moet hun
+        // watermark hier gewist worden.
+        await new BreinMiningResetService(db).ResetAsync(BreinResetScope.Interactions);
+
+        Assert.All(await db.Cards.AsNoTracking().ToListAsync(),
+            c => Assert.Null(c.InteractionsMinedAt));
+        Assert.All(await db.CanonicalEntities.AsNoTracking().ToListAsync(),
+            e => Assert.Null(e.InteractionsMinedAt));
+    }
+
     [Fact]
     public async Task Reset_LichtPoortGrafstenen_MaarLaatAdminOordelenStaan()
     {
