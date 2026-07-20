@@ -38,7 +38,7 @@ public sealed record BreinInteractionMiningResult(
 ///
 /// Herijkt in #249. De meting op 383 live interacties liet zien dat 69% kaart↔
 /// eigen-keyword was — een feit dat al gratis en deterministisch bestaat
-/// (<c>GraphSyncService</c> projecteert <c>Card.Mechanics[]</c> als HAS_KEYWORD),
+/// (<c>GraphSyncService</c> projecteert <c>Card.Mechanics[]</c> als HAS_MECHANIC),
 /// terwijl mech↔mech (het échte doel) op 1,3% bleef en 77% geen enkele conditie
 /// droeg. De oorzaak zat in de aanbieding én in de poort: we boden vooral een kaart
 /// mét haar eigen keywords aan, en de lexicale poort beloonde precies die
@@ -144,8 +144,19 @@ public class BreinInteractionMiningService(
         // kaart in-memory gefilterd (zelfde patroon als de partner-pool). Dit is de
         // bron waar keyword↔keyword-relaties daadwerkelijk staan opgeschreven — de
         // kaartteksten alleen leverden vrijwel geen mech↔mech op.
+        //
+        // Alléén trust-tier-1-bronnen (#249-review): rule_chunks bevat ook de
+        // community-gidsen (trust 3), en een parafrase daaruit zou als "bewijszin
+        // gevonden" een LLM-voorstel direct promoveren. Dat breekt de kennislagen
+        // (officieel > … > community, docs/KNOWLEDGE.md) op precies de plek waar de
+        // deterministische steun náást het LLM-verdict moet staan. Zelfde filter als
+        // BanErrataSyncService ("officieel wint").
+        var officialSourceIds = await db.Sources.AsNoTracking()
+            .Where(s => s.TrustTier == 1)
+            .Select(s => s.Id)
+            .ToListAsync(ct);
         var ruleSections = await db.RuleChunks.AsNoTracking()
-            .Where(c => c.Text != "")
+            .Where(c => c.Text != "" && officialSourceIds.Contains(c.SourceId))
             .OrderBy(c => c.SourceId).ThenBy(c => c.ChunkIndex)
             .Select(c => new SectionLite(c.SourceId, c.SectionCode, c.Text))
             .ToListAsync(ct);
@@ -380,10 +391,23 @@ public class BreinInteractionMiningService(
         if (keywordLabels.Count >= 2)
         {
             var pickedSections = 0;
+            var coveredPairs = new HashSet<(string, string)>();
             foreach (var s in ruleSections)
             {
                 if (pickedSections >= MaxRuleSections) break;
-                if (keywordLabels.Count(l => TextContains(s.Text, l)) < 2) continue;
+                var hits = keywordLabels.Where(l => TextContains(s.Text, l)).ToList();
+                if (hits.Count < 2) continue;
+
+                // Begrotings-diversiteit (#249-review): neem een sectie alleen als ze
+                // MINSTENS ÉÉN nog niet gedekt label-PAAR toevoegt. Zonder die eis vulden
+                // drie vroege secties die toevallig dezelfde twee labels noemen de hele
+                // MaxRuleSections-begroting, en werd de sectie die K5↔K6 daadwerkelijk
+                // beschrijft nooit geladen — de poort-uitslag hing dan aan de
+                // corpusvolgorde (SourceId/ChunkIndex) in plaats van aan het bewijs.
+                var pairs = LabelPairs(hits).ToList();
+                if (pairs.All(coveredPairs.Contains)) continue;
+                coveredPairs.UnionWith(pairs);
+
                 var label = s.SectionCode is { Length: > 0 } code
                     ? $"{s.SourceId} §{code}" : s.SourceId;
                 promptParts.Add($"[regels {label}] {s.Text}");
@@ -472,9 +496,12 @@ public class BreinInteractionMiningService(
                 ? EvidenceAnchor.Textual
                 : EvidenceAnchor.None;
 
+    /// <summary>Woordgrens-bewuste term-treffer (#249-review): een kale substring-match
+    /// liet generieke keywords ("Tank", "Hidden", "Equip") op gewoon regelproza vallen en
+    /// leverde zo valse lexicale steun voor de promotie-poort. Gebracket ("[Assault 2]")
+    /// en meerwoordstermen ("Reaction Window") blijven werken.</summary>
     private static bool TextContains(string text, string term) =>
-        !string.IsNullOrWhiteSpace(term)
-        && text.Contains(term.Trim(), StringComparison.OrdinalIgnoreCase);
+        TermMatch.ContainsWord(text, term);
 
     private sealed record OfferedRefRow(string Ref, string Label, EntityType Type);
 
