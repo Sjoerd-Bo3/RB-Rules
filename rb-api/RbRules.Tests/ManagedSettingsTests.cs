@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Pgvector;
+using RbRules.Api;
 using RbRules.Domain;
 using RbRules.Infrastructure;
 using RbRules.Infrastructure.GraphRag;
@@ -337,6 +339,42 @@ public class ManagedSettingsTests
         var tz = views.Single(v => v.Key == SettingKeys.NightlyTimeZone);
         Assert.False(tz.Overridden);
         Assert.Equal(tz.Default, tz.Effective);
+    }
+
+    // ── 7) Het koppelvlak met rb-web ──────────────────────────────────────
+
+    [Fact]
+    public void SettingsPatch_LeestDeBodyDieRbWebStuurt()
+    {
+        // rb-web's `setting`-action postet {changes:[{key,value}],actor}. Deze test
+        // is de vangrail tegen een stille 400/415 in productie: de vorm is met een
+        // stub geverifieerd, maar de échte binding gebruikt de Web-defaults
+        // (camelCase, hoofdletterongevoelig) van ASP.NET Core.
+        var json = """
+            {"changes":[{"key":"nightly.start_hour","value":"12"},
+                        {"key":"nightly.end_hour","value":"18"}],"actor":"beheer"}
+            """;
+
+        var patch = JsonSerializer.Deserialize<SettingsPatch>(
+            json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.NotNull(patch);
+        Assert.Equal("beheer", patch.Actor);
+        Assert.Equal(2, patch.Changes!.Count);
+        Assert.Equal(SettingKeys.NightlyStartHour, patch.Changes[0].Key);
+        Assert.Equal("12", patch.Changes[0].Value);
+        Assert.Equal(SettingKeys.NightlyEndHour, patch.Changes[1].Key);
+        Assert.Equal("18", patch.Changes[1].Value);
+    }
+
+    [Fact]
+    public void SettingsPatch_LegeWaarde_BetekentTerugNaarDeStandaard()
+    {
+        var patch = JsonSerializer.Deserialize<SettingsPatch>(
+            """{"changes":[{"key":"brein.retrieval.enabled","value":""}]}""",
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.Equal("", Assert.Single(patch!.Changes!).Value);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
