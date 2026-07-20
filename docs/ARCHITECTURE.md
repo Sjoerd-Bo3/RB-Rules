@@ -2417,7 +2417,12 @@ telling alleen zegt niets over de kosten: 8 regel-secties (tot 2400 tekens,
 kaartteksten (~300 tekens). Vóór #282 kon één verzoek 16×2400 ≈ 38k tekens
 bevatten. Dat tekenbudget stond tot **#293** op 8000 — gemeten precies de waarde
 waarop `llama-server` omvalt (7000 → 200, 8000 → 400 in 3 van de 3 pogingen), dus
-de begrenzing stond op de klip in plaats van eronder. Zie ADR-20.
+de begrenzing stond op de klip in plaats van eronder. Sinds **#301** is dat budget
+bovendien een garantie in plaats van een afspraak: `EmbeddingService` kapt en
+splitst elk verzoek zelf, dus ook de tien aanroepplekken buiten de twee
+embed-pijplijnen (primer-drafts, `/ask`, correcties) kunnen `llama-server` niet
+meer omver duwen. Het env-plafond ligt sinds **#303** op `MaxConfigurableBatchChars`
+(6300) in plaats van op de meetwaarde 7000 — die is de klifrand zelf. Zie ADR-20.
 
 **Elke nieuwe env-vlag hoort óók in de compose-`environment:`** (#268-follow-up).
 Voor #279 gaat het om `AI_MAX_CONCURRENCY` + `AI_INTERACTIVE_RESERVE` (rb-ai) en
