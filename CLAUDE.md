@@ -115,6 +115,17 @@ met quota en rate-limiting.
   natekenen; ze staan gevendord in `rb-web/static/glyphs/`
   (`scripts/fetch-glyphs.sh`, ADR-16). Let op: ze zijn getekend voor een
   **donkere** UI (`might`/`exhaust` puur wit) en slibben dicht onder ~14px.
+- **"LLM boven regex" (#188) is geen vrijbrief — meet eerst wat de bron al
+  gedrukt heeft** (#211/#249, ADR-17). Riftbound-keywords staan letterlijk
+  gebracket in de kaarttekst (`[Equip]`, `[Assault 2]`): meting over de 1429
+  live kaartteksten gaf 31 keywords, állemaal in die vorm, met ~3% van de
+  vermeldingen érgens zonder haken. Een LLM daarop loslaten is precies de
+  verspilling die #249 aantoonde (69% herkauwde `Card.Mechanics[]`). Regel:
+  lees wat gedrukt is, geef de LLM een **gesloten** vraag over de rest, en
+  reken zijn antwoord deterministisch na (alleen toevoegen, nooit afnemen,
+  nooit een term buiten het aangeboden lijstje). Magnitudes horen bij hun
+  familie — "Assault 2"/"Assault 3" zijn beide `Assault`, nooit een eigen
+  entiteit.
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`

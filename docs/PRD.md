@@ -581,6 +581,22 @@ de globale duur-vangrail).
   Harde grens: zo'n samengestelde alt-tekst hoort uitsluitend in een `alt=` —
   hij wordt nooit als Riots officiële kaarttekst getoond en gaat nooit de
   kennisbank of een LLM-prompt in. Afgeleid is niet officieel.
+- **Mechanieken per kaart — gelezen, niet geraden** *(#211)* — de mechaniek-
+  facetten, de `HAS_KEYWORD`-edges in de graaf en het mechaniek-blok op de
+  kaartpagina komen uit `Card.Mechanics`, en dat veld wordt sinds #211
+  deterministisch uit de kaarttekst zélf afgeleid: Riot drukt élk keyword
+  gebracket af (`[Equip]`, `[Assault 2]`). Meting over de 1429 kaartteksten met
+  tekst: 31 verschillende keywords, állemaal in die vorm — slechts ~3% van de
+  vermeldingen staat érgens zónder haken. Magnitudes blijven bij hun familie
+  ("Assault 2" en "Assault 3" zijn beide `Assault`, nooit een eigen facet).
+  Het LLM doet nog uitsluitend wat die vorm niet kan: per kaart beoordelen of
+  een bekend keyword dat er *zonder* haken in staat daar als spelterm wordt
+  gebruikt ("Equip :rb_rune_body:") of als gewoon Engels woord ("Repeat this
+  gear's play effect"); dat oordeel wordt achteraf tegen dezelfde gesloten
+  lijst nagerekend en kan alleen toevoegen. **Merkbaar gevolg:** valt rb-ai uit
+  — een verwacht pad — dan hebben kaarten nog steeds hun mechanieken, dus
+  blijven de facetten, de graaf en het kaart-dossier gevuld; alleen de
+  afgeleide triggers/effects wachten op de volgende run.
 
 ### 4.3 De vraagbaak (`/ask`)
 
@@ -707,7 +723,12 @@ de globale duur-vangrail).
   semantisch vindbaar is; anders `unverified` met reden, de reviewqueue in.
 - **Evolutie-raamwerk** — set-release-keten, groeiend mechaniek-vocabulaire
   (keyword-kandidaten → reviewqueue → re-mine) en een kennis-gaten-rapport dat
-  meet waar de bank aantoonbaar niets weet.
+  meet waar de bank aantoonbaar niets weet. Het vocabulaire groeit uitsluitend
+  langs die queue: een nieuwe set introduceert nieuwe keywords in gebrackete
+  vorm, de mining oogst ze deterministisch als kandidaat mét kaart-telling en
+  bewijssnippet, en pas een menselijke acceptatie maakt er vocabulaire van
+  (#211: een LLM-oordeel kan nooit zelf een term toevoegen; een afwijzing geldt
+  óók voor de deterministische route).
 - **Kennis-levenscyclus** — regelwijzigingen (change high/medium) hertoetsen de
   betrokken primer-docs en claims automatisch; kaart-embeddings invalideren
   bij naam- of tekstwijziging (beide zitten in de embeddingtekst, #150), de
