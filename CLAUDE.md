@@ -213,6 +213,30 @@ met quota en rate-limiting.
   vraag kost 2 permits. Bijkomend: `AI_MAX_CONCURRENCY` en het memory-plafond
   van `rb-v2-ai` horen bij elkaar (~300-400 MiB RSS per gelijktijdige sessie) —
   verhoog nooit het één zonder het ander.
+- **De Claude Agent SDK GOOIT niet als een run mislukt** (#281) — ze eindigt met
+  een gewoon `result`-bericht (`subtype: "error_max_turns"`, `is_error`,
+  `api_error_status`, `errors[]`) en retryt een mislukte API-call bovendien
+  ZELF tot 10× met exponentiële backoff, elke poging gemeld als
+  `{"type":"system","subtype":"api_retry",…}`. rb-ai las geen van beide, dus 22
+  van de 40 mining-kaarten faalden zonder één logregel. Gemeten backoff: 0,5 →
+  1,0 → 2,3 → 4,5 → 9,6 → 16,4 → 32,1 s — na zeven pogingen 37 s zonder één
+  verwerkt token, dus een aanhoudende 429/529 loopt gegarandeerd in onze eigen
+  90 s-timeout en komt naar buiten als een generieke 500. **Een harde timeout
+  die korter is dan de retry-keten eronder verkleedt elke upstream-fout als
+  "traag".** Lees bij elke SDK-lus dus het result-bericht én `api_retry` uit;
+  `rb-ai/src/failure.ts` doet dat nu op één plek. Diagnostiek gaat verplicht
+  door `safeDetail`/`redactSecrets` — groottes en aantallen loggen mag,
+  prompt-inhoud en het token nooit.
+- **Reken een hypothese na op de wandkloktijd vóór je hem gelooft** (#281) —
+  "de grote payloads vallen om" was plausibel (de predicaten-run met kleinere
+  payload gaf 0% uitval), maar 40 kaarten in 43 min met 18 successen laat maar
+  één oplossing toe: 22 × ~85 s, oftewel de timeout. Een payload-afwijzing is
+  een 400 in <1 s en zou impliceren dat een SUCCES 141 s duurde — langer dan de
+  timeout die hem afgekapt zou hebben. Zelfde soort toets: een gefaalde kaart
+  krijgt geen watermark en komt terug, dus een grootte-afhankelijke fout zou het
+  uitvalpercentage naar 100% duwen; gemeten schommelt het (45/47/55%). Het
+  echte verschil met de predicaten-run was **speling**, niet grootte: 9,5 s per
+  call laat ~80 s over voor retries, 33 s per call maar ~57 s.
 - **Meet je eigen cap niet als "de LLM is overbelast"** (#279) — rb-ai's
   semaphore-afwijzing komt óók als 429 terug, maar mét
   `{"code":"concurrency_limit"}`. Zonder dat onderscheid telt zelf-veroorzaakte

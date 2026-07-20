@@ -948,6 +948,19 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   `AGENT_ADDENDUM`; de in-process brein-MCP-server (`createBrainMcpServer`);
   `extractWithTool` (#226) — één geforceerde in-process MCP-tool die de
   gevalideerde argumenten in een closure vangt (tool-forced structured output).
+- `src/failure.ts` — PUUR (zonder Agent SDK, unit-getest): de faaldiagnostiek
+  van #281. Levert het redenen-vocabulaire (`AiFailureReason`), de twee
+  vertalers (`describeThrown` voor een geworpen fout, `resultFailure` voor het
+  SDK-resultaatbericht), de `RetryTracker` op `api_retry`-berichten, de
+  `StderrTail` van het subprocess, en `logCall` — één JSON-regel per
+  LLM-aanroep (`{"evt":"ai_call","endpoint":…,"ms":…,"status":…,"outcome":…,
+  "reason":…,"detail":…}`), greppelbaar met
+  `docker logs rb-v2-ai | grep ai_call`. `redactSecrets`/`safeDetail` zijn de
+  verplichte poort: env-waarden met TOKEN/KEY/SECRET in de naam, `sk-ant-…`,
+  `Bearer …` en lange ondoorzichtige runs gaan eruit vóór er iets naar buiten
+  gaat (werkafspraak 7, met een test die vastlegt dat het token nooit in een
+  logregel belandt). Prompt-inhoud wordt nooit gelogd — `detail` komt
+  uitsluitend uit foutmeldingen. Zie §6.6 voor waaróm dit bestand bestaat.
 - `src/extract.ts` — PUUR (zonder Agent SDK, unit-getest): de
   vocabulaire→zod-schema-vertaling voor de brein-extractie (#226). Bouwt de
   enum-poorten voor `emit_interactions`/`emit_mechanic_predicates` uit het door
@@ -1598,6 +1611,106 @@ reizen dus via de tool-input, niet via de antwoordtekst. Uitval (tool niet
 geroepen, timeout, run gefaald) → de endpoint antwoordt 500, wat `RbAiClient` als
 AI-uitval leest (null, nette degradatie); een 200 met lege lijst betekent "geen
 kandidaten" — dat onderscheid blijft bewaard.
+
+**Faaldiagnostiek op dat pad (#281).** Een mining-run over 40 kaarten meldde
+`22 rb-ai-uitval (5xx×22)` terwijl `docker logs rb-v2-ai` één regel bevatte: de
+opstartregel. Meer dan de helft van de kaarten haalde de LLM niet en de oorzaak
+was van buitenaf niet vast te stellen. Er zaten twee stille gaten in de keten,
+en één gemeten hoofdoorzaak.
+
+1. **De Agent SDK gooit niet bij een mislukte run.** Ze eindigt met een gewoon
+   `result`-bericht met `subtype: "error_*"`, `is_error`, `api_error_status`,
+   `errors[]` en `permission_denials`. `collectAnswer` las daar alleen
+   `result`/`usage` uit; `extractWithTool` las de berichtenstroom zelfs volledig
+   leeg (`for await (const _ of …)`). Elke mislukking werd zo een kale
+   `captured === null` → `500 {"error":"extractie mislukt"}`, spoorloos.
+   `resultFailure` leest het bericht nu wél.
+2. **rb-api gooide de foutbody weg.** `RbAiClient` logde alleen de statuscode.
+   De 500 draagt nu `reason` + `detail`; `ReadErrorAsync` leest ze (samen met de
+   `code` van #279, uit één lezing) en `AiExtraction.Reason` brengt ze naar de
+   tally.
+3. **De gemeten hoofdoorzaak: SDK-interne retries met exponentiële backoff.**
+   Een probe met een ongeldige sleutel legde bloot dat de SDK een mislukte
+   API-call ZELF tot `max_retries` (10) opnieuw probeert en elke poging als
+   `{"type":"system","subtype":"api_retry",…,"error_status":429,…}` uitzendt —
+   een berichtsoort die rb-ai nergens las. Gemeten wachttijden: 0,5s → 1,0s →
+   2,3s → 4,5s → 9,6s → 16,4s → 32,1s. Na zeven pogingen is er 37 seconden
+   verstreken zónder één verwerkt token; poging 8 en 9 duwen het totaal ruim
+   voorbij `EXTRACT_TIMEOUT_MS` (90 s), waarna onze AbortController de run
+   afkapt. **Een aanhoudende 429/529 op het abonnement kwam daardoor naar buiten
+   als ónze timeout → een generieke rb-ai-500** — met een container die
+   nauwelijks geheugen gebruikte omdat het subprocess vooral lag te wáchten
+   (`OOMKilled=false`, `restarts=0`, ~120 MiB van 2,44 GiB). Dat verklaart ook
+   waarom #251 concludeerde "5xx, geen rate-limit": de 5xx was onze eigen
+   timeout-vertaling, de rate-limit zat een laag dieper.
+
+`RetryTracker` telt die retries en `withRetries` laat de upstream-oorzaak bij
+een timeout wínnen van het woord "timeout" — een run die na zeven mislukte
+API-pogingen afgekapt wordt is een API-fout, geen trage LLM. De timeout blijft
+in de detail-tekst staan. Verder gemeten en vastgelegd: de SDK-meldingen
+`Failed to spawn …` / `… exited with code N` / `… terminated by signal SIGKILL`
+worden als `spawn` herkend (letterlijk uit `sdk.mjs`, niet geraden), en de
+`stderr`-callback van het subprocess gaat in een ringbuffer die alleen bij
+uitval wordt uitgestort — stil bij succes, doorslaggevend bij een crash.
+
+Twee kleine fixes zaten in dezelfde meting:
+- **de harde timeout start nu ná de semaphore-permit**, niet bij binnenkomst.
+  Daarvóór at een volle achtergrond-deelcap tot 30 s (`AI_QUEUE_WAIT_MS`) van
+  het 90 s-budget op en verscheen dat als een timeout die naar de LLM leek te
+  wijzen. Sinds de mining parallel draait (#279) is die wachttijd de regel.
+- **"tool niet geroepen" is niet langer hetzelfde als "run gefaald"**: een run
+  die netjes afrondt zonder de geforceerde tool te callen krijgt
+  `reason: "no_tool_call"` — een prompt-/schemaprobleem, een andere knop dan een
+  machineprobleem.
+
+**Onderzocht en VERWORPEN: de payload-hypothese.** Het lag voor de hand dat de
+interactie-taak omviel op zijn grotere payload (kaarttekst + buren + regels +
+vocabulaire), omdat een predicaten-run op dezelfde sidecar en hetzelfde model
+`0 rb-ai-uitval` gaf. Drie onafhankelijke argumenten weerleggen dat.
+
+1. **De wandkloktijd sluit het uit.** De interactie-run deed 40 kaarten in 43
+   min (2580 s), sequentieel, met 18 successen en 22 uitvallen. Reken je met een
+   uitval van 90 s (onze harde timeout), dan blijft er (2580 − 22×90)/18 =
+   **33 s per geslaagde kaart** over — precies de gedocumenteerde ~40 s. Draai
+   het om en los op voor de uitvalduur bij 40 s per succes: (2580 − 18×40)/22 =
+   **84,5 s**, oftewel de timeout. Een payload-afwijzing is daarentegen een
+   HTTP 400 die in **onder een seconde** terugkomt; dan zou een succes
+   (2580 − 22×2)/18 = **141 s** hebben geduurd — langer dan de timeout die hem
+   allang afgekapt zou hebben. De hypothese spreekt zichzelf tegen; de
+   timeout-verklaring klopt op ~6% na.
+2. **De magnitude is er niet naar.** De aanbieding is hard begrensd: 1 focus- +
+   ≤4 partnerkaarten (kaarttekst ~100-300 tekens), ≤3 regelsecties van elk ≤2400
+   tekens (`RuleSectionParser.MaxSectionLength`), plus refs en enums. Worst case
+   ~12 KB ≈ 3000 tokens: **~1,5% van het 200k-contextvenster**. De predicaten-
+   payload is ~3 KB. Een factor 4 tussen twee waarden die allebei ruim twee
+   ordes onder de limiet liggen verklaart geen 55% uitval. Bovendien is
+   "prompt te lang" een NIET-herhaalbare 400 — de SDK zou er niet op retryen.
+3. **Het watermark falsifieert het patroon.** Een gefaalde kaart krijgt géén
+   watermark en komt de volgende run terug. Wás uitval een deterministische
+   functie van kaartgrootte, dan bestond run 2 uitsluitend uit de grote kaarten
+   van run 1 en liep het percentage monotoon naar 100%. Gemeten over
+   opeenvolgende runs: 45%, 47%, 55% — het schommelt, dus de falende verzameling
+   is niet stabiel en de uitval hangt niet aan de kaart.
+
+**Waarom de predicaten-run dan wél 0% haalt:** niet de payload maar de
+SPELING. Die calls duurden 9,5 s (38 subjects in 6 min) en houden dus ~80 s over
+binnen dezelfde 90 s-begroting — ruim genoeg om een paar SDK-retries te
+absorberen. Een interactie-call van 33 s houdt er ~57 s over en verdraagt er
+minder. Dat maakt uitval load-afhankelijk en stochastisch, wat precies past bij
+een percentage dat tussen runs schommelt in plaats van vastligt. De voorspelling
+die erbij hoort: onder aanhoudende API-druk gaan predicaten-calls óók vallen,
+alleen zeldzamer.
+
+De `ai_call`-regel draagt daarom `bytes`, `refs` en `items` mee (maten en
+aantallen, nooit inhoud). Correleert uitval tóch met payload-grootte, dan blijkt
+dat nu direct uit de log in plaats van uit een reconstructie — de hypothese is
+weerlegd, niet genegeerd.
+
+Bewust NIET aangepast: `EXTRACT_MAX_TURNS` (3), `EXTRACT_TIMEOUT_MS` (90 s) en
+de verhouding tot de SDK-`max_retries` (10). Dat zijn de plausibele vervolg-
+knoppen — een timeout die korter is dan de eigen retry-keten van de SDK is
+aantoonbaar scheef — maar #281 ging over meten, en welke van die knoppen het
+wordt hoort uit de eerste gemeten run te volgen, niet uit deze redenering.
 
 **rb-api-kant (mining-orkestratie).** Drie jobs in `JobCatalog`. De twee
 LLM-jobs staan bewust NIET in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk —

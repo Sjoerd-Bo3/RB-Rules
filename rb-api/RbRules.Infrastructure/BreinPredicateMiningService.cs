@@ -178,7 +178,7 @@ public class BreinPredicateMiningService(
         if (call.Raw is null)
         {
             // Degradatie: geen half feit — maar de oorzaak wordt geteld (#251).
-            tally.Fail(call.Outcome);
+            tally.Fail(call.Outcome, call.Reason);
             return;
         }
 
@@ -253,9 +253,12 @@ public class BreinPredicateMiningService(
 
         public void Ai(AiCallOutcome outcome) { lock (_gate) _ai.Add(outcome); }
 
-        public void Fail(AiCallOutcome outcome)
+        /// <summary>Telt één uitval, met de fijnmazige reden die rb-ai meestuurde
+        /// (#281) — zo staat er "5xx×22 (max_turns×14, spawn×8)" in het run-detail
+        /// in plaats van alleen "5xx×22". Null blijft het gedrag van vóór #281.</summary>
+        public void Fail(AiCallOutcome outcome, string? reason = null)
         {
-            lock (_gate) { _failed++; _ai.Add(outcome); }
+            lock (_gate) { _failed++; _ai.Add(outcome, reason); }
         }
 
         public void Mine(int count) { lock (_gate) _mined += count; }

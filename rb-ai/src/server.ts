@@ -4,6 +4,7 @@
 import { createServer } from "node:http";
 import { askClaude, extractWithTool, warmPool } from "./ai.js";
 import { aiSemaphore, ConcurrencyLimitError } from "./concurrency.js";
+import { failureOf, logCall, safeDetail, type AiFailure } from "./failure.js";
 import {
   buildInteractionToolShape,
   buildPredicateToolShape,
@@ -19,22 +20,81 @@ import { parseAskRequest } from "./validate.js";
 
 const PORT = Number(process.env.PORT ?? 8090);
 
-async function readJson(req: import("node:http").IncomingMessage): Promise<unknown> {
+/** Endpoints die één ai_call-regel per aanroep verdienen (#281). `/health` en
+ * `/prewarm` staan er bewust NIET bij: die worden geregeld gepolld en zouden
+ * het signaal onder duizenden regels ruis begraven — het gaat om de aanroepen
+ * die een LLM-run doen. */
+const LOGGED_PATHS = new Set([
+  "/ask",
+  "/ask/stream",
+  "/extract/interactions",
+  "/extract/predicates",
+]);
+
+/** De request-body als JSON én de GROOTTE ervan in bytes (#281). De grootte is
+ * diagnostisch goud en verklapt niets: ze zegt hoe zwaar een aanroep was zonder
+ * één teken prompt-inhoud te loggen (werkafspraak 7). Zonder deze meting is de
+ * vraag "vallen juist de grote payloads om?" alleen achteraf te reconstrueren
+ * uit de rb-api-kant; met de meting staat het antwoord in de logregel zelf. */
+async function readJson(
+  req: import("node:http").IncomingMessage,
+): Promise<{ value: unknown; bytes: number }> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
+  const raw = Buffer.concat(chunks);
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+    return { value: JSON.parse(raw.toString("utf8")) as unknown, bytes: raw.length };
   } catch {
-    return {};
+    return { value: {}, bytes: raw.length };
   }
 }
 
 const server = createServer(async (req, res) => {
-  const send = (status: number, body: unknown) => {
+  const startedAt = Date.now();
+  const path = (req.url ?? "").split("?")[0];
+
+  // Eén regel per LLM-aanroep (#281). Dit is de kern van de issue: rb-ai logde
+  // sinds de start letterlijk één regel ("rb-ai luistert op :8090") terwijl er
+  // 22 aanroepen faalden, dus de oorzaak van 55% uitval was van buitenaf niet
+  // vast te stellen. `note` vuurt precies één keer per aanroep, ook als er
+  // onderweg meerdere foutpaden langskomen.
+  let logged = false;
+  // Payload-context van deze aanroep: GROOTTES en AANTALLEN, nooit inhoud
+  // (werkafspraak 7). Wordt gevuld zodra de body gelezen en gevalideerd is.
+  let shape: { bytes?: number; refs?: number; items?: number; task?: string } = {};
+  const note = (status: number, failure?: AiFailure) => {
+    if (logged || !LOGGED_PATHS.has(path)) return;
+    logged = true;
+    logCall({
+      endpoint: path,
+      ms: Date.now() - startedAt,
+      status,
+      outcome: status >= 400 ? "error" : "ok",
+      reason: failure?.reason,
+      detail: failure?.detail,
+      ...shape,
+    });
+  };
+
+  const send = (status: number, body: unknown, failure?: AiFailure) => {
+    note(status, failure);
     if (res.destroyed) return res; // client al weg — niets meer te sturen
     res.writeHead(status, { "content-type": "application/json" });
     return res.end(JSON.stringify(body));
   };
+
+  /** Foutbody mét machine-leesbare reden (#281). rb-api's `RbAiClient` leest
+   * `reason` en telt hem mee in de per-oorzaak-uitsplitsing van #251, zodat de
+   * oorzaak in het run-detail staat in plaats van alleen in de containerlog.
+   * Oudere aanroepers zien gewoon het vertrouwde `error`-veld. */
+  const errorBody = (message: string, failure: AiFailure) => ({
+    // Ook `error` gaat door de redactie (werkafspraak 7): dit veld draagt bij
+    // een geworpen fout de rauwe SDK-melding, en die reist het compose-netwerk
+    // over naar rb-api's logger.
+    error: safeDetail(message),
+    reason: failure.reason,
+    detail: failure.detail,
+  });
 
   // Weggelopen client = Claude-call afbreken (review #31): zonder deze
   // koppeling maakt de sidecar elke geannuleerde vraag gewoon af en schrijft
@@ -76,8 +136,10 @@ const server = createServer(async (req, res) => {
       // task="research" is de enige taak met web-toegang (WebSearch/WebFetch,
       // opt-in per call — #64); task="agentic" (#106) krijgt alléén de interne
       // brein-tools (MCP → rb-api, zie ai.ts/brain-tools.ts).
-      const parsed = parseAskRequest(await readJson(req));
+      const body = await readJson(req);
+      const parsed = parseAskRequest(body.value);
       if (!parsed.ok) return send(400, { error: parsed.error });
+      shape = { bytes: body.bytes, task: parsed.request.task };
       // Brein-stappen (#107): alléén bij task="agentic" gaan de tool-calls
       // als `steps` mee terug (rb-api legt ze vast in AskTrace.BrainSteps).
       // Elke taak krijgt daarnaast `usage` (#121): de echte token-tellingen
@@ -109,12 +171,17 @@ const server = createServer(async (req, res) => {
         // rb-api's RbAiClient behandelt elke non-success als "AI weg" en
         // degradeert naar de bestaande vriendelijke melding.
         if (e instanceof ConcurrencyLimitError)
-          return send(429, { error: e.message, code: e.code });
+          return send(
+            429,
+            { error: e.message, code: e.code },
+            { reason: "concurrency_limit", detail: e.message },
+          );
         // Agentic faalt/timeout (#107): de tool-calls die vóór de uitval al
         // gedaan waren gaan mee in de fout-body — juist de hangende run wil
         // de beheerder in de trace kunnen inspecteren. Overige taken volgen
         // het bestaande pad (outer catch → 500 {error}).
-        if (agentic) return send(500, { error: String(e), steps });
+        if (agentic)
+          return send(500, { ...errorBody(String(e), failureOf(e)), steps }, failureOf(e));
         throw e;
       }
     }
@@ -126,8 +193,10 @@ const server = createServer(async (req, res) => {
       // Frames: {type:"delta",text} … {type:"done",answer,usage} | {type:"error",error}.
       // Het slotframe draagt de token-usage van de run (#121, null bij
       // ontbreken) — dezelfde best-effort-doorgifte als op /ask.
-      const parsed = parseAskRequest(await readJson(req));
+      const body = await readJson(req);
+      const parsed = parseAskRequest(body.value);
       if (!parsed.ok) return send(400, { error: parsed.error });
+      shape = { bytes: body.bytes, task: parsed.request.task };
       // De 200 + NDJSON-header gaat pas de deur uit bij het eerste frame
       // (#155): zo kan een capaciteits-afwijzing — die altijd vóór de eerste
       // delta valt — nog als echte 429 terug, het pad dat RbAiClient al als
@@ -151,13 +220,24 @@ const server = createServer(async (req, res) => {
           },
         });
         frame({ type: "done", answer, usage });
+        note(200);
       } catch (e) {
         if (!headSent && e instanceof ConcurrencyLimitError)
-          return send(429, { error: e.message, code: e.code });
+          return send(
+            429,
+            { error: e.message, code: e.code },
+            { reason: "concurrency_limit", detail: e.message },
+          );
         // Uitval mídden in de stream: de 200 is al weg, dus de fout gaat als
         // frame mee — de aanroeper (rb-api) degradeert daarop netjes. Is de
-        // client zelf weggelopen (abort), dan is het frame een no-op.
-        frame({ type: "error", error: String(e) });
+        // client zelf weggelopen (abort), dan is het frame een no-op. De reden
+        // gaat mee in het frame én in de logregel (#281): een half-gestreamde
+        // uitval was voorheen het slechtst zichtbare pad dat er was.
+        const failure = failureOf(e);
+        frame({ type: "error", error: safeDetail(String(e)), reason: failure.reason });
+        // De head is mogelijk al als 200 de deur uit; de UITKOMST is een fout,
+        // en dat is wat de logregel moet vertellen.
+        note(500, failure);
       }
       return res.end();
     }
@@ -167,10 +247,14 @@ const server = createServer(async (req, res) => {
       // ontologie-vocabulaire levert de agent gestructureerde interactie-kandidaten
       // via een geforceerde tool-call. rb-api (mining-orkestratie) draait ze door de
       // fase-2-promotie-poort. Uitval → 500 → RbAiClient degradeert naar null.
-      const parsed = parseInteractionExtractRequest(await readJson(req));
+      const body = await readJson(req);
+      const parsed = parseInteractionExtractRequest(body.value);
       if (!parsed.ok) return send(400, { error: parsed.error });
+      // refs = de omvang van het aangeboden vocabulaire; samen met bytes maakt
+      // dat de vraag "vallen juist de grote aanbiedingen om?" direct toetsbaar.
+      shape = { bytes: body.bytes, refs: parsed.request.refs.length };
       try {
-        const interactions = await extractWithTool({
+        const outcome = await extractWithTool({
           toolName: "emit_interactions",
           description: interactionToolDescription(parsed.request),
           schema: buildInteractionToolShape(parsed.request),
@@ -182,11 +266,21 @@ const server = createServer(async (req, res) => {
         });
         // null = tool niet geroepen / run gefaald: geef een 500 zodat rb-api dit als
         // AI-uitval leest (null, nette degradatie) i.p.v. als "geen kandidaten".
-        if (interactions === null) return send(500, { error: "extractie mislukt" });
-        return send(200, { interactions });
+        // Sinds #281 draagt die 500 de REDEN — dit was het endpoint waar 22 van
+        // de 40 mining-kaarten spoorloos op strandden.
+        if (outcome.items === null) {
+          const failure = outcome.failure ?? { reason: "unknown" as const, detail: "" };
+          return send(500, errorBody("extractie mislukt", failure), failure);
+        }
+        shape = { ...shape, items: outcome.items.length };
+        return send(200, { interactions: outcome.items });
       } catch (e) {
         if (e instanceof ConcurrencyLimitError)
-          return send(429, { error: e.message, code: e.code });
+          return send(
+            429,
+            { error: e.message, code: e.code },
+            { reason: "concurrency_limit", detail: e.message },
+          );
         throw e;
       }
     }
@@ -194,10 +288,12 @@ const server = createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/extract/predicates") {
       // Tool-forced mechanic-predicaat-extractie (#226/#229, §5): getypeerde
       // (predicate, object) uit de regel-/definitietekst van één mechanic/keyword.
-      const parsed = parsePredicateExtractRequest(await readJson(req));
+      const body = await readJson(req);
+      const parsed = parsePredicateExtractRequest(body.value);
       if (!parsed.ok) return send(400, { error: parsed.error });
+      shape = { bytes: body.bytes };
       try {
-        const predicates = await extractWithTool({
+        const outcome = await extractWithTool({
           toolName: "emit_mechanic_predicates",
           description: predicateToolDescription(parsed.request),
           schema: buildPredicateToolShape(parsed.request),
@@ -207,22 +303,39 @@ const server = createServer(async (req, res) => {
           text: parsed.request.text,
           signal: abort.signal,
         });
-        if (predicates === null) return send(500, { error: "extractie mislukt" });
-        return send(200, { predicates });
+        if (outcome.items === null) {
+          const failure = outcome.failure ?? { reason: "unknown" as const, detail: "" };
+          return send(500, errorBody("extractie mislukt", failure), failure);
+        }
+        shape = { ...shape, items: outcome.items.length };
+        return send(200, { predicates: outcome.items });
       } catch (e) {
         if (e instanceof ConcurrencyLimitError)
-          return send(429, { error: e.message, code: e.code });
+          return send(
+            429,
+            { error: e.message, code: e.code },
+            { reason: "concurrency_limit", detail: e.message },
+          );
         throw e;
       }
     }
 
     return send(404, { error: "not found" });
   } catch (e) {
-    // Na writeHead kan er geen JSON-foutstatus meer; dan alleen netjes sluiten.
-    if (res.headersSent) return res.end();
+    const failure = failureOf(e);
+    // Na writeHead kan er geen JSON-foutstatus meer; dan alleen netjes sluiten
+    // — de logregel gaat wél de deur uit, want juist dit pad was blind.
+    if (res.headersSent) {
+      note(500, failure);
+      return res.end();
+    }
     if (e instanceof ConcurrencyLimitError)
-      return send(429, { error: e.message, code: e.code });
-    return send(500, { error: String(e) });
+      return send(
+        429,
+        { error: e.message, code: e.code },
+        { reason: "concurrency_limit", detail: e.message },
+      );
+    return send(500, errorBody(String(e), failure), failure);
   }
 });
 

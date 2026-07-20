@@ -301,6 +301,104 @@ public class RbAiOutcomeTests
         Assert.Equal("", tally.Summary);
     }
 
+    // ── #281: rb-ai's uitvalsoort reist mee naar het run-detail ──────────────
+    //
+    // Een mining-run over 40 kaarten meldde "22 rb-ai-uitval (5xx×22)" terwijl
+    // `docker logs rb-v2-ai` één regel bevatte. #251 gaf ons de LAAG (5xx), maar niet
+    // de oorzaak; rb-ai stuurt die nu als `reason` mee en RbAiClient gooide de
+    // foutbody tot nu toe ongelezen weg.
+
+    [Fact]
+    public async Task Extractie_500MetReden_DraagtDeRedenMee()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.InternalServerError,
+            """{"error":"extractie mislukt","reason":"max_turns","detail":"subtype=error_max_turns turns=3"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Equal("max_turns", r.Reason);
+        Assert.Null(r.Raw);   // degradatie-contract blijft: geen half feit
+    }
+
+    [Fact]
+    public async Task Extractie_500ZonderReden_BlijftHetOudeGedrag()
+    {
+        // Een oudere rb-ai (of een pad zonder reden) mag niets breken.
+        var ai = Ai(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Null(r.Reason);
+    }
+
+    [Fact]
+    public async Task Extractie_KapotteFoutbody_LeestGeenReden_EnBreektNiet()
+    {
+        // Zelfde defensieve regel als bij de concurrency-code: onleesbaar betekent
+        // "geen extra informatie", nooit "kapot".
+        var ai = Ai(_ => Json(HttpStatusCode.InternalServerError, "<html>502 nginx</html>"));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Null(r.Reason);
+    }
+
+    [Fact]
+    public async Task Extractie_429MetCodeEnReden_LeestBeideUitEenLezing()
+    {
+        // `code` (#279, de sidecar-cap) en `reason` (#281) zitten in dezelfde body;
+        // ze mogen elkaar niet in de weg zitten.
+        var ai = Ai(_ => Json(HttpStatusCode.TooManyRequests,
+            """{"error":"alle AI-slots bezet","code":"concurrency_limit","reason":"concurrency_limit"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ConcurrencyLimited, r.Outcome);
+        Assert.Equal("concurrency_limit", r.Reason);
+    }
+
+    [Fact]
+    public void Tally_SplitstDeUitvalUitPerReden()
+    {
+        var tally = new AiOutcomeTally();
+        for (var i = 0; i < 14; i++) tally.Add(AiCallOutcome.ServerError, "max_turns");
+        for (var i = 0; i < 8; i++) tally.Add(AiCallOutcome.ServerError, "spawn");
+        tally.Add(AiCallOutcome.Timeout);
+
+        // Dit is het verschil tussen "22 kaarten faalden" en een aanwijsbare knop.
+        Assert.Equal("5xx×22 (max_turns×14, spawn×8), timeout×1", tally.Summary);
+        Assert.Equal(23, tally.Failures);
+        Assert.Equal(14, tally.Count(AiCallOutcome.ServerError, "max_turns"));
+    }
+
+    [Fact]
+    public void Tally_ZonderReden_BlijftByteGelijkAanVoor281()
+    {
+        // De bestaande run-detail-teksten (en de tests die ze vastleggen) mogen niet
+        // verschuiven zolang rb-ai geen reden meestuurt.
+        var tally = new AiOutcomeTally();
+        tally.Add(AiCallOutcome.ServerError);
+        tally.Add(AiCallOutcome.ServerError);
+        tally.Add(AiCallOutcome.RateLimited, "   ");   // witruimte telt niet als reden
+
+        Assert.Equal("5xx×2, 429 rate-limit×1", tally.Summary);
+    }
+
+    [Fact]
+    public void Tally_RedenenVanVerschillendeUitkomsten_LopenNietDoorElkaar()
+    {
+        var tally = new AiOutcomeTally();
+        tally.Add(AiCallOutcome.ServerError, "spawn");
+        tally.Add(AiCallOutcome.Timeout, "spawn");
+
+        Assert.Equal("5xx×1 (spawn×1), timeout×1 (spawn×1)", tally.Summary);
+        Assert.Equal(1, tally.Count(AiCallOutcome.ServerError, "spawn"));
+        Assert.Equal(0, tally.Count(AiCallOutcome.ServerError, "max_turns"));
+    }
+
     // ── testinfra ────────────────────────────────────────────────────────────
 
     private static HttpResponseMessage Json(HttpStatusCode status, string body) =>

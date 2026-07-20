@@ -1131,6 +1131,29 @@ de globale duur-vangrail).
   throttelend abonnement en zo de verkeerde knop verdraaien. *Na deploy: het
   geheugenplafond van de AI-container is meeverhoogd (1 GiB → 2500 MiB); beide
   waarden horen bij elkaar.*
+- **rb-ai vertelt waaróm een aanroep mislukte** (#281) — de mining meldde
+  `22 rb-ai-uitval (5xx×22)` op 40 kaarten terwijl `docker logs rb-v2-ai` sinds
+  de start één regel bevatte: meer dan de helft van de kaarten haalde de LLM
+  niet en niemand kon zien waarom. rb-ai schrijft nu **één regel per
+  LLM-aanroep** (`evt=ai_call`: endpoint, duur, statuscode, uitkomst, oorzaak),
+  en geeft die oorzaak óók terug in de foutbody, zodat ze in de per-oorzaak-
+  telling van #251 belandt en in het **run-detail** staat in plaats van in de
+  containerlog: `5xx×22 (api_error×14, no_tool_call×8)`. Onderscheiden worden
+  onder meer SDK-fout, max beurten, API-fout, auth, subprocess-crash, timeout,
+  afgebroken door de client en "geforceerde tool niet geroepen". **Secrets en
+  prompt-inhoud blijven eruit** (werkafspraak 7): elke tekst gaat verplicht door
+  een redactie-poort, met een test die vastlegt dat het token nooit in een
+  logregel belandt.
+
+  De meting wees meteen de hoofdoorzaak aan: de Agent SDK probeert een mislukte
+  API-call **zelf tot tien keer opnieuw** met exponentiële backoff, en die
+  pogingen passen samen niet in de 90 s die een extractie krijgt. Een
+  aanhoudende 429/529 op het abonnement kwam daardoor naar buiten als ónze
+  timeout — een generieke 500, zonder spoor. Zo'n timeout wordt nu aan de échte
+  oorzaak toegeschreven. Meegenomen: de harde timeout begint pas als de aanroep
+  daadwerkelijk een AI-slot heeft (de wachtrij at tot een derde van het budget
+  op sinds de mining parallel draait). *Na deploy: draai een mining-job en lees
+  het run-detail — dáár staat nu welke knop verdraaid moet worden.*
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
   er ook als signaalregel op (#171, `SourceDossierCompleteness`), met
