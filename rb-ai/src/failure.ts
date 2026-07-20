@@ -776,6 +776,13 @@ export function logCall(entry: {
   refs?: number;
   /** Aantal geëmitteerde items bij een geslaagde extractie. */
   items?: number;
+  /** Items die de deterministische narekening weigerde (#312): een term buiten
+   * het aangeboden vocabulaire of een kapotte vorm. Een MAAT, geen inhoud —
+   * hij meet hoe vaak het model buiten het lijstje kleurt nu het schema die
+   * poort niet meer afdwingt. */
+  rejected?: number;
+  /** Condities die hun as-/lexicon-poort niet haalden terwijl het item bleef. */
+  rejectedConditions?: number;
   /** Taaktype van een /ask-call (cheap/hard/research/agentic). */
   task?: string;
 }): void {
@@ -788,6 +795,8 @@ export function logCall(entry: {
     bytes: entry.bytes,
     refs: entry.refs,
     items: entry.items,
+    rejected: entry.rejected,
+    rejectedConditions: entry.rejectedConditions,
     reason: entry.reason,
     // Lege toelichting weglaten in plaats van als "" loggen: `logEvent` filtert
     // alleen undefined/null, want daar is `0` een betekenisvolle waarde.

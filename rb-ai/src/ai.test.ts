@@ -8,10 +8,13 @@ import {
   buildQueryOptions,
   buildUserMessage,
   collectAnswer,
+  extractWithTool,
   noteBrainStep,
   warmBootOptions,
+  warmPool,
   type AskQueryRunner,
   type CollectProgress,
+  type QueryRunner,
 } from "./ai.js";
 import { failureOf, logCall, StderrTail } from "./failure.js";
 import { pushableInput, WarmPool, type WarmBootHandle } from "./warmpool.js";
@@ -799,4 +802,91 @@ test("/ask warm: een dode claim geeft zijn staart NIET door aan de koude herstar
     .find((l) => l.evt === "warmpool_fallback");
   assert.ok(fallback, `geen warmpool_fallback-regel: ${lines.join(" | ")}`);
   assert.match(String(fallback.stderr), /SIGSEGV/);
+});
+
+// ── Het extract-pad en de warme pool (#312) ────────────────────────────────
+// De boot-kost-meting wees de warme aansluiting af (zie de extractWithTool-doc
+// in ai.ts): 0,41-0,46 s lokaal tegenover een mediane run van ~81 s, en één
+// extra idle sessie kost 300-400 MiB op de VM waar de OOM-killer al eerder
+// llama-server schoot. Deze twee tests leggen die grens als GEDRAG vast, in
+// beide richtingen:
+//  1. extractWithTool klopt NOOIT bij de pool aan — op geen enkel taaktype.
+//     Wie het extract-pad ooit warm aansluit, maakt deze test bewust rood en
+//     moet dan de cheap-only-guard meebrengen: een audit (task "hard", #255)
+//     die een warme cheap-sessie claimt zou stil op MODEL.cheap draaien met
+//     valse provenance in élke interaction_audit-rij.
+//  2. dezelfde spy ziet askClaude's cheap-pad WÉL bij de pool aankloppen — de
+//     positieve controle die bewijst dat de spy claims kan zien. Zonder haar
+//     is test 1 vacuüm: hij zou ook slagen als de spy nooit kán vuren.
+
+/** Spionnen op de module-singleton: eigen properties die de prototype-methoden
+ * afschermen, en een restore die ze weer weghaalt. */
+function spyOnWarmPool() {
+  const seen = { claims: 0, observes: 0, prewarms: 0 };
+  const p = warmPool as unknown as Record<string, unknown>;
+  p.isEnabled = () => true; // de grens mag niet stiekem op een kill-switch leunen
+  p.claim = () => {
+    seen.claims += 1;
+    return null;
+  };
+  p.observe = () => {
+    seen.observes += 1;
+  };
+  p.prewarm = () => {
+    seen.prewarms += 1;
+    return { enabled: true, booted: false };
+  };
+  const restore = () => {
+    delete p.isEnabled;
+    delete p.claim;
+    delete p.observe;
+    delete p.prewarm;
+  };
+  return { seen, restore };
+}
+
+test("het extract-pad raakt de warme pool niet aan — geen claim, op geen enkele task (#312)", async () => {
+  const { seen, restore } = spyOnWarmPool();
+  try {
+    for (const task of ["cheap", "hard"] as const) {
+      const runQuery: QueryRunner = () =>
+        stream({ type: "result", subtype: "success", is_error: false, result: "klaar" });
+      const o = await extractWithTool({
+        toolName: "emit_interactions",
+        description: "test",
+        schema: {} as never,
+        resultKey: "interactions",
+        addendum: "test",
+        text: "kaarttekst",
+        task,
+        runQuery,
+      });
+      // De run zelf liep gewoon (geen tool-call is hier prima): het gaat erom
+      // dat de pool onaangeraakt bleef, niet dat de extractie iets ving.
+      assert.equal(o.items, null, `task=${task}`);
+    }
+    assert.deepEqual(
+      seen,
+      { claims: 0, observes: 0, prewarms: 0 },
+      "het extract-pad heeft de warme pool aangeraakt — dat vraagt om de cheap-only/audit-guard uit de extractWithTool-doc",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("dezelfde spy ziet askClaude's cheap-pad WÉL bij de pool aankloppen (positieve controle bij #312)", async () => {
+  const { seen, restore } = spyOnWarmPool();
+  try {
+    const runQuery: AskQueryRunner = () =>
+      stream({ type: "result", subtype: "success", is_error: false, result: "koud" });
+    // Geen pool-parameter: dit gaat expres door de module-singleton, dezelfde
+    // die de spy hierboven bewaakt.
+    const res = await askClaude({ prompt: "vraag", runQuery });
+    assert.equal(res.answer, "koud", "claim gaf null, dus de call hoort koud af te ronden");
+    assert.equal(seen.claims, 1, "de spy hoort precies één claim te zien");
+    assert.ok(seen.observes >= 1, "het cheap-pad hoort zijn signatuur te leren");
+  } finally {
+    restore();
+  }
 });
