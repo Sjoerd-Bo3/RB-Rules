@@ -575,9 +575,24 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   notitie → geverifieerde ruling), `ChatRulingService` (#166, in-chat-ruling →
   verified/pending naar autoriteit), `DeckBrowserService` (#15 fase 3 spoor A:
   read-only projectie boven op de Piltover Archive-decks — lijst/facetten/
-  paginering + de per-deck `DeckLegality`-uitkomst; laadt set-releasedatums en
-  gebande canonieke kaarten per format één keer per aanroep, net als
-  `CardEndpoints`' set-legaliteitslookup), `JobLedger`,
+  paginering + de per-deck `DeckLegality`-uitkomst. Het **legaliteitsfilter**
+  (#265) draait als SQL-predicaat vóór de paginering — in-memory filteren ná
+  het ophalen van een pagina zou de pagina's uithollen en `total` laten liegen
+  — en is bewust dezelfde uitspraak als `DeckLegality.Evaluate`: harde
+  overtreding (geband of set nog niet verschenen) → illegaal, anders
+  onbeoordeelbare regel (niet-gekoppeld of set zonder releasedatum) →
+  onvolledig, anders legaal; de regressietest pint beide implementaties op
+  elkaar vast. Zoeken (`q`) gaat over de deckname plus de legend-/
+  champions-namen — bewust niet over álle kaartregels, dat is wat het
+  `card`-filter al doet), `DeckCodeService` (#264: geplakte deck-code →
+  `DeckCode.Decode` → canonieke kaarten via `DeckCardLinker` (zelfde weg als
+  de PA-ingest) → `DeckLegality`. `DeckCodeException` wordt hier gevangen en
+  als `DeckCodeResult.Error` teruggegeven, zodat het endpoint een 400 met
+  uitleg kan geven in plaats van een kale 500; alléén import — de
+  sectiemapping voor export is niet te toetsen, zie PRD §4.7),
+  `DeckLegalityContext` (gedeelde legaliteitsfeiten — set-releasedatums, set
+  per canonieke kaart, gebande kaarten per format — één keer geladen per
+  aanroep en gebruikt door beide deck-services), `JobLedger`,
   `JobCatalog`/`JobPaths`/`PathRunner` (#190 — zie de eigen paragraaf
   hieronder), `PushService`,
   `MailService`, `UserAccountService`, `PasskeyService`, en de migraties in
@@ -815,7 +830,10 @@ klaar, de bestaande nachtelijke/wekelijkse cadans van de losse jobs
 verandert niet.
 
 Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/decks*`
-(#15 fase 3 spoor A: lijst/facetten/detail, read-only), `/api/rules*`,
+(#15 fase 3 spoor A: lijst/facetten/detail, read-only — lijst met
+`legality`/`q` erbij sinds #265; `POST /api/decks/decode` leest een geplakte
+deck-code uit (#264) en is het enige niet-GET-deck-endpoint: het schrijft
+niets, een ongeldige code is een 400 met uitleg), `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
 contradictions), `/api/ask` + `/api/ask/stream` + `/api/ask/history` (eigen
 ask-geschiedenis op user_id/ip_hash, geen id-parameter, #157) +
