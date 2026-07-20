@@ -166,6 +166,15 @@ met quota en rate-limiting.
   (c) bij een reload breekt de browser de stream af en loopt je catch nog één
   keer — die zou "verbinding weg" over de "onderbroken door herladen"-
   momentopname schrijven, dus vanaf `pagehide` niets meer persisteren.
+- **Een nieuwe env-vlag moet óók in de compose-`environment:`** (#268-follow-up)
+  — Docker Compose geeft alleen door wat expliciet onder `environment:` van de
+  service staat. Een variabele in de VM-`.env` is een *substitutie*-bron voor de
+  compose-file, géén container-env. `NIGHTLY_ENABLED` (de noodrem op de
+  nachtrun) stond alleen in de `.env` en bereikte rb-api dus nooit: `docker exec
+  rb-v2-api printenv | grep -i nightly` gaf niets, terwijl we dáchten een
+  noodrem te hebben. Voeg elke nieuwe vlag toe aan
+  `deploy/server-setup-v2/docker-compose.yml` met een `${VAR:-default}` die het
+  bestaande gedrag houdt, en verifieer met `printenv` op de VM.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`
