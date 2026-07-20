@@ -141,6 +141,7 @@ public class BreinInteractionMiningService(
 
         int extracted = 0, promoted = 0, candidates = 0, hypothesized = 0, rejected = 0, failed = 0;
         var skippedKnown = 0;
+        var aiTally = new AiOutcomeTally();   // uitval per oorzaak (#251)
         var processed = 0;
         var deadlineHit = false;
         foreach (var card in focus)
@@ -158,7 +159,7 @@ public class BreinInteractionMiningService(
                 offered.Refs.Select(r => new OfferedRef(r.Ref, r.Label, r.Type)).ToList(),
                 windowLexicon, statusLexicon);
 
-            var raw = await ai.ExtractStructuredAsync(
+            var call = await ai.ExtractStructuredDetailedAsync(
                 "/extract/interactions",
                 new
                 {
@@ -172,15 +173,23 @@ public class BreinInteractionMiningService(
                     statusLexicon,
                 }, ct);
 
-            if (raw is null)
+            if (call.Raw is null)
             {
-                // Degradatie: rb-ai weg → geen half feit, sla deze kaart over.
+                // Degradatie: rb-ai weg → geen half feit, sla deze kaart over. De
+                // OORZAAK wordt wel geteld (#251) zodat het run-detail laat zien of
+                // dit rate-limits, timeouts of onleesbare antwoorden waren.
                 failed++;
+                aiTally.Add(call.Outcome);
                 continue;
             }
 
             var byRef = offered.Refs.ToDictionary(r => r.Ref, StringComparer.Ordinal);
-            foreach (var ix in InteractionExtraction.Parse(raw, vocab))
+            var parsed = InteractionExtraction.Parse(call.Raw, vocab);
+            // Geldig antwoord zonder kandidaten is geslaagd werk, geen uitval —
+            // apart geteld zodat "rb-ai gaf niets" en "rb-ai wist niets" niet meer
+            // op één hoop belanden.
+            aiTally.Add(parsed.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
+            foreach (var ix in parsed)
             {
                 if (!byRef.TryGetValue(ix.FromRef, out var from)
                     || !byRef.TryGetValue(ix.ToRef, out var to))
@@ -242,7 +251,8 @@ public class BreinInteractionMiningService(
         // FocusCards = daadwerkelijk verwerkt (bij een deadline-stop < focus.Count).
         // CapHit ⇔ er blijft vers werk liggen: cap geraakt óf deadline afgekapt.
         return new(processed, extracted, promoted, candidates, hypothesized, rejected, failed,
-            capHit || deadlineHit, skippedKnown);
+            capHit || deadlineHit, skippedKnown,
+            aiTally.Summary is { Length: > 0 } detail ? detail : null);
     }
 
     /// <summary>De aangeboden refs (enum-vocabulaire) + de bewijs-eenheden voor één

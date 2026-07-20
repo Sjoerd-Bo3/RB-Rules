@@ -2,8 +2,15 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
+
+/// <summary>Eén brein-extractie-aanroep mét haar uitslag (#251): de rauwe body
+/// (<c>null</c> bij uitval — het bestaande degradatie-contract), de OORZAAK, en de
+/// statuscode waar er een was. Zo kan de mining-orkestratie de uitval per oorzaak
+/// optellen in plaats van alleen te tellen dát het misging.</summary>
+public sealed record AiExtraction(string? Raw, AiCallOutcome Outcome, int? StatusCode);
 
 /// <summary>Echte token-tellingen van één rb-ai-call (#121): input telt de
 /// cache-tokens mee (rb-ai's volume-maat), bij multi-turn-taken opgeteld over
@@ -118,25 +125,137 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
     /// degradeert (null → geen half feit). De endpoint zelf antwoordt met 500 bij
     /// AI-uitval (tool niet geroepen/run gefaald) en met 200 + lege lijst wanneer er
     /// simpelweg geen kandidaten waren — dat onderscheid blijft bewaard: 200 → een
-    /// (mogelijk lege) parse, 500/null → degradatie.</summary>
+    /// (mogelijk lege) parse, 500/null → degradatie.
+    ///
+    /// Aanroepers die WÍLLEN weten waarom het misging gebruiken
+    /// <see cref="ExtractStructuredDetailedAsync"/> (#251); deze overload blijft de
+    /// korte vorm voor wie alleen de body nodig heeft.</summary>
     public async Task<string?> ExtractStructuredAsync(
+        string path, object payload, CancellationToken ct = default) =>
+        (await ExtractStructuredDetailedAsync(path, payload, ct)).Raw;
+
+    /// <summary>Als <see cref="ExtractStructuredAsync"/>, maar met de UITVALSOORZAAK
+    /// erbij (#251). Elke mining-run meldde structureel ~45-47% "rb-ai-uitval" zonder
+    /// dat te zien was of dat rate-limits, timeouts, serverfouten of onbruikbare
+    /// antwoorden waren — en zonder die meting is elke fix gokwerk. De uitslag komt
+    /// als <see cref="AiCallOutcome"/> terug (met de statuscode waar die er is) zodat
+    /// de orkestratie hem kan optellen en in het run-detail/de cockpit tonen.
+    ///
+    /// Eén gerichte fix zit hier meteen in: 429 (rate-limit) en 503 worden met een
+    /// bounded backoff opnieuw geprobeerd — dat zijn de enige uitslagen waar wachten
+    /// zin heeft, en <c>Retry-After</c> van rb-ai wint van onze eigen backoff. Alle
+    /// andere oorzaken worden alleen gemeten, niet geraden: de vervolgfix volgt de
+    /// meting.</summary>
+    public async Task<AiExtraction> ExtractStructuredDetailedAsync(
         string path, object payload, CancellationToken ct = default)
     {
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            var res = await http.PostAsJsonAsync(path, payload, ct);
-            if (!res.IsSuccessStatusCode)
+            HttpResponseMessage res;
+            try
             {
-                logger.LogWarning("rb-ai {Path} gaf {Status}", path, (int)res.StatusCode);
-                return null;
+                res = await http.PostAsJsonAsync(path, payload, ct);
             }
-            return await res.Content.ReadAsStringAsync(ct);
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // HttpClient-timeout manifesteert zich als TaskCanceledException
+                // ZONDER geannuleerd token (zelfde onderscheid als het agent-pad).
+                // Echte annulering door de aanroeper bubbelt door.
+                logger.LogWarning("rb-ai {Path} verlopen op de HttpClient-timeout", path);
+                return new(null, AiCallOutcome.Timeout, null);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "rb-ai-extractie mislukt (path={Path})", path);
+                return new(null, AiCallOutcome.Transport, null);
+            }
+
+            using (res)
+            {
+                var status = (int)res.StatusCode;
+                if (res.IsSuccessStatusCode)
+                {
+                    var body = await res.Content.ReadAsStringAsync(ct);
+                    // 200 met een onleesbare body is een parse-/schemafout, geen
+                    // capaciteitsprobleem — dat onderscheid is precies waar #251 om
+                    // vraagt. Een geldige maar lege envelop blijft Ok: de parser
+                    // maakt er nul kandidaten van, en dat is geen uitval.
+                    if (!LooksLikeJson(body))
+                    {
+                        logger.LogWarning(
+                            "rb-ai {Path} gaf 200 met een onleesbare body ({Length} tekens)",
+                            path, body?.Length ?? 0);
+                        return new(null, AiCallOutcome.Unparseable, status);
+                    }
+                    return new(body, AiCallOutcome.Ok, status);
+                }
+
+                var outcome = Classify(res.StatusCode);
+                // Alleen rate-limit/overbelasting is het wachten waard; de rest faalt
+                // bij een directe herhaling vrijwel zeker opnieuw.
+                if (outcome == AiCallOutcome.RateLimited && attempt < MaxAttempts)
+                {
+                    var wait = RetryAfter(res) ?? Backoff(attempt);
+                    logger.LogWarning(
+                        "rb-ai {Path} gaf {Status}; poging {Attempt}/{Max} na {Wait}s",
+                        path, status, attempt, MaxAttempts, wait.TotalSeconds);
+                    await RetryDelay(wait, ct);
+                    continue;
+                }
+
+                logger.LogWarning("rb-ai {Path} gaf {Status}", path, status);
+                return new(null, outcome, status);
+            }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex, "rb-ai-extractie mislukt (path={Path})", path);
-            return null;
-        }
+    }
+
+    /// <summary>Aantal pogingen bij een rate-limit (de eerste meegeteld). Bewust laag:
+    /// een lange nachtrun mag niet uren op één kaart blijven hangen — wat blijft
+    /// falen komt gewoon de volgende run terug (het watermark bewaart de voortgang).</summary>
+    private const int MaxAttempts = 3;
+
+    /// <summary>Test-seam voor de backoff-wachttijd; productie wacht echt. Een
+    /// unit-test zet hier een no-op zodat de retry-logica zonder vertraging
+    /// getoetst kan worden.</summary>
+    internal Func<TimeSpan, CancellationToken, Task> RetryDelay { get; set; } =
+        (delay, ct) => Task.Delay(delay, ct);
+
+    private static TimeSpan Backoff(int attempt) => TimeSpan.FromSeconds(Math.Pow(2, attempt));
+
+    /// <summary>rb-ai's eigen <c>Retry-After</c> wint van onze backoff — die weet
+    /// beter wanneer het venster weer open is. Absurde waarden worden gekapt zodat
+    /// een kapotte header geen run kan gijzelen.</summary>
+    private static TimeSpan? RetryAfter(HttpResponseMessage res)
+    {
+        var after = res.Headers.RetryAfter;
+        var delay = after?.Delta
+            ?? (after?.Date is { } date ? date - DateTimeOffset.UtcNow : null);
+        return delay is { } d && d > TimeSpan.Zero
+            ? (d > MaxRetryAfter ? MaxRetryAfter : d)
+            : null;
+    }
+
+    private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(60);
+
+    private static AiCallOutcome Classify(System.Net.HttpStatusCode status) => status switch
+    {
+        System.Net.HttpStatusCode.TooManyRequests => AiCallOutcome.RateLimited,
+        System.Net.HttpStatusCode.RequestTimeout or System.Net.HttpStatusCode.GatewayTimeout =>
+            AiCallOutcome.Timeout,
+        // 503 hoort bij 5xx maar is qua herstel een rate-limit-achtig signaal
+        // (rb-ai even vol) — zelfde backoff-pad, zodat een piek geen uitval wordt.
+        System.Net.HttpStatusCode.ServiceUnavailable => AiCallOutcome.RateLimited,
+        >= System.Net.HttpStatusCode.InternalServerError => AiCallOutcome.ServerError,
+        _ => AiCallOutcome.ClientError,
+    };
+
+    /// <summary>Goedkope vorm-toets: begint de body met een JSON-object of -array?
+    /// De echte poort blijft de Domain-parser (defense-in-depth); dit onderscheidt
+    /// alleen "rb-ai gaf proza/niets" van "rb-ai gaf een envelop".</summary>
+    private static bool LooksLikeJson(string? body)
+    {
+        var trimmed = body?.TrimStart();
+        return trimmed is { Length: > 0 } && (trimmed[0] == '{' || trimmed[0] == '[');
     }
 
     /// <summary>Antwoord van het agent-pad (#107): het antwoord plus de

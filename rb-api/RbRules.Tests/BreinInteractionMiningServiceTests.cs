@@ -471,6 +471,42 @@ public class BreinInteractionMiningServiceTests
         Assert.Equal(0, run.Verified);
     }
 
+    // ── #251: de uitvals-OORZAAK staat in de samenvatting (run-detail/cockpit) ──
+    [Fact]
+    public async Task RunAsync_RbAiUitval_SplitstDeOorzaakUitInDeSamenvatting()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        // Aanhoudende rate-limit: vroeger telde dit als een kale "1 rb-ai-uitval"
+        // en was niet te zien dat het om 429's ging.
+        var svc = new BreinInteractionMiningService(
+            db, RateLimitedAi(), new EntityResolutionService(db), new InteractionPromotionService(db));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Failed);
+        Assert.Equal("429 rate-limit×1", r.FailureDetail);
+        Assert.Contains("(429 rate-limit×1)", r.Summary);
+    }
+
+    [Fact]
+    public async Task RunAsync_ZonderUitval_HeeftGeenOorzaakStaart()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        var svc = Service(db, () => Interactions());
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(0, r.Failed);
+        Assert.Null(r.FailureDetail);
+        Assert.EndsWith("0 rb-ai-uitval", r.Summary);   // geen oorzaak-staart
+    }
+
     // ── Nachtrun-deadline (#245) ───────────────────────────────────────────────
     [Fact]
     public async Task RunAsync_DeadlineVerstreken_StoptDirect_GeenHalfFeit_MeerWerk()
@@ -519,6 +555,16 @@ public class BreinInteractionMiningServiceTests
             HttpRequestMessage request, CancellationToken ct) =>
             Task.FromResult(respond(request));
     }
+
+    /// <summary>rb-ai dat structureel 429 geeft (#251), met een no-op backoff zodat
+    /// de test niet echt wacht.</summary>
+    private static RbAiClient RateLimitedAi() => new(
+        new HttpClient(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)))
+        { BaseAddress = new Uri("http://rb-ai.test") },
+        NullLogger<RbAiClient>.Instance)
+    {
+        RetryDelay = (_, _) => Task.CompletedTask,
+    };
 
     private static RbAiClient Ai(Func<string?> body) => new(
         new HttpClient(new StubHandler(_ => body() is { } b

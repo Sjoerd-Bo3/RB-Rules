@@ -1,0 +1,218 @@
+using System.Net;
+using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
+using RbRules.Domain;
+using RbRules.Infrastructure;
+
+namespace RbRules.Tests;
+
+/// <summary>#251 — de uitvals-oorzaak van een rb-ai-extractie. Elke mining-run
+/// meldde structureel ~45-47% "rb-ai-uitval" terwijl <c>RbAiClient</c> zowel bij een
+/// HTTP-fout als bij een onbruikbaar antwoord een kale <c>null</c> gaf: rate-limits,
+/// timeouts en parsefouten waren niet te onderscheiden. Zonder die meting is elke
+/// fix gokwerk — deze tests leggen het onderscheid vast.</summary>
+public class RbAiOutcomeTests
+{
+    // ── Client: oorzaak per uitslag ──────────────────────────────────────────
+
+    [Fact]
+    public async Task Extractie_200MetEnvelop_IsOk()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.OK, """{"interactions":[]}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Ok, r.Outcome);
+        Assert.Equal("""{"interactions":[]}""", r.Raw);
+        Assert.Equal(200, r.StatusCode);
+    }
+
+    [Fact]
+    public async Task Extractie_200MetOnleesbareBody_IsParsefout_GeenServerfout()
+    {
+        // Tool-forced output die niet valideert kwam vroeger als dezelfde null
+        // binnen als een 500 — terwijl de fix een heel andere is (prompt/schema
+        // i.p.v. capaciteit).
+        var ai = Ai(_ => Json(HttpStatusCode.OK, "Sorry, ik kan die tool niet aanroepen."));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Unparseable, r.Outcome);
+        Assert.Null(r.Raw);   // degradatie-contract blijft: geen half feit
+    }
+
+    [Fact]
+    public async Task Extractie_500_IsServerfout()
+    {
+        var ai = Ai(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Equal(500, r.StatusCode);
+    }
+
+    [Fact]
+    public async Task Extractie_Timeout_IsTimeout_GeenTransportfout()
+    {
+        // HttpClient-timeout = TaskCanceledException zonder geannuleerd token.
+        var ai = Ai(_ => throw new TaskCanceledException("timeout"));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Timeout, r.Outcome);
+    }
+
+    [Fact]
+    public async Task Extractie_VerbindingWeg_IsTransportfout()
+    {
+        var ai = Ai(_ => throw new HttpRequestException("connection refused"));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Transport, r.Outcome);
+    }
+
+    [Fact]
+    public async Task Extractie_EchteAnnulering_Bubbelt_Door()
+    {
+        // Een door de aanroeper geannuleerde run mag NIET als "uitval" verdwijnen.
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var ai = Ai(_ => throw new TaskCanceledException("geannuleerd"));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ai.ExtractStructuredDetailedAsync("/extract/interactions", new { }, cts.Token));
+    }
+
+    // ── Gerichte fix: backoff + retry bij rate-limit ─────────────────────────
+
+    [Fact]
+    public async Task Extractie_429_WordtOpnieuwGeprobeerd_EnSlaagtAlsnog()
+    {
+        var calls = 0;
+        var ai = Ai(_ => ++calls == 1
+            ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            : Json(HttpStatusCode.OK, """{"interactions":[]}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(2, calls);
+        Assert.Equal(AiCallOutcome.Ok, r.Outcome);
+    }
+
+    [Fact]
+    public async Task Extractie_AanhoudendeRateLimit_IsBounded_EnMeldt429()
+    {
+        var calls = 0;
+        var ai = Ai(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        });
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        // Bounded: een nachtrun mag niet uren op één kaart blijven hangen.
+        Assert.Equal(3, calls);
+        Assert.Equal(AiCallOutcome.RateLimited, r.Outcome);
+        Assert.Null(r.Raw);
+    }
+
+    [Fact]
+    public async Task Extractie_RetryAfterHeader_WintVanDeEigenBackoff()
+    {
+        var waits = new List<TimeSpan>();
+        var calls = 0;
+        var ai = Ai(_ =>
+        {
+            if (++calls > 1) return Json(HttpStatusCode.OK, "[]");
+            var res = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            res.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+                TimeSpan.FromSeconds(7));
+            return res;
+        });
+        ai.RetryDelay = (d, _) => { waits.Add(d); return Task.CompletedTask; };
+
+        await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(TimeSpan.FromSeconds(7), Assert.Single(waits));
+    }
+
+    [Fact]
+    public async Task Extractie_5xxWordtNietHerhaald()
+    {
+        // Alleen rate-limit is het wachten waard; een 500 faalt bij een directe
+        // herhaling vrijwel zeker opnieuw (en kost dan dubbel).
+        var calls = 0;
+        var ai = Ai(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        });
+
+        await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task KorteOverload_BlijftHetBestaandeContract()
+    {
+        // De bestaande aanroepers krijgen nog steeds gewoon de body of null.
+        Assert.Equal("[]", await Ai(_ => Json(HttpStatusCode.OK, "[]"))
+            .ExtractStructuredAsync("/extract/interactions", new { }));
+        Assert.Null(await Ai(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError))
+            .ExtractStructuredAsync("/extract/interactions", new { }));
+    }
+
+    // ── Tally: de samenvatting die in het run-detail/de cockpit landt ────────
+
+    [Fact]
+    public void Tally_SplitstDeUitvalUit_EnTeltLeegNietAlsUitval()
+    {
+        var tally = new AiOutcomeTally();
+        for (var i = 0; i < 12; i++) tally.Add(AiCallOutcome.RateLimited);
+        tally.Add(AiCallOutcome.Timeout);
+        tally.Add(AiCallOutcome.Timeout);
+        tally.Add(AiCallOutcome.Unparseable);
+        tally.Add(AiCallOutcome.Ok);
+        tally.Add(AiCallOutcome.Empty);   // geldig, leeg antwoord = geslaagd werk
+
+        Assert.Equal(15, tally.Failures);
+        Assert.Equal("429 rate-limit×12, timeout×2, onleesbaar antwoord×1", tally.Summary);
+    }
+
+    [Fact]
+    public void Tally_ZonderUitval_HeeftEenLegeSamenvatting()
+    {
+        var tally = new AiOutcomeTally();
+        tally.Add(AiCallOutcome.Ok);
+        tally.Add(AiCallOutcome.Empty);
+
+        Assert.Equal(0, tally.Failures);
+        Assert.Equal("", tally.Summary);
+    }
+
+    // ── testinfra ────────────────────────────────────────────────────────────
+
+    private static HttpResponseMessage Json(HttpStatusCode status, string body) =>
+        new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    /// <summary>Client met een gestubde handler én een no-op backoff, zodat de
+    /// retry-logica zonder echte vertraging getoetst wordt.</summary>
+    private static RbAiClient Ai(Func<HttpRequestMessage, HttpResponseMessage> respond) =>
+        new(new HttpClient(new StubHandler(respond)) { BaseAddress = new Uri("http://rb-ai.test") },
+            NullLogger<RbAiClient>.Instance)
+        {
+            RetryDelay = (_, _) => Task.CompletedTask,
+        };
+
+    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(respond(request));
+    }
+}
