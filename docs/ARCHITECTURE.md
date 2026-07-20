@@ -2005,6 +2005,137 @@ nachtrun:
      secties over hetzelfde paar de `MaxRuleSections`-begroting en werd de sectie
      die een ánder paar documenteert nooit geladen: de poort-uitslag hing dan aan
      de corpusvolgorde (`SourceId`/`ChunkIndex`) in plaats van aan het bewijs.
+
+  **Herijkt in #286 — de vraag zelf (`PromptVersion` → `breinmine-interactions-v3`,
+  migratie `MechanicInteractionWatermark286`).** Na #249 klopte de vraag inhoudelijk,
+  maar hij was te DUUR: 45-55% van de kaarten viel uit, en dat percentage liep
+  monotoon op (45 → 47 → 55). Een meting op productie isoleerde de oorzaak — zelfde
+  kaarttekst, alleen het aangeboden vocabulaire verschilt:
+
+  | refs aangeboden | uitkomst |
+  |---|---|
+  | 3 | 200 na 49,0 s |
+  | 39 | afgekapt na 92,1 s (`EXTRACT_TIMEOUT_MS` = 90 s) |
+
+  Ter vergelijking, zelfde sidecar en model: `breinmine-predicaten` (kort subject +
+  definitie) deed ~9,5 s per call met **0%** uitval. Twee conclusies. (a) **Het
+  aantal aangeboden refs drijft de duur**, niet de kaarttekst — de 49 s bij 3 refs is
+  grotendeels vaste SDK-opstartkost, dus méér *vragen* per aanroep is bijna gratis en
+  méér *vocabulaire* is peperduur. (b) **Het is een schaalklip, geen vaste faalkans**:
+  het vocabulaire groeit met elke set, dus hoe meer het brein leert, hoe meer
+  extracties omvallen. De monotone stijging bevestigde dat — een gefaalde kaart krijgt
+  geen watermark, komt terug, en de pool verzwaart zichzelf. Drie wijzigingen:
+  8. **De aanbieding is begrensd en relevantie-gestuurd** (`InteractionOffering` +
+     `OfferedRefBudget`, Domain/puur). De oude aanbieding stuurde de keywords van de
+     HELE buurt mee (focus + 4 partners) — in de praktijk 39 refs. Nu: het anker, de
+     **gedrukte** keywords van de kaart (deterministisch leesbaar, `MechanicMiner`),
+     en alleen die buur-keywords die aantoonbaar samen met een ankerlabel in één
+     **aangeboden** bewijs-eenheid staan, geordend op co-occurrence-telling en
+     afgekapt op `OfferingLimits.Card` (**12 refs**, in de praktijk ~8-10). De
+     buur-regel is een bewuste SPIEGEL van de lexicale promotie-poort
+     (identiteits- of textueel anker): we bieden geen buur aan die per constructie
+     nooit steun kan krijgen, en laten er geen weg die dat wél kan. Het volledige
+     vocabulaire wordt nog wél *gelezen* om te scoren — dat is O(vocab), geen
+     redeneerruimte — waardoor de kaart-vraag zelfs bréder is dan voorheen: een
+     keyword dat de kaart in haar tekst noemt maar dat geen enkele partner draagt,
+     kon vroeger niet worden aangeboden en kan dat nu wel.
+  9. **Een mechanic-niveau-pass draait vóór de kaart-pass.** 38 mechanics tegenover
+     1311 kaarten, en "Equip modificeert Might" geldt voor élke kaart met `[Equip]` —
+     de graph-projectie waaiert mechanics al deterministisch naar kaarten uit. Per
+     canoniek keyword-subject één aanroep met alleen KEYWORD-rollen (subject + directe
+     buren, `OfferingLimits.Mechanic`: 8 refs); kaarten en regelsecties zijn er
+     bewijs, geen rol. `DERIVED_FROM` is dan `mechanic:X` in plaats van een
+     toevallige kaart. Eigen watermark op `canonical_entity.interactions_mined_at`,
+     exact het patroon van review-fix 4 hierboven.
+
+     **Dekking, expliciet** (dit is de val waar deze codebase al twee keer in liep):
+     de mechanic-pass VERVANGT de kaart-pass niet. Hij kan per constructie geen
+     kaart↔kaart-hypotheses en geen kaart↔andermans-keyword vinden — daar is geen
+     keyword-rol voor. De kaart-pass blijft dus draaien met al zijn roltypen
+     (regressietests bewaken beide). Wat de kleinere kaart-aanbieding aan
+     mech↔mech-paren laat liggen, dekt de mechanic-pass uitputtender dan één kaart dat
+     ooit kon: elk subject krijgt zijn eigen aanroep mét zijn directe buren. Eén
+     restgat blijft en is geen regressie: een mech↔mech-paar waarvan de leden NERGENS
+     samen voorkomen (geen gedeelde kaart, geen gedeelde regelsectie) wordt door geen
+     van beide passes aangeboden — dat paar was voorheen alleen bij toeval bereikbaar
+     en had per definitie geen bewijs.
+  10. **Rijkere vraag in dezelfde aanroep.** Omdat de vaste kosten toch betaald zijn,
+     is een extra veld over tekst die al in de prompt staat vrijwel gratis. De
+     extractie vraagt nu ook `governed_by`: welke aangeboden regelsectie verankert de
+     interactie normatief? Gesloten enum over de meegestuurde `section:`-refs, met de
+     parser als tweede muur — een verzonnen sectie valt weg zoals een verzonnen
+     rol-ref. Dat vult `Interaction.GovernedByRef` (GOVERNED_BY), dat sinds #226
+     bestond maar in de praktijk altijd `null` bleef.
+
+  **Review-ronde op #286 (vijf punten).**
+  11. **De tier-verdeling wordt VOORAF uitgerekend**, niet achteraf weggesneden. Zo
+     geldt per constructie `1 + printed + buren + partners ≤ MaxRefs` en is elke
+     gekozen partner gegarandeerd óók een ref. Dat sluit een echt gat: een partner die
+     ná het scoren uit de refs viel telde bij het scoren wél als identiteits-anker,
+     terwijl `BuildOffer` hem in de prompt geen ref-header geeft — `Anchor()` levert
+     dan nooit `Identity` en de buur die zijn gewicht aan die kaart ontleende is per
+     constructie onpromoveerbaar. `OfferedRefBudget.Apply` blijft staan als vangnet
+     voor een toekomstige rol-bron, niet meer als scheidsrechter.
+  12. **De Context-tier heeft een reserve** (`ReservedPartnerCards` = 2). Partner-
+     kaarten waren het EERSTE dat de begroting weggooide, dus bij ≥8 gedrukte keywords
+     bleef `card:focus` als enige kaart-ref over — en dan draait de kaart-pass wél maar
+     kan hij kaart↔kaart en kaart↔andermans-keyword per constructie niet vinden,
+     precies de twee gevallen die hem van de mechanic-pass onderscheiden. De reserve
+     draait de voorrang om: de gedrukte keywords wijken, want de paren die zíj
+     opleveren (eigen-keyword↔eigen-keyword) zijn sinds #286 het werk van de
+     mechanic-pass, die ze uitputtender dekt dan één kaart ooit kon. Welke gedrukte
+     keywords bij krapte voorgaan is bovendien geen alfabetische loterij meer: wat
+     LETTERLIJK in de kaarttekst staat wint van wat de kaart alleen via
+     `Card.Mechanics` draagt.
+  13. **`PickSections` is anker-relatief en draait vóór het scoren.** De regel was "≥2
+     AANGEBODEN labels" en kon dus pas ná de buurkeuze draaien; daardoor werd er
+     gescoord tegen alle (tot twaalf) kandidaat-secties terwijl er hooguit drie worden
+     aangeboden, en kon een buur zijn gewicht ontlenen aan een sectie die de prompt
+     nooit zag. Nu is de gekozen sectie-verzameling exact de verzameling waartegen
+     gescoord wordt.
+  14. **`CanonicalEntity.Definition` telt mee bij het kiezen van de buren.** Zij ging al
+     als bewijs de prompt in en de lexicale poort las er al op, maar stond niet in de
+     scoring-units — dus een mech↔mech-paar dat ALLEEN in de officiële keyword-definitie
+     samen staat werd nooit aangeboden, terwijl het de poort wél zou passeren. Dat is de
+     kortste trust-tier-1-regelzin die het keyword introduceert; de beste bron lag
+     ongebruikt.
+  15. **Eerlijk over wat de ordening wél en niet is.** Binnen een tier beslist bij
+     gelijk gewicht `StringComparer.Ordinal`, en omdat een aanbieding maar een handvol
+     bewijs-eenheden telt scoren de meeste buren 1 of 2 — het alfabet kiest dus vaak
+     wélke vier meegaan. Dat is deterministisch (de uitkomst mag niet van corpusvolgorde
+     afhangen) maar niet hetzelfde als relevant. Bewust geaccepteerd: een rijkere
+     rangschikking is pas te verdedigen als een meting laat zien dat de huidige keuze
+     dekking kost.
+
+  **Wat NIET gemeten kon worden.** De review vroeg om de verdeling
+  gedrukte-keywords-per-kaart over de live pool, om te bepalen of punt 12 een voetnoot
+  of een echt probleem is. Die meting kon hier niet: het enige kaartcorpus in de repo is
+  een 9-kaarts fixture, en de live verdeling zit in de productie-database. In plaats van
+  op een ongemeten staart te gokken is de begroting daarom zó verdeeld dat de uitkomst
+  niet van die verdeling afhangt — de reserve garandeert de kaart-rollen ongeacht hoeveel
+  keywords een kaart draagt. Blijkt de staart later dik, dan is dat een reden om
+  `ReservedPartnerCards` te herijken, niet om een dekkingsgat te repareren.
+
+  **Meting ingebouwd** (acceptatiecriterium): elke rb-ai-call wordt geteld met zijn
+  **wandkloktijd** en het aantal aangeboden refs, uitgesplitst per fase, en dat komt
+  als `CallMetrics` in het run-detail — bv. `meting: mechanic 12× (gem. 11,3s
+  wandklok, 6,0 refs), kaart 40× (gem. 31,8s wandklok, 9,4 refs)`. "Wandklok" is geen
+  slordigheid maar het punt: de Claude Agent SDK gooit niet bij een mislukte run en
+  retryt intern tot 10× met backoff, dus die tijd kan herhalingen bevatten — en het is
+  precies de tijd waartegen de 90 s-timeout afrekent. Zonder deze drie getallen is
+  elke uitspraak over "de vraag is nu goedkoper" een gok, en gokken is hier al drie
+  keer misgegaan.
+
+  **`PromptVersion` is een stempel, geen stale-conditie** (#286-review). De bump naar
+  `breinmine-interactions-v3` legt in de `mining_run`-provenance vast wélke vraagvorm een
+  feit voortbracht, maar NIETS leest hem als her-mine-trigger: de selectie kijkt alleen
+  naar `interactions_mined_at`. Kaarten die onder v2 een watermark kregen worden dus
+  nooit vanzelf met de goedkopere aanbieding herbevraagd — alleen de GEFAALDE komen
+  terug (die kregen immers geen watermark). Bij de uitval van dit moment is dat toevallig
+  het merendeel, maar de enige manier om ook de geslaagde v2-kaarten opnieuw te bevragen
+  is de expliciete `breinreset-interacties`. Wie hier ooit een echte stale-conditie van
+  wil maken, hangt hem aan een `PromptVersion`-vergelijking in de focus-selectie —
+  hetzelfde patroon als `Source.StripVersion` in `IngestService`.
 - `breinmine-predicaten` (`BreinPredicateMiningService`). Per canonieke
   mechanic/keyword-entiteit (het subject IS al geresolveerd) haalt getypeerde
   predicaten (`triggers_on`/`prevents`/`grants`/`requires_target` + object-token)
@@ -2479,8 +2610,13 @@ kan rb-api eerder starten dan Postgres klaar is.
   FK's naar `canonical_entity` op `Restrict` staan — dat verlies is expliciet
   gemaakt in de bevestigingstekst, de telling en het run_log, niet stilzwijgend.
   Het watermark zelf is geïsoleerd in één private methode
-  (`ClearWatermarkAsync`): verhuist het ooit naar een expliciet veld op `Card`,
-  dan is dat de enige plek die mee moet. De jobs zitten bewust in geen enkel
+  (`ClearWatermarkAsync`) — en dat uitbreidpunt is inmiddels twee keer gebruikt:
+  sinds #249 staat er óók een expliciet veld op `card` en sinds #286 op
+  `canonical_entity`, dus de methode wist alle drie de markeringen. Wist ze er
+  maar één, dan is de reset half: de assertions verdwijnen, maar de miner slaat
+  dezelfde kaarten en subjecten alsnog over en juist de meting waarvoor deze
+  service bestaat gaat verloren (regressietest
+  `Reset_WistOokDeExplicieteWatermarkVelden`). De jobs zitten bewust in geen enkel
   pad, niet in de "alles"-keten en niet in de nachtrun (getest in
   `JobPathsTests`/`JobPathOrderTests`/`BreinMiningResetServiceTests`); ze chainen niets
   automatisch. Na de reset draait de beheerder zelf

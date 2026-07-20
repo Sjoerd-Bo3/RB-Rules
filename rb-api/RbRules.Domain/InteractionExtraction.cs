@@ -14,10 +14,14 @@ public sealed record OfferedRef(string Ref, string Label, EntityType Type);
 /// zijn enum-poorten sluit (§3.1): de aangeboden refs + de qualifier-lexica
 /// (Window/Status). Cost-condities zijn vrijer gestructureerd (operator+floor) en
 /// worden lexicaal niet gesloten, wél door de conditie-as-enum begrensd.</summary>
+/// <param name="SectionRefs">De citeerbare <c>section:</c>-refs van de regelsecties
+/// die als bewijs meegaan (#286). Ze zijn GEEN rol — alleen het gesloten enum voor
+/// <c>governed_by</c>. Leeg = het veld verdwijnt uit het schema.</param>
 public sealed record ExtractionVocab(
     IReadOnlyList<OfferedRef> Refs,
     IReadOnlyList<string> WindowLexicon,
-    IReadOnlyList<string> StatusLexicon);
+    IReadOnlyList<string> StatusLexicon,
+    IReadOnlyList<string>? SectionRefs = null);
 
 /// <summary>Eén geëxtraheerde conditie (tool-output).</summary>
 public sealed record ExtractedCondition(
@@ -26,9 +30,14 @@ public sealed record ExtractedCondition(
 /// <summary>Eén geëxtraheerde, gekwalificeerde interactie (tool-output), al door de
 /// tweede (deterministische) muur gehaald: refs ∈ aangeboden set, kind ∈
 /// gereïficeerd-verplichte relaties, condities ∈ het gesloten lexicon.</summary>
+/// <param name="GovernedByRef">De officiële regelsectie die deze interactie
+/// verankert (#286) — één van de aangeboden <c>section:</c>-refs, of null. GEEN rol:
+/// de HAS_ROLE-range is Card/Keyword, dit vult <see cref="Interaction.GovernedByRef"/>
+/// (GOVERNED_BY). Gesloten enum, dus het model kan geen sectie verzinnen.</param>
 public sealed record ExtractedInteraction(
     string FromRef, string ToRef, string Kind, bool Interacts,
-    string? Explanation, IReadOnlyList<ExtractedCondition> Conditions);
+    string? Explanation, IReadOnlyList<ExtractedCondition> Conditions,
+    string? GovernedByRef = null);
 
 /// <summary>Fase 2 (#226, §3.1) — de ontologie-begrensde, tool-forced
 /// structured-output-vorm voor de gekwalificeerde-interactie-extractie. Bouwt het
@@ -52,6 +61,11 @@ public static class InteractionExtraction
         - conditions: alleen als de regel een voorwaarde stelt (window/status/cost);
           laat leeg als de interactie onvoorwaardelijk is. Pers geen ambigue conditie
           plat — laat die dan weg.
+        - governed_by (indien aangeboden): de regelsectie uit de invoer die deze
+          interactie normatief verankert. Alleen invullen als die sectie de relatie
+          ECHT beschrijft; bij twijfel null.
+        - explanation: één zin, in het Engels, die de relatie uit het aangeboden
+          bewijs verantwoordt.
 
         Waar het om gaat:
         - ZOEK VOORAL naar relaties TUSSEN KEYWORDS (mechanic:X ↔ mechanic:Y): hoe
@@ -94,18 +108,30 @@ public static class InteractionExtraction
             ["required"] = new[] { "on_kind" },
         };
 
+        var properties = new Dictionary<string, object?>
+        {
+            ["from"] = EnumProp(refEnum, "Agent-ref (uit de aangeboden set)."),
+            ["to"] = EnumProp(refEnum, "Patient-ref (uit de aangeboden set)."),
+            ["kind"] = EnumProp(KindEnum, "Gekwalificeerd relatie-kind."),
+            ["interacts"] = new Dictionary<string, object?> { ["type"] = "boolean" },
+            ["explanation"] = new Dictionary<string, object?> { ["type"] = "string" },
+            ["conditions"] = new Dictionary<string, object?> { ["type"] = "array", ["items"] = conditionSchema },
+        };
+
+        // Rijkere vraag in DEZELFDE aanroep (#286): de vaste kosten (SDK-opstart,
+        // beurten) zijn toch al betaald, dus een extra veld over tekst die al in de
+        // prompt staat is vrijwel gratis — anders dan een groter ref-vocabulaire, dat
+        // de redeneerruimte vermenigvuldigt. Het veld verschijnt alleen als er
+        // citeerbare secties meegaan; zonder enum-waarden zou het een open vraag zijn.
+        if (vocab.SectionRefs is { Count: > 0 } sections)
+            properties["governed_by"] = EnumProp(
+                sections, "De officiële regelsectie die deze interactie verankert.",
+                nullable: true);
+
         var interactionSchema = new Dictionary<string, object?>
         {
             ["type"] = "object",
-            ["properties"] = new Dictionary<string, object?>
-            {
-                ["from"] = EnumProp(refEnum, "Agent-ref (uit de aangeboden set)."),
-                ["to"] = EnumProp(refEnum, "Patient-ref (uit de aangeboden set)."),
-                ["kind"] = EnumProp(KindEnum, "Gekwalificeerd relatie-kind."),
-                ["interacts"] = new Dictionary<string, object?> { ["type"] = "boolean" },
-                ["explanation"] = new Dictionary<string, object?> { ["type"] = "string" },
-                ["conditions"] = new Dictionary<string, object?> { ["type"] = "array", ["items"] = conditionSchema },
-            },
+            ["properties"] = properties,
             ["required"] = new[] { "from", "to", "kind", "interacts" },
         };
 
@@ -158,6 +184,7 @@ public static class InteractionExtraction
         var refSet = vocab.Refs.Select(r => r.Ref).ToHashSet(StringComparer.Ordinal);
         var windowSet = vocab.WindowLexicon.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var statusSet = vocab.StatusLexicon.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var sectionSet = (vocab.SectionRefs ?? []).ToHashSet(StringComparer.Ordinal);
 
         JsonElement root;
         try
@@ -211,7 +238,12 @@ public static class InteractionExtraction
                     conditions.Add(new(onKind, role, value, Str(c, "operator")));
                 }
 
-            result.Add(new(from, to, kind, interacts, explanation, conditions));
+            // Anker-poort (#286): een sectie die niet is aangeboden is verzonnen —
+            // weg ermee, precies zoals een ref buiten de enum. Nooit een term buiten
+            // het aangeboden lijstje (CLAUDE.md, de gesloten LLM-vraag).
+            var governedBy = Str(item, "governed_by") is { } g && sectionSet.Contains(g) ? g : null;
+
+            result.Add(new(from, to, kind, interacts, explanation, conditions, governedBy));
         }
         return new(result, Malformed: false);
     }

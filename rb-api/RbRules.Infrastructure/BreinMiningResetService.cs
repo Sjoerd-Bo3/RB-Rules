@@ -88,8 +88,9 @@ public sealed record BreinMiningResetResult(
 /// <see cref="InteractionDecision"/>: die memo's horen bij een interactie-id dat
 /// niet meer bestaat, dus ze achterlaten levert alleen een reviewqueue vol
 /// verwijzingen naar niets.</item>
-/// <item><see cref="Assertion"/> met <c>FactKind = interaction</c> — DAT is het
-/// watermark; zie <see cref="ClearWatermarkAsync"/>.</item>
+/// <item><see cref="Assertion"/> met <c>FactKind = interaction</c> én de expliciete
+/// watermark-velden op <see cref="Card"/> (#249) en <see cref="CanonicalEntity"/>
+/// (#286) — SAMEN vormen die het watermark; zie <see cref="ClearWatermarkAsync"/>.</item>
 /// <item>Scope <see cref="BreinResetScope.InteractionsAndEntities"/> ook:
 /// <see cref="MechanicPredicateAssertion"/>, <see cref="CanonicalEntity"/>,
 /// <see cref="MergeCandidate"/> en <see cref="MergeDecision"/>.</item>
@@ -236,24 +237,46 @@ public class BreinMiningResetService(RbRulesDbContext db)
         return result;
     }
 
-    /// <summary>Wist het voortgangs-watermark van de interactie-mining en geeft
-    /// terug hoeveel rijen dat waren.
+    /// <summary>Wist ELK voortgangs-watermark van de interactie-mining en geeft terug
+    /// hoeveel <see cref="Assertion"/>-rijen daarbij verdwenen.
     ///
-    /// Het watermark is vandaag afgeleid, niet expliciet: <see cref="BreinInteractionMiningService"/>
-    /// beschouwt een kaart als verwerkt zodra er een <see cref="Assertion"/> bestaat
-    /// met <c>FactKind = interaction</c> en <c>DerivedFromRef = card:{id}</c>. Die
-    /// rijen weg = de hele pool weer in beeld.
-    ///
-    /// DIT IS HET UITBREIDPUNT: krijgt <see cref="Card"/> (of een andere tabel) ooit
-    /// een expliciet markeringsveld — bijvoorbeeld een <c>BreinMinedAt</c> — dan hoort
-    /// het resetten daarvan hier, en nergens anders. De reset blijft correct zolang
-    /// élke markering die de miner leest hier gewist wordt.</summary>
+    /// De miner leest sinds #249/#286 DRIE markeringen, en de reset is pas correct als
+    /// alle drie hier gewist worden — de klasse-doc noemde dit al "het uitbreidpunt",
+    /// en dat is precies wat het is:
+    /// <list type="number">
+    /// <item>de afgeleide markering: een <see cref="Assertion"/> met
+    /// <c>FactKind = interaction</c> en <c>DerivedFromRef = card:{id}</c> (de
+    /// achtervang van vóór #249);</item>
+    /// <item><see cref="Card.InteractionsMinedAt"/> — het expliciete kaart-watermark
+    /// (#249);</item>
+    /// <item><see cref="CanonicalEntity.InteractionsMinedAt"/> — het expliciete
+    /// subject-watermark van de mechanic-niveau-pass (#286).</item>
+    /// </list>
+    /// Zonder (2) en (3) is de reset half: de assertions verdwijnen, maar de miner slaat
+    /// dezelfde kaarten en subjecten alsnog over — en dan is de verbetering waarvoor
+    /// deze service bestaat ("zelfde pool, nieuwe extractie") juist niet meetbaar.</summary>
     private async Task<int> ClearWatermarkAsync(CancellationToken ct)
     {
         var watermark = await db.Assertions
             .Where(a => a.FactKind == FactKinds.Interaction)
             .ToListAsync(ct);
         db.Assertions.RemoveRange(watermark);
+
+        var cards = await db.Cards.Where(c => c.InteractionsMinedAt != null).ToListAsync(ct);
+        foreach (var c in cards)
+        {
+            c.InteractionsMinedAt = null;
+            c.InteractionsMinedByRunId = null;
+        }
+
+        var entities = await db.CanonicalEntities
+            .Where(e => e.InteractionsMinedAt != null).ToListAsync(ct);
+        foreach (var e in entities)
+        {
+            e.InteractionsMinedAt = null;
+            e.InteractionsMinedByRunId = null;
+        }
+
         return watermark.Count;
     }
 }

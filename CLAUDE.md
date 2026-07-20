@@ -132,6 +132,19 @@ met quota en rate-limiting.
   nooit een term buiten het aangeboden lijstje). Magnitudes horen bij hun
   familie — "Assault 2"/"Assault 3" zijn beide `Assault`, nooit een eigen
   entiteit.
+- **Bij een LLM-extractie is het aangeboden VOCABULAIRE de kostenpost** (#286) — de
+  meting en de schaalklip staan hierboven bij #281/#288; dit is de bouwkant ervan.
+  (a) Bied per item alleen aan wat aantoonbaar relevant is. Het hele vocabulaire
+  LEZEN om te scoren mag — dat is O(n) leeswerk — maar het AANBIEDEN moet begrensd;
+  laat de relevantie-regel de latere promotie-poort spiegelen, anders geef je refs
+  uit aan paren die per constructie niet kunnen promoveren. (b) Stel de vraag op het
+  hoogste niveau waar het antwoord kaart-onafhankelijk is (38 mechanics i.p.v. 1311
+  kaarten), maar benoem expliciet wat dát niveau NIET dekt en laat het lagere niveau
+  daarvoor staan. (c) Een harde begroting verdeelt schaarste, dus kies bewust wie
+  wijkt: de tier die uniek is voor dit niveau (kaart-rollen) hoort een reserve te
+  krijgen, niet als eerste te sneuvelen. (d) **Een assertie tegen de constante die ze
+  bewaakt schuift mee** — test caps met een letterlijke waarde, en controleer met een
+  mutatie dat de fixture de grens überhaupt kán overschrijden.
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`

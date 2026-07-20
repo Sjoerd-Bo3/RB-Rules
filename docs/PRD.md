@@ -1188,6 +1188,31 @@ de globale duur-vangrail).
   die kaart komt juist terug. Zichtbaar effect: het drain-signaal in beheer klopt
   weer, en de pool loopt daadwerkelijk leeg. *Na deploy geen actie nodig — de
   al verwerkte kaarten blijven herkend.*
+- **Extractie-vraag herijkt: minder vocabulaire, meer vragen** (#286) — na #249
+  klopte de vraag inhoudelijk, maar 45-55% van de kaarten viel uit, en dat
+  percentage liep monotoon op. Een meting wees de oorzaak aan: zelfde kaarttekst,
+  3 aangeboden refs → antwoord in 49 s; 39 refs → afgekapt op de 90 s-timeout.
+  Het **aantal aangeboden termen** drijft de kosten, niet de kaarttekst — en dat
+  aantal groeit met elke set, dus dit was een schaalklip, geen pech: hoe meer het
+  brein leerde, hoe meer extracties omvielen (een gefaalde kaart komt terug, dus
+  de wachtrij verzwaarde zichzelf). Drie wijzigingen. **(1)** Een kaart krijgt
+  niet langer het hele keyword-vocabulaire van haar buurt te zien maar alleen wat
+  relevant is: de keywords die letterlijk op de kaart gedrukt staan plus de
+  buren die aantoonbaar samen met zo'n keyword in één bewijstekst voorkomen, met
+  een harde bovengrens (12 in plaats van 39). **(2)** Er is een
+  **mechanic-niveau-vraag** bijgekomen die vóór de kaartronde draait: 38
+  mechanics tegenover 1311 kaarten, en "Equip modificeert Might" geldt voor élke
+  kaart met Equip — dezelfde kennis voor een fractie van de aanroepen. Die ronde
+  vervángt de kaartronde niet: kaart↔kaart en kaart↔andermans-keyword bestaan
+  alleen op kaartniveau en blijven daar gewoon gevonden worden. **(3)** Omdat de
+  vaste kosten per aanroep toch betaald zijn, wordt er meer in dezelfde vraag
+  meegenomen: het model wijst nu ook de **regelsectie** aan die een interactie
+  officieel verankert, waardoor kaartdossier en graaf-verkenner bij zo'n relatie
+  naar de bron kunnen doorverwijzen in plaats van alleen "gevonden". Het
+  run-detail toont voortaan per ronde het aantal aanroepen, de gemiddelde duur en
+  het gemiddelde aantal aangeboden termen, zodat de winst zichtbaar is in plaats
+  van beweerd. *Na deploy: draai eerst `breinreset-interacties` als je de oude en
+  nieuwe extractie op dezelfde pool wilt vergelijken.*
 - **Brein-mining draait parallel** (#279) — de extractie kostte ~40 s per kaart
   en liep één kaart tegelijk: 40 kaarten was een half uur, een ongecapte
   nachtrun (~900 kaarten) tien uur. De kaart- en subject-lus verwerken nu
