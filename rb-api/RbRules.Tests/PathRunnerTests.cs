@@ -223,12 +223,194 @@ public class PathRunnerTests
         Assert.Empty(await db.RunLogs.ToListAsync());
     }
 
+    // --- best-effort ketens (#258) -----------------------------------------
+
+    [Fact]
+    public async Task BestEffortPad_LooptDoorNaEenFout_EnZetDeFoutInDeSamenvatting()
+    {
+        // REGRESSIETEST voor het behoud van bestaand gedrag: "all" en de
+        // nachtrun waren met de hand geschreven ketens die elke stap
+        // best-effort draaiden (CONVENTIONS: "een haperende externe dienst
+        // stopt nooit de hele run"). Bij het opgaan in het pad-mechanisme —
+        // dat stop-bij-fout is — moest die semantiek meeverhuizen, anders
+        // strandt een nachtrun van uren op één 5xx van rb-ai.
+        var dbName = Guid.NewGuid().ToString();
+        await using var sp = NewSp(dbName);
+        var laatsteStapGedraaid = false;
+        var jobs = Catalog(
+            ("stap-een", (sp, report, ct) => Task.FromResult(new JobOutcome("ok"))),
+            ("stap-twee-faalt", (sp, report, ct) =>
+                throw new InvalidOperationException("rb-ai onbereikbaar")),
+            ("stap-drie", (sp, report, ct) =>
+            {
+                laatsteStapGedraaid = true;
+                return Task.FromResult(new JobOutcome("ook ok"));
+            }));
+        var path = new PathDefinition("test-keten",
+            [new PathStep("stap-een"), new PathStep("stap-twee-faalt"), new PathStep("stap-drie")],
+            ContinueOnError: true);
+
+        var outcome = await PathRunner.RunAsync(path, sp, _ => { }, CancellationToken.None, jobs);
+
+        Assert.True(laatsteStapGedraaid);
+        Assert.Contains("stap-een: ok", outcome.Detail);
+        Assert.Contains("stap-twee-faalt: FOUT — rb-ai onbereikbaar", outcome.Detail);
+        Assert.Contains("stap-drie: ook ok", outcome.Detail);
+
+        // De fout blijft wél zichtbaar in de historie — best-effort betekent
+        // doorlopen, niet wegmoffelen.
+        using var db = NewDb(dbName);
+        var logs = await db.RunLogs.Where(l => l.Kind == "test-keten").OrderBy(l => l.Id).ToListAsync();
+        Assert.Equal(3, logs.Count);
+        Assert.Equal("error", logs[1].Status);
+        Assert.Contains("rb-ai onbereikbaar", logs[1].Detail);
+    }
+
+    [Fact]
+    public async Task BestEffortPad_HerhaaltEenGefaaldeDrainStapNiet()
+    {
+        // Vers-werk-semantiek (#190): een stap die zojuist kapot ging opnieuw
+        // draaien faalt vrijwel zeker opnieuw. De drain-lus moet dus stoppen
+        // bij een fout, óók als het pad best-effort is.
+        var dbName = Guid.NewGuid().ToString();
+        await using var sp = NewSp(dbName);
+        var calls = 0;
+        var jobs = Catalog(("faalt-altijd", (sp, report, ct) =>
+        {
+            calls++;
+            throw new InvalidOperationException("stuk");
+        }));
+        var path = new PathDefinition("test-keten",
+            [new PathStep("faalt-altijd", Drain: true, MaxRepeats: 10)], ContinueOnError: true);
+
+        await PathRunner.RunAsync(path, sp, _ => { }, CancellationToken.None, jobs);
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task BestEffortPad_StoptAlsnogBijAfbrekenViaBeheer()
+    {
+        // Afbreken (#253) is een BESLISSING, geen storing: ook een
+        // best-effort keten moet er meteen mee stoppen in plaats van de
+        // cancellation als "gewoon weer een gefaalde stap" te behandelen en
+        // vrolijk door te lopen.
+        var dbName = Guid.NewGuid().ToString();
+        await using var sp = NewSp(dbName);
+        using var cts = new CancellationTokenSource();
+        var laatsteStapGedraaid = false;
+        var jobs = Catalog(
+            ("stap-een", (sp, report, ct) =>
+            {
+                cts.Cancel();
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult(new JobOutcome("nooit"));
+            }),
+            ("stap-twee", (sp, report, ct) =>
+            {
+                laatsteStapGedraaid = true;
+                return Task.FromResult(new JobOutcome("ok"));
+            }));
+        var path = new PathDefinition("test-keten",
+            [new PathStep("stap-een"), new PathStep("stap-twee")], ContinueOnError: true);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => PathRunner.RunAsync(path, sp, _ => { }, cts.Token, jobs));
+
+        Assert.False(laatsteStapGedraaid);
+        using var db = NewDb(dbName);
+        var log = await db.RunLogs.SingleAsync(l => l.Kind == "test-keten");
+        Assert.Equal("cancelled", log.Status);
+    }
+
+    // --- ongecapte stappen (#258) ------------------------------------------
+
+    [Fact]
+    public async Task OngecapteStap_DraaitDeOngecapteVariant_MetDePadDeadline()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await using var sp = NewSp(dbName);
+        var deadline = DateTimeOffset.UtcNow.AddHours(3);
+        DateTimeOffset? ontvangen = null;
+        var gecaptGedraaid = false;
+        var jobs = CatalogMetOngecapt(("mine-stub",
+            (sp, report, ct) =>
+            {
+                gecaptGedraaid = true;
+                return Task.FromResult(new JobOutcome("gecapt"));
+            },
+            (sp, report, dl, ct) =>
+            {
+                ontvangen = dl;
+                return Task.FromResult(new JobOutcome("ongecapt"));
+            }));
+        var path = new PathDefinition("test-keten", [new PathStep("mine-stub", Uncapped: true)]);
+
+        var outcome = await PathRunner.RunAsync(
+            path, sp, _ => { }, CancellationToken.None, jobs, deadline);
+
+        Assert.False(gecaptGedraaid);
+        Assert.Equal(deadline, ontvangen);
+        Assert.Contains("ongecapt", outcome.Detail);
+    }
+
+    [Fact]
+    public async Task GewoneStap_DraaitDeGecapteVariant_OokAlsErEenDeadlineIs()
+    {
+        // Alleen stappen die het expliciet vragen gaan ongecapt; een deadline
+        // op het pad maakt niet stilzwijgend álles ongecapt.
+        var dbName = Guid.NewGuid().ToString();
+        await using var sp = NewSp(dbName);
+        var ongecaptGedraaid = false;
+        var jobs = CatalogMetOngecapt(("mine-stub",
+            (sp, report, ct) => Task.FromResult(new JobOutcome("gecapt")),
+            (sp, report, dl, ct) =>
+            {
+                ongecaptGedraaid = true;
+                return Task.FromResult(new JobOutcome("ongecapt"));
+            }));
+        var path = new PathDefinition("test-keten", [new PathStep("mine-stub")]);
+
+        var outcome = await PathRunner.RunAsync(
+            path, sp, _ => { }, CancellationToken.None, jobs, DateTimeOffset.UtcNow.AddHours(3));
+
+        Assert.False(ongecaptGedraaid);
+        Assert.Contains("gecapt", outcome.Detail);
+    }
+
+    [Fact]
+    public async Task OngecapteStap_ZonderOngecapteVariant_ValtTerugOpDeGewoneRun()
+    {
+        // Degradatie i.p.v. een crash — maar JobPathOrderTests maakt deze
+        // combinatie statisch zichtbaar, zodat hij niet ongemerkt ontstaat.
+        var dbName = Guid.NewGuid().ToString();
+        await using var sp = NewSp(dbName);
+        var jobs = Catalog(("zonder-variant",
+            (sp, report, ct) => Task.FromResult(new JobOutcome("gecapt"))));
+        var path = new PathDefinition("test-keten", [new PathStep("zonder-variant", Uncapped: true)]);
+
+        var outcome = await PathRunner.RunAsync(
+            path, sp, _ => { }, CancellationToken.None, jobs, DateTimeOffset.UtcNow.AddHours(3));
+
+        Assert.Contains("gecapt", outcome.Detail);
+    }
+
     // --- testinfra ---------------------------------------------------------
 
     private static Func<string, JobDefinition?> Catalog(
         params (string Name, Func<IServiceProvider, Action<string>, CancellationToken, Task<JobOutcome>> Run)[] entries)
     {
         var byName = entries.ToDictionary(e => e.Name, e => new JobDefinition(e.Name, e.Run));
+        return name => byName.GetValueOrDefault(name);
+    }
+
+    private static Func<string, JobDefinition?> CatalogMetOngecapt(
+        params (string Name,
+            Func<IServiceProvider, Action<string>, CancellationToken, Task<JobOutcome>> Run,
+            Func<IServiceProvider, Action<string>, DateTimeOffset?, CancellationToken, Task<JobOutcome>> RunUncapped)[] entries)
+    {
+        var byName = entries.ToDictionary(
+            e => e.Name, e => new JobDefinition(e.Name, e.Run, e.RunUncapped));
         return name => byName.GetValueOrDefault(name);
     }
 

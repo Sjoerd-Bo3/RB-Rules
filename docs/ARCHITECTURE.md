@@ -43,7 +43,7 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
 | Kwaliteit | Concreet | Verankerd in |
 |---|---|---|
 | Correctheid/traceerbaarheid | Antwoord scheidt officiële regels van community-consensus, met citaties | `AskService.cs`, `docs/KNOWLEDGE.md` |
-| Beschikbaarheid/robuustheid | Elke pijplijnstap is best-effort; één haperende stap stopt de run niet | `JobCatalog.RunAllAsync`, `ScanScheduler` |
+| Beschikbaarheid/robuustheid | Elke pijplijnstap is best-effort; één haperende stap stopt de run niet | `PathDefinition.ContinueOnError` (#258), `ScanScheduler` |
 | Actualiteit | Scan per cadence, dagelijkse kaart-sync, set-release-keten | `ScanScheduler`, `SetReleaseService` |
 | Herbouwbaarheid | Alle afgeleiden (embeddings, mechanics, graph) opnieuw op te bouwen uit Postgres | `docs/CONVENTIONS.md`, `GraphSyncService` |
 | Kosten/latency-beheersing | AI opt-in per taak, rate-limiting op dure routes, agentic achter een gate | `rb-ai/src/ai.ts`, `Program.cs` (rate limiter), `AgenticGate` |
@@ -464,10 +464,16 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   best-effort, want Neo4j zit niet in CI/lokaal; **live-Cypher-executie is
   integratie-follow-up** (zoals de fase-2-projectie), de pure regel-/patroon-generatie
   en de conflict-vertaling zijn wél getest (`InferenceRuleRegistryTests`,
-  `ContradictionDetectorTests`). `OntologyConsistencyAudit` (job `owlaudit`, optioneel,
-  nooit in "alles") is de **OWL2-RL-nachtaudit-skeleton**: een pure zelf-toets van de
-  afgedwongen schema-bron (acyclisch, disjointness vervulbaar, geen dangling
-  domain/range) — geen OWL-runtime. EF-migratie `Reasoner227`.
+  `ContradictionDetectorTests`). `OntologyConsistencyAudit` is de
+  **OWL2-RL-nachtaudit-skeleton**: een pure zelf-toets van de afgedwongen
+  schema-bron (acyclisch, disjointness vervulbaar, geen dangling domain/range) —
+  geen OWL-runtime. Draaide tot #258 als admin-job `owlaudit`, maar las geen data
+  en raakte geen database: hij kon alleen falen op de GECOMPILEERDE
+  `OntologySchema`. Dat is een unit-test, geen beheerdersactie — de job is weg en
+  de toets is een CI-assert
+  (`ContradictionDetectorTests.OntologyConsistencyAudit_DeAfgedwongenSchemaBronIsConsistent`),
+  waar hij een kapot schema tegenhoudt vóór de merge in plaats van erna.
+  EF-migratie `Reasoner227`.
 - **`RbRules.Infrastructure`** — services met I/O: `RbRulesDbContext` (EF Core),
   `IngestService`, `FeedCrawlService` (#167, bron-feed-crawl — eerste stap
   van `IngestService.ScanAsync`; sinds #175 ook herkomst-adoptie — een
@@ -731,18 +737,105 @@ embedding-poort voor parafrases, `NearestWithin`, verandert niet).
 betekent CapHit nog steeds "er ligt vers werk klaar voor een volgende run".
 
 `JobPaths` (Infrastructure, naast `JobCatalog`) is de padencatalogus: een
-`PathDefinition(Name, Steps)` is een geordende lijst `PathStep(JobName,
-Drain = false, MaxRepeats = 10)` die elk naar een bestaande `JobCatalog`-naam
-verwijst (gevalideerd in `JobPathsTests`); Drain hoort alleen op per-run
-gecapte jobs — `classify` staat daarom zonder Drain in het Ingest-pad. Vier
-paden — Ingest-, Kaart-, Kennis- en het Volledige-regeneratiepad (zie PRD
-§4.5 voor de precieze stappen; bewust GEEN wipe erin, dat blijft
-`regenerateknowledge` als losse Gevarenzone-actie). Het Kennis-pad kreeg met
-#199 v1 een vijfde stap: `relationtriage` (Drain: true), ná `relations` en
-vóór `graph`. Het Ingest-pad kreeg met #206 een nieuwe stap
-`consolidatechanges` ná `classify` en vóór `mine` (ongecapt, geen Drain —
+`PathDefinition(Name, Steps, ContinueOnError = false)` is een geordende lijst
+`PathStep(JobName, Drain = false, MaxRepeats = 10, Uncapped = false)` die elk
+naar een bestaande `JobCatalog`-naam verwijst (gevalideerd in `JobPathsTests`);
+Drain hoort alleen op per-run gecapte jobs — `classify` staat daarom zonder
+Drain in het Ingest-pad.
+
+**Eén ketenmechanisme (#258).** Tot #258 bestonden er drie manieren om een
+keten te draaien: `JobCatalog.RunAllAsync` ("all"), `RunNightlyAsync`
+("nachtrun") en de paden — elk met een eigen volgorde, een eigen
+foutafhandeling en (bij de eerste twee) zónder per-stap-`run_log`. Sinds #258
+is het **pad het enige ketenmechanisme**: `all` en `nachtrun` zijn dunne
+aliassen die een `PathDefinition` door `PathRunner` draaien. Ze erven daarmee
+de drain-semantiek, de per-stap-historie en de afbreek-afhandeling die ze
+misten, en de volgorde staat op één plek. Twee mechanismen maakten dat
+mogelijk zonder gedragsverlies:
+
+- `PathDefinition.ContinueOnError` — best-effort per stap in plaats van
+  stop-bij-fout. Dat is wat `RunAllAsync`/`RunNightlyAsync` altijd al deden
+  (kwaliteitsdoel "elke pijplijnstap is best-effort") en wat een nachtrun van
+  uren nodig heeft: hij mag niet stranden op één 5xx van rb-ai. Alleen de
+  samengestelde ketens zetten het; de handmatige paden houden stop-bij-fout.
+  Afbreken via beheer (#253) stopt ook een best-effort keten.
+- `PathStep.Uncapped` + `JobDefinition.RunUncapped` — de per-run cap eraf, de
+  pad-deadline erin. Alleen de drie dure miners (`mine`,
+  `breinmine-interacties`, `breinmine-predicaten`) hebben zo'n variant;
+  `JobPathOrderTests` dwingt af dat een `Uncapped`-stap er ook echt één heeft
+  (anders zou de nachtrun stil op de gecapte run terugvallen) en dat
+  `Uncapped` en `Drain` elkaar uitsluiten.
+
+Vier los startbare paden (`/api/admin/paths`), elk een fase van de keten:
+Ingest (`scan` → `rules-index` → `bans` → `classify` → `consolidatechanges`),
+Kaart (`cards` → `embed` → `mine`·drain → `graph`), Kennis (`claims` →
+`clarify` → `relations` → `relationtriage`, alle drain, → `primer` → `graph`)
+en Brein (`breinentiteiten` → `breinmine-interacties`·drain →
+`breinmine-predicaten`·drain → `breinprojectie` → `reason`). Zie PRD §4.5.
+Vier wijzigingen die #258 daarbij doorvoerde:
+
+- `rules` en `bans` ontbraken in het Ingest-pad (ze stonden alleen in `all`) —
+  dat gat is gedicht. De keten gebruikt daarvoor een nieuwe job `rules-index`
+  (incrementeel, `force:false`); de bestaande `rules`-knop blijft de volledige
+  herbouw (`force:true`, na een parser-verbetering) en hoort NIET in een keten
+  die elke nacht draait — dat zou de complete regelindex elke nacht
+  her-chunken en her-embedden.
+- `mine` verhuisde van het Ingest- naar het Kaart-pad: mechaniek-mining is
+  kaart-afgeleid en had in het bronnen-pad niets te zoeken.
+- `primer` verhuisde van het aparte pad `full` naar het Kennis-pad; `full`
+  wás het Kennis-pad plus primer en is daarmee vervallen.
+- Het Brein-pad is nieuw. `breinentiteiten` staat vooraan omdat de
+  predicaat-mining alleen tegen de canonieke entiteitenlaag resolveert en
+  zonder die stap NUL subjects vindt (#250).
+
+De twee samengestelde ketens staan bewust NIET in `AllPaths` (en dus niet op
+`/api/admin/paths`): `JobPaths.AllUpdate` is de bijwerk-keten en
+`JobPaths.Nightly` diezelfde keten plus Brein, met de drie miners ongecapt.
+
+**De bijwerk-keten is géén simpele aaneenschakeling van de twee paden**
+(`JobPaths.UpdateChain`, #287-review). Twee harde afhankelijkheden wijzen
+tegengesteld, dus welke volgorde je ook kiest, plat concatenéren breekt er één:
+
+- `bans` moet ná `cards`. `BanErrataSyncService` snapshot de kaarttabel en
+  resolvet elke ban/erratum naar een `CardRiftboundId`, in een destructieve
+  herbouw per run. Draait hij eerst, dan krijgt na een nieuwe set élke ban voor
+  een nieuwe kaart `null` — zichtbaar in `BanLookup`, het kaartdossier en de
+  effectieve kaarttekst van de resolver. Zelfherstellend, maar pas een cyclus
+  later.
+- `graph` moet ná `rules-index`. De projectie schrijft ook regelsecties, dus de
+  graph-afsluiter van het kaart-pad zou midden in de keten vallen en verse
+  secties een run later projecteren.
+
+Daarom: kaart-stappen (zonder hun graph-afsluiter) → ingest-stappen → `graph`.
+Dat is exact de volgorde die de oude, handgeschreven `RunAllAsync` had; dat die
+afspraak impliciet wás is precies waarom `JobPathOrderTests` beide eisen nu
+vastlegt. De vier los startbare paden blijven ongewijzigd — elk is op zichzelf
+correct, en het kaart-pad eindigt terecht op zijn eigen graph-projectie. Ze dragen de naam van de
+job die ze uitvoert (`all`, `nachtrun`), zodat de per-stap-`run_log`-regels
+(Kind=padnaam) bij die job terug te vinden zijn en de padnaam niet botst met de
+jobnaam die rb-web, de docs en het grootboek al kennen. `Nightly` wordt
+programmatisch uit dezelfde bouwstenen afgeleid (`WithUncapped`), zodat een
+nieuwe stap in een bouwsteen niet stil uit de nachtrun wegvalt —
+`JobPathOrderTests` legt die gelijkheid vast. De nachtrun draait bewust NIET
+het Kennis-pad: dat deed hij nooit (claims/clarify/relations hebben hun eigen
+scheduler-cadans, primer levert elke run drafts ter review) en het erbij
+trekken zou het LLM-budget van de brein-mining opeten.
+
+Bewust GEEN wipe (`regenerateknowledge`) of brein-reset in enig pad — dat
+blijven losse Gevarenzone-acties. Het Kennis-pad kreeg met #199 v1 de stap
+`relationtriage` (Drain: true), ná `relations` en vóór `graph`. Het Ingest-pad
+kreeg met #206 `consolidatechanges` ná `classify` (ongecapt, geen Drain —
 zelfde afweging als `classify`: het aantal ongekoppelde changes binnen het
 venster is klein).
+
+**Harde volgorde-eis: `graph` vóór `breinprojectie`.** `GraphSyncService` doet
+een `DETACH DELETE` over ZIJN labelset; `BreinProjectionService` schrijft een
+strikt disjuncte labelset. Ze zijn dus géén duplicaten (dat vermoeden is bij de
+#258-inventarisatie expliciet weerlegd), maar de basis-graaf waar de
+brein-knopen aan hangen moet er wél eerst zijn. Draait de projectie eerder, dan
+projecteert ze op een graaf die daarna alsnog wordt herbouwd: geen crash, geen
+foutmelding, alleen een stil incompleet brein tot de volgende nacht.
+`JobPathOrderTests` bewaakt dit voor de nachtrun-keten.
 
 **`ChangeConsolidationService`/`ChangeFeedService` (changeconsolidatie,
 #206).** Een officiële en een community-bron die hetzelfde event melden
@@ -858,9 +951,12 @@ Input-validatie zit puur op het contract-record
 (`RelationBulkDecideRequest.ValidationError`, finding 6): ontbrekende of
 ongeldige velden zijn een 400, geen NRE-500. Een mens-beoordeeld voorstel
 (Status niet meer "unreviewed") wordt nooit her-getriaged.
-`PathRunner.RunAsync(path, sp, report, ct, findJob?)` (Infrastructure)
-draait de stappen sequentieel via `job.Run(sp, ...)` — `findJob` is een
-test-seam die in productie op `JobCatalog.Find` defaultet. Bij `Drain: true`
+`PathRunner.RunAsync(path, sp, report, ct, findJob?, deadline?)`
+(Infrastructure) draait de stappen sequentieel via `job.Run(sp, ...)` — of via
+`job.RunUncapped(sp, report, deadline, ct)` bij een `Uncapped`-stap (#258).
+`findJob` is een test-seam die in productie op `JobCatalog.Find` defaultet;
+`deadline` is het einde van het nachtvenster en begrenst de ongecapte stappen
+(null = geen deadline, bv. een handmatige volledige drain). Bij `Drain: true`
 herhaalt hij dezelfde job tot `outcome.Drained`, met twee vangrails
 (review-fix #190): de harde `MaxRepeats`-grens én een no-progress-guard die
 de lus vroegtijdig stopt zodra twee opeenvolgende runs een identiek
@@ -876,15 +972,24 @@ gefaalde stap alsnog committen, en een log-exceptie mag de oorspronkelijke
 stap-fout nooit maskeren. Gooit een stap een exception, dan logt
 `PathRunner` die stap als "error" en gooit door — het pad stopt daar
 (JobRunner's catch markeert de hele padrun als error); de al voltooide
-stappen blijven staan. Een pad start via
+stappen blijven staan. Zet het pad `ContinueOnError` (#258, alleen `all` en
+`nachtrun`), dan wordt de fout wél gelogd maar loopt de keten door en draagt de
+samenvatting `"{stap}: FOUT — {bericht}"` — met één uitzondering: de drain-lus
+herhaalt een zojuist gefaalde stap niet (vers-werk-semantiek #190: een directe
+herhaling faalt vrijwel zeker opnieuw). Een pad start via
 `jobs.TryStart(pathName, (sp, report, ct) => PathRunner.RunAsync(path, sp,
 report, ct))` in `AdminEndpoints`/`ScanScheduler` — dezelfde
 `JobRunner`-instantie, dus een pad en een losse job kunnen nooit tegelijk
 draaien. `ScanScheduler` heeft ook een pad-equivalent van zijn
 `TryStartPeriodicJobAsync` (`TryStartPeriodicPathAsync`), maar de
-schedule-lijst (`PathSchedules`) is bewust leeg — de mogelijkheid staat
-klaar, de bestaande nachtelijke/wekelijkse cadans van de losse jobs
-verandert niet.
+schedule-lijst (`PathSchedules`) is bewust leeg. Sinds #258 met een scherpere
+reden dan "nog niet gedaan": alle drie de kandidaten zijn al gedekt en
+inplannen zou dubbel werk zijn dat om dezelfde éénjob-gate vecht. Ingest/Kaart/
+Brein zitten in de nachtrun-keten (en incrementeel in de tick); de dure stappen
+van het Kennis-pad hebben hun eigen cadans als LOSSE job (`relations` en
+`clarify` in `JobSchedules`, claims via `_lastClaimsMine`) — het pad erbij
+plannen zou ze twee keer per etmaal draaien; en `primer` hoort niet in een
+automaat omdat elke run drafts oplevert die een mens moet reviewen (#187).
 
 Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/decks*`
 (#15 fase 3 spoor A: lijst/facetten/detail, read-only — lijst met
@@ -1414,9 +1519,15 @@ Nachtrun (#245): naast de interval-schedules hierboven start `ScanScheduler`
 sinds #245 binnen een KLOK-venster (default 00:00–11:00 lokaal, Europe/Amsterdam;
 env-overschrijfbaar via `NIGHTLY_START_HOUR`/`NIGHTLY_END_HOUR`/`NIGHTLY_TZ` in de
 VM-`.env`) de job `nachtrun`: de volledige ONGECAPTE kennis-keten in één
-JobRunner-slot — `all` (met ongecapte mechaniek-mining) → `breinentiteiten` (#250)
-→ `breinmine-interacties`
-→ `breinmine-predicaten` → `breinprojectie` → `reason`. De mining-services krijgen
+JobRunner-slot. Sinds #258 is dat een PAD (`JobPaths.Nightly`, door `PathRunner`)
+in plaats van een met de hand geschreven keten: het Ingest- en Kaart-pad met
+ongecapte mechaniek-mining, gevolgd door het Brein-pad (`breinentiteiten` #250 →
+`breinmine-interacties` → `breinmine-predicaten` → `breinprojectie` → `reason`)
+met ongecapte miners. De job zelf doet nog maar één ding — de deadline bepalen en
+aan het pad meegeven; de volgorde staat in `JobPaths`. Winst: een
+`run_log`-regel per stap (Kind=`nachtrun`, Ref=stapnaam), zodat na een nacht
+zichtbaar is welke stap hoe lang draaide en waar het strandde — dat ontbrak in de
+oude opzet, die alleen één afrondingsregel schreef. De mining-services krijgen
 een optionele `deadline` (het venster-einde) en stoppen daar netjes; hun watermark
 bewaart de voortgang, dus de resterende backlog volgt de volgende nacht. De
 klok-logica leeft in `NightlyWindow` (Domain, puur/getest) i.p.v.
@@ -1542,10 +1653,12 @@ veronderstellen bron-edges die de huidige projectie nog niet materialiseert
 (bv. `Mechanic-[:GOVERNED_BY]->RuleSection`, class-anchor-labels) — die projectie-
 uitbreiding hoort bij dezelfde follow-up; de regels staan er al, correct getagd.
 
-De **OWL2-RL-nachtaudit** (`OntologyConsistencyAudit`, job `owlaudit`) is per beslissing
-een **skeleton**: geen OWL/Turtle-runtime, maar een pure zelf-toets van de afgedwongen
+De **OWL2-RL-nachtaudit** (`OntologyConsistencyAudit`) is per beslissing een
+**skeleton**: geen OWL/Turtle-runtime, maar een pure zelf-toets van de afgedwongen
 schema-bron (`OntologySchema`) op acycliciteit, vervulbare disjointness en
-niet-danglende domain/range. Optioneel en nooit in de "alles"-keten.
+niet-danglende domain/range. Draaide tot #258 als admin-job `owlaudit`; sindsdien is
+het een CI-assert (§6.4) — de toets leest geen data en raakt geen database, dus ze
+hoort vóór de merge te vuren en niet als beheerdersknop erna.
 
 ### 6.5 De brein-projectie
 
@@ -2159,8 +2272,8 @@ kan rb-api eerder starten dan Postgres klaar is.
   `document`/`rule_chunk`, `card`, `errata`, `ban_entry`, `deck`/`deck_card`
   (bron of feitelijke data, al Engels) — bewezen met een test die exact die
   tabellen seedt en na de wipe ongewijzigd telt. De job
-  (`JobCatalog`: `regenerateknowledge`) zit bewust NIET in `RunAllAsync`
-  ("Alles bijwerken" bevat primer/claims/clarify/relations toch al niet) en
+  (`JobCatalog`: `regenerateknowledge`) zit bewust NIET in de "alles"-keten
+  (die bevat primer/claims/clarify/relations toch al niet) en
   chaint bewust GEEN automatische her-generatie — een expliciete,
   destructieve beheerdersactie (eigen gewaarschuwd paneel met confirm-stap in
   rb-web) die de coördinator zelf ná de deploy uitvoert, waarna de
@@ -2195,8 +2308,8 @@ kan rb-api eerder starten dan Postgres klaar is.
   Het watermark zelf is geïsoleerd in één private methode
   (`ClearWatermarkAsync`): verhuist het ooit naar een expliciet veld op `Card`,
   dan is dat de enige plek die mee moet. De jobs zitten bewust in geen enkel
-  pad, niet in `RunAllAsync` en niet in de nachtrun (getest in
-  `JobPathsTests`/`BreinMiningResetServiceTests`); ze chainen niets
+  pad, niet in de "alles"-keten en niet in de nachtrun (getest in
+  `JobPathsTests`/`JobPathOrderTests`/`BreinMiningResetServiceTests`); ze chainen niets
   automatisch. Na de reset draait de beheerder zelf
   `breinmine-interacties` (brede scope: eerst `breinentiteiten`) en daarna
   `graph` + `breinprojectie` — Neo4j is een projectie en loopt tot dat moment
@@ -2280,8 +2393,8 @@ kan rb-api eerder starten dan Postgres klaar is.
   secret, dan blijft `IpHash` overal null: stille degradatie, nooit een
   crash.
 - **Best-effort achtergrondwerk** — `JobCatalog` registreert jobs als één
-  switch-vrije catalogus; `RunAllAsync` ("Alles bijwerken") draait elke stap
-  best-effort in volgorde.
+  switch-vrije catalogus; de ketens draaien als pad met
+  `ContinueOnError` (#258), dus elke stap best-effort in volgorde.
 - **Benchmark voedt de kennisbank niet** (#158) — de judge-benchmark draait
   exact dezelfde retrieval/prompt/agentic-gate als een normale vraag, via
   `AskService.AskOptions { Benchmark = true }`: één vlag door de

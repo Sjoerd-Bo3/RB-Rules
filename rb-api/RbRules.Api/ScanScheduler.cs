@@ -67,14 +67,23 @@ public class ScanScheduler(
         ("consolidatechanges", ConsolidateChangesInterval),
     ];
 
-    // Paden periodiek inplanbaar (#190): zelfde venster-mechanisme als de
-    // losse jobs hierboven (JobLedger bepaalt het venster, TryStartPeriodicPathAsync
-    // is het pad-equivalent van TryStartPeriodicJobAsync), maar bewust LEEG —
-    // dit voegt alleen de MOGELIJKHEID toe om een pad in te plannen. De
-    // bestaande nachtelijke/wekelijkse cadans hierboven (relations/scout/
-    // decks/clarify als losse jobs) verandert niet; een pad hier inplannen is
-    // een latere, bewuste keuze (een nieuwe entry), geen gedragswijziging van
-    // deze PR.
+    // Paden periodiek inplanbaar (#190): zelfde venster-mechanisme als de losse
+    // jobs hierboven (JobLedger bepaalt het venster, TryStartPeriodicPathAsync is
+    // het pad-equivalent van TryStartPeriodicJobAsync).
+    //
+    // BEWUST LEEG, en na #258 met een scherpere reden dan "nog niet gedaan" —
+    // alle drie de kandidaten zijn al gedekt, en inplannen zou dubbel werk zijn
+    // dat om dezelfde éénjob-gate vecht:
+    //  · ingest/kaart/brein — zitten in de nachtrun-keten (JobPaths.Nightly, elke
+    //    nacht in het klok-venster) en incrementeel in de tick hierboven.
+    //  · knowledge — de dure stappen hebben hun eigen cadans als LOSSE job
+    //    (relations en clarify in JobSchedules, claims via _lastClaimsMine).
+    //    Het pad erbij plannen zou ze twee keer per etmaal draaien.
+    //  · primer — staat in het kennis-pad maar hoort niet in een automaat: elke
+    //    run levert drafts die een mens moet reviewen (#187). Op verzoek, niet
+    //    op de klok.
+    // Een pad hier inplannen blijft dus een bewuste keuze per geval; het
+    // mechanisme staat klaar en is getest (ScanSchedulerScheduleTests).
     private static readonly IReadOnlyList<(string PathName, TimeSpan Window)> PathSchedules = [];
     private DateTimeOffset _lastCardSync = DateTimeOffset.MinValue;
     private DateTimeOffset _lastClaimsMine = DateTimeOffset.MinValue;
