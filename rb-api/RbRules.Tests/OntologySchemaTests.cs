@@ -37,9 +37,9 @@ public class OntologySchemaTests
     [Fact]
     public void ValidateTriple_ObjectBuitenRange_GeeftRangeMismatch()
     {
-        // HAS_KEYWORD verlangt Card→Keyword; een Mechanic als object valt buiten.
+        // HAS_MECHANIC verlangt Card→Mechanic; een Keyword als object valt buiten.
         var r = OntologyValidationService.ValidateTriple(
-            EntityType.Unit, RelationType.HasKeyword, EntityType.Mechanic);
+            EntityType.Unit, RelationType.HasMechanic, EntityType.Keyword);
 
         Assert.False(r.IsValid);
         Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.RangeMismatch);
@@ -50,9 +50,9 @@ public class OntologySchemaTests
     [Fact]
     public void ValidateTriple_UnitVoldoetAanCardDomein_IsGeldig()
     {
-        // IN_DOMAIN heeft domein Card; een Unit (⊑ Card) moet voldoen zonder join.
+        // HAS_DOMAIN heeft domein Card; een Unit (⊑ Card) moet voldoen zonder join.
         var r = OntologyValidationService.ValidateTriple(
-            EntityType.Unit, RelationType.InDomain, EntityType.Domain);
+            EntityType.Unit, RelationType.HasDomain, EntityType.Domain);
 
         Assert.True(r.IsValid);
     }
@@ -167,11 +167,11 @@ public class OntologySchemaTests
     }
 
     [Fact]
-    public void ValidateTriple_HasKeywordMeervoudig_IsGeldig()
+    public void ValidateTriple_HasMechanicMeervoudig_IsGeldig()
     {
-        // HAS_KEYWORD is 0..* — een tweede edge is prima.
+        // HAS_MECHANIC is 0..* — een tweede edge is prima.
         var r = OntologyValidationService.ValidateTriple(
-            EntityType.Unit, RelationType.HasKeyword, EntityType.Keyword,
+            EntityType.Unit, RelationType.HasMechanic, EntityType.Mechanic,
             new TripleContext(ExistingOutgoingCount: 3));
 
         Assert.True(r.IsValid);
@@ -259,9 +259,9 @@ public class OntologySchemaTests
     [Fact]
     public void ValidateTriple_StringVariantMetEdgeNaam_ResolvedNamenGeenUnknown()
     {
-        var r = OntologyValidationService.ValidateTriple("keyword", "HAS_KEYWORD", "Keyword");
+        var r = OntologyValidationService.ValidateTriple("keyword", "HAS_MECHANIC", "Mechanic");
 
-        // "keyword" HAS_KEYWORD "Keyword": Keyword is geen Card → range/domain faalt,
+        // "keyword" HAS_MECHANIC "Mechanic": Keyword is geen Card → domain faalt,
         // maar de namen resolven wél (geen Unknown*).
         Assert.DoesNotContain(r.Violations, v =>
             v.Code is OntologyViolationCode.UnknownEntityType or OntologyViolationCode.UnknownRelation);
@@ -270,14 +270,14 @@ public class OntologySchemaTests
     [Fact]
     public void ValidateTriple_StringVariantGeldigeTriple_IsGeldig()
     {
-        var r = OntologyValidationService.ValidateTriple("Unit", "IN_DOMAIN", "Domain");
+        var r = OntologyValidationService.ValidateTriple("Unit", "HAS_DOMAIN", "Domain");
         Assert.True(r.IsValid);
     }
 
     [Fact]
     public void ValidateTriple_OnbekendType_GeeftUnknownEntityType()
     {
-        var r = OntologyValidationService.ValidateTriple("Sorcery", "HAS_KEYWORD", "Keyword");
+        var r = OntologyValidationService.ValidateTriple("Sorcery", "HAS_MECHANIC", "Mechanic");
 
         Assert.False(r.IsValid);
         Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownEntityType);
@@ -317,7 +317,7 @@ public class OntologySchemaTests
 
     [Theory]
     [InlineData("5")]                     // numeriek → zou anders Invokes (index) worden
-    [InlineData("Invokes,HasKeyword")]    // OR-combinatie → zou anders Invokes worden
+    [InlineData("Invokes,HasMechanic")]   // OR-combinatie → zou anders Invokes worden
     public void ValidateTriple_NumeriekOfComboRelatie_GeeftUnknownRelation(string relation)
     {
         var r = OntologyValidationService.ValidateTriple("Keyword", relation, "Mechanic");
@@ -332,7 +332,7 @@ public class OntologySchemaTests
     [Fact]
     public void ValidateTriple_NumeriekType_GeeftUnknownEntityType()
     {
-        var r = OntologyValidationService.ValidateTriple("5", "HAS_KEYWORD", "Keyword");
+        var r = OntologyValidationService.ValidateTriple("5", "HAS_MECHANIC", "Mechanic");
 
         Assert.False(r.IsValid);
         Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownEntityType);
@@ -379,10 +379,10 @@ public class OntologySchemaTests
     }
 
     [Fact]
-    public void Schema_HasKeywordBehoudtMagnitudeParameter()
+    public void Schema_HasMechanicBehoudtMagnitudeParameter()
     {
         // De magnitude-qualifier mag niet weggestript worden (Tank N, Accelerate N).
-        Assert.Contains("magnitude", OntologySchema.Relations[RelationType.HasKeyword].Parameters);
+        Assert.Contains("magnitude", OntologySchema.Relations[RelationType.HasMechanic].Parameters);
     }
 
     [Fact]

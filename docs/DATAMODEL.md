@@ -113,6 +113,12 @@ Indexen: `rule_chunk.embedding` (pgvector ivfflat/hnsw), `change(detected_at)`,
 `HAS_ERRATA`, `BANNED_IN`, `HAS_KEYWORD`→`DEFINED_BY`, en gekoppelde `Ruling`s →
 lever de feiten + bron mee aan Claude, samen met de pgvector-hits.
 
+> **Let op — dit is het ontwerp van de Next.js-PoP** (`src/lib/neo4j.ts`), niet de
+> live v2-graaf. Daar heet de kaart→mechaniek-relatie **`HAS_MECHANIC`** en wijst ze
+> naar een `(:Mechanic)`-knoop; `OntologySchema` is daar sinds #274 de ÉNE bron voor
+> die naam (zie ARCHITECTURE.md, `RbRules.Domain/Ontology`). Neem `HAS_KEYWORD`
+> hierboven dus niet over in nieuwe v2-code — één relatie, één naam.
+
 ## Provenance & conflictlogica (overal)
 - Elke chunk én elke edge draagt **bron + datum + trust**.
 - "Officieel verslaat community" en "errata supersedes print" zijn regels over

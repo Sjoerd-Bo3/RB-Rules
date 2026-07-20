@@ -53,6 +53,11 @@ al via de Rules Hub (trust 1).
   -[:HAS_DOMAIN]-> (:Domain {name})
   -[:HAS_KEYWORD]->(:Keyword {name})   // uit tags
 ```
+> **Let op — dit blok beschrijft de Next.js-PoP** (`src/lib/neo4j.ts`), niet de live
+> v2-graaf. Daar heet de kaart→mechaniek-relatie **`HAS_MECHANIC`** en wijst ze naar
+> een `(:Mechanic)`-knoop; `OntologySchema` is daar sinds #274 de ÉNE bron voor die
+> naam. Neem `HAS_KEYWORD` hierboven dus niet over in nieuwe v2-code.
+
 Volgende stappen voor volledige GraphRAG: `(:Keyword)-[:DEFINED_BY]->(:RuleSection)`,
 `(:Card)-[:HAS_ERRATA]->(:Erratum)`, `(:Card)-[:BANNED_IN]->(:BanEntry)` — die
 koppelen kaarten aan de regel-/errata-/ban-data uit de change-tracker.

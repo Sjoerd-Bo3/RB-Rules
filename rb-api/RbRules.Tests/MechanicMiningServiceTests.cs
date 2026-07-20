@@ -26,7 +26,7 @@ public class MechanicMiningServiceTests
         // Kern van #211: de keywords staan letterlijk in de kaarttekst, dus een
         // platliggende rb-ai (verwacht pad, ~45% uitval) mag niet betekenen dat
         // de kaart géén mechanieken heeft — dat kostte de graaf zijn
-        // HAS_KEYWORD-edges voor niets.
+        // HAS_MECHANIC-edges voor niets.
         using var db = NewDb();
         db.Cards.Add(Kaart("ogn-001-298", "[Assault 2] Deal 4. [Deflect]"));
         await db.SaveChangesAsync();

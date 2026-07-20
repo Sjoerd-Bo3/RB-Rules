@@ -97,9 +97,20 @@ public static class InferenceRuleRegistry
 
     /// <summary>Property-chain-regels: elke samenstelling van kale ontologie-relaties
     /// die (subclass-compatibel) van een Card via één of meer hops in een
-    /// GOVERNED_BY naar een RuleSection uitkomt. Zo bereikt een Deflect-kaartvraag
-    /// §7.4 in één hop zónder her-minen: <c>GOVERNED_BY(card,s) :- HAS_KEYWORD(card,kw),
-    /// INVOKES(kw,m), GOVERNED_BY(m,s)</c>. De ketens worden bounded uit de ontologie
+    /// GOVERNED_BY naar een RuleSection uitkomt, bv. <c>GOVERNED_BY(card,s) :-
+    /// HAS_MECHANIC(card,m), GOVERNED_BY(m,s)</c>.
+    ///
+    /// EERLIJKE STAND (#274): hop 1 van die keten loopt sinds #274 over de relatie en
+    /// het knooplabel die <c>GraphSyncService</c> ECHT projecteert (HAS_MECHANIC →
+    /// <c>:Mechanic</c>) — daarvóór mikte de gegenereerde Cypher op HAS_KEYWORD →
+    /// <c>:Keyword</c>, dat nergens geschreven wordt. Hop 2 is echter nog steeds niet
+    /// geprojecteerd: <c>GOVERNED_BY</c> wordt uitsluitend vanaf een <c>:Interaction</c>
+    /// geschreven, dus een <c>(:Mechanic)-[:GOVERNED_BY]->(:RuleSection)</c> bestaat
+    /// niet en de regel materialiseert vandaag nul edges. #274 nam alleen de
+    /// naam-tweespalt weg; de projectie-uitbreiding blijft de openstaande follow-up
+    /// (ARCHITECTURE §6.4). Reken deze keten dus NIET als levende inferentie.
+    ///
+    /// De ketens worden bounded uit de ontologie
     /// afgeleid (<see cref="GovernedByChains"/>), niet met de hand opgesomd.</summary>
     public static IReadOnlyList<InferenceRule> PropertyChainRules()
     {
@@ -167,7 +178,7 @@ public static class InferenceRuleRegistry
 
     private static string RenderChainCypher(IReadOnlyList<OntologyRelation> chain, string id)
     {
-        // (c:Card)-[:HAS_KEYWORD]->(:Keyword)-[:INVOKES]->(:Mechanic)-[:GOVERNED_BY]->(s:RuleSection)
+        // (c:Card)-[:HAS_MECHANIC]->(:Mechanic)-[:GOVERNED_BY]->(s:RuleSection)
         var sb = new StringBuilder("MATCH (c:Card)");
         for (var i = 0; i < chain.Count; i++)
         {

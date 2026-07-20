@@ -36,16 +36,19 @@ public class InferenceRuleRegistryTests
     // ── property-chain → GOVERNED_BY ─────────────────────────────────────────
 
     [Fact]
-    public void GovernedByChains_VindtDeKeywordInvokesMechanicKeten()
+    public void GovernedByChains_VindtDeMechanicKeten()
     {
         var chains = InferenceRuleRegistry.GovernedByChains()
             .Select(c => c.Select(r => r.EdgeName).ToArray())
             .ToList();
 
-        // De canonieke keten: Card -HAS_KEYWORD-> Keyword -INVOKES-> Mechanic
-        // -GOVERNED_BY-> RuleSection (zo bereikt een Deflect-vraag §7.4 in één hop).
+        // De canonieke keten: Card -HAS_MECHANIC-> Mechanic -GOVERNED_BY->
+        // RuleSection (zo bereikt een Deflect-vraag §7.4 in één hop). Sinds #274
+        // loopt die over de relatie die de projectie ECHT schrijft; de oude
+        // HAS_KEYWORD ∘ INVOKES-variant mikte op edges en knopen die niemand zet.
         Assert.Contains(chains, c =>
-            c.SequenceEqual(new[] { "HAS_KEYWORD", "INVOKES", "GOVERNED_BY" }));
+            c.SequenceEqual(new[] { "HAS_MECHANIC", "GOVERNED_BY" }));
+        Assert.DoesNotContain(chains, c => c.Contains("HAS_KEYWORD"));
     }
 
     [Fact]
@@ -146,7 +149,7 @@ public class InferenceRuleRegistryTests
 
     [Theory]
     [InlineData("isa-closure")]                             // huis-vorm: kleine letters + '-'
-    [InlineData("pc:has_keyword-invokes-governed_by")]      // ':' '_' '-' zijn veilig
+    [InlineData("pc:has_mechanic-governed_by")]             // ':' '_' '-' zijn veilig
     public void IsSafeRuleId_AccepteertHetVeiligeAlfabet(string id) =>
         Assert.True(InferenceRuleRegistry.IsSafeRuleId(id));
 

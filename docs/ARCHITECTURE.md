@@ -322,6 +322,23 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `Object` maar de object-kaarttypes erven van beide (multi-parent), zodat
   `Spell ⟂ Object` vervulbaar blijft. Nog geen endpoint, EF-migratie of
   Neo4j-write — puur, volledig unit-getest (`OntologySchemaTests`).
+  **Namen volgen de projectie, niet andersom (#274).** Het register is de ÉNE
+  schema-bron, dus het moet de relaties benoemen die er in Neo4j écht staan:
+  `HAS_MECHANIC` (Card→`Mechanic`) en `HAS_DOMAIN` (Card→`Domain`), niet de
+  eerdere `HAS_KEYWORD`/`IN_DOMAIN`. Twee namen voor één relatie maakten het
+  schema onvalideerbaar (het beschreef niet wat er stond), lieten een weiger-reden
+  een niet-bestaand relatietype noemen en maakten de reasoner inert: de uit de
+  ontologie gegenereerde Cypher matchte edges en knooplabels die niemand schrijft.
+  `GraphSyncService` leidt zijn MERGE-clausules daarom uit het register af
+  (`MechanicMergeClause`/`DomainMergeClause`) in plaats van uit losse literals, en
+  `OntologyProjectionAlignmentTests` pint schema, projectie, `BrainQuery.EdgeTypes`
+  en de gegenereerde reasoner-Cypher op elkaar vast — de vier lopen niet meer stil
+  uiteen. `Keyword` blijft een klasse (HAS_ROLE-filler, `ERRATA_OF`-range,
+  canoniek entiteit-kind) en `INVOKES` de fijnere, vandaag niet-geprojecteerde brug
+  Keyword→Mechanic; de gedrukte magnitude rijdt als edge-parameter mee. De
+  hernoeming is structuurbrekend en bumpte `OntologyBaseline` naar **2.0.0**
+  (major) — zonder datamigratie: de graaf droeg deze namen al en afgeleide edges
+  zijn per definitie herbouwbaar (job `graph` → `reason`).
 - **`RbRules.Domain/Provenance.cs` + `ProvenanceAuditService` — provenance-
   ruggengraat (fase 0a, #233).** Versla faalmodus #4 (ontbrekende provenance)
   als schema-invariant, niet als discipline. Twee nieuwe entiteiten (Postgres,
@@ -420,7 +437,13 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   losse regel-lijst ernaast): **isa-closure** (GOVERNED_BY-overerving over de
   type-lattice uit `OntologySchema.Ancestors`), **property-chain** (ketens die uit de
   relatie-domain/range in een GOVERNED_BY→RuleSection uitkomen, bv.
-  `HAS_KEYWORD ∘ INVOKES ∘ GOVERNED_BY` — een Deflect-vraag bereikt §7.4 in één hop),
+  `HAS_MECHANIC ∘ GOVERNED_BY`; sinds #274 loopt hop 1 van die keten over de edge én
+  het knooplabel die de projectie ECHT schrijft, daarvóór mikte ze op
+  `HAS_KEYWORD`→`:Keyword`. **Hop 2 blijft ongeprojecteerd**: er bestaat geen
+  `(:Mechanic)-[:GOVERNED_BY]->(:RuleSection)`-edge — `GOVERNED_BY` wordt uitsluitend
+  vanaf een `:Interaction` geschreven — dus de keten levert vandaag nog steeds nul
+  afgeleide edges. Zie §6.4 hieronder: die projectie-uitbreiding is de openstaande
+  follow-up, #274 heeft alleen de naam-tweespalt weggenomen),
   **symmetrische sluiting** (uit de `Symmetric`-trait: INTERACTS_WITH/CONTRADICTS) en
   **subproperty-collapse** (alias-kind → canonieke super-property uit
   `OntologySchema.RelatesToKindSubProperties`, v0 leeg). De denorm-cache RELATES_TO en
@@ -2619,7 +2642,7 @@ volgende mining-stap:
 1. **Wat de bron gedrukt heeft, wordt gelezen — niet geraden.** De gebrackete
    vorm is de mechaniek, met de magnitude gestript tot de familie ("Assault 2"
    → "Assault", zie `CanonicalEntity.CanonicalLabel`); de magnitude rijdt als
-   parameter op `HAS_KEYWORD` mee en wordt nooit een eigen entiteit.
+   parameter op `HAS_MECHANIC` mee en wordt nooit een eigen entiteit.
 2. **De LLM-vraag is gesloten, niet open.** Niet "welke mechanieken zitten
    hierin" maar "van déze termen, die aantoonbaar ongebracket in déze
    kaarttekst staan, welke zijn spelterm en welke gewoon Engels?". Dat is een
@@ -2633,7 +2656,7 @@ volgende mining-stap:
 
 **Gevolg.** Mechanieken zijn niet langer afhankelijk van rb-ai: bij uitval
 (verwacht pad) heeft een kaart gewoon zijn keywords en houdt de graaf zijn
-`HAS_KEYWORD`-edges, in plaats van niets. Omdat de LLM-velden dan nog wél
+`HAS_MECHANIC`-edges, in plaats van niets. Omdat de LLM-velden dan nog wél
 ontbreken, is de wachtrij-poort verbreed naar `Mechanics == null || Triggers ==
 null` — anders zou het deterministische deel de kaart als "klaar" wegschrijven,
 en dat is precies het halve feit dat we niet willen. De admin-tegel

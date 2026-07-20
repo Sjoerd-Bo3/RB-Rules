@@ -21,7 +21,7 @@ public record MiningResult(
 /// <b>Werkverdeling sinds #211.</b> De mechanieken zelf komen deterministisch
 /// uit de gebrackete kaarttekst (<see cref="MechanicMiner.Analyze"/>) en worden
 /// geschreven vóór en ONAFHANKELIJK van de rb-ai-call — bij AI-uitval heeft een
-/// kaart dus gewoon zijn keywords (en zijn HAS_KEYWORD-edges in de graaf), in
+/// kaart dus gewoon zijn keywords (en zijn HAS_MECHANIC-edges in de graaf), in
 /// plaats van niets. De LLM doet alleen wat de druk-vorm niet kan: het oordeel
 /// over ongebrackete vermeldingen (gesloten kandidatenlijst, deterministisch
 /// gevalideerd in <see cref="MechanicMiner.MergeMechanics"/>) plus de

@@ -243,7 +243,7 @@ public static class OntologyValidationService
         var trimmed = relationName.Trim();
         if (OntologySchema.RelationByEdgeName(trimmed) is { } byEdge) return byEdge.Type;
         // UITSLUITEND een exacte enum-naam: TryParse slikt óók kale getallen
-        // ("5") en OR-combinaties ("Invokes,HasKeyword" → Invokes → stil geldig);
+        // ("5") en OR-combinaties ("Invokes,HasMechanic" → Invokes → stil geldig);
         // de naam-gelijkheids-guard verwerpt die als UnknownRelation.
         if (Enum.TryParse<RelationType>(trimmed, ignoreCase: true, out var t)
             && OntologySchema.Relations.ContainsKey(t)
