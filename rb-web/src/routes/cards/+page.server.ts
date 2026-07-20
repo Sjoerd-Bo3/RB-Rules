@@ -13,6 +13,13 @@ export interface CardHit {
 	setId: string | null;
 	textPlain: string | null;
 	imageUrl: string | null;
+	/** Presentatie per kaart (#269/#270): maat, alt-tekst, laadkleur en
+	 *  Riots markers ("New"). */
+	imageWidth?: number | null;
+	imageHeight?: number | null;
+	imageAltText?: string | null;
+	imageColorPrimary?: string | null;
+	flags?: string[];
 	distance?: number;
 	variants?: number;
 	/** Set-legaliteit (#22): releasedatum van de set (yyyy-mm-dd) of null. */

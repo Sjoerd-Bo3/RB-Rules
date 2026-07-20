@@ -1,10 +1,14 @@
 <script lang="ts">
 	import RbText from '$lib/RbText.svelte';
+	import { cardAlt, cardAspect, cardTint, isNewCard } from '$lib/cardImage';
 	import { domainColorVar } from '$lib/changeCard';
 	import { useShell } from '$lib/shell.svelte';
 
 	let { data } = $props();
 	const c = $derived(data.card);
+	// Presentatievelden uit de bron (#270); imageAltText hoort uitsluitend in
+	// een alt= — het kan lokaal afgeleid zijn en is dus geen kaarttekst.
+	const pres = $derived(c.presentation);
 	const shell = useShell();
 	// Domein-tint (#214): de kaart krijgt de kleur van haar eerste domein
 	// (--dom-*), zoals de tegels in de kaartbrowser — één bron voor de mapping.
@@ -18,6 +22,7 @@
 	const onThisPage = $derived(
 		[
 			c.errataText || c.textPlain ? { id: 'tekst', label: 'Kaarttekst' } : null,
+			c.presentation.effectPlain ? { id: 'effect', label: 'Effect' } : null,
 			c.mechanics?.length ? { id: 'mechanieken', label: 'Mechanieken' } : null,
 			{ id: 'in-decks', label: 'In decks' },
 			data.interactions.length ? { id: 'interacties', label: 'Interacties' } : null,
@@ -88,13 +93,30 @@
 	<a href="/cards" class="back">← Kaarten</a>
 
 	<div class="detail">
-		{#if c.imageUrl}
-			<img class="art" src={c.imageUrl} alt={c.name} />
+		<!-- Afbeelding + krediet vormen samen de eerste grid-kolom; los zouden
+		     het twee cellen zijn en klapt de kolomindeling om. -->
+		{#if c.imageUrl || pres.illustrator}
+			<figure class="art-col">
+				{#if c.imageUrl}
+					<!-- Alt-tekst uit de bron (#270); verhouding en laadkleur per
+					     kaart, zodat een liggende battlefield niet vervormt (#269). -->
+					<img
+						class="art"
+						src={c.imageUrl}
+						alt={cardAlt(pres, c.name)}
+						style="aspect-ratio: {cardAspect(pres)}; background-color: {cardTint(pres)}"
+					/>
+				{/if}
+				{#if pres.illustrator}
+					<figcaption class="credit">Illustratie: {pres.illustrator}</figcaption>
+				{/if}
+			</figure>
 		{/if}
 		<div class="info">
 			<h1>
 				{c.name}
 				{#if c.banned}<span class="banned">Verboden</span>{/if}
+				{#if isNewCard(pres)}<span class="status new">Nieuw</span>{/if}
 				<!-- Set-legaliteit (#22). "Verboden" domineert: een gebande kaart
 				     óók "Legaal" noemen zou tegenstrijdig lezen. Bij een onbekende
 				     releasedatum geen "niet legaal"-claim — dat kan net zo goed een
@@ -113,6 +135,8 @@
 				{[c.supertype, c.type].filter(Boolean).join(' ')}
 				· {c.rarity ?? '—'}
 				· <a href="/cards?set={c.setId}">{c.setLabel ?? c.setId ?? '?'}</a>{c.collectorNumber ? ` #${c.collectorNumber}` : ''}
+				<!-- Riots publieke kaartcode: wat er op de kaart zelf staat. -->
+				{#if pres.publicCode}· <span class="tnum">{pres.publicCode}</span>{/if}
 			</p>
 
 			<p class="stats">
@@ -122,6 +146,10 @@
 				{#if c.energy !== null}<span class="chip stat"><span class="k">Energy</span>{c.energy}</span>{/if}
 				{#if c.might !== null}<span class="chip stat"><span class="k">Might</span>{c.might}</span>{/if}
 				{#if c.power !== null}<span class="chip stat"><span class="k">Power</span>{c.power}</span>{/if}
+				<!-- Signature-kaarten dragen een vaste bonus bovenop hun might. -->
+				{#if pres.mightBonus !== null}
+					<span class="chip stat"><span class="k">Might-bonus</span>+{pres.mightBonus}</span>
+				{/if}
 			</p>
 
 			{#if c.errataText}
@@ -139,6 +167,15 @@
 				<section id="tekst">
 					<h2>Kaarttekst</h2>
 					<p class="oracle"><RbText text={c.textPlain} /></p>
+				</section>
+			{/if}
+
+			<!-- Los "Effect"-blok dat Riot naast de kaarttekst meelevert
+			     (gear/attachments) — officiële tekst, dus met icoon-tokens. -->
+			{#if pres.effectPlain}
+				<section id="effect">
+					<h2>Effect</h2>
+					<p class="oracle"><RbText text={pres.effectPlain} /></p>
 				</section>
 			{/if}
 
@@ -388,7 +425,12 @@
 	@media (max-width: 640px) { .detail { grid-template-columns: 1fr; } }
 	/* Domein-getint: 3px domein-rand boven de kaartafbeelding, zelfde taal als
 	   de tegels in de kaartbrowser. */
-	.art { width: 100%; border-radius: var(--radius-lg); border: 1px solid var(--border); border-top: 3px solid var(--card-dom); }
+	.art {
+		width: 100%; border-radius: var(--radius-lg); border: 1px solid var(--border);
+		border-top: 3px solid var(--card-dom); display: block;
+	}
+	.art-col { margin: 0; }
+	.credit { color: var(--muted); font-size: 0.78rem; margin: 6px 0 0; }
 	h1 { margin: 0 0 4px; }
 	h2 { font-size: 1rem; color: var(--accent); margin: 18px 0 6px; }
 	.meta { color: var(--muted); }
@@ -425,6 +467,8 @@
 	.status.legal { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
 	.status.upcoming { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
 	.status.announced { color: var(--muted); }
+	/* Riots eigen "New"-markering uit de gallery (#270). */
+	.status.new { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
 	.oracle.errata { border-color: var(--accent); }
 	.oracle.printed { opacity: 0.6; }
 	.versions { display: flex; gap: 10px; flex-wrap: wrap; }

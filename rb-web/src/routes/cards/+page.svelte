@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { navigating } from '$app/state';
 	import RbText from '$lib/RbText.svelte';
+	import { cardAlt, cardAspect, cardTint, isNewCard } from '$lib/cardImage';
 	import { domainColorVar } from '$lib/changeCard';
 	import { useShell } from '$lib/shell.svelte';
 
@@ -144,10 +145,16 @@
 			{#each data.results as c (c.riftboundId)}
 				<a class="card" href="/cards/{c.riftboundId}" style="--card-dom: {domainColorVar(c.domains[0])}">
 					{#if c.imageUrl}
-						<img src={c.imageUrl} alt={c.name} loading="lazy" />
+						<img
+							src={c.imageUrl}
+							alt={cardAlt(c)}
+							loading="lazy"
+							style="aspect-ratio: {cardAspect(c)}; background-color: {cardTint(c)}"
+						/>
 					{/if}
 					<div class="body">
 						<strong>{c.name}</strong>
+						{#if isNewCard(c)}<span class="new">Nieuw</span>{/if}
 						{#if c.variants}<span class="variants">+{c.variants} versies</span>{/if}
 						{#if c.legality === 'upcoming'}<span class="soon">Nog niet legaal</span>{/if}
 						<p class="meta">
@@ -198,6 +205,10 @@
 	.grid {
 		display: grid; gap: 14px;
 		grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+		/* Elke tegel zo hoog als hij zelf is (#269): kaarten met een liggende
+		   afbeelding zijn korter dan staande, en uitrekken zou daar een groot
+		   leeg vlak onder zetten. */
+		align-items: start;
 	}
 	.card {
 		background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
@@ -206,12 +217,25 @@
 		border-top: 3px solid var(--card-dom);
 	}
 	.card:hover { border-color: var(--border-strong); }
-	.card img { width: 100%; aspect-ratio: 744 / 1039; object-fit: cover; }
+	/* Verhouding per kaart uit de bron (#269): battlefields zijn liggend en
+	   werden met één vaste 744/1039 + cover bijgesneden. De waarde hier is
+	   alleen de terugval; contain zorgt dat er niets meer wegvalt. */
+	.card img {
+		width: 100%;
+		aspect-ratio: 744 / 1039;
+		object-fit: contain;
+	}
 	.card .body { padding: 10px 12px; }
 	.text { font-size: 0.85rem; color: var(--muted); }
 	.variants {
 		display: inline-block; margin-left: 6px; font-size: 0.7rem; color: var(--muted);
 		border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px;
+	}
+	/* Riots eigen "New"-markering op de kaart (#270). */
+	.new {
+		display: inline-block; margin-left: 6px; font-size: 0.7rem;
+		background: var(--ok-soft); color: var(--ok);
+		border: 1px solid var(--ok); border-radius: 999px; padding: 1px 7px;
 	}
 	.soon {
 		display: inline-block; margin-left: 6px; font-size: 0.7rem;

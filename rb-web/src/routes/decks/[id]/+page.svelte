@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { domainColorVar } from '$lib/changeCard';
+	import { cardAlt, cardAspect, cardTint } from '$lib/cardImage';
 	import { DECK_VIEW_KEY, parseDeckView, sectionTotal, type DeckView } from '$lib/deckView';
 	import type { DeckCardRow } from './+page.server';
 
@@ -127,13 +128,21 @@
 					<div class="tiles">
 						{#each section.cards as card (card.cardCode)}
 							{#if card.canonicalRiftboundId}
-								<a class="tile" href="/cards/{card.canonicalRiftboundId}">
+								<a
+									class="tile"
+									href="/cards/{card.canonicalRiftboundId}"
+									style="aspect-ratio: {cardAspect(card)}; background-color: {cardTint(card)}"
+								>
 									{@render tileFace(card)}
 								</a>
 							{:else}
 								<!-- Onbekend is data, geen fout: geen link, wel de kaartcode zodat
 								     de gebruiker ziet wát er ontbreekt. -->
-								<div class="tile unknown" title="Niet gekoppeld aan onze kaartendatabank">
+								<div
+									class="tile unknown"
+									title="Niet gekoppeld aan onze kaartendatabank"
+									style="aspect-ratio: {cardAspect(card)}"
+								>
 									{@render tileFace(card)}
 								</div>
 							{/if}
@@ -162,7 +171,7 @@
      tekstplaatshouder in dezelfde kaartverhouding — nooit een gat in het grid. -->
 {#snippet tileFace(card: DeckCardRow)}
 	{#if card.imageUrl}
-		<img src={card.imageUrl} alt={card.cardName ?? card.cardCode} loading="lazy" />
+		<img src={card.imageUrl} alt={cardAlt(card, card.cardName ?? card.cardCode)} loading="lazy" />
 	{:else}
 		<span class="face-fallback">
 			<span class="fb-name">{card.cardName ?? card.cardCode}</span>
@@ -321,6 +330,10 @@
 		overflow: hidden;
 		border: 1px solid var(--border);
 		background: var(--surface-deep);
+		/* Verhouding en laadkleur komen per kaart uit de bron (#269/#270):
+		   battlefields zijn liggend en werden met één vaste 744/1039
+		   bijgesneden. De vaste waarde hier is alleen de terugval voor de
+		   tegel zonder inline style. */
 		aspect-ratio: 744 / 1039;
 		text-decoration: none;
 		color: inherit;
@@ -332,7 +345,9 @@
 		display: block;
 		width: 100%;
 		height: 100%;
-		object-fit: cover;
+		/* contain, niet cover: de tegel heeft nu de verhouding van de kaart
+		   zelf, dus er valt niets meer bij te snijden (#269). */
+		object-fit: contain;
 	}
 	.tile.unknown {
 		border-style: dashed;
