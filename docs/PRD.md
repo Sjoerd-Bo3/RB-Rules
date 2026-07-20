@@ -1238,6 +1238,20 @@ de globale duur-vangrail).
   daadwerkelijk een AI-slot heeft (de wachtrij at tot een derde van het budget
   op sinds de mining parallel draait). *Na deploy: draai een mining-job en lees
   het run-detail — dáár staat nu welke knop verdraaid moet worden.*
+
+  **De vraag van de bezoeker staat niet meer in de containerlog** (#292). Twee
+  oudere logregels liepen volledig om de redactie-poort heen. De ene logde de
+  argumenten waarmee de agent het brein bevraagt — bij een zoekopdracht is dat
+  in de praktijk de **vraagtekst van de gebruiker**, en die belandde onbewerkt
+  in de containerlog, een kanaal dat veel losser wordt behandeld dan de
+  vraag-trace in het beheer (waar de vraag bewust wél staat, achter de
+  admin-poort). De andere logde een rauwe SDK-foutmelding, die een
+  auth-fragment kán dragen. Beide lopen nu door dezelfde poort als al het
+  andere; de brein-regel houdt alleen nog de **toolnaam en de omvang** van de
+  argumenten over, zodat een beheerder nog steeds ziet dát en hoe vaak de agent
+  het brein bevroeg — zonder één teken gebruikersinvoer. De volledige stappen
+  blijven ongewijzigd zichtbaar in de vraag-trace. Geen gedragswijziging voor
+  de bezoeker; wel minder dat er over hem wordt vastgelegd.
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
   er ook als signaalregel op (#171, `SourceDossierCompleteness`), met
@@ -1540,6 +1554,12 @@ openstaande PR.
   blijft staan voor de volgende run, en het gebruik is begrensd
   (`EMBED_BATCH_SIZE`/`EMBED_BATCH_CHARS`) in plaats van het plafond verhoogd —
   daar is op de 8 GB-VM na #279 geen ruimte meer voor.
+- **#292** Twee logregels in rb-ai omzeilden de redactie-poort — *in-flight*,
+  zie §4.5. De agentic tool-log schreef de vraagtekst van de bezoeker naar de
+  containerlog en het warmpool-faalpad een rauwe SDK-fout. Beide lopen nu door
+  dezelfde poort; de brein-regel houdt alleen toolnaam + argument-omvang over.
+  Geen regressie van #281/#285, maar #285 nodigt beheerders uit die log te
+  gaan lezen.
 - **#254** Feature-vlaggen beheerbaar in de beheerpagina i.p.v. de VM-`.env` —
   *in-flight*, zie §4.5. Een `setting`-tabel met lezen-op-gebruiksmoment: de
   `/ask`-retrieval-vlag en de nachtrun-noodrem + het venster zijn vanuit beheer

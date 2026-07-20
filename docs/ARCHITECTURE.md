@@ -1083,15 +1083,21 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   van #281. Levert het redenen-vocabulaire (`AiFailureReason`), de twee
   vertalers (`describeThrown` voor een geworpen fout, `resultFailure` voor het
   SDK-resultaatbericht), de `RetryTracker` op `api_retry`-berichten, de
-  `StderrTail` van het subprocess, en `logCall` — één JSON-regel per
-  LLM-aanroep (`{"evt":"ai_call","endpoint":…,"ms":…,"status":…,"outcome":…,
-  "reason":…,"detail":…}`), greppelbaar met
-  `docker logs rb-v2-ai | grep ai_call`. `redactSecrets`/`safeDetail` zijn de
-  verplichte poort: env-waarden met TOKEN/KEY/SECRET in de naam, `sk-ant-…`,
-  `Bearer …` en lange ondoorzichtige runs gaan eruit vóór er iets naar buiten
-  gaat (werkafspraak 7, met een test die vastlegt dat het token nooit in een
-  logregel belandt). Prompt-inhoud wordt nooit gelogd — `detail` komt
-  uitsluitend uit foutmeldingen. Zie §6.6 voor waaróm dit bestand bestaat.
+  `StderrTail` van het subprocess, en `logEvent` — **de enige stdout-schrijver
+  van de hele sidecar** (#292). Elke waarde die geen getal of boolean is gaat
+  door `safeDetail`; `logCall` is zelf gewoon een aanroeper en levert de
+  bekende regel per LLM-aanroep (`{"evt":"ai_call","endpoint":…,"ms":…,
+  "status":…,"outcome":…,"reason":…,"detail":…}`), greppelbaar met
+  `docker logs rb-v2-ai | grep ai_call`. Daarnaast schrijven `brain_step`
+  (agentic tool-aanroep: toolnaam + argument-MAAT), `warmpool_fallback`,
+  `warmpool` en `startup` via dezelfde poort.
+  `redactSecrets`/`safeDetail` zijn verplicht: env-waarden met
+  TOKEN/KEY/SECRET in de naam, `sk-ant-…`, `Bearer …` en lange ondoorzichtige
+  runs gaan eruit vóór er iets naar buiten gaat (werkafspraak 7, met een test
+  die vastlegt dat het token nooit in een logregel belandt). Prompt-inhoud
+  wordt nooit gelogd — `detail` komt uitsluitend uit foutmeldingen. Een
+  structurele test bewaakt dat geen enkele andere module rechtstreeks naar
+  stdout/stderr schrijft. Zie §6.6 voor waaróm dit bestand bestaat.
 - `src/extract.ts` — PUUR (zonder Agent SDK, unit-getest): de
   vocabulaire→zod-schema-vertaling voor de brein-extractie (#226). Bouwt de
   enum-poorten voor `emit_interactions`/`emit_mechanic_predicates` uit het door
@@ -1886,9 +1892,35 @@ Voor SECRETS is de garantie hard. Voor PROMPT-INHOUD is ze zwakker en dat is
 bewust: `StderrTail` is een ongecontroleerd kanaal — wat het Claude-subprocess
 naar stderr schrijft belandt in `detail`, en draait de CLI ooit verbose, dan
 kan daar kaarttekst tussen zitten. Dat is publieke Riot-tekst, dus het residu
-is aanvaard in ruil voor de diagnostische waarde. Twee oudere `console.log`'s
-in `ai.ts` (de agentic tool-call-log en het warmpool-faalpad) omzeilen de poort
-volledig; die staan al op main en zijn los opgepakt in **#292**.
+is aanvaard in ruil voor de diagnostische waarde.
+
+**Eén poort, geen tweede pad (#292).** Twee oudere `console.log`'s in `ai.ts`
+liepen volledig om de poort heen: de agentic tool-call-log en het
+warmpool-faalpad. Ze waren geen regressie van #281, maar #285 nodigt beheerders
+expliciet uit om `docker logs rb-v2-ai` te lezen — dus wat daar staat, wordt
+vanaf nu ook echt gelezen. Sinds #292 schrijft alleen `failure.ts` naar stdout
+(`logEvent`), en de twee regels lopen daar doorheen.
+
+Bij de agentic-regel was doorsturen door de poort níét genoeg, en dat is de
+les van dit issue: **redactie is geen privacy**. De tool-argumenten zijn bij
+`semantic_search` in de praktijk de VRAAGTEKST van de gebruiker, en
+`safeDetail` haalt secrets weg — geen gebruikersinvoer. De containerlog krijgt
+daarom alleen nog de toolnaam (gesloten verzameling) en de argument-MAAT
+(`{"evt":"brain_step","tool":"semantic_search","bytes":…}`); de volledige stap
+gaat onveranderd naar de aanroeper en belandt in `AskTrace.BrainSteps`, achter
+de admin-poort — de plek waar de vraag bewust wél staat. Het warmpool-faalpad
+logde een rauwe `String(e)`; die gaat nu door `describeThrown` en levert
+meteen een classificatie op (`{"evt":"warmpool_fallback","stage":…,"reason":…}`).
+
+De bewaking is bewust tweeledig, omdat geen van beide helften alleen volstaat.
+Een **gedragstest** toetst de poort (redacteert `logEvent` élk veld, ook een
+object?) en de privacy-beslissing (staat er echt geen argument-inhoud in de
+`brain_step`-regel?). Een **structurele test** toetst het enige dat gedrag niet
+kan zien: het BESTAAN van een tweede stdout-pad — #292 ontstond immers niet
+doordat de poort verkeerd redacteerde, maar doordat er langs werd gelopen. Die
+test is expres geen vorm-check op template-interpolatie (die faalt op een
+refactor en mist een concatenatie of een `String(e)`), maar de simpele regel
+"alleen `failure.ts` schrijft".
 
 **rb-api-kant (mining-orkestratie).** Drie jobs in `JobCatalog`. De twee
 LLM-jobs staan bewust NIET in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk —
