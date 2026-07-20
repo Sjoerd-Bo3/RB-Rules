@@ -23,7 +23,7 @@ ook wanneer een agent zelf het brein doorloopt.
 | 1. Primer | 12 concept-docs, draft → approved, met embedding en §-refs | `knowledge_doc` (kind=primer) | `PrimerService`, `PrimerTopics` |
 | 2. Community-claims | Geparafraseerde beweringen met corroboratie, trust-score, officiële toets en bronnen+citaat | `claim`, `claim_source` | `ClaimMiningService`, `ClaimMiner`/`ClaimJudge`/`OfficialCheck` (Domain), `ClaimRetrieval` (Domain) |
 | Evolutie (#52) | Set-release-keten, groeiend keyword-vocabulaire, kennis-gaten-rapport | `mechanic_keyword`, run_log-grootboek | `SetReleaseService`, `MechanicVocabularyService`, `KnowledgeGapsService` |
-| 3. Meta & tactiek | Archetypes, staples | — | bestaat niet (wacht op #15 decks) |
+| 3. Meta & tactiek | Deck-gebruikssignaal (aandeel recente decks, gemiddeld aantal exemplaren, top-co-occurrence) als gelabeld laag-3-blok in /ask (#267); archetype-detectie blijft niet-doel | `deck`, `deck_card` | `DeckMetaRetrieval` (Domain, poort + blok), `DeckPopularityQuery`, deck-meta-kanaal in `AskService` |
 
 ### 1.2 Retrieval: /ask vandaag
 
@@ -36,7 +36,9 @@ ook wanneer een agent zelf het brein doorloopt.
 3. Kanalen: vector (pgvector, per query), full-text (Postgres FTS), RRF-fusie
    (`RrfFusion`, Domain), kaartcontext (naam/mechaniek/lexicaal/semantisch),
    banlijst, geverifieerde rulings, primer (top-3 approved), community-claims
-   (`ClaimRetrieval.TakeFor`-gewicht per vraagtype, afstands-plafond 0.55).
+   (`ClaimRetrieval.TakeFor`-gewicht per vraagtype, afstands-plafond 0.55),
+   deck-meta (laag 3, #267 — alléén bij kaart-/lijstvragen mét herkende
+   kaartnaam, `DeckMetaRetrieval.ShouldRetrieve`).
 4. Eén antwoord-call via `RbAiClient` → rb-ai (task cheap, of hard bij foto),
    met alle blokken gelabeld in piramide-volgorde.
 5. `AskTrace` (#40) legt per vraag vast welke lagen meededen;
@@ -91,7 +93,9 @@ bij uitval; de HttpClient-timeout staat op 6 minuten.
   `SetReleaseService.RunChainAsync` bevat hardcoded "claims-harvest:
   overgeslagen — claims-pipeline (#50) bestaat nog niet", terwijl #50
   inmiddels gebouwd is. Dit is een los eindje van de golf van vandaag.
-- Geen archetype-/meta-laag (bewust: wacht op #15).
+- Geen archetype-detectie; de meta-laag zelf (deck-gebruikssignaal als
+  laag-3-blok in /ask) bestaat sinds #267, maar kent geen graph-representatie
+  (`STAPLE_IN` blijft niet-doel, §3).
 - `AskTrace` kent de brein-dimensie nog niet (geen veld voor agentic
   stappen/tool-calls).
 
@@ -154,7 +158,8 @@ Scope-keuzes, bewust:
 - **`CITED_IN` (Card→Section) schuift door**: dat vergt een aparte
   mining-pass (kaartnamen in sectieteksten) zonder afnemer vandaag. YAGNI —
   het schema kan hem er later bij zonder iets te breken.
-- **`STAPLE_IN`/Archetype: niet-doel** (wacht op #15, zie §3).
+- **`STAPLE_IN`/Archetype: niet-doel** (zie §3; de prompt-kant van laag 3
+  bestaat sinds #267, een graph-representatie vergt archetype-detectie).
 - Aantallen zijn klein (duizenden secties, honderden claims/changes,
   tientallen bronnen/errata): de bestaande batched-UNWIND-aanpak en de
   8GB-VM (Neo4j-memory-caps uit #45) kunnen dit ruim aan.
@@ -279,7 +284,10 @@ ClaimScoring-schaal).
 
 ## 3. Niet-doelen
 
-- **Geen meta-laag/archetypes** (`STAPLE_IN`): expliciet ná #15 (decks).
+- **Geen archetypes** (`STAPLE_IN`): archetype-detectie is een
+  onderzoeksproject, geen feature (#267). De meta-laag als prompt-blok
+  (deck-gebruikssignaal, kennislaag 3) bestaat wél sinds #267 — zonder
+  graph-representatie.
 - **Geen publieke brein-API**: koppelvlakken zijn compose-intern; extern
   ontsluiten is een apart besluit (auth, quota — raakt #42).
 - **Geen agentic-default**: single-pass blijft de norm; agentic is een

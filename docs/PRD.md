@@ -644,6 +644,21 @@ de globale duur-vangrail).
   ingelogd; cross-device-sync via het account is bewust géén onderdeel
   hiervan. Zonder JavaScript blijft de gewone form action het antwoord
   server-side renderen.
+- **Deck-meta als kennislaag 3** (#267) — bij kaart- en lijst-/meta-vragen
+  waarin een kaartnaam herkend is, gaat het deck-gebruikssignaal van het
+  kaartdossier (aandeel van de recente Piltover Archive-decks, gemiddeld
+  aantal exemplaren, top-co-occurrence — dezelfde `DeckPopularityQuery` als
+  het "In decks"-blok) mee in de prompt als expliciet gelabeld
+  `DECK-META`-blok: kennislaag 3, de zwakste laag — community-metagegevens,
+  geen officiële regel. De omgangsregels in het blok dwingen af dat meta een
+  antwoord kleurt maar nooit een Oordeel draagt. Onder de decks-drempel
+  (dunne bank) staan er absolute aantallen in plaats van een
+  percentage-claim. **Hotpath bewaakt:** elke andere vraag — in het bijzonder
+  een regelvraag zonder kaarten — doet géén enkele deck-query
+  (`DeckMetaRetrieval.ShouldRetrieve`); vuurt het kanaal wel, dan draait het
+  concurrent onder de query-rewrite en kost het geen extra wandkloktijd. De
+  trace toont de meegegeven kaarten met een `deckmeta:`-prefix in het
+  kennislagen-veld.
 - **Query-rewrite** — een goedkope voor-call normaliseert de zoekzin (typo's,
   synoniemen, NL→EN speltermen) vóór retrieval (#66).
 - **Doorvragen met context** — follow-up-vragen behouden de volledige context
@@ -668,7 +683,7 @@ de globale duur-vangrail).
 - **Snellere retrieval** (#152) — de query-rewrite blokkeert de pipeline niet
   meer (draait parallel met de rewrite-onafhankelijke kanalen), de
   onafhankelijke retrieval-kanalen (vector, FTS, primer, rulings,
-  kaartcontext, banlijst, claims, misvattingen) draaien concurrent op een
+  kaartcontext, banlijst, claims, deck-meta, misvattingen) draaien concurrent op een
   eigen databasecontext per kanaal, en een kleine LRU-cache slaat de
   rewrite-call over bij een herhaalde/gelijksoortige vraag. Uitval van één
   kanaal blijft altijd gedegradeerd (leeg kanaal + trace-marker), nooit een
@@ -708,7 +723,9 @@ de globale duur-vangrail).
 ### 4.4 Kennisbank / het brein
 
 - **Kennispiramide** — officieel > geverifieerde rulings > primer > community >
-  meta, expliciet gelabeld in de prompt en het antwoordformat.
+  meta, expliciet gelabeld in de prompt en het antwoordformat. Sinds #267 is
+  ook laag 3 (meta) gevuld: het deck-gebruikssignaal gaat bij kaart-/
+  lijstvragen als gelabeld `DECK-META`-blok mee (zie §4.3).
 - **Temporele precedentie** (#168) — naast gezag (TrustTier) telt nu ook
   recency als tie-breaker: `Precedence.Compare` (pure Domain-functie) kiest
   bij gelijke tier de nieuwste datum, met een ontbrekende datum als oudste
@@ -1678,8 +1695,9 @@ openstaande PR.
   legaliteitscheck — *in-flight* (PR #181), zie §4.7, (B) "In decks"-
   dossierblok op de kaartpagina — gemerged (PR #182), (C) periodieke
   decks-verversing in de scheduler-tick — gemerged (PR #179). Golf 2 (ná
-  golf 1): (D) co-occurrence/archetype-signalen als kennispiramide-laag 3
-  in /ask.
+  golf 1): (D) co-occurrence/staple-signalen als kennispiramide-laag 3
+  in /ask — gedaan via #267 (archetype-detectie blijft expliciet buiten
+  scope).
   Onderzoek in `docs/ENGINE.md` §5.
 - **#265** Deckbrowser: filter op legaliteit + zoeken op deck-/legend-/
   championnaam — *in-flight*, zie §4.7. Afgesplitst van #15 na scoping: de
