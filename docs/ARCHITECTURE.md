@@ -1980,8 +1980,74 @@ kanaal), en `safeDetail` redacteert **vóór** het afkapt (andersom snijdt
 Voor SECRETS is de garantie hard. Voor PROMPT-INHOUD is ze zwakker en dat is
 bewust: `StderrTail` is een ongecontroleerd kanaal — wat het Claude-subprocess
 naar stderr schrijft belandt in `detail`, en draait de CLI ooit verbose, dan
-kan daar kaarttekst tussen zitten. Dat is publieke Riot-tekst, dus het residu
-is aanvaard in ruil voor de diagnostische waarde.
+kan daar kaarttekst tussen zitten. **Op de extractie-endpoints** is dat
+publieke Riot-tekst, dus het residu is daar aanvaard in ruil voor de
+diagnostische waarde. Op /ask ligt die afweging anders — zie #300 hieronder.
+
+**De stderr-staart bereikte /ask nooit (#300).** `extractWithTool` zette de
+`stderr`-optie, `buildQueryOptions` niet. Dat is geen vergeten doorgifte maar
+een weggegooide stroom: de SDK spawnt met
+`stdio:["pipe","pipe", (DEBUG_CLAUDE_AGENT_SDK || options.stderr) ? "pipe" : "ignore"]`,
+dus zonder de optie vangt niemand ooit iets op. Heel /ask — inclusief agentic —
+miste daardoor precies het spoor dat een omgevallen subprocess achterlaat: het
+stilste faalpad dat er is op de krappe VM (de kernel killt het kind, de
+container blijft draaien, `OOMKilled=false`, `restarts=0`), waar `reason: spawn`
+overbleef zonder de tekst eronder. De optie is nu een **verplichte** parameter
+van `buildQueryOptions`: geen enkel pad kan nog een sessie spawnen zonder
+opvang, en het is de typechecker die dat afdwingt in plaats van een bron-grep
+(#295-review: een grep op de aanroepvorm heeft altijd omzeilingen).
+
+*Het warm/koud-contract blijft heel.* #154 eist byte-gelijke sessie-opties voor
+de warme pool en het koude pad. Een stderr-callback is per sessie uniek en valt
+daarmee in dezelfde categorie als `abortController`: het contract gaat over
+waarmee het subprocess gespawnd wordt en welke API-call eruit volgt, niet over
+de identiteit van twee callbacks. De contract-test toetst nu expliciet drie
+dingen — dezelfde VELDEN, dezelfde WAARDEN op die twee na, en dat warm en koud
+**niet** dezelfde sink delen. Dat laatste is geen detail: één gedeelde buffer
+zou de uitvoer van gelijktijdige calls door elkaar husselen.
+
+*Welke staart bij welke vraag hoort.* De pool boot zijn sessie vóórdat er een
+aanroep is, dus de vraag "van wie is deze stderr" is echt. Het antwoord volgt
+uit de ontwerpgrens van de pool (één sessie = één call): elke boot legt zijn
+eigen `StderrTail` aan, die met de `WarmBootHandle` meereist naar de claimende
+aanroep — inclusief wat er tijdens de boot binnenkwam, want juist dát verklaart
+waarom een claim dood blijkt. Een sessie die nooit geclaimd wordt, sterft met
+haar staart. Valt een claim dood terug op koud, dan wordt de warme staart op
+het `warmpool_fallback`-moment gemeld (het enige moment waarop ze nog aan de
+juiste sessie hangt) en daarna expliciet losgelaten: de koude herstart is een
+ándere sessie en wordt alleen met haar eigen uitvoer verklaard. Fout toewijzen
+is hier erger dan geen staart — dan diagnosticeert de beheerder met stelligheid
+de verkeerde vraag.
+
+*Wat er van die staart naar buiten gaat, verschilt per endpoint — en dat is de
+kern.* Dezelfde ringbuffer, dezelfde redactie, een andere uitkomst, omdat de
+motivering om het prompt-residu te aanvaarden nooit "stderr is ongevaarlijk"
+was maar "op dit endpoint is de invoer publieke Riot-tekst". Op /ask is de
+invoer de vraag van een bezoeker, dus dezelfde afweging valt andersom uit: die
+vraag hoort in `ask_trace` achter de admin-poort, niet in `docker logs
+rb-v2-ai`. `StderrTail` heeft daarom twee leesvormen — `tail()` geeft alles
+(extract), `digest()` alleen de regels uit een **gesloten machine-vocabulaire**
+(spawn/OOM/auth/node-crash) plus maten: het aantal bytes dat het subprocess
+schreef en het aantal regels dat níét gemeld wordt. Dat is dezelfde zet als bij
+de brein-stappen in #292 — niet "beter redacteren" (`safeDetail` haalt secrets
+weg, geen gebruikersinvoer) maar de inhoud niet meegeven — en het dekt precies
+het scenario waarvoor #300 bestaat, want een omgevallen subprocess laat juist
+die regels achter. Het blijft een **bound, geen belofte**: een echode regel die
+toevallig op een machine-patroon matcht komt er nog steeds door. Het
+lekoppervlak gaat van "de hele staart" naar "regels uit een gesloten lijst".
+
+*Bijvangst: een tweede pad dat de faal-poort oversloeg.* Het koude pad gooide
+al een `AiRunError` bij een mislukte run zonder antwoord; de warme claim deed
+`if (progress.sawOutput) return res` en gaf diezelfde run terug als een 200 met
+een leeg antwoord. Voor de aanroeper maakte dat niets uit (`RbAiClient`
+degradeert een lege `answer` én een 5xx allebei naar `null`), maar de REDEN was
+langs het warme pad onzichtbaar — dezelfde stilte als #281 zelf. Beide uitgangen
+lopen nu door één `finishAskRun`. Dat dit tot nu toe niemand opviel is het
+punt: het warme pad was zonder echt SDK-subprocess niet te bereiken, dus geen
+enkele test kwam er ooit. `askClaude` heeft daarom nu dezelfde soort naden als
+`extractWithTool` (`runQuery`, plus een injecteerbare `pool`) — een gedragstest
+kan per definitie niet zien dat er een tweede pad bestaat dat ze nooit aanroept
+(#292), en met de naad roept ze het wél aan.
 
 **Eén poort, geen tweede pad (#292).** Twee oudere `console.log`'s in `ai.ts`
 liepen volledig om de poort heen: de agentic tool-call-log en het

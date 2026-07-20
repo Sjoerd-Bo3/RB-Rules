@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { StderrTail } from "./failure.js";
 import {
   pushableInput,
   signatureKey,
@@ -26,6 +27,7 @@ function fakeBoot() {
     emit: (m: unknown) => void;
     end: () => void;
     fail: (e: unknown) => void;
+    stderr: StderrTail;
   }> = [];
   const boot = (sig: WarmSignature): WarmBootHandle => {
     const out = pushableInput<unknown>();
@@ -41,6 +43,10 @@ function fakeBoot() {
         failure = e;
         out.end();
       },
+      // Elke geboote sessie krijgt een EIGEN staart (#300), net als in
+      // bootWarmCheapSession — zo kan een test toetsen dat de pool ze niet
+      // door elkaar haalt.
+      stderr: new StderrTail(),
     };
     boots.push(record);
     async function* messages() {
@@ -49,6 +55,7 @@ function fakeBoot() {
     }
     return {
       messages: messages(),
+      stderr: record.stderr,
       push: (m) => record.pushed.push(m),
       endInput: () => {
         record.inputEnded = true;

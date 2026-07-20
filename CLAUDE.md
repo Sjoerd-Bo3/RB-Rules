@@ -252,6 +252,30 @@ met quota en rate-limiting.
   argument-MAAT; de volledige stap gaat naar `AskTrace.BrainSteps`, achter de
   admin-poort). Vraag bij elke nieuwe logregel dus twee dingen: kan hier een
   secret in, én kan hier iets van een gebruiker in.
+- **Een aanvaard residu is aanvaard om de INVOER, niet om het kanaal** (#300).
+  #281 liet de volledige stderr-staart in `detail` belanden met een eerlijke
+  motivering: stderr is ongecontroleerd, dus prompt-inhoud kan meeliften, maar
+  "dat is publieke Riot-kaarttekst, dus de schade is nihil". Die zin gaat over
+  het EXTRACT-endpoint. Toen dezelfde staart naar /ask moest — waar de invoer de
+  vraag van een bezoeker is — bleek de afweging andersom uit te vallen: zelfde
+  buffer, zelfde `safeDetail`, ander oordeel. Sleep een "bewust genomen residu"
+  dus nooit mee naar een nieuw pad zonder de motivering opnieuw te lezen; ze
+  hangt bijna altijd aan wát erin zit, niet aan wáár het doorheen loopt. De fix
+  is dezelfde als bij de brein-stappen (#292): niet beter redacteren maar de
+  inhoud niet meegeven — hier een **gesloten machine-vocabulaire** (alleen
+  spawn-/OOM-/auth-regels) plus maten (bytes, aantal niet-gemelde regels), zodat
+  je nog steeds ziet dát het subprocess iets riep. Blijft een bound, geen
+  belofte: een echode regel die toevallig matcht komt er nog door.
+- **Een optie kan een SCHAKELAAR zijn in plaats van een afnemer** (#300). De
+  `stderr`-callback van de Agent SDK leek een doorgeefluik dat je kon vergeten;
+  in werkelijkheid spawnt de SDK met `stdio:[…,…, options.stderr ? "pipe" :
+  "ignore"]`, dus zonder de optie wordt de stroom niet genegeerd maar
+  WEGGEGOOID. "We lezen 'm nu even niet uit" was dus "er valt niets uit te
+  lezen". Lees bij een SDK-optie die je overslaat na wat ze in de spawn/config
+  doet. En als zo'n optie op élk pad hoort te staan: maak haar een VERPLICHTE
+  parameter, dan dwingt de typechecker het af — dat is de enige vorm van "poort
+  die je niet kunt omzeilen" die een refactor overleeft (vgl. #295-review, waar
+  elke grep op de aanroepvorm omzeilingen bleek te hebben).
 - **Structurele en gedragstests dekken verschillende gaten — kies bewust welk**
   (#292). Een grep-test op de broncode faalt op een pure refactor en ziet echte
   bugs niet; #281 leerde dat al duur. Maar gedragstests kunnen per definitie
