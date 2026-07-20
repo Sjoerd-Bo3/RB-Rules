@@ -253,7 +253,9 @@ public static class JobCatalog
     private static async Task<JobOutcome> RunNightlyAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
-        var settings = sp.GetRequiredService<NightlyRunSettings>();
+        // Op het gebruiksmoment gelezen (#254): een venster dat in beheer is bijgesteld
+        // geldt meteen voor de eerstvolgende run, ook zonder herstart.
+        var settings = await sp.GetRequiredService<ManagedSettingsService>().NightlyAsync(ct);
         var tz = Domain.NightlyWindow.ResolveTimeZone(settings.TimeZoneId);
         var now = DateTimeOffset.UtcNow;
         DateTimeOffset? deadline =

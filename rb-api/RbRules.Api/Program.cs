@@ -77,15 +77,23 @@ builder.Services.AddScoped<BreinInteractionMiningService>();
 builder.Services.AddScoped<BreinPredicateMiningService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
-// Brein-GraphRAG-retrieval in /ask (#228, §4) ACHTER de default-uit feature-flag
-// (BREIN_RETRIEVAL_ENABLED). De settings zijn singleton (uit env, één keer gelezen);
+// Beheerde instellingen (#254): de feature-vlaggen die vroeger alleen via de
+// VM-.env te zetten waren (brein-retrieval, nachtrun-noodrem + venster) staan nu in
+// de setting-tabel en worden op het GEBRUIKSMOMENT gelezen — een toggle in beheer
+// werkt dus zonder SSH of herstart. De omgeving blijft de bootstrap-default: zonder
+// DB-rij geldt exact de bestaande env-/codewaarde. Singleton met een korte
+// in-memory cache (zie ManagedSettingsService), dus het hete /ask-pad betaalt geen
+// query per vraag. Vervangt de vroegere BreinRetrievalSettings-/NightlyRunSettings-
+// singletons: die lazen één keer bij startup en zijn bewust NIET meer injecteerbaar,
+// zodat niemand per ongeluk een bevroren snapshot gebruikt.
+builder.Services.AddSingleton(sp => new ManagedSettingsService(
+    sp.GetRequiredService<IDbContextFactory<RbRulesDbContext>>(),
+    sp.GetRequiredService<ILogger<ManagedSettingsService>>()));
+// Brein-GraphRAG-retrieval in /ask (#228, §4) ACHTER de default-uit feature-flag:
 // staat de flag uit, dan raakt AskService deze laag nooit aan. De vier fase-4-poorten
 // draaien tegen de live Neo4j + pgvector (INTEGRATIE-FOLLOW-UP: niet in CI — de
 // adapters degraderen bij uitval naar leeg, zodat /ask nooit een 500 krijgt). De
 // orchestrator + service zijn scoped (per request), net als AskService zelf.
-builder.Services.AddSingleton(_ => BreinRetrievalSettings.FromEnvironment());
-// Nachtrun-venster (#245): singleton uit env (default 00:00–11:00 Europe/Amsterdam).
-builder.Services.AddSingleton(_ => NightlyRunSettings.FromEnvironment());
 builder.Services.AddScoped<IGazetteerSource, PostgresGazetteerSource>();
 builder.Services.AddScoped<INodeContextSimilarity, PgVectorNodeSimilarity>();
 builder.Services.AddScoped<INodeAdjacency, Neo4jNodeAdjacency>();
@@ -329,6 +337,7 @@ app.MapFeedEndpoints();
 app.MapPushEndpoints();
 app.MapAdminEndpoints();
 app.MapBrainAdminEndpoints();
+app.MapSettingsAdminEndpoints();
 
 app.Run();
 

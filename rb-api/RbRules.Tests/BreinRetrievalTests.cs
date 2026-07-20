@@ -103,7 +103,7 @@ public class BreinRetrievalTests
 
     private static BreinRetrievalService Service(
         IGraphRetriever retriever, BreinRetrievalSettings settings, IGazetteerSource? gaz = null) =>
-        new(Orch(retriever, gaz), settings, NullLogger<BreinRetrievalService>.Instance);
+        new(Orch(retriever, gaz), TestSettings.Fixed(settings), NullLogger<BreinRetrievalService>.Instance);
 
     // ── 1) Flag-parsing: default UIT, alleen expliciet aan-woord telt ──
 
@@ -138,13 +138,12 @@ public class BreinRetrievalTests
         var retriever = new FakeRetriever(drift: OfficialChunk(BrainRef.Section("core", "7.3"), "regel"));
         var svc = new BreinRetrievalService(
             new RetrievalOrchestrator(gaz, new FakeSimilarity(), new FakeAdjacency(), retriever),
-            BreinRetrievalSettings.Disabled, NullLogger<BreinRetrievalService>.Instance);
+            TestSettings.Fixed(BreinRetrievalSettings.Disabled), NullLogger<BreinRetrievalService>.Instance);
 
         var result = await svc.EnrichAsync(
             "Werkt Empowered samen met Might in een showdown?", QuestionType.Ruling);
 
         Assert.Null(result);
-        Assert.False(svc.Enabled);
         // De flag-uit-poort mag geen enkele poort raken (geen extra latency/IO).
         Assert.False(gaz.Called);
         Assert.False(retriever.AnyCalled);
@@ -209,7 +208,7 @@ public class BreinRetrievalTests
             new RetrievalOrchestrator(
                 new CancelAwareGazetteer(Gaz()), new FakeSimilarity(), new FakeAdjacency(),
                 new FakeRetriever()),
-            new BreinRetrievalSettings(Enabled: true), NullLogger<BreinRetrievalService>.Instance);
+            TestSettings.Fixed(new BreinRetrievalSettings(Enabled: true)), NullLogger<BreinRetrievalService>.Instance);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 

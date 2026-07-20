@@ -119,6 +119,62 @@
 	const projectionPill = $derived(stepPill(cockpit?.projectionRun, 'geprojecteerd'));
 	const reasonPill = $derived(stepPill(cockpit?.reasonRun, 'gedraaid'));
 
+	// ── Beheerde instellingen (#254) ────────────────────────────────────────
+	// De feature-vlaggen die vroeger alleen via de VM-.env + een herstart te
+	// zetten waren. rb-api leest ze op het gebruiksmoment, dus een toggle hier
+	// werkt meteen. "default" is de env-/codewaarde die geldt zonder override —
+	// die tonen we erbij zodat zichtbaar blijft waar je vandaan komt.
+	interface ManagedSetting {
+		key: string;
+		kind: string;
+		group: string;
+		label: string;
+		description: string;
+		effective: string;
+		default: string;
+		overridden: boolean;
+		updatedAt: string | null;
+		updatedBy: string | null;
+	}
+	const settings = $derived((data.settings ?? []) as ManagedSetting[]);
+	const settingOf = (key: string) => settings.find((s) => s.key === key) ?? null;
+
+	const retrievalSetting = $derived(settingOf('brein.retrieval.enabled'));
+	const nightlySetting = $derived(settingOf('nightly.enabled'));
+	// Het venster in het formulier: uit de effectieve waarden, met een terugval op
+	// de bestaande defaults zolang de instellingen-lijst er nog niet is.
+	const nightlyStart = $derived(settingOf('nightly.start_hour')?.effective ?? '0');
+	const nightlyEnd = $derived(settingOf('nightly.end_hour')?.effective ?? '11');
+	const nightlyTz = $derived(settingOf('nightly.timezone')?.effective ?? 'Europe/Amsterdam');
+	const HOURS = Array.from({ length: 24 }, (_, i) => String(i));
+
+	// "gewijzigd 3u geleden door beheer" — herkomst van een schakelaar hoort
+	// zichtbaar te zijn (rode draad #236); het volledige spoor staat in run_log.
+	function settingMeta(s: ManagedSetting | null): string {
+		if (!s) return '';
+		if (!s.overridden) return `standaard (${s.default})`;
+		const who = s.updatedBy ? ` door ${s.updatedBy}` : '';
+		const when = s.updatedAt ? ` ${fmtAgo(s.updatedAt)} geleden` : '';
+		return `beheerd${when}${who} · standaard ${s.default}`;
+	}
+
+	// Het venster is één ding uit drie sleutels — één regel eronder in plaats van
+	// drie losse "standaard (0)"-fragmenten.
+	const windowMeta = $derived.by(() => {
+		const parts = ['nightly.start_hour', 'nightly.end_hour', 'nightly.timezone'].map(settingOf);
+		if (parts.some((p) => !p)) return '';
+		const [s, e, tz] = parts as ManagedSetting[];
+		const standaard = `standaard ${s.default}:00–${e.default}:00 ${tz.default}`;
+		const changed = parts
+			.filter((p) => p!.overridden && p!.updatedAt)
+			.sort((a, b) => (a!.updatedAt! < b!.updatedAt! ? 1 : -1))[0];
+		return changed
+			? `beheerd ${fmtAgo(changed.updatedAt)} geleden${
+					changed.updatedBy ? ` door ${changed.updatedBy}` : ''
+				} · ${standaard}`
+			: standaard;
+	});
+
 	const startedLabel: Record<string, string> = {
 		breinentiteiten: 'Canonieke entiteiten registreren',
 		'breinmine-interacties': 'Interacties minen',
@@ -242,6 +298,9 @@
 		{#if form?.started}
 			<p class="notice ok">Job &ldquo;{startedLabel[form.started] ?? form.started}&rdquo; gestart — de
 				voortgang staat in het beheer-overzicht.</p>
+		{:else if form?.settingSaved}
+			<p class="notice ok">Instelling opgeslagen — hij geldt meteen, zonder herstart. De
+				wijziging staat als auditregel in het run-grootboek.</p>
 		{:else if form?.error}
 			<p class="notice err">{form.error}</p>
 		{/if}
@@ -378,7 +437,7 @@
 				</div>
 			</div>
 
-			<!-- Consument — /ask-retrieval (env-flag, geen knop) -->
+			<!-- Consument — /ask-retrieval (beheerde vlag, #254: echte knop) -->
 			<div class="step consumer">
 				<div class="step-rail"><span class="step-n ask">ask</span></div>
 				<div class="step-body">
@@ -390,10 +449,35 @@
 					</div>
 					<p class="step-desc">Gebruikt de brein-graaf (GraphRAG) in /ask-antwoorden — de consument
 						van de pipeline hierboven.</p>
-					{#if !cockpit.retrievalEnabled}
-						<p class="flaghint">
-							uit — zet <code>BREIN_RETRIEVAL_ENABLED=true</code> op de VM om de retrieval aan te zetten.
-						</p>
+					{#if retrievalSetting}
+						<div class="jobrow">
+							<div class="jr-info">
+								<span class="jr-stat"
+									>Retrieval staat <strong>{cockpit.retrievalEnabled ? 'aan' : 'uit'}</strong> voor
+									alle /ask-vragen</span
+								>
+								<span class="run-meta">{settingMeta(retrievalSetting)}</span>
+							</div>
+							<form
+								method="POST"
+								action="?/setting"
+								use:enhance={() => async ({ update }) => {
+									await update();
+									await invalidateAll();
+								}}
+							>
+								<input type="hidden" name="key" value="brein.retrieval.enabled" />
+								<input
+									type="hidden"
+									name="value"
+									value={cockpit.retrievalEnabled ? 'false' : 'true'}
+								/>
+								<button class="cta">{cockpit.retrievalEnabled ? 'Uitzetten' : 'Aanzetten'}</button>
+							</form>
+						</div>
+					{:else}
+						<p class="flaghint">De instellingen zijn even niet op te halen — probeer te
+							herladen.</p>
 					{/if}
 				</div>
 			</div>
@@ -405,9 +489,9 @@
 				<h3>Volledige nachtrun</h3>
 				<p>
 					De hele keten <strong>ongecapt</strong> in één run: alles bijwerken &rarr; interacties
-					&rarr; predicaten &rarr; projectie &rarr; reason. Draait automatisch elke nacht
-					(00:00&ndash;11:00) tot het venster-einde en pakt de rest de volgende nacht op; overdag
-					blijven de losse jobs hierboven gecapt.
+					&rarr; predicaten &rarr; projectie &rarr; reason. Draait automatisch binnen het venster
+					hieronder tot het venster-einde en pakt de rest de volgende nacht op; overdag blijven
+					de losse jobs hierboven gecapt.
 				</p>
 				<span class="run-meta">{runMeta(cockpit.nightlyRun)}</span>
 			</div>
@@ -425,6 +509,89 @@
 				</button>
 			</form>
 		</div>
+
+		<!-- Nachtrun-instellingen (#254): noodrem + venster, zonder SSH of herstart -->
+		{#if nightlySetting}
+			<div class="nightly settings">
+				<div class="nightly-info">
+					<h3>
+						Automatische nachtrun
+						<span class="tier {nightlySetting.effective === 'true' ? 'ok' : 'warn'}"
+							>{nightlySetting.effective === 'true' ? 'AAN' : 'GEPAUZEERD'}</span
+						>
+					</h3>
+					<p>
+						De noodrem op de nachtelijke keten. Uit = de scheduler start de nachtrun niet;
+						handmatig starten met &ldquo;Nu draaien&rdquo; blijft altijd werken.
+					</p>
+					<span class="run-meta">{settingMeta(nightlySetting)}</span>
+				</div>
+				<form
+					method="POST"
+					action="?/setting"
+					use:enhance={() => async ({ update }) => {
+						await update();
+						await invalidateAll();
+					}}
+				>
+					<input type="hidden" name="key" value="nightly.enabled" />
+					<input
+						type="hidden"
+						name="value"
+						value={nightlySetting.effective === 'true' ? 'false' : 'true'}
+					/>
+					<button class="cta">
+						{nightlySetting.effective === 'true' ? 'Pauzeren' : 'Hervatten'}
+					</button>
+				</form>
+			</div>
+
+			<form
+				class="nightly window"
+				method="POST"
+				action="?/setting"
+				use:enhance={() => async ({ update }) => {
+					await update();
+					await invalidateAll();
+				}}
+			>
+				<div class="nightly-info">
+					<h3>Nachtvenster</h3>
+					<p>
+						Wanneer de nachtrun mag draaien (lokale klok, eind-uur telt niet mee en is ook de
+						deadline van de run). Het venster moet binnen één kalenderdag vallen &mdash;
+						start v&oacute;&oacute;r eind.
+					</p>
+					<span class="run-meta">{windowMeta}</span>
+				</div>
+				<div class="wfields">
+					<label>
+						<span>Start</span>
+						<input type="hidden" name="key" value="nightly.start_hour" />
+						<select name="value" value={nightlyStart}>
+							{#each HOURS as h (h)}
+								<option value={h}>{h}:00</option>
+							{/each}
+						</select>
+					</label>
+					<label>
+						<span>Eind</span>
+						<input type="hidden" name="key" value="nightly.end_hour" />
+						<select name="value" value={nightlyEnd}>
+							{#each HOURS as h (h)}
+								<option value={h}>{h}:00</option>
+							{/each}
+						</select>
+					</label>
+					<label class="tzfield">
+						<span>Tijdzone</span>
+						<input type="hidden" name="key" value="nightly.timezone" />
+						<input name="value" value={nightlyTz} spellcheck="false" autocapitalize="off" />
+					</label>
+					<button class="cta">Opslaan</button>
+				</div>
+			</form>
+		{/if}
 	</section>
 {/if}
 
@@ -782,6 +949,53 @@
 		margin: 0;
 		flex: none;
 	}
+	/* Beheerde instellingen (#254): zelfde blokvorm als de nachtrun-kaart, maar
+	   secundair — dit zijn schakelaars, geen acties. */
+	.nightly.settings,
+	.nightly.window {
+		margin-top: 10px;
+		border-color: var(--border);
+		background: var(--surface);
+	}
+	.nightly.window {
+		align-items: flex-end;
+	}
+	.nightly-info h3 .tier {
+		margin-left: 8px;
+		vertical-align: middle;
+	}
+	.wfields {
+		display: flex;
+		align-items: flex-end;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.wfields label {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		font-size: 0.72rem;
+		color: var(--muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		font-weight: 600;
+	}
+	.wfields select,
+	.wfields input {
+		font: inherit;
+		/* 16px: kleiner laat iOS op focus inzoomen (app.css-regel). */
+		font-size: 16px;
+		padding: 6px 9px;
+		border-radius: var(--radius-md, 8px);
+		border: 1px solid var(--border);
+		background: var(--surface-deep);
+		color: var(--text);
+		max-width: 100%;
+	}
+	.wfields .tzfield input {
+		/* Ruim genoeg voor "Europe/Amsterdam" zonder te klippen. */
+		width: 18ch;
+	}
 	.cta {
 		font: inherit;
 		font-size: 0.8rem;
@@ -806,15 +1020,6 @@
 		font-size: 0.8rem;
 		color: var(--muted);
 		line-height: 1.45;
-	}
-	.flaghint code {
-		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
-		font-size: 0.78rem;
-		padding: 1px 5px;
-		border-radius: 5px;
-		background: var(--surface-deep);
-		border: 1px solid var(--border);
-		color: var(--text);
 	}
 
 	.tiles {

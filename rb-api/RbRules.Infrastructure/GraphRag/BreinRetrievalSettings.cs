@@ -1,9 +1,13 @@
+using RbRules.Domain;
 using RbRules.Domain.GraphRag;
 
 namespace RbRules.Infrastructure.GraphRag;
 
-/// <summary>Omgevings-instellingen voor de brein-GraphRAG-retrieval in /ask (fase
-/// ask-retrieval, #228). Singleton in DI, uit env gelezen (<see cref="FromEnvironment"/>).
+/// <summary>Instellingen voor de brein-GraphRAG-retrieval in /ask (fase
+/// ask-retrieval, #228). De omgeving is sinds #254 de BOOTSTRAP-DEFAULT
+/// (<see cref="FromEnvironment"/>); beheer schrijft er via de <c>setting</c>-tabel
+/// overheen (<see cref="WithOverrides"/>). Niet als singleton injecteren: vraag hem
+/// op het gebruiksmoment op bij <see cref="ManagedSettingsService"/>.
 /// <see cref="Enabled"/> is de DEFAULT-UIT feature-flag (<see cref="BreinRetrievalGate"/>):
 /// staat hij uit, dan raakt /ask deze laag nooit aan.
 ///
@@ -40,6 +44,14 @@ public sealed record BreinRetrievalSettings(
             GdsWarm: BreinRetrievalGate.Parse(
                 Environment.GetEnvironmentVariable("BREIN_RETRIEVAL_GDS_WARM")));
     }
+
+    /// <summary>Leg de beheerde override (#254) over de env-basiswaarde heen. Alleen
+    /// de FLAG is beheerbaar — de budgetten blijven env/code, die horen niet in een
+    /// knop. Ontbrekende sleutel ⇒ ongewijzigd (lege <c>setting</c>-tabel = env-gedrag).</summary>
+    public BreinRetrievalSettings WithOverrides(IReadOnlyDictionary<string, string> overrides) =>
+        overrides.TryGetValue(SettingKeys.BreinRetrievalEnabled, out var raw)
+            ? this with { Enabled = BreinRetrievalGate.Parse(raw) }
+            : this;
 
     private static int ParseInt(string envVar, int fallback) =>
         int.TryParse(Environment.GetEnvironmentVariable(envVar), out var v) && v > 0 ? v : fallback;

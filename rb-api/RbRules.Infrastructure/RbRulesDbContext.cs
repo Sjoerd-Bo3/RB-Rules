@@ -19,6 +19,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<Card> Cards => Set<Card>();
     public DbSet<RuleChunk> RuleChunks => Set<RuleChunk>();
     public DbSet<RunLog> RunLogs => Set<RunLog>();
+    /// <summary>Beheerde instellingen (#254): overrides op de env-bootstrap-defaults.</summary>
+    public DbSet<Setting> Settings => Set<Setting>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<BanEntry> BanEntries => Set<BanEntry>();
     public DbSet<Erratum> Errata => Set<Erratum>();
@@ -170,6 +172,18 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.ToTable("run_log");
             e.Property(x => x.Ref).HasColumnName("ref");
             e.HasIndex(x => x.CreatedAt);
+        });
+
+        // Beheerde instellingen (#254): sleutel/waarde, sleutel is de PK. Klein en
+        // zelden gemuteerd — geen extra index nodig; de service leest de hele tabel
+        // in één keer in de cache.
+        b.Entity<Setting>(e =>
+        {
+            e.ToTable("setting");
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).HasColumnName("key").HasMaxLength(128);
+            e.Property(x => x.Value).HasMaxLength(256);
+            e.Property(x => x.UpdatedBy).HasMaxLength(128);
         });
 
         b.Entity<PushSubscription>(e =>

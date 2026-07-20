@@ -34,7 +34,7 @@ public class AskServiceBreinRetrievalTests
         var ai = CapturingAi("**Oordeel:** Ja. [1]");
         var spy = new SpyRetriever();
         var brein = new BreinRetrievalService(
-            Orchestrator(spy), BreinRetrievalSettings.Disabled,
+            Orchestrator(spy), TestSettings.Fixed(BreinRetrievalSettings.Disabled),
             NullLogger<BreinRetrievalService>.Instance);
         var svc = new TestableAskService(db, FailingEmbeddings(), ai, brein);
 
@@ -76,7 +76,7 @@ public class AskServiceBreinRetrievalTests
         var retriever = new AllModesRetriever(
             OfficialChunk(BrainRef.Section("core", "7.3"), "showdown timing regel uit het brein"));
         var brein = new BreinRetrievalService(
-            Orchestrator(retriever), new BreinRetrievalSettings(Enabled: true),
+            Orchestrator(retriever), TestSettings.Fixed(new BreinRetrievalSettings(Enabled: true)),
             NullLogger<BreinRetrievalService>.Instance);
         var svc = new TestableAskService(db, FailingEmbeddings(), ai, brein);
 
@@ -105,7 +105,8 @@ public class AskServiceBreinRetrievalTests
         await SeedRulesAsync(db);
         var ai = CapturingAi("**Oordeel:** Ja. [1]");
         var brein = new BreinRetrievalService(
-            Orchestrator(new ThrowingRetriever()), new BreinRetrievalSettings(Enabled: true),
+            Orchestrator(new ThrowingRetriever()),
+            TestSettings.Fixed(new BreinRetrievalSettings(Enabled: true)),
             NullLogger<BreinRetrievalService>.Instance);
         var svc = new TestableAskService(db, FailingEmbeddings(), ai, brein);
 
@@ -133,7 +134,7 @@ public class AskServiceBreinRetrievalTests
         var ai = CapturingAi("**Oordeel:** Geen bekende interactie. [1]");
         var spy = new SpyRetriever();
         var brein = new BreinRetrievalService(
-            Orchestrator(spy), new BreinRetrievalSettings(Enabled: true, GdsWarm: true),
+            Orchestrator(spy), TestSettings.Fixed(new BreinRetrievalSettings(Enabled: true, GdsWarm: true)),
             NullLogger<BreinRetrievalService>.Instance);
         var svc = new TestableAskService(db, FailingEmbeddings(), ai, brein);
 
@@ -167,7 +168,7 @@ public class AskServiceBreinRetrievalTests
         var ai = CapturingAi("**Oordeel:** Ja. [1]");
         var spy = new SpyRetriever();
         var brein = new BreinRetrievalService(
-            Orchestrator(spy), new BreinRetrievalSettings(Enabled: true, GdsWarm: false),
+            Orchestrator(spy), TestSettings.Fixed(new BreinRetrievalSettings(Enabled: true, GdsWarm: false)),
             NullLogger<BreinRetrievalService>.Instance);
         var svc = new TestableAskService(db, FailingEmbeddings(), ai, brein);
 

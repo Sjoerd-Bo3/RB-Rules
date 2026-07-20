@@ -18,18 +18,16 @@ public sealed record BreinEnrichment(string PromptBlock, GraphRagOutcome Outcome
 ///
 /// KRITIEK (rode draad #236 / werkafspraak): flag UIT ⇒ <see cref="EnrichAsync"/>
 /// doet niets en raakt de orchestrator (en dus Neo4j/pgvector) nóóit aan — geen
-/// extra latency, geen gedragswijziging. Flag AAN ⇒ verrijk, maar elke
+/// extra latency, geen gedragswijziging. Sinds #254 wordt de flag op het
+/// GEBRUIKSMOMENT gelezen (beheerde instelling, env als bootstrap-default), zodat de
+/// knop in beheer direct werkt; de lezing zelf is een cache-hit. Flag AAN ⇒ verrijk, maar elke
 /// retrieval-fout (Neo4j weg, pgvector weg, timeout) → null terug (AskService valt
 /// terug op de bestaande flow). Alleen een échte client-annulering bubbelt door.</summary>
 public sealed class BreinRetrievalService(
     RetrievalOrchestrator orchestrator,
-    BreinRetrievalSettings settings,
+    ManagedSettingsService managed,
     ILogger<BreinRetrievalService> logger)
 {
-    /// <summary>Staat de flag aan? AskService gebruikt dit als vóór-poort zodat er bij
-    /// een UIT-flag geen enkele brein-call gebeurt (geen extra latency).</summary>
-    public bool Enabled => settings.Enabled;
-
     /// <summary>Verrijk de context met de brein-subgraaf/paden/trust-gelabelde
     /// citaties. Returnt null als (a) de flag uit staat of (b) de retrieval faalt —
     /// in beide gevallen draait /ask ongewijzigd verder. Nooit een exception naar
@@ -37,6 +35,9 @@ public sealed class BreinRetrievalService(
     public async Task<BreinEnrichment?> EnrichAsync(
         string question, QuestionType type, CancellationToken ct = default)
     {
+        // De flag-poort staat vóór ELKE andere aanroep: uit ⇒ de orchestrator (en dus
+        // Neo4j/pgvector) wordt niet aangeraakt.
+        var settings = await managed.BreinRetrievalAsync(ct).ConfigureAwait(false);
         if (!settings.Enabled) return null;
 
         try

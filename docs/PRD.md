@@ -671,8 +671,10 @@ de globale duur-vangrail).
   trust-gelabeld `BREIN-CONTEXT`-blok (subgraaf-fragmenten, pad-onderbouwing als
   citaties, gating-beslissing) aan de prompt toe en legt een `AnswerTrace`
   vast (verantwoording per antwoord, zichtbaar in de Brein-verkenner). Zit
-  achter de feature-flag `BREIN_RETRIEVAL_ENABLED`: **default UIT ⇒ `/ask`
-  gedraagt zich exact zoals hierboven** (geen brein-call, geen extra latency).
+  achter een feature-flag: **default UIT ⇒ `/ask` gedraagt zich exact zoals
+  hierboven** (geen brein-call, geen extra latency). De vlag is sinds #254
+  bedienbaar in **beheer → Brein → /ask-retrieval** (env
+  `BREIN_RETRIEVAL_ENABLED` blijft de startwaarde) en werkt direct, zonder deploy.
   Staat de flag aan, dan is de verrijking best-effort met hard latency-budget en
   nette terugval op de bestaande retrieval bij elke fout — nooit een 500 voor de
   gebruiker.
@@ -1048,10 +1050,14 @@ de globale duur-vangrail).
   het watermark). Overdag blijven de losse jobs gecapt. Ook handmatig te
   starten in **beheer → Brein → "Volledige nachtrun"** (die knop toont ook de
   laatste nachtrun-afronding); handmatig buiten het venster draait zonder
-  deadline (volledige drain). **Noodrem** (#249): `NIGHTLY_ENABLED=false` zet
-  de automatische start uit zonder code-wijziging of deploy — handmatig
-  starten via de knop blijft werken. Default aan; alleen een expliciete
-  uit-waarde schakelt uit, zodat een typfout de keten niet stil stillegt.
+  deadline (volledige drain). **Noodrem + venster** (#249/#254): "Automatische
+  nachtrun" (Pauzeren/Hervatten) en het venster (start-uur, eind-uur, tijdzone)
+  staan als schakelaars in **beheer → Brein**, direct werkend zonder SSH of
+  deploy — handmatig starten via de knop blijft altijd werken. De env-waarden
+  (`NIGHTLY_ENABLED` e.d.) blijven de startwaarden. Default aan; alleen een
+  expliciete uit-waarde schakelt uit, zodat een typfout de keten niet stil
+  stillegt. Een venster dat niet binnen één kalenderdag valt (start ≥ eind) wordt
+  geweigerd met uitleg in plaats van stil genegeerd.
 - **Brein-extractie herijkt** (#249/#250/#251) — een meting op 383 live
   interacties liet zien dat 69% kaart↔**eigen** keyword was: kennis die al
   gratis en deterministisch bestaat (de graph projecteert `Card.Mechanics[]`
@@ -1166,14 +1172,29 @@ de globale duur-vangrail).
   / Y mechanic-predicaten gemined, per job een trigger-knop), **stap 2 —
   Projectie** (`breinprojectie` → Neo4j: canonieke-entiteiten-teller + status,
   trigger-knop), **stap 3 — Reasoner** (`reason` → afgeleide edges + conflicts: X
-  conflicts / Y open, trigger-knop), en de **/ask-retrieval**-flag (AAN/UIT — bij
-  UIT de hint `BREIN_RETRIEVAL_ENABLED=true` op de VM; env-schakelaar, geen knop).
+  conflicts / Y open, trigger-knop), en de **/ask-retrieval**-flag (AAN/UIT, met
+  sinds #254 een échte aan/uit-knop in plaats van de oude hint "zet
+  `BREIN_RETRIEVAL_ENABLED=true` op de VM").
   Elke stap heeft een één-regel-uitleg en de volgorde-hint 1→2→3; status = kleur
   + tekst (geen emoji), met per stap de laatste-run (uit het run_log-grootboek,
   overleeft herstart). De knoppen respecteren de JobRunner-serialisatie (één job
-  tegelijk; 409 → nette melding). Read-only endpoint, additief. *Endpoint*
+  tegelijk; 409 → nette melding). *Endpoint*
   `GET /api/admin/brein/cockpit` (per-stap-tellingen + laatste-run per job +
   flag-status) · *actie* `POST ?/job` (start via `POST /api/admin/jobs/{name}`).
+- **Beheerde feature-vlaggen** (#254) — de vlaggen die alleen via de VM-`.env` +
+  een herstart te zetten waren, staan nu als schakelaars in **beheer → Brein**:
+  `/ask`-retrieval aan/uit, en onder de nachtrun-kaart de noodrem
+  (Pauzeren/Hervatten) plus het nachtvenster (start-uur, eind-uur, tijdzone).
+  Een wijziging werkt **direct** — rb-api leest de waarde op het gebruiksmoment,
+  dus geen SSH, geen redeploy, geen herstart. De omgeving blijft de startwaarde:
+  zolang je niets omzet verandert er niets aan het bestaande gedrag. Bij elke
+  schakelaar staat de herkomst ("beheerd 3u geleden door beheer · standaard …"),
+  en elke wijziging landt als auditregel in het run-grootboek — geen onzichtbare
+  state. Onmogelijke waarden (een venster dat niet binnen één kalenderdag valt,
+  een onbekende tijdzone) worden geweigerd met uitleg. *Endpoints*
+  `GET /api/admin/settings` (effectieve waarde + standaard + wanneer/door wie) ·
+  `POST /api/admin/settings` (één of meer sleutels tegelijk, alles-of-niets) ·
+  *actie* `POST ?/setting`.
 
 ### 4.6 Platform, accounts & PWA
 
@@ -1353,6 +1374,10 @@ openstaande PR.
 - **#45** Ops-hardening voor de 8GB-VM: memory-limits, healthchecks +
   deploy-verificatie, één updatemechanisme (Watchtower vs push-to-deploy),
   log-rotatie, migratie-retry bij opstart, secrets-hygiëne, CSP/security-headers.
+- **#254** Feature-vlaggen beheerbaar in de beheerpagina i.p.v. de VM-`.env` —
+  *in-flight*, zie §4.5. Een `setting`-tabel met lezen-op-gebruiksmoment: de
+  `/ask`-retrieval-vlag en de nachtrun-noodrem + het venster zijn vanuit beheer
+  te schakelen, met de omgeving als startwaarde en een auditregel per wijziging.
 
 **Documentatie & proces**
 - **#134** Levende documentatie: arc42-architectuurdocument + dit PRD, verankerd
