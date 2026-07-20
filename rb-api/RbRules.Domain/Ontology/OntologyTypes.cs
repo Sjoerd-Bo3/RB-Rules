@@ -86,8 +86,8 @@ public enum RelationTraits
 public enum RelationType
 {
     SubclassOf,
-    InDomain,
-    HasKeyword,
+    HasDomain,
+    HasMechanic,
     Invokes,
     HasStatus,
     GovernedBy,

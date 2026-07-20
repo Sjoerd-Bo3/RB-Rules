@@ -150,12 +150,21 @@ public static class OntologySnapshot
 /// de discipline die de poort afdwingt).</summary>
 public static class OntologyBaseline
 {
-    /// <summary>De laatst vastgelegde ontologie-versie.</summary>
-    public static readonly SemVer Version = new(1, 0, 0);
+    /// <summary>De laatst vastgelegde ontologie-versie.
+    ///
+    /// 2.0.0 (#274) — MAJOR, want structuurbrekend: de kaart→mechaniek-relatie is
+    /// hernoemd van HAS_KEYWORD naar HAS_MECHANIC (met range Keyword → Mechanic) en
+    /// de kaart→domein-relatie van IN_DOMAIN naar HAS_DOMAIN, zodat het schema de
+    /// relaties beschrijft die <c>GraphSyncService</c> écht projecteert. Een
+    /// hernoemde/versmalde relatie classificeert <see cref="OntologyBumpClassifier"/>
+    /// als Major (de oude structuur-regel is geen deelverzameling meer). Geen
+    /// data-migratie nodig: de graaf droeg deze namen al, en afgeleide edges zijn
+    /// per definitie herbouwbaar (job <c>graph</c> → <c>reason</c>).</summary>
+    public static readonly SemVer Version = new(2, 0, 0);
 
     /// <summary>SHA-256-vingerafdruk van de structuur bij <see cref="Version"/>.
     /// Bijwerken is een BEWUSTE handeling samen met een versie-bump.</summary>
-    public const string Fingerprint = "e1ab8d63a20136483224354de904c5739a79c3f623a95366837b48626d5397c7";
+    public const string Fingerprint = "49a5fe3c0c4e91e9052c780a4c069f7abb7d29436ebc24919a70322f22af09e3";
 }
 
 /// <summary>De has-pending-ontology-changes-poort (fase 6, #230) — puur, €0, geen

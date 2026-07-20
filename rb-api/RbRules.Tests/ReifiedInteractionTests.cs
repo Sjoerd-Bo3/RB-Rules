@@ -47,9 +47,9 @@ public class ReifiedInteractionTests
     [Fact]
     public void ReifiedInteraction_NonQualifiedKind_IsRejected()
     {
-        // HAS_KEYWORD is geen gekwalificeerde relatie en hoort niet gereïficeerd.
+        // HAS_MECHANIC is geen gekwalificeerde relatie en hoort niet gereïficeerd.
         var r = OntologyValidationService.ValidateReifiedInteraction(
-            EntityType.Card, EntityType.Card, RelationType.HasKeyword);
+            EntityType.Card, EntityType.Card, RelationType.HasMechanic);
         Assert.False(r.IsValid);
         Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.ReificationRequired);
     }
@@ -146,7 +146,7 @@ public class ReifiedInteractionTests
             new[] { "COUNTERS", "MODIFIES", "GRANTS", "REQUIRES" }.OrderBy(x => x),
             InteractionKinds.All.OrderBy(x => x));
         Assert.Equal("COUNTERS", InteractionKinds.Canonicalize("counters"));
-        Assert.Null(InteractionKinds.Canonicalize("HAS_KEYWORD"));
+        Assert.Null(InteractionKinds.Canonicalize("HAS_MECHANIC"));
         Assert.Null(InteractionKinds.Canonicalize("nonsense"));
     }
 
@@ -244,7 +244,7 @@ public class ReifiedInteractionTests
           {"from":"card:a","to":"card:b","kind":"COUNTERS","interacts":true,
            "conditions":[{"on_kind":"WINDOW","window":"Showdown"}]},
           {"from":"card:a","to":"card:ZZZ","kind":"COUNTERS","interacts":true},
-          {"from":"card:a","to":"card:b","kind":"HAS_KEYWORD","interacts":true}
+          {"from":"card:a","to":"card:b","kind":"HAS_MECHANIC","interacts":true}
         ]}
         """;
         var parsed = InteractionExtraction.Parse(raw, Vocab());
@@ -347,7 +347,7 @@ public class ReifiedInteractionTests
     {
         Assert.True(RelationTypeConstraint.Allows(EntityType.Card, "COUNTERS", EntityType.Card));
         Assert.True(RelationTypeConstraint.Allows(EntityType.Keyword, "GRANTS", EntityType.Card));
-        Assert.False(RelationTypeConstraint.Allows(EntityType.Card, "HAS_KEYWORD", EntityType.Card));
+        Assert.False(RelationTypeConstraint.Allows(EntityType.Card, "HAS_MECHANIC", EntityType.Mechanic));
         Assert.False(RelationTypeConstraint.Allows(EntityType.Mechanic, "COUNTERS", EntityType.Card));
     }
 
@@ -499,7 +499,7 @@ public class ReifiedInteractionTests
         var svc = new InteractionPromotionService(db);
 
         // Een niet-gekwalificeerde relatie kan geen gereïficeerde interactie worden.
-        var r = await svc.PromoteAsync(Req(kind: "HAS_KEYWORD", lexical: true), runId);
+        var r = await svc.PromoteAsync(Req(kind: "HAS_MECHANIC", lexical: true), runId);
         Assert.Equal(InteractionGateOutcome.Rejected, r.Outcome);
         Assert.Contains("schema", r.StatusReason);
     }

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Neo4j.Driver;
 using RbRules.Domain;
+using RbRules.Domain.Ontology;
 
 namespace RbRules.Infrastructure;
 
@@ -468,12 +469,10 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             """,
             new Dictionary<string, object> { ["rows"] = cardRows });
 
-        await RunPairsAsync(tx,
-            "MERGE (d:Domain {name: p.value}) SET d.ref = p.ref MERGE (c)-[:HAS_DOMAIN]->(d)", domainPairs);
+        await RunPairsAsync(tx, DomainMergeClause, domainPairs);
         await RunPairsAsync(tx,
             "MERGE (t:Tag {name: p.value}) SET t.ref = p.ref MERGE (c)-[:HAS_TAG]->(t)", tagPairs);
-        await RunPairsAsync(tx,
-            "MERGE (m:Mechanic {name: p.value}) SET m.ref = p.ref MERGE (c)-[:HAS_MECHANIC]->(m)", mechanicPairs);
+        await RunPairsAsync(tx, MechanicMergeClause, mechanicPairs);
 
         // Facet-knopen die na de opruiming nergens meer aan hangen (bijv. een
         // promo-set die alleen variant-printings bevatte) verdwijnen mee.
@@ -720,6 +719,33 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             $"UNWIND $pairs AS p {matchMergeClause}",
             new Dictionary<string, object> { ["pairs"] = pairs });
     }
+
+    /// <summary>De MERGE-clausule voor een kaart-facet-projectie, opgebouwd uit de
+    /// ontologie (<see cref="OntologySchema"/>) — de ÉNE schema-bron (#227). Edge-naam
+    /// én knooplabel (de range van de relatie) komen dus uit het register in plaats van
+    /// uit een losse string-literal hier.
+    ///
+    /// Waarom (#274): het schema noemde deze relaties HAS_KEYWORD en IN_DOMAIN terwijl
+    /// de projectie al jaren HAS_MECHANIC en HAS_DOMAIN schreef. Twee namen voor
+    /// dezelfde relatie maakt het schema onvalideerbaar (het beschrijft niet wat er
+    /// staat) en de reasoner inert: de uit de ontologie gegenereerde property-chain-
+    /// Cypher matchte edges en knooplabels die niemand ooit schrijft. Door het hier af
+    /// te leiden kan dat niet meer stil uiteenlopen — één naam wijzigen in de ontologie
+    /// verplaatst de projectie mee, en <c>OntologyProjectionAlignmentTests</c> pint de
+    /// canonieke namen vast. Interpolatie in Cypher is veilig: beide waarden komen uit
+    /// het compile-time schema-register, nooit uit invoer.</summary>
+    private static string FacetMergeClause(RelationType type, string alias)
+    {
+        var relation = OntologySchema.Relations[type];
+        return $"MERGE ({alias}:{relation.Range[0]} {{name: p.value}}) SET {alias}.ref = p.ref " +
+               $"MERGE (c)-[:{relation.EdgeName}]->({alias})";
+    }
+
+    /// <summary>De kaart→domein-projectie (HAS_DOMAIN → <c>:Domain</c>).</summary>
+    internal static string DomainMergeClause => FacetMergeClause(RelationType.HasDomain, "d");
+
+    /// <summary>De kaart→mechaniek-projectie (HAS_MECHANIC → <c>:Mechanic</c>).</summary>
+    internal static string MechanicMergeClause => FacetMergeClause(RelationType.HasMechanic, "m");
 
     /// <summary>De DETERMINISTISCHE kaart→mechanic-projectie (HAS_MECHANIC): één rij
     /// per (kaart, mechanic), recht uit <see cref="Card.Mechanics"/> — geen LLM, geen

@@ -98,8 +98,11 @@ public static class InferenceRuleRegistry
     /// <summary>Property-chain-regels: elke samenstelling van kale ontologie-relaties
     /// die (subclass-compatibel) van een Card via één of meer hops in een
     /// GOVERNED_BY naar een RuleSection uitkomt. Zo bereikt een Deflect-kaartvraag
-    /// §7.4 in één hop zónder her-minen: <c>GOVERNED_BY(card,s) :- HAS_KEYWORD(card,kw),
-    /// INVOKES(kw,m), GOVERNED_BY(m,s)</c>. De ketens worden bounded uit de ontologie
+    /// §7.4 in één hop zónder her-minen: <c>GOVERNED_BY(card,s) :- HAS_MECHANIC(card,m),
+    /// GOVERNED_BY(m,s)</c>. Die keten loopt sinds #274 over de relatie en het
+    /// knooplabel die <c>GraphSyncService</c> ECHT projecteert (HAS_MECHANIC →
+    /// <c>:Mechanic</c>); daarvóór mikte de gegenereerde Cypher op HAS_KEYWORD →
+    /// <c>:Keyword</c> en raakte ze per definitie niets. De ketens worden bounded uit de ontologie
     /// afgeleid (<see cref="GovernedByChains"/>), niet met de hand opgesomd.</summary>
     public static IReadOnlyList<InferenceRule> PropertyChainRules()
     {
@@ -167,7 +170,7 @@ public static class InferenceRuleRegistry
 
     private static string RenderChainCypher(IReadOnlyList<OntologyRelation> chain, string id)
     {
-        // (c:Card)-[:HAS_KEYWORD]->(:Keyword)-[:INVOKES]->(:Mechanic)-[:GOVERNED_BY]->(s:RuleSection)
+        // (c:Card)-[:HAS_MECHANIC]->(:Mechanic)-[:GOVERNED_BY]->(s:RuleSection)
         var sb = new StringBuilder("MATCH (c:Card)");
         for (var i = 0; i < chain.Count; i++)
         {

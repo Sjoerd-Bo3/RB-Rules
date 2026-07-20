@@ -94,13 +94,33 @@ public static class OntologySchema
             Traits: RelationTraits.Transitive | RelationTraits.Acyclic,
             Parameters: []),
 
-        new(RelationType.InDomain, "IN_DOMAIN",
+        // HEET HAS_DOMAIN (#274), niet IN_DOMAIN: dezelfde naam-tweespalt als bij
+        // HAS_MECHANIC hieronder, één relatie verderop. De projectie,
+        // BrainQuery.EdgeTypes, docs/ENGINE.md en docs/BRAIN.md zeggen allemaal
+        // HAS_DOMAIN; alleen dit register zei IN_DOMAIN, waardoor de gegenereerde
+        // keten IN_DOMAIN ∘ GOVERNED_BY op een edge mikte die nergens bestaat.
+        new(RelationType.HasDomain, "HAS_DOMAIN",
             Domain: AnyCard, Range: [EntityType.Domain],
             MinCardinality: 1, MaxCardinality: null,          // 1..* (Colorless = 1)
             Traits: RelationTraits.None, Parameters: []),
 
-        new(RelationType.HasKeyword, "HAS_KEYWORD",
-            Domain: AnyCard, Range: [EntityType.Keyword],
+        // Kaart → de mechaniek die zij draagt. HEET HAS_MECHANIC (#274), niet
+        // HAS_KEYWORD: dit schema is de ÉNE bron, dus het moet de relatie
+        // beschrijven die er in Neo4j ECHT staat. GraphSyncService projecteert
+        // Card.Mechanics[] deterministisch als (:Card)-[:HAS_MECHANIC]->(:Mechanic
+        // {name}) met ref mechanic:{label}; datzelfde HAS_MECHANIC → :Mechanic
+        // staat in het doelschema van docs/KNOWLEDGE.md, in BrainQuery.EdgeTypes
+        // en in de brein-tools van rb-ai. Een tweede naam voor diezelfde relatie
+        // maakte het schema onvalideerbaar én de reasoner inert: de gegenereerde
+        // property-chain-Cypher matchte een edge (HAS_KEYWORD) en een knooplabel
+        // (:Keyword) die nergens geschreven worden.
+        // Range is dus Mechanic, niet Keyword. De gedrukte keyword-vorm leeft als
+        // magnitude-parameter op de edge ("Assault 2" → familie Assault + 2), niet
+        // als eigen knoop; Keyword blijft wél een klasse (HAS_ROLE-filler,
+        // ERRATA_OF-range, canonieke entiteit-kind) en INVOKES blijft de fijnere,
+        // vandaag níet geprojecteerde brug Keyword → Mechanic.
+        new(RelationType.HasMechanic, "HAS_MECHANIC",
+            Domain: AnyCard, Range: [EntityType.Mechanic],
             MinCardinality: 0, MaxCardinality: null,
             Traits: RelationTraits.None,
             Parameters: ["magnitude"]),                        // Tank N, Accelerate N — niet wegstrippen

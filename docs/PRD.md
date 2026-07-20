@@ -582,7 +582,7 @@ de globale duur-vangrail).
   hij wordt nooit als Riots officiële kaarttekst getoond en gaat nooit de
   kennisbank of een LLM-prompt in. Afgeleid is niet officieel.
 - **Mechanieken per kaart — gelezen, niet geraden** *(#211)* — de mechaniek-
-  facetten, de `HAS_KEYWORD`-edges in de graaf en het mechaniek-blok op de
+  facetten, de `HAS_MECHANIC`-edges in de graaf en het mechaniek-blok op de
   kaartpagina komen uit `Card.Mechanics`, en dat veld wordt sinds #211
   deterministisch uit de kaarttekst zélf afgeleid: Riot drukt élk keyword
   gebracket af (`[Equip]`, `[Assault 2]`). Meting over de 1429 kaartteksten met

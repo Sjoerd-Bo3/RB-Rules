@@ -37,23 +37,34 @@ public class GovernanceServiceTests
     }
 
     // ── Ontologie-versie-historie ─────────────────────────────────────────────
+
+    /// <summary>De eerstvolgende versie ná de checked-in baseline. Zonder rijen in de
+    /// tabel valt <see cref="OntologyGovernanceService"/> terug op
+    /// <see cref="OntologyBaseline.Version"/>, dus een vastgespijkerde "1.1.0" breekt
+    /// bij elke echte ontologie-bump (#274 bumpte naar 2.0.0). Relatief rekenen houdt
+    /// deze tests over toekomstige bumps heen geldig.</summary>
+    private static readonly SemVer NextVersion =
+        OntologyBaseline.Version.Bump(OntologyBumpKind.Minor);
+
     [Fact]
     public async Task RecordVersion_MoetMonotoonToenemen()
     {
         await using var db = NewDb();
         var svc = new OntologyGovernanceService(db);
 
-        await svc.RecordVersionAsync(new SemVer(1, 1, 0), OntologyBumpKind.Minor, "eerste bump", "run-1");
-        Assert.Equal(new SemVer(1, 1, 0), await svc.GetLatestVersionAsync());
+        await svc.RecordVersionAsync(NextVersion, OntologyBumpKind.Minor, "eerste bump", "run-1");
+        Assert.Equal(NextVersion, await svc.GetLatestVersionAsync());
 
         // Terugval of gelijk moet weigeren.
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            svc.RecordVersionAsync(new SemVer(1, 0, 0), OntologyBumpKind.Patch, "terugval", "run-2"));
+            svc.RecordVersionAsync(OntologyBaseline.Version, OntologyBumpKind.Patch, "terugval", "run-2"));
 
-        // Semver-sort (niet lexicaal): 1.10.0 > 1.9.0.
-        await svc.RecordVersionAsync(new SemVer(1, 9, 0), OntologyBumpKind.Minor, "", "run-3");
-        await svc.RecordVersionAsync(new SemVer(1, 10, 0), OntologyBumpKind.Minor, "", "run-4");
-        Assert.Equal(new SemVer(1, 10, 0), await svc.GetLatestVersionAsync());
+        // Semver-sort (niet lexicaal): x.10.0 > x.9.0.
+        var negende = new SemVer(NextVersion.Major, 9, 0);
+        var tiende = new SemVer(NextVersion.Major, 10, 0);
+        await svc.RecordVersionAsync(negende, OntologyBumpKind.Minor, "", "run-3");
+        await svc.RecordVersionAsync(tiende, OntologyBumpKind.Minor, "", "run-4");
+        Assert.Equal(tiende, await svc.GetLatestVersionAsync());
     }
 
     // ── Staging → review → migratie ───────────────────────────────────────────
@@ -91,12 +102,12 @@ public class GovernanceServiceTests
         Assert.Equal("sjoerd", approved.ReviewedBy);
 
         // Migratie legt de versie-rij vast én markeert het voorstel gemigreerd.
-        var version = await svc.MigrateProposalAsync(p.Id, new SemVer(1, 1, 0), "run-migrate");
-        Assert.Equal("1.1.0", version.Version);
+        var version = await svc.MigrateProposalAsync(p.Id, NextVersion, "run-migrate");
+        Assert.Equal(NextVersion.ToString(), version.Version);
         var migrated = await db.SchemaProposals.FindAsync(p.Id);
         Assert.Equal(SchemaProposalStatus.Migrated, migrated!.Status);
-        Assert.Equal("1.1.0", migrated.MigratedInVersion);
-        Assert.Equal(new SemVer(1, 1, 0), await svc.GetLatestVersionAsync());
+        Assert.Equal(NextVersion.ToString(), migrated.MigratedInVersion);
+        Assert.Equal(NextVersion, await svc.GetLatestVersionAsync());
     }
 
     [Fact]
@@ -202,7 +213,7 @@ public class GovernanceServiceTests
             "5 kaarten, §9.2", "run-1",
             officialCardCount: 5, ruleSectionRef: "section:core-rules-pdf/9.2");
         await svc.ApproveProposalAsync(p.Id, "sjoerd", "ok");
-        await svc.MigrateProposalAsync(p.Id, new SemVer(1, 1, 0), "run-migrate");
+        await svc.MigrateProposalAsync(p.Id, NextVersion, "run-migrate");
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.RejectProposalAsync(p.Id, "sjoerd", "bedenk me"));
