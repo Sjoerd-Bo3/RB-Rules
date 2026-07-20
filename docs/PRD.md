@@ -913,6 +913,38 @@ de globale duur-vangrail).
   géén stap in "Alles bijwerken" en géén automatische trigger: uitsluitend een
   expliciete, eenmalige beheerdersactie na de deploy die de mining-prompts
   naar het Engels omzette. *Endpoint* `/api/admin/jobs/regenerateknowledge`.
+- **Brein-mining resetten** (#263) — twee losse, gewaarschuwde
+  Gevarenzone-acties (elk met confirm-stap) die ALLEEN de brein-mining-laag
+  terugzetten, waar `regenerateknowledge` hierboven veel te grof voor is.
+  Nodig omdat het mined-watermark van de interactie-mining "deze kaart leverde
+  ooit een interactie-`Assertion` op" is: na de runs van 19–20 juli stonden
+  ~800 kaarten afgevinkt met de extractie die #249 als ondeugdelijk
+  vaststelde, waardoor de verbeterde extractie precies die kaarten zou
+  overslaan en niet meetbaar zou zijn.
+  Job `breinreset-interacties` verwijdert `interaction`,
+  `interaction_condition`, `interaction_decision` en de `assertion`-rijen met
+  `FactKind = interaction` (het watermark), en LICHT de grafstenen die de
+  poort zelf schreef (`rejection_tombstone` met actor "gate" → `Lifted`, nooit
+  hard-deleted — het audit-spoor blijft; grafstenen van de beheerder blijven
+  gelden). Job `breinreset-volledig` doet hetzelfde plus `mechanic_predicate`,
+  `canonical_entity`, `merge_candidate` en `merge_decision` — zodat ook de
+  entiteit-/predicaat-extractie (#250) op een schone pool meetbaar is; de
+  merge-historie moet daarbij mee (haar FK's staan op Restrict) en dat verlies
+  staat expliciet in de bevestigingstekst, de telling en het run_log.
+  De `mining_run`-historie blijft BEWUST staan: die PROV-O-activiteiten
+  (model, prompt-versie, vocabulaire-snapshot, tellingen) zijn juist de
+  baseline waartegen de #249-verbetering gemeten wordt. Raakt nooit claims,
+  primer, correcties, relaties, kaarten, regels, bans of de OUDE lexicale
+  `card_interaction`-laag — bewezen met regressietests
+  (`BreinMiningResetServiceTests`). Draait in één transactie, telt terug wat
+  er weg is en logt dat in `run_log` (kind `breinreset`, ref = de scope);
+  bewust geen stap in "Alles bijwerken", geen pad en niet in de nachtrun, en
+  chaint niets automatisch — de beheerder start daarna zelf
+  `breinmine-interacties` (en bij de brede scope eerst `breinentiteiten`),
+  gevolgd door `graph` + `breinprojectie`. De brein-cockpit (`/admin/brein`)
+  wijst bij stap 1 naar deze acties. *Endpoints*
+  `/api/admin/jobs/breinreset-interacties` en
+  `/api/admin/jobs/breinreset-volledig`.
 - **Bron-feeds beheer** (#167) — feeds zelf toevoegen/bewerken/aan-uitzetten/
   verwijderen, met per feed het aantal ontdekte bronnen en de laatste vangst;
   elke bron toont zijn herkomstfeed (klikbaar terug). *Route*
@@ -1330,6 +1362,13 @@ openstaande PR.
   het product. Export blijft dicht tot er hard bewijs is voor de
   sectie-mapping; de referentie-implementatie kent alleen main deck,
   sideboard en chosen champion.
+
+**Brein & kennisbank**
+- **#263** Gerichte brein-mining-reset — *in-flight*, zie §4.5. Zonder deze
+  reset blijven ~800 kaarten afgevinkt met de in #249 als ondeugdelijk
+  vastgestelde extractie, waardoor de verbeterde extractie precies die kaarten
+  overslaat en de verbetering niet meetbaar is. Twee expliciete scopes
+  (alleen interacties, of ook entiteiten/predicaten voor #250).
 
 ---
 

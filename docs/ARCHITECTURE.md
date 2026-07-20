@@ -553,6 +553,15 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   relation) en reset de mining-markers zodat her-mining met de Engelse
   prompts schoon opnieuw opbouwt; nooit de bron-/mensenwerk-tabellen, geen
   automatische her-generatie erna, expliciete admin-actie),
+  `BreinMiningResetService` (#263, jobs "breinreset-interacties" en
+  "breinreset-volledig" — de SMALLE tegenhanger: zet alleen de brein-mining-laag
+  terug (`interaction`, `interaction_condition`, `interaction_decision` en de
+  `assertion`-rijen met `FactKind = interaction`, oftewel het mined-watermark;
+  in de brede scope ook `mechanic_predicate`, `canonical_entity`,
+  `merge_candidate`, `merge_decision`), licht de poort-grafstenen i.p.v. ze te
+  verwijderen, en BEHOUDT de `mining_run`-historie als provenance-baseline;
+  raakt nooit claims/primer/correcties/relaties/bron-tabellen of de oude
+  `card_interaction`-laag),
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
   op `AskService` met `AskOptions.Benchmark = true`, #158; sinds #174 ook
@@ -1648,6 +1657,19 @@ eerste run (integratie-follow-up, §8). Het qualifier-lexicon (Window/Status) is
 seed (`InteractionQualifierLexicon`) die review/evolutie uitbreidt — een nieuwe set
 mag nieuwe timing-windows/toestanden introduceren (CLAUDE.md: mee-evolueren).
 
+**Terugzetten (`breinreset-interacties` / `breinreset-volledig`, #263).**
+Beide mining-jobs hierboven schuiven met een watermark door de pool: een
+verwerkte focus-kaart (resp. een reeds-gepredikeerd subject) komt niet terug.
+Dat is bewust — het houdt de abonnement-tokenkost begrensd — maar het maakt een
+verbeterde extractie ook onmeetbaar zolang de oude vinkjes staan. De twee
+reset-jobs (`BreinMiningResetService`, §4.4/§9) zetten die laag gericht terug:
+de smalle scope de interactie-laag + het watermark, de brede ook de canonieke
+entiteiten en predicaten. De `mining_run`-historie blijft staan als
+vergelijkingsbasis, poort-grafstenen worden gelicht en niet gewist, en niets
+buiten de mining-laag wordt aangeraakt. Bewust destructief-met-bevestiging,
+nooit in een pad of de nachtrun; na de reset draait de beheerder de jobs
+hierboven zelf opnieuw en daarna `graph` + `breinprojectie`.
+
 ---
 
 ## 7. Deploymentzicht
@@ -1983,6 +2005,42 @@ kan rb-api eerder starten dan Postgres klaar is.
   destructieve beheerdersactie (eigen gewaarschuwd paneel met confirm-stap in
   rb-web) die de coördinator zelf ná de deploy uitvoert, waarna de
   bestaande primer/claims/clarify/relations-jobs los getriggerd worden.
+- **Gerichte brein-mining-reset** (#263) — `regenerateknowledge` hierboven is
+  de grove bijl; voor het brein-spoor bestaat een smalle. Het voortgangs-
+  watermark van `BreinInteractionMiningService` is impliciet: een focus-kaart
+  geldt als verwerkt zodra er een `Assertion` bestaat met
+  `FactKind = interaction` en `DerivedFromRef = card:{id}`. Na de runs van
+  19–20 juli 2026 stonden ~800 kaarten afgevinkt met de extractie die #249 als
+  ondeugdelijk vaststelde (69% kaart↔eigen-keyword), waardoor de verbeterde
+  extractie diezelfde kaarten zou overslaan — de verbetering zou letterlijk
+  niet te meten zijn. `BreinMiningResetService.ResetAsync(scope)` zet daarom in
+  één transactie precies die laag terug, met twee expliciete scopes als twee
+  losse jobnamen (zelfde keuze als "benchmark" vs. "benchmarksweep": een
+  zichtbare knop, geen verborgen modus-vlag, en de scope belandt zo ook in
+  `run_log.Ref`). Drie beslissingen die niet vanzelf spreken:
+  (a) de `mining_run`-historie BLIJFT staan — dat is de PROV-O-Activity met
+  model/prompt-versie/vocabulaire-snapshot en tellingen, oftewel exact de
+  baseline waartegen de #249-verbetering gemeten wordt; het schema zegt
+  hetzelfde (`assertion → mining_run` staat op `Restrict` met de motivering
+  "provenance is geen wegwerp-administratie");
+  (b) `rejection_tombstone`-rijen van de POORT worden GELICHT
+  (`Lifted = true`, het bestaande herstelpad) in plaats van verwijderd — laten
+  staan zou de reset half maken (ze blokkeren precies de dedupe-sleutels die
+  de nieuwe extractie opnieuw moet mogen aandragen), verwijderen zou de rode
+  draad #236 breken ("nooit een hard-delete: de grafsteen ís het herstelpad");
+  grafstenen met actor "admin" blijven ongemoeid, dat is mensenwerk;
+  (c) in de brede scope gaan `merge_decision`/`merge_candidate` mee omdat hun
+  FK's naar `canonical_entity` op `Restrict` staan — dat verlies is expliciet
+  gemaakt in de bevestigingstekst, de telling en het run_log, niet stilzwijgend.
+  Het watermark zelf is geïsoleerd in één private methode
+  (`ClearWatermarkAsync`): verhuist het ooit naar een expliciet veld op `Card`,
+  dan is dat de enige plek die mee moet. De jobs zitten bewust in geen enkel
+  pad, niet in `RunAllAsync` en niet in de nachtrun (getest in
+  `JobPathsTests`/`BreinMiningResetServiceTests`); ze chainen niets
+  automatisch. Na de reset draait de beheerder zelf
+  `breinmine-interacties` (brede scope: eerst `breinentiteiten`) en daarna
+  `graph` + `breinprojectie` — Neo4j is een projectie en loopt tot dat moment
+  achter op Postgres.
 - **Sanitize vóór `{@html}`** — tekst wordt ge-escaped vóór markdown-parse/
   icoon-injectie; link-URL's zijn gewhitelist (`rb-web/src/lib/markdown.ts`,
   `rbtokens.ts`, `docs/CONVENTIONS.md`).
