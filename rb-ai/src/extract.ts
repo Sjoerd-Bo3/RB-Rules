@@ -32,9 +32,10 @@ export interface OfferedRef {
 }
 
 /** Het gesloten vocabulaire van één extractie-aanroep: de aangeboden refs + de
- * qualifier-lexica (Window/Status) + de kind-/conditie-/rol-enums. Alles komt
- * uit de .NET-Domain-laag (één bron); rb-ai geeft het aan het model als
- * prompt-invoer en rekent het antwoord er deterministisch tegen na (#312). */
+ * qualifier-lexica (Window/Status) + de kind-/conditie-/rol-enums + de
+ * citeerbare sectie-refs voor `governed_by` (#286/#315). Alles komt uit de
+ * .NET-Domain-laag (één bron); rb-ai geeft het aan het model als prompt-invoer
+ * en rekent het antwoord er deterministisch tegen na (#312). */
 export interface InteractionExtractRequest {
   system?: string;
   text: string;
@@ -44,6 +45,12 @@ export interface InteractionExtractRequest {
   roles: string[];
   windowLexicon: string[];
   statusLexicon: string[];
+  /** De aangeboden `section:`-refs waaruit het model `governed_by` MAG kiezen
+   * (#286). rb-api stuurt ze sinds #286 mee, maar rb-ai las ze tot #315 nergens
+   * — waardoor `Interaction.GovernedByRef` in productie altijd null bleef. Leeg
+   * = niets aangeboden, dus élke geëmit `governed_by` wordt ge-nuld (zo doet de
+   * .NET-muur het ook: een lege sectionSet accepteert niets). */
+  sections: string[];
 }
 
 /** Eén geëxtraheerde interactie zoals de tool ze emit — dezelfde vorm die de .NET
@@ -55,6 +62,11 @@ export interface ExtractedInteraction {
   interacts: boolean;
   explanation?: string;
   conditions?: ExtractedCondition[];
+  /** De aangeboden regelsectie die deze interactie normatief verankert (#286/
+   * #315) — alleen aanwezig als het model een ref uit de aangeboden `sections`
+   * noemde; de .NET-muur leest hem als `governed_by` en vult er
+   * `Interaction.GovernedByRef` mee. */
+  governed_by?: string;
 }
 
 export interface ExtractedCondition {
@@ -71,8 +83,8 @@ export interface ExtractedCondition {
 export const INTERACTION_TOOL_ADDENDUM =
   "Roep de tool `emit_interactions` PRECIES ÉÉN keer aan met alle gevonden interacties " +
   "(een lege lijst als er geen noemenswaardige interactie is). Gebruik UITSLUITEND de " +
-  "refs, kinds en window/status-waarden uit het aangeboden vocabulaire in de invoer — " +
-  "verzin er geen. Geef daarna geen verdere uitleg.";
+  "refs, kinds, window/status-waarden en governed_by-sectie-refs uit het aangeboden " +
+  "vocabulaire in de invoer — verzin er geen. Geef daarna geen verdere uitleg.";
 
 export const PREDICATE_TOOL_ADDENDUM =
   "Roep de tool `emit_mechanic_predicates` PRECIES ÉÉN keer aan met alle eigenschappen " +
@@ -100,6 +112,12 @@ export function buildInteractionToolShape(): z.ZodRawShape {
     interacts: z.boolean(),
     explanation: z.string().nullish(),
     conditions: z.array(conditionSchema).optional(),
+    // #315: de vorm blijft request-onafhankelijk (#312) — het veld bestaat
+    // ALTIJD, ook als er geen secties zijn aangeboden; de sectie-poort zit in
+    // de narekening. De .NET-kant liet het veld juist per request uit het
+    // schema verdwijnen (BuildToolSchema), maar dat was precies de per-aanroep-
+    // variatie die #312 uit de tool-definitie heeft gehaald.
+    governed_by: z.string().nullish(),
   });
   return { interactions: z.array(interactionSchema) };
 }
@@ -135,6 +153,10 @@ export function interactionPromptText(req: InteractionExtractRequest): string {
     vocabLine("subject_role", req.roles),
     vocabLine("window-lexicon", req.windowLexicon),
     vocabLine("status-lexicon", req.statusLexicon),
+    // #315: de citeerbare sectie-refs als eigen vocabulaire-regel — zonder deze
+    // regel kan het model niet weten wélke secties het als anker mag noemen, en
+    // nult de narekening elke gok. Leeg = regel weg, net als de andere assen.
+    vocabLine("governed_by (sectie-refs)", req.sections),
   ].filter(Boolean);
   return `${lines.join("\n")}\n\nTekst:\n${req.text}`;
 }
@@ -220,6 +242,12 @@ export function enforceInteractionVocabulary(
   req: InteractionExtractRequest,
 ): VocabularyGateResult<ExtractedInteraction> {
   const refs = new Set(req.refs.map((r) => r.ref));
+  // Sectie-refs zijn Ordinal-exact, en hier geldt de lege-lijst-fallback van
+  // inLexicon bewust NIET: de .NET-muur toetst governed_by tegen een gewone
+  // HashSet (leeg aangeboden = alles ge-nuld), dus "niets aangeboden ⇒ geen
+  // poort" zou hier juist ruimer zijn dan de muur — en de narekening mag nooit
+  // ruimer én nooit strenger zijn dan wat rb-api doet (#315).
+  const sections = new Set(req.sections);
   const accepted: ExtractedInteraction[] = [];
   let rejected = 0;
   let rejectedConditions = 0;
@@ -253,6 +281,14 @@ export function enforceInteractionVocabulary(
       }
     }
 
+    // Anker-poort (#286/#315): een sectie die niet is aangeboden is verzonnen —
+    // ge-nuld, niet geweigerd, exact zoals de .NET-muur (`sectionSet.Contains`
+    // in InteractionExtraction.ParseDetailed) en zoals subject_role hierboven:
+    // het anker kwijtraken mag het item niet kosten dat rb-api zou behouden.
+    const governedByRaw = str(item.governed_by);
+    const governedBy =
+      governedByRaw !== null && sections.has(governedByRaw) ? governedByRaw : null;
+
     accepted.push({
       from,
       to,
@@ -260,6 +296,7 @@ export function enforceInteractionVocabulary(
       interacts: item.interacts,
       ...(str(item.explanation) !== null ? { explanation: str(item.explanation)! } : {}),
       ...(conditions.length > 0 ? { conditions } : {}),
+      ...(governedBy !== null ? { governed_by: governedBy } : {}),
     });
   }
   return { accepted, rejected, rejectedConditions };
@@ -394,6 +431,12 @@ export function parseInteractionExtractRequest(
       roles: stringArray(b.roles),
       windowLexicon: stringArray(b.windowLexicon),
       statusLexicon: stringArray(b.statusLexicon),
+      // #315: rb-api stuurt de citeerbare sectie-refs sinds #286 mee, maar dit
+      // veld werd hier nooit gelezen — de GOVERNED_BY-verankering bestond
+      // daardoor alleen op papier. Afwezig = lege lijst: een oudere rb-api
+      // zonder sections blijft gewoon werken (governed_by wordt dan altijd
+      // ge-nuld, wat de .NET-muur toch al deed).
+      sections: stringArray(b.sections),
     },
   };
 }

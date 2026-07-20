@@ -34,6 +34,7 @@ const baseInteractionReq: InteractionExtractRequest = {
   roles: ["agent", "patient"],
   windowLexicon: ["Showdown"],
   statusLexicon: ["Exhausted"],
+  sections: ["section:core-4.2b", "section:core-7.1"],
 };
 
 describe("parseInteractionExtractRequest", () => {
@@ -68,6 +69,24 @@ describe("parseInteractionExtractRequest", () => {
     assert.equal(r.request.refs.length, 1);
     assert.equal(r.request.refs[0]?.ref, "card:a");
   });
+
+  it("leest sections als string-array mee, junk-items eruit (#315)", () => {
+    // Dit veld stuurde rb-api al sinds #286 mee, maar het werd hier nooit
+    // gelezen — de GOVERNED_BY-verankering bestond daardoor alleen op papier.
+    const r = parseInteractionExtractRequest({
+      ...baseInteractionReq,
+      sections: ["section:core-4.2b", 42, "  ", "section:core-7.1"],
+    });
+    assert.ok(r.ok);
+    assert.deepEqual(r.request.sections, ["section:core-4.2b", "section:core-7.1"]);
+  });
+
+  it("sections afwezig → lege lijst (rb-api-versies zonder #286 blijven werken)", () => {
+    const { sections: _weg, ...zonder } = baseInteractionReq;
+    const r = parseInteractionExtractRequest(zonder);
+    assert.ok(r.ok);
+    assert.deepEqual(r.request.sections, []);
+  });
 });
 
 describe("de vaste tool-vorm (#312)", () => {
@@ -76,7 +95,13 @@ describe("de vaste tool-vorm (#312)", () => {
     // request-prefix (prompt-cache) en later warm-boot-baar. De description mag
     // geen enkele aangeboden waarde meer bevatten.
     const desc = interactionToolDescription();
-    for (const term of ["mechanic:Deflect", "mechanic:Assault", "Showdown", "COUNTERS"]) {
+    for (const term of [
+      "mechanic:Deflect",
+      "mechanic:Assault",
+      "Showdown",
+      "COUNTERS",
+      "section:core-4.2b",
+    ]) {
       assert.equal(desc.includes(term), false, `vocabulaire lekt in de description: ${term}`);
     }
     // Twee aanroepen bouwen structureel dezelfde shape (geen per-request-enums).
@@ -106,6 +131,7 @@ describe("de vaste tool-vorm (#312)", () => {
       "agent",
       "Showdown",
       "Exhausted",
+      "governed_by (sectie-refs): section:core-4.2b | section:core-7.1",
       baseInteractionReq.text,
     ]) {
       assert.ok(p.includes(verwacht), `ontbreekt in prompt: ${verwacht}`);
@@ -115,6 +141,34 @@ describe("de vaste tool-vorm (#312)", () => {
   it("laat lege vocabulaire-assen weg uit de prompt", () => {
     const p = interactionPromptText({ ...baseInteractionReq, statusLexicon: [] });
     assert.equal(p.includes("status-lexicon"), false);
+  });
+
+  it("zonder aangeboden secties geen governed_by-regel in de prompt (#315)", () => {
+    const p = interactionPromptText({ ...baseInteractionReq, sections: [] });
+    assert.equal(p.includes("governed_by"), false);
+  });
+
+  it("governed_by zit in de VASTE vorm en wordt niet weggestript (#315)", () => {
+    // De vorm is request-onafhankelijk (#312): het veld bestaat óók zonder
+    // aangeboden secties — de sectie-poort zit in de narekening. Zonder dit
+    // veld stript de zod-parse elke emit en kan het model per constructie
+    // nooit een anker leveren (precies de bug van #315).
+    const schema = z.object(buildInteractionToolShape());
+    const parsed = schema.parse({
+      interactions: [
+        { from: "x", to: "y", kind: "K", interacts: true, governed_by: "section:core-4.2b" },
+        { from: "x", to: "y", kind: "K", interacts: true, governed_by: null },
+        { from: "x", to: "y", kind: "K", interacts: true },
+      ],
+    }) as { interactions: Array<{ governed_by?: string | null }> };
+    assert.equal(parsed.interactions[0]?.governed_by, "section:core-4.2b");
+    assert.equal(
+      schema.safeParse({
+        interactions: [{ from: "x", to: "y", kind: "K", interacts: true, governed_by: 7 }],
+      }).success,
+      false,
+      "governed_by moet een string of null blijven",
+    );
   });
 });
 
@@ -267,6 +321,52 @@ describe("enforceInteractionVocabulary — de deterministische narekening (#312)
       "kind",
       "to",
     ]);
+  });
+
+  it("een aangeboden sectie-ref overleeft als governed_by (#315, overleef-richting)", () => {
+    const r = enforceInteractionVocabulary(
+      [{ ...geldig, governed_by: "section:core-4.2b" }],
+      baseInteractionReq,
+    );
+    assert.equal(r.rejected, 0);
+    assert.equal(r.accepted[0]?.governed_by, "section:core-4.2b");
+    // En het item eromheen blijft ongeschonden — een anker mag niets kosten.
+    assert.equal(r.accepted[0]?.from, "mechanic:Deflect");
+    assert.equal(r.accepted[0]?.kind, "COUNTERS");
+  });
+
+  it("een verzonnen sectie-ref wordt ge-nuld, het item blijft (#315, muur-semantiek)", () => {
+    // Exact de .NET-anker-poort (InteractionExtraction.ParseDetailed): buiten
+    // de aangeboden lijst → null, nooit het item weigeren dat rb-api behoudt.
+    const r = enforceInteractionVocabulary(
+      [{ ...geldig, governed_by: "section:verzonnen" }],
+      baseInteractionReq,
+    );
+    assert.equal(r.rejected, 0, "het item zelf is geldig");
+    assert.equal(r.accepted.length, 1);
+    assert.equal(r.accepted[0]?.governed_by, undefined);
+    assert.equal(r.accepted[0]?.explanation, geldig.explanation, "de rest overleeft");
+  });
+
+  it("sectie-refs zijn Ordinal-exact, net als from/to (#315)", () => {
+    const r = enforceInteractionVocabulary(
+      [{ ...geldig, governed_by: "SECTION:CORE-4.2B" }],
+      baseInteractionReq,
+    );
+    assert.equal(r.rejected, 0);
+    assert.equal(r.accepted[0]?.governed_by, undefined);
+  });
+
+  it("lege sectie-aanbieding nult élke governed_by — GEEN inLexicon-fallback (#315)", () => {
+    // De .NET-muur toetst tegen een gewone HashSet: niets aangeboden = niets
+    // geldig. De "lege lijst ⇒ geen poort"-fallback van window/status zou hier
+    // juist RUIMER zijn dan de muur, en rb-api zou het anker alsnog nullen.
+    const r = enforceInteractionVocabulary(
+      [{ ...geldig, governed_by: "section:core-4.2b" }],
+      { ...baseInteractionReq, sections: [] },
+    );
+    assert.equal(r.rejected, 0);
+    assert.equal(r.accepted[0]?.governed_by, undefined);
   });
 });
 
