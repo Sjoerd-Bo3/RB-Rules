@@ -98,7 +98,11 @@ public class SetReleaseService(
         {
             var r = await embeddings.RunAsync(
                 progress: p => progress?.Invoke($"4/6 · embeddings — {p}"), ct: ct);
-            return $"{r.Embedded} geembed";
+            // r.Summary (#282-review): vóór #282 gooide de pijplijn en zette de
+            // Step-catch hier "FOUT — …" neer. Nu gooit hij niet meer, dus zonder
+            // Summary zou een omgevallen embed-stap als geslaagd in het
+            // ketendetail belanden — een regressie van #282 zelf.
+            return r.Summary;
         });
         await Step("graph", async () =>
         {

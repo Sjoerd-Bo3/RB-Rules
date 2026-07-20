@@ -93,6 +93,25 @@ services:
       # uitval (zichtbaar als "429 AI-slots vol" in het run-detail); lager laat
       # slots onbenut. Bijstellen doe je aan beide kanten tegelijk.
       BREIN_MINING_CONCURRENCY: ${BREIN_MINING_CONCURRENCY:-3}
+      # Embed-batchgrootte (#282). MOETEN hier staan — zelfde les als NIGHTLY_ENABLED
+      # hierboven. Verifieer na deploy met:
+      #   docker exec rb-v2-api printenv | grep EMBED_
+      #
+      # Deze twee horen bij de memory:-cap van de OLLAMA-service onderaan deze file,
+      # net zoals AI_MAX_CONCURRENCY bij die van rb-ai hoort. Aanleiding: de
+      # cgroup-OOM-killer schoot llama-server af op ~2,5 GB (anon-rss 2578728kB) —
+      # precies Ollama's plafond. Idle houdt Ollama ~69 MiB vast, dus de piek zit
+      # volledig in het VERZOEK: llama.cpp houdt de activaties van alle sequenties in
+      # een batch tegelijk vast, en die kosten schalen met aantal én lengte.
+      #
+      # Vandaar twee grenzen. EMBED_BATCH_SIZE (16 → 8) knijpt het aantal; de
+      # regel-secties zijn met tot 2400 tekens per stuk de zware kant, dus
+      # EMBED_BATCH_CHARS (~8000) is wat de worst case echt afknijpt — vóór #282 kon
+      # één verzoek 16×2400 ≈ 38k tekens bevatten. Verhogen = de OOM terughalen;
+      # verhoog dan eerst de cap hieronder, en alleen als er op de VM ruimte is
+      # (Postgres 1g + Neo4j 1,5g + Ollama 2,5g + rb-ai 2,44g + api 1,5g op 8 GB).
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-8}
+      EMBED_BATCH_CHARS: ${EMBED_BATCH_CHARS:-8000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -264,6 +283,14 @@ services:
     deploy:
       resources:
         limits:
+          # BEWUST ONGEWIJZIGD in #282, ook al werd deze cap geraakt. De VM heeft
+          # geen ruimte om te schuiven: rb-ai nam in #279 de laatste ~1,7 GiB, en de
+          # som van de caps ligt al boven de 7,7 GiB van de host. De ingreep zit dus
+          # aan de vraagkant (EMBED_BATCH_SIZE/EMBED_BATCH_CHARS bij rb-api), niet aan
+          # het plafond: idle is Ollama ~69 MiB, dus wie de piek verkleint heeft deze
+          # 2,5 GiB ruim niet nodig. Een verhoging hier zonder eerst te meten schuift
+          # de OOM alleen door naar Postgres of Neo4j — en dan kiest de HOST-killer,
+          # die niet weet wie de veroorzaker is.
           memory: 2560m
     networks: [internal]
 

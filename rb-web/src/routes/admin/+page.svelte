@@ -34,12 +34,17 @@
 	// Laatste afronding per job uit het run_log-grootboek (#122): overleeft
 	// een herstart en toont ook de automatische runs van de scheduler.
 	interface JobRun { name: string; status: string; at: string; }
+	// Embed-gezondheid (#282): de NIEUWSTE embed-run_log-regel, los van het
+	// 15-rijen-venster van `logs` — een nachtelijke embed-fout wordt daar vóór de
+	// ochtend uit weggedrukt, en dan ziet beheer er weer kerngezond uit.
+	interface EmbedHealth { status: string; detail: string | null; createdAt: string; }
 	interface Status {
 		running: Job | null;
 		lastJob: Job | null;
 		jobRuns?: JobRun[];
 		counts: Record<string, number>;
 		logs: Log[];
+		lastEmbed?: EmbedHealth | null;
 	}
 	// Graph-drift (#214 overzicht): aantallen per knooptype — Postgres is de
 	// bron, Neo4j de projectie. Zelfde vorm als het gaten-rapport (#52).
@@ -330,6 +335,18 @@
 		!!drift?.graphAvailable && drift.entries.every((e) => e.delta === 0)
 	);
 
+	// Embed-uitval (#282): een omgevallen Ollama viel voorheen alleen op als iemand
+	// toevallig `dmesg` las — de kaarten/chunks bleven stil zonder embedding rondlopen
+	// en semantisch zoeken verslechterde ongemerkt. De pijplijn schrijft nu bij ELKE
+	// run met werk een regel in run_log (kind "embed"), ongeacht welke aanroeper hem
+	// startte. `lastEmbed` is de nieuwste daarvan — bewust een eigen veld en niet
+	// `logs`, dat maar 15 rijen diep is (#282-review). Dat de pijplijn óók bij succes
+	// logt is wat het alarm laat DOVEN door herstel in plaats van door veroudering:
+	// geen enkel UI-pad schreef voorheen een embed-ok-regel.
+	const embedFailed = $derived(
+		live?.lastEmbed?.status === 'error' ? live.lastEmbed : null
+	);
+
 	// Recente runs (#122): laatste afronding per job, nieuwste eerst.
 	const recentRuns = $derived(
 		[...(live?.jobRuns ?? [])]
@@ -510,6 +527,29 @@
 					{last.status === 'ok' ? 'afgerond' : cancelled ? 'afgebroken' : 'mislukt'} · {fmtAgo(last.finishedAt)} geleden
 				</span>
 				{#if last.detail}<span class="meta detail">{last.detail}</span>{/if}
+			</div>
+		{/if}
+
+		<!-- Embed-uitval (#282): Ollama valt om (OOM) en de embed-stap slaat over.
+		     Zonder deze melding merkte niemand het: de run liep "geslaagd" door en
+		     alleen `dmesg` op de VM wist ervan. Status = kleur + tekst, geen emoji. -->
+		{#if embedFailed}
+			<div class="panel embed-failure">
+				<span class="status-dot err"></span>
+				<div>
+					<strong>Embeddings onvolledig — laatste embed-run meldde uitval</strong>
+					<p class="meta">
+						{embedFailed.detail ?? 'geen details'} · {fmtAgo(embedFailed.createdAt)} geleden
+					</p>
+					<p class="meta">
+						De betrokken kaarten/regelsecties hebben géén embedding gekregen en staan
+						nog in de wachtrij; semantisch zoeken en retrieval missen ze zolang. Bij
+						5xx of "onbereikbaar" is Ollama vermoedelijk door de geheugengrens gegaan
+						(zie EMBED_BATCH_SIZE/EMBED_BATCH_CHARS naast de memory-cap in de
+						compose-file). Draai daarna "Kaarten embedden" opnieuw — al geëmbedde
+						kaarten worden overgeslagen.
+					</p>
+				</div>
 			</div>
 		{/if}
 
@@ -1405,6 +1445,19 @@
 		background: var(--accent-soft);
 	}
 	.upcoming .meta {
+		margin: 3px 0 0;
+	}
+
+	/* ── Embed-uitval (#282) ───────────────────────────────────────── */
+	.embed-failure {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		padding: 12px 16px;
+		border-color: color-mix(in srgb, var(--err) 45%, var(--border));
+		background: var(--err-soft);
+	}
+	.embed-failure .meta {
 		margin: 3px 0 0;
 	}
 

@@ -482,7 +482,10 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   een near-duplicaat-samenvoeging vooraf in elke run die bronnen in
   afwijkende URL-vorm samenvoegt met referentie-omhangen, #144-patroon),
   `RuleChunkPipeline`, `CardSyncService`,
-  `CardEmbeddingPipeline`, `EmbeddingService` (Ollama), `AskService`,
+  `CardEmbeddingPipeline`, `EmbeddingService` (Ollama — sinds **#282** met
+  `TryEmbedAsync`, dat de uitvals-oorzaak als `EmbedCallOutcome` teruggeeft
+  i.p.v. als exception; `EmbedAsync`/`EmbedOneAsync` blijven gooien voor de
+  interactieve paden die al naar alleen-FTS degraderen), `AskService`,
   `AskHistoryService` (eigen ask-geschiedenis op user_id/ip_hash, #157),
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`
   (Neo4j), `BrainService`, `BrainExplorerService` (read-only inspectie-laag over
@@ -2128,11 +2131,29 @@ GiB vrij op de VM, rb-ai op 290 MiB — de ~1,7 GiB extra past met marge voor
 Ollama/Neo4j/Postgres. Cap en plafond horen bij elkaar: verhoog het één nooit
 zonder het ander.
 
+**Begrens het gebruik vóór je een plafond verzet** (#282). De cgroup-OOM-killer
+schoot `llama-server` af op ~2,5 GB (`anon-rss 2578728kB`, 5 kills) — precies de
+cap van `rb-v2-ollama`, dus de embed-stap viel stil tijdens zware runs. Die cap
+is **bewust ongewijzigd gebleven**: na #279 is er geen ruimte meer om te schuiven
+(api 1,5g + web 512m + ai 2500m + postgres 1g + neo4j 1,5g + ollama 2,5g op een
+8 GB-VM), en een hogere cap zou de OOM alleen doorschuiven naar Postgres of
+Neo4j — waarna de *host*-killer kiest, die niet weet wie de veroorzaker is.
+De ingreep zit dus aan de vraagkant: idle houdt Ollama ~69 MiB vast, dus de piek
+zit volledig in het verzoek, waar llama.cpp de activaties van alle sequenties in
+één batch tegelijk vasthoudt. `EMBED_BATCH_SIZE` ging van 16 naar **8** en
+daarnaast staat er een tekenbudget `EMBED_BATCH_CHARS` (~**8000**), want een
+telling alleen zegt niets over de kosten: 8 regel-secties (tot 2400 tekens,
+`RuleSectionParser.MaxSectionLength`) is een heel ander verzoek dan 8
+kaartteksten (~300 tekens). Vóór #282 kon één verzoek 16×2400 ≈ 38k tekens
+bevatten. Zie ADR-20.
+
 **Elke nieuwe env-vlag hoort óók in de compose-`environment:`** (#268-follow-up).
 Voor #279 gaat het om `AI_MAX_CONCURRENCY` + `AI_INTERACTIVE_RESERVE` (rb-ai) en
-`BREIN_MINING_CONCURRENCY` (rb-api), elk met een `${VAR:-default}` die het
+`BREIN_MINING_CONCURRENCY` (rb-api); voor #282 om `EMBED_BATCH_SIZE` +
+`EMBED_BATCH_CHARS` (rb-api), elk met een `${VAR:-default}` die het
 gedocumenteerde gedrag houdt. Verifieer na deploy met `docker exec rb-v2-ai
-printenv | grep AI_`.
+printenv | grep AI_` respectievelijk `docker exec rb-v2-api printenv | grep
+EMBED_`.
 
 Migraties draaien bij opstart met korte retry (Program.cs) — na een VM-reboot
 kan rb-api eerder starten dan Postgres klaar is.
@@ -2974,6 +2995,102 @@ geen vergaarbak van losse strings wordt. `ManagedSettingsService`,
 
 ---
 
+### ADR-20 — Embed-uitval is data; de vraag wordt begrensd, niet het plafond (#282)
+
+**Context.** De kernel schoot `llama-server` af op ~2,5 GB — precies de cgroup-cap
+van `rb-v2-ollama` (`OOMKilled=true`, 5 kills in `dmesg`). De embed-stap viel
+daardoor stil tijdens zware runs, en dat bleef lang onopgemerkt om twee redenen.
+(1) `CardEmbeddingPipeline` rapporteerde het aantal *te-doen* kaarten als
+`Embedded`, dus een run die halverwege omviel meldde vrolijk "1429 geembed".
+(2) De aanroepers vingen de exception generiek op: `ScanScheduler` logde
+"Embed-pijplijn overgeslagen (Ollama onbereikbaar?)" naar de containerlog, waar
+niemand kijkt. Netto liepen kaarten en regel-chunks zonder embedding rond en
+verslechterden semantisch zoeken en retrieval stilletjes — precies het
+degradatiepad dat volgens `docs/CONVENTIONS.md` zichtbaar hoort te zijn.
+
+**Beslissing.** Dezelfde behandeling als #251 voor rb-ai, plus een ingreep aan de
+vraagkant in plaats van aan het plafond:
+
+1. **Oorzaak als data.** `EmbeddingService.TryEmbedAsync` geeft een
+   `EmbedCallOutcome` terug (`ServerError` = runner-kill, `Transport` =
+   container weg, `Timeout`, `ClientError` = model niet gepulld, `Incomplete`,
+   `DimensionMismatch`) met een `EmbedOutcomeTally` die per oorzaak telt én
+   bijhoudt hoeveel teksten er bleven liggen. Gelijk herstelgedrag ≠ gelijke
+   oorzaak: een runner-kill vraagt een kleinere batch, een 404 vraagt een pull.
+   `EmbedAsync`/`EmbedOneAsync` blijven gooien — de interactieve paden (/ask,
+   regels-/kaart-zoek) degraderen al netjes naar alleen-FTS en dat contract
+   blijft staan.
+2. **De pijplijn logt elke run mét werk** naar `run_log` (kind `embed`) — met de
+   per-oorzaak-uitsplitsing bij uitval — zodat het zichtbaar is ongeacht wie hem
+   startte: beheer-knop, job óf scheduler-tick. Dat de gesláágde run óók een
+   regel schrijft is niet cosmetisch: géén enkel vanuit de UI bereikbaar pad
+   schreef een embed-ok-regel (rb-web post alleen `/api/admin/jobs/{name}`, en
+   `JobRunner` logt `Kind = "job"`; de scheduler logde bij succes niets), dus
+   een oude foutregel bleef eeuwig de nieuwste embed-regel en het alarm doofde
+   nooit door herstel — alleen door veroudering. De endpoints schrijven geen
+   eigen embed-regel meer; anders zou elke run er twee krijgen.
+3. **`/api/admin/status` geeft `lastEmbed`** — de nieuwste embed-regel als eigen
+   veld, los van het 15-rijen-venster van `logs`. Dat venster was zelf een
+   herhaling van #282: een embed-fout om 02:00 wordt vóór de ochtend weggedrukt
+   door de rijen van stap 6-8, de job-afronding en de nachtelijke
+   claims-/clarify-/relations-jobs, waarna beheer er weer kerngezond uitziet. De
+   admin-cockpit hangt zijn paneel aan dit veld.
+4. **Herstel is stilstand, geen half resultaat.** Een gefaalde batch wordt
+   overgeslagen (kaarten houden `Embedding == null` en komen vanzelf weer aan de
+   beurt); bij de regel-index wordt de héle bron overgeslagen, want de
+   oud-weg/nieuw-erin-swap zou een complete index vervangen door een gatenkaas.
+   Bij annulering wordt de tally van eerder gefaalde batches nog weggeschreven
+   (met `CancellationToken.None`, zelfde les als de "bewust zonder
+   token"-afronding in `JobRunner`) vóór de `OperationCanceledException`
+   doorgaat.
+5. **Doorlopen, maar niet eindeloos.** Vóór #282 brak de pijplijn af bij de
+   eerste fout: een dode Ollama kostte één verzoek. Per-batch doorlopen mág dat
+   niet in een hangpartij veranderen — bij `Timeout` (5 min, geen retry) zou 179
+   batches ≈ 15 uur zijn, en met de één-job-gate van `JobRunner` plus de
+   synchrone aanroep in `ScanScheduler` ligt dan de hele beheer- én schedulerlus
+   stil. Na `MaxConsecutiveFailures` (3) opeenvolgende gefaalde batches stopt de
+   run en meldt dat; een geslaagde batch zet de teller terug.
+6. **Alle aanroepers gebruiken `EmbedRunResult.Summary` /
+   `RuleIndexResults.Summarize()`.** Een eigen samenvatting bouwen liet de uitval
+   weer wegvallen: `JobCatalog` meldde een omgevallen stap als `ok`, en
+   `"{r.Count} bronnen (herbouwd)"` telde gefaalde bronnen gewoon mee — zes
+   omgevallen bronnen werden "0 sectie-chunks over 6 bronnen (herbouwd)".
+   `SetReleaseService` was een échte regressie van #282 zelf: zijn `Step`-catch
+   zette voorheen `FOUT — …` in het ketendetail, maar de pijplijn gooit niet
+   meer, dus zonder `Summary` werd een omgevallen embed-stap als geslaagd
+   gemeld. Concreet vier aanroepplekken: `JobCatalog.EmbedAsync`,
+   `RulesAsync` (`Summarize(rebuilt: true)`), `RulesIndexAsync`
+   (`Summarize(incremental: true)` — de incrementele job uit #258) en
+   `SetReleaseService`. Komt er een nieuwe aanroeper bij, dan hoort die
+   `Summary`/`Summarize()` te gebruiken: een eigen string is precies hoe deze
+   bevinding er via een nieuwe deur weer in komt.
+7. **Begrenzen boven verhogen.** De cap van 2,5 GiB blijft: na #279 is er geen
+   ruimte om te schuiven, en een hogere cap verplaatst de OOM alleen naar
+   Postgres of Neo4j. Idle houdt Ollama ~69 MiB vast, dus de piek zit in het
+   verzoek. `EMBED_BATCH_SIZE` 16 → **8**, plus een tekenbudget
+   `EMBED_BATCH_CHARS` (~**8000**) omdat een telling niets zegt over de kosten:
+   8 regel-secties (tot 2400 tekens) is een heel ander verzoek dan 8
+   kaartteksten (~300 tekens). Beide staan als `${VAR:-default}` in de
+   compose-`environment:` van rb-api — env-only is hier bewust, want dit is een
+   geheugenknop die vastzit aan de `memory:`-cap in dezelfde file (zelfde
+   koppeling als `AI_MAX_CONCURRENCY` ↔ `rb-v2-ai`), geen gedragsvlag die om de
+   ADR-18-behandeling vraagt.
+
+**Gevolg.** Provenance blijft onaangeroerd: model (`bge-m3`) en dimensie
+(`vector(1024)`) zijn ongewijzigd — een kleinere batch is geen ander model, en de
+dimensie-guard is juist versterkt tot een eigen, getelde uitkomst.
+`EmbedCallOutcome.cs`, `EmbedBatching.cs`, `EmbeddingSettings.cs`,
+`CardEmbeddingPipeline`, `RuleChunkPipeline`, `EmbedOutcomeTests`,
+`RuleChunkPipelineTests`.
+
+**Nuance bij het tekenbudget.** `RuleSectionParser.MaxSectionLength` (2400) is een
+streefwaarde, geen harde grens: `SplitLong` knipt op zinsgrens en laat één zin die
+zelf langer is heel, dus een punteloze tabeldump kan boven het budget uitkomen.
+`EmbedBatching` geeft zo'n uitschieter een eigen verzoek in plaats van hem weg te
+laten — input verdwijnt nooit, ook niet als hij niet past.
+
+---
+
 ## 10. Kwaliteitsscenario's
 
 Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
@@ -2993,6 +3110,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Q11 | Eén parallel retrieval-kanaal van `/ask` gooit (bv. de misvattingen-query faalt) | Dat kanaal levert leeg + een marker in de trace (`kanaal-uitval: ...`); de overige kanalen en het antwoord blijven ongemoeid, nooit een 500. Sequentieel (zonder factory) vs. parallel (met factory) leveren byte-voor-byte dezelfde prompt | `AskService` (#152), `AskServiceParallelRetrievalTests` |
 | Q12 | rb-ai onbereikbaar tijdens de mechaniek-mining | De gebrackete mechanieken worden tóch geschreven (deterministisch, ADR-17), inclusief magnitude-familie; de kaart blijft in de wachtrij omdat `Triggers` null blijft en wordt de volgende run afgemaakt — nooit een half feit dat als "gemined" telt | `MechanicMiningService` (#211), `MechanicMiningServiceTests` |
 | Q13 | Vertaalstap van de primer valt uit of vernederlandst een spelterm (Runes, Battlefields, showdown, Might, …) of laat een §-verwijzing vallen | De vertaling wordt niet opgeslagen (`body_nl` blijft null); `/primer` toont de canonieke Engelse tekst met een expliciete melding erbij, nooit een leeg vak en nooit een half-vernederlandste tekst. Het doc blijft draft tot de beheerder het goedkeurt | `PrimerTranslation.Leaks`, `PrimerService.TranslateAsync` (#266, ADR-19), `PrimerTranslationTests`, `PrimerServiceTranslationTests`, `primerText.test.ts` |
+| Q14 | Ollama valt om (OOM-kill van `llama-server`) tijdens een embed-run | De gefaalde batch wordt overgeslagen, de run gaat door en meldt achteraf per oorzaak hoeveel kaarten/chunks bleven liggen — in het resultaat én als `run_log`-regel (kind `embed`, status `error`), ongeacht welke aanroeper de pijplijn startte. De betrokken kaarten houden `Embedding == null` en komen de volgende run weer aan de beurt; bij de regel-index blijft de bestaande index van die bron staan i.p.v. half vervangen te worden | `EmbedCallOutcome`, `CardEmbeddingPipeline`, `RuleChunkPipeline` (#282, ADR-20), `EmbedOutcomeTests` |
 
 ---
 

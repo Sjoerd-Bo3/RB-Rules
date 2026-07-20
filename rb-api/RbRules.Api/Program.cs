@@ -59,6 +59,15 @@ builder.Services.AddHttpClient<EmbeddingService>(c =>
     c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434");
     c.Timeout = TimeSpan.FromMinutes(5);
 });
+// Hoeveel werk er per embed-verzoek naar Ollama gaat (#282). Hangt vast aan de
+// memory:-cap van rb-v2-ollama in de compose-file — verzet nooit het één zonder het
+// ander. Startup-snapshot is hier correct: dit is een infra-/geheugenknop die met een
+// containerherstart meekomt, geen gedragsvlag die je live wilt kunnen omzetten.
+builder.Services.AddSingleton(sp => EmbeddingSettings.FromEnvironment(
+    // Een genegeerde waarde mag niet stil op de default terugvallen (#282-review):
+    // dan denk je te hebben bijgesteld terwijl er niets veranderde.
+    msg => sp.GetRequiredService<ILoggerFactory>()
+        .CreateLogger("EmbeddingSettings").LogWarning("{Message}", msg)));
 builder.Services.AddScoped<CardEmbeddingPipeline>();
 builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
