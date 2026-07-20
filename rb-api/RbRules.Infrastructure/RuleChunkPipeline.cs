@@ -11,6 +11,31 @@ public record RuleIndexResult(string SourceId, int Chunks, string FailureSummary
     public bool Failed => FailureSummary.Length > 0;
 }
 
+/// <summary>Eén samenvattingsregel over een hele indexeer-run (#282-review). Bestaat
+/// omdat de aanroepers hun eigen string bouwden en de uitval daarin wegviel: met alle
+/// zes de bronnen omgevallen meldde de job letterlijk "0 sectie-chunks over 6 bronnen
+/// (herbouwd)" met status ok — `Count` telde de gefaalde bronnen gewoon mee.</summary>
+public static class RuleIndexResults
+{
+    /// <param name="rebuilt">De volledige herbouw ("rules", force:true).</param>
+    /// <param name="incremental">De incrementele indexering ("rules-index", #258) —
+    /// die telt alleen nieuwe/gewijzigde bronnen, dus dat hoort in de regel te staan.</param>
+    public static string Summarize(
+        this IReadOnlyList<RuleIndexResult> results,
+        bool rebuilt = false, bool incremental = false)
+    {
+        var ok = results.Where(r => !r.Failed).ToList();
+        var failed = results.Where(r => r.Failed).ToList();
+        var scope = incremental ? " nieuwe/gewijzigde bronnen" : " bronnen";
+        var head = $"{ok.Sum(r => r.Chunks)} sectie-chunks over {ok.Count}{scope}"
+            + (rebuilt ? " (herbouwd)" : "");
+        return failed.Count == 0
+            ? head
+            : head + $" · {failed.Count} bron(nen) overgeslagen — "
+                + string.Join("; ", failed.Select(f => $"{f.SourceId}: {f.FailureSummary}"));
+    }
+}
+
 /// <summary>Indexeert het nieuwste document per bron: sectie-parse → chunks met
 /// chunk_index + section_code (audit-fixes) → embeddings. Idempotent per
 /// document: al geïndexeerde documenten worden overgeslagen.
@@ -67,9 +92,13 @@ public class RuleChunkPipeline(
             // pas daarna oud-weg/nieuw-erin in één transactie, zodat er nooit
             // een venster zonder regelindex is (review-fix).
             //
-            // Regel-secties zijn de ZWAARSTE embed-verzoeken in het systeem (tot
+            // Regel-secties zijn de ZWAARSTE embed-verzoeken in het systeem (richtlijn
             // RuleSectionParser.MaxSectionLength = 2400 tekens per stuk), dus juist
-            // hier knijpt het tekenbudget van EmbeddingSettings (#282).
+            // hier knijpt het tekenbudget van EmbeddingSettings (#282). Let op: 2400
+            // is een streefwaarde, geen harde grens — SplitLong knipt op zinsgrens en
+            // laat één zin die zelf langer is heel (een punteloze tabeldump kan dus
+            // boven het tekenbudget uitkomen). EmbedBatching geeft zo'n uitschieter
+            // een eigen verzoek in plaats van hem weg te laten.
             var texts = chunks.Select(c => c.Text).ToList();
             var tally = new EmbedOutcomeTally();
             foreach (var range in EmbedBatching.Split(texts, _settings.BatchSize, _settings.BatchChars))
@@ -106,28 +135,29 @@ public class RuleChunkPipeline(
             results.Add(new(src.Id, chunks.Count));
         }
 
-        await LogFailuresAsync(results, ct);
+        // Niets gedaan = geen nieuws (alle bronnen al geïndexeerd, de normale tick).
+        if (results.Count > 0) await LogRunAsync(results, ct);
         return results;
     }
 
-    /// <summary>Overgeslagen bronnen landen ALTIJD in run_log, ongeacht de aanroeper
-    /// (beheer-knop, job, scheduler-tick) — de scheduler logde ze voorheen hooguit als
-    /// "Her-index/bans overgeslagen (Ollama/rb-ai onbereikbaar?)" naar de
-    /// containerlog.</summary>
-    private async Task LogFailuresAsync(List<RuleIndexResult> results, CancellationToken ct)
+    /// <summary>Elke run mét werk landt in run_log, ongeacht de aanroeper (beheer-knop,
+    /// job, scheduler-tick) — de scheduler logde uitval voorheen hooguit als
+    /// "Her-index/bans overgeslagen (Ollama/rb-ai onbereikbaar?)" naar de containerlog.
+    /// De ok-regel hoort er net zo goed bij (#282-review): zonder herstel-melding
+    /// blijft een oude foutregel de nieuwste embed-regel en dooft het alarm in beheer
+    /// nooit.</summary>
+    private async Task LogRunAsync(List<RuleIndexResult> results, CancellationToken ct)
     {
-        var failed = results.Where(r => r.Failed).ToList();
-        if (failed.Count == 0) return;
+        var anyFailed = results.Any(r => r.Failed);
         try
         {
             db.RunLogs.Add(new RunLog
             {
                 Kind = "embed",
                 Ref = "rules",
-                Status = "error",
-                Detail = $"{failed.Count} bron(nen) niet geïndexeerd — "
-                    + string.Join("; ", failed.Select(f => $"{f.SourceId}: {f.FailureSummary}"))
-                    + " — bestaande regelindex blijft staan",
+                Status = anyFailed ? "error" : "ok",
+                Detail = results.Summarize()
+                    + (anyFailed ? " — bestaande regelindex blijft staan" : ""),
             });
             await db.SaveChangesAsync(ct);
         }

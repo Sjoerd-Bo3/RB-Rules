@@ -285,7 +285,9 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<CardEmbeddingPipeline>()
             .RunAsync(progress: report, ct: ct);
-        return new($"{r.Embedded} kaarten geembed, {r.Skipped} al actueel");
+        // r.Summary draagt de uitval mee (#282): een run waarin Ollama omviel meldde
+        // anders alleen het aantal geslaagde kaarten en gold als geslaagde stap.
+        return new(r.Summary);
     }
 
     /// <summary>Ongecapte mechaniek-mining (#258): de per-run batch-cap eraf, de
@@ -323,7 +325,10 @@ public static class JobCatalog
         // ook op bestaande documenten landen.
         var r = await sp.GetRequiredService<RuleChunkPipeline>()
             .RunAsync(force: true, report, ct);
-        return new($"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen (herbouwd)");
+        // Summarize (#282): telt alleen ECHT geïndexeerde bronnen en noemt de
+        // overgeslagen bronnen apart. Een kale Count telde de gefaalde mee, dus zes
+        // omgevallen bronnen meldden "0 sectie-chunks over 6 bronnen (herbouwd)".
+        return new(r.Summarize(rebuilt: true));
     }
 
     /// <summary>Incrementele regelindexering (#258): alleen documenten die nog
@@ -335,7 +340,9 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<RuleChunkPipeline>()
             .RunAsync(force: false, report, ct);
-        return new($"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} nieuwe/gewijzigde bronnen");
+        // Zelfde Summarize-plicht als "rules" (#282): ook deze incrementele variant
+        // mag een overgeslagen bron niet als geïndexeerd meetellen.
+        return new(r.Summarize(incremental: true));
     }
 
     private static async Task<JobOutcome> BansAsync(

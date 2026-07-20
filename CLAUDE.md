@@ -253,6 +253,28 @@ met quota en rate-limiting.
   `Transport` = container weg); (b) laat de **pijplijn zelf** de foutregel in
   `run_log` schrijven, niet de aanroeper — anders is de uitval alleen zichtbaar
   langs het pad dat toevallig logt, en juist de scheduler-tick doet dat niet.
+- **Een alarm dat alleen door veroudering dooft, is geen alarm** (#282-review).
+  Drie valstrikken die er alle drie tegelijk in zaten. (a) **Lees niet uit een
+  venster**: het paneel las de 15 nieuwste `run_log`-rijen uit `/admin/status` —
+  een embed-fout om 02:00 wordt vóór de ochtend weggedrukt door de rijen van de
+  latere nachtstappen, en dan ziet beheer er weer kerngezond uit. Geef zo'n
+  gezondheidssignaal een eigen, gerichte query (`lastEmbed`). (b) **Controleer
+  dat er écht een herstel-regel geschreven wordt**: er was geen enkel vanuit de
+  UI bereikbaar pad dat een embed-*ok*-regel schreef (rb-web post alleen
+  `/api/admin/jobs/{name}`, `JobRunner` logt `Kind = "job"`, de scheduler logde
+  bij succes niets), dus de melding kon alleen verlopen, niet verdwijnen.
+  (c) **Zoek de aanroepers op die hun eigen samenvatting bouwen**: `JobCatalog`
+  en `SetReleaseService` negeerden `EmbedRunResult.Summary` en meldden een
+  omgevallen stap als `ok` — `"{r.Count} bronnen (herbouwd)"` telde zelfs de
+  gefaalde bronnen mee. Een resultaat-record met de uitval erin helpt niets als
+  de aanroeper hem niet gebruikt.
+- **Best-effort doorlopen heeft een rem nodig** (#282-review). Van "stop bij de
+  eerste fout" naar "sla de batch over en ga door" verandert de kosten van uitval
+  van één verzoek naar *alle* verzoeken. Met een 5-minuten-timeout en zonder
+  retry is 179 batches ≈ 15 uur — en de embed-pijplijn draait synchroon in de
+  scheduler-lus én achter de één-job-gate van `JobRunner`, dus dan ligt álles
+  stil. Tel opeenvolgende fouten en stop na een handvol (een geslaagde batch zet
+  de teller terug, zodat één hik een lange run niet afkapt).
 - **Begrens het gebruik vóór je een memory-plafond verzet** (#282). Op de 8
   GB-VM is na #279 geen ruimte meer om te schuiven; een hogere cap verplaatst de
   OOM alleen naar Postgres of Neo4j, en dan kiest de *host*-killer, die de

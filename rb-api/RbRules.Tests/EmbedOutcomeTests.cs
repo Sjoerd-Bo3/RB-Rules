@@ -86,8 +86,14 @@ public class EmbedOutcomeTests
         Assert.Single(db.RunLogs.Where(l => l.Kind == "embed" && l.Status == "error"));
     }
 
+    // ── Het alarm moet doven door HERSTEL, niet door veroudering ─────────────
+    // #282-review: er is geen enkel vanuit de UI bereikbaar pad dat een embed-ok-regel
+    // schrijft (rb-web post alleen /api/admin/jobs/{name}, JobRunner logt Kind="job",
+    // de scheduler logde bij succes niets). Zonder ok-regel blijft een oude foutregel
+    // eeuwig de nieuwste embed-regel: loos alarm tot de rij veroudert.
+
     [Fact]
-    public async Task Embed_GeslaagdeRun_SchrijftGeenFoutregel()
+    public async Task Embed_GeslaagdeRunMetWerk_SchrijftEenOkRegel_ZodatHetAlarmDooft()
     {
         await using var db = NewDb();
         db.Cards.AddRange(Cards(5));
@@ -97,9 +103,118 @@ public class EmbedOutcomeTests
 
         Assert.Equal(5, r.Embedded);
         Assert.False(r.HasFailures);
-        Assert.Equal("", r.FailureSummary);
-        // De ok-regel hoort bij de aanroeper (endpoint/job) — de pijplijn zwijgt.
+        var log = Assert.Single(db.RunLogs.Where(l => l.Kind == "embed"));
+        Assert.Equal("ok", log.Status);
+    }
+
+    [Fact]
+    public async Task Embed_NaEenFout_LaatEenGeslaagdeRunDeNieuwsteRegelOkZijn()
+    {
+        await using var db = NewDb();
+        db.Cards.AddRange(Cards(4));
+        await db.SaveChangesAsync();
+
+        // Run 1: Ollama ligt eruit.
+        await Pipeline(db, _ => new HttpResponseMessage(HttpStatusCode.InternalServerError))
+            .RunAsync();
+        // Run 2: Ollama is terug — precies het herstelpad dat het paneel moet doven.
+        await Pipeline(db, req => OkEmbeddings(BatchTexts(req))).RunAsync();
+
+        var newest = db.RunLogs.Where(l => l.Kind == "embed")
+            .OrderByDescending(l => l.Id).First();
+        Assert.Equal("ok", newest.Status);
+    }
+
+    [Fact]
+    public async Task Embed_NietsTeDoen_SchrijftGeenRegel()
+    {
+        // Anders zou de scheduler-tick elk uur een lege regel produceren en het
+        // run_log volstromen met "0 geembed".
+        await using var db = NewDb();
+
+        var r = await Pipeline(db, req => OkEmbeddings(BatchTexts(req))).RunAsync();
+
+        Assert.Equal(0, r.Embedded);
         Assert.Empty(db.RunLogs);
+    }
+
+    // ── Niet eindeloos doorproberen ──────────────────────────────────────────
+
+    [Fact]
+    public async Task Embed_OllamaLigtEruit_BreektAfNaDrieOpeenvolgendeFouten()
+    {
+        // #282-review: vóór #282 kostte een dode Ollama één verzoek (de pijplijn
+        // gooide). Doorlopen-per-batch mag dat niet in 179 × 5 min timeout ≈ 15 uur
+        // veranderen — met de één-job-gate en de synchrone scheduler-aanroep ligt dan
+        // alles stil.
+        await using var db = NewDb();
+        db.Cards.AddRange(Cards(80));   // 10 batches van 8
+        await db.SaveChangesAsync();
+
+        var calls = 0;
+        var r = await Pipeline(db, _ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.GatewayTimeout);
+        }).RunAsync();
+
+        Assert.Equal(3, calls);          // niet alle 10
+        Assert.True(r.Aborted);
+        Assert.Equal(24, r.Failed);      // 3 batches × 8
+        Assert.Equal(56, r.Remaining);   // nooit geprobeerd
+        Assert.Contains("afgebroken", r.Summary);
+        Assert.Contains("niet geprobeerd", r.Summary);
+    }
+
+    [Fact]
+    public async Task Embed_LosseHik_BreektDeRunNietAf()
+    {
+        // Een geslaagde batch zet de teller terug: één hapering mag een lange run niet
+        // afkappen, anders ruilen we de ene stille schade voor de andere.
+        await using var db = NewDb();
+        db.Cards.AddRange(Cards(40));   // 5 batches
+        await db.SaveChangesAsync();
+
+        var calls = 0;
+        var r = await Pipeline(db, req =>
+        {
+            calls++;
+            // Batch 2 en 4 haperen, met steeds een geslaagde ertussen.
+            return calls is 2 or 4
+                ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                : OkEmbeddings(BatchTexts(req));
+        }).RunAsync();
+
+        Assert.Equal(5, calls);          // alle batches geprobeerd
+        Assert.False(r.Aborted);
+        Assert.Equal(24, r.Embedded);
+        Assert.Equal(16, r.Failed);
+    }
+
+    [Fact]
+    public async Task Embed_Annulering_BewaartDeTallyVanEerdereFouten()
+    {
+        // #282-review: TryEmbedAsync gooit door bij annulering. Zonder vangnet slaat
+        // LogRunAsync over en verdwijnt de meting van batches die vóór de annulering
+        // faalden — dezelfde les als JobRunner's "bewust zonder token"-afronding.
+        await using var db = NewDb();
+        db.Cards.AddRange(Cards(24));
+        await db.SaveChangesAsync();
+
+        using var cts = new CancellationTokenSource();
+        var calls = 0;
+        var pipeline = Pipeline(db, _ =>
+        {
+            if (++calls == 2) { cts.Cancel(); cts.Token.ThrowIfCancellationRequested(); }
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => pipeline.RunAsync(ct: cts.Token));
+
+        var log = Assert.Single(db.RunLogs.Where(l => l.Kind == "embed"));
+        Assert.Equal("error", log.Status);
+        Assert.Contains("5xx", log.Detail);
     }
 
     // ── Oorzaak per uitslag ──────────────────────────────────────────────────
@@ -247,6 +362,46 @@ public class EmbedOutcomeTests
         Assert.Equal(3, batches.Sum(b => b.GetOffsetAndLength(texts.Count).Length));
     }
 
+    // ── De foutregel mag niet uit het venster wegzakken ──────────────────────
+
+    [Fact]
+    public async Task EmbedGezondheid_OverleeftDeDrukteVanEenNachtrun()
+    {
+        // #282-review: het paneel las eerst `logs` — exact de 15 nieuwste run_log-rijen
+        // uit /admin/status. Scenario: nachtrun 02:00, Ollama valt om in stap 5/8;
+        // daarna schrijven stap 6-8, de job-afronding en de claims-/clarify-/
+        // relations-/decks-jobs elk hun rijen. 's Ochtends staat de embed-fout buiten
+        // die 15 → paneel leeg, tabel leeg, alles ziet er gezond uit. Exact #282.
+        await using var db = NewDb();
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "embed", Ref = "cards", Status = "error", Detail = "5xx×3",
+            CreatedAt = DateTimeOffset.UtcNow.AddHours(-6),
+        });
+        for (var i = 0; i < 25; i++)
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "job", Ref = $"stap{i}", Status = "ok",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+            });
+        await db.SaveChangesAsync();
+
+        // Het 15-rijen-venster ziet de fout niet meer …
+        var window = await db.RunLogs.AsNoTracking()
+            .OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync();
+        Assert.DoesNotContain(window, l => l.Kind == "embed");
+
+        // … de gerichte embed-query wel. Dit is de vorm die /admin/status als
+        // `lastEmbed` teruggeeft.
+        var lastEmbed = await db.RunLogs.AsNoTracking()
+            .Where(l => l.Kind == "embed")
+            .OrderByDescending(l => l.CreatedAt)
+            .Select(l => new { l.Status, l.Detail, l.CreatedAt })
+            .FirstOrDefaultAsync();
+        Assert.NotNull(lastEmbed);
+        Assert.Equal("error", lastEmbed.Status);
+    }
+
     // ── Instellingen ─────────────────────────────────────────────────────────
 
     [Fact]
@@ -257,16 +412,34 @@ public class EmbedOutcomeTests
     }
 
     [Fact]
-    public void Settings_OnzinOfBuitenBereik_ValtTerugOpDeDefault()
+    public void Settings_OnzinOfBuitenBereik_ValtTerugOpDeDefault_MaarNietStil()
     {
         // Een typfout in de .env mag de pijplijn niet op 1 tekst per verzoek zetten
-        // (traag) of het plafond ontgrendelen (OOM terug).
-        using var _ = new EnvScope(("EMBED_BATCH_SIZE", "nul"), ("EMBED_BATCH_CHARS", "0"));
+        // (traag) of het plafond ontgrendelen (OOM terug). Maar in een PR over stille
+        // degradatie mag die terugval óók niet zwijgen (#282-review): dan denk je te
+        // hebben bijgesteld terwijl er niets veranderde — de NIGHTLY_ENABLED-klasse
+        // fout (#268).
+        using var _ = new EnvScope(("EMBED_BATCH_SIZE", "100"), ("EMBED_BATCH_CHARS", "0"));
+        var warnings = new List<string>();
 
-        var s = EmbeddingSettings.FromEnvironment();
+        var s = EmbeddingSettings.FromEnvironment(warnings.Add);
 
         Assert.Equal(EmbeddingSettings.DefaultBatchSize, s.BatchSize);
         Assert.Equal(EmbeddingSettings.DefaultBatchChars, s.BatchChars);
+        Assert.Equal(2, warnings.Count);
+        Assert.Contains(warnings, w => w.Contains("EMBED_BATCH_SIZE") && w.Contains("100"));
+    }
+
+    [Fact]
+    public void Settings_OngezetteVlag_WaarschuwtNiet()
+    {
+        // Niets ingesteld is de normale toestand, geen probleem.
+        using var _ = new EnvScope(("EMBED_BATCH_SIZE", ""), ("EMBED_BATCH_CHARS", ""));
+        var warnings = new List<string>();
+
+        EmbeddingSettings.FromEnvironment(warnings.Add);
+
+        Assert.Empty(warnings);
     }
 
     [Fact]

@@ -878,20 +878,30 @@ de globale duur-vangrail).
   (model-runner omgevallen?)×3", "onbereikbaar×1", "4xx (model niet
   gepulld?)×2", net zoals #251 dat voor rb-ai-uitval doet. Die uitsplitsing
   landt als `run_log`-regel (kind `embed`, status `error`) ongeacht wie de
-  pijplijn startte — beheer-knop, job óf scheduler-tick — en de cockpit licht
-  de nieuwste eruit als eigen paneel, zodat hij niet in de logtabel wegzakt.
-  Voorheen was de degradatie stil: de run meldde het aantal *te-doen* kaarten
-  als "geembed" en de scheduler logde hooguit "Ollama onbereikbaar?" naar de
-  containerlog, waar niemand kijkt — kaarten liepen zonder embedding rond en
-  semantisch zoeken verslechterde ongemerkt. **Niet-geëmbedde items blijven
-  staan** voor de volgende run (de pijplijn selecteert op ontbrekende
-  embedding), en bij de regel-index wordt de hele bron overgeslagen in plaats
-  van een complete index door een gatenkaas te vervangen. Het gebruik is
-  begrensd in plaats van het plafond verhoogd: `EMBED_BATCH_SIZE` (16 → 8) en
-  een tekenbudget `EMBED_BATCH_CHARS` (~8000), omdat de piek in het verzoek zit
-  en regel-secties (tot 2400 tekens) veel zwaarder zijn dan kaartteksten.
+  pijplijn startte — beheer-knop, job óf scheduler-tick — en de cockpit toont
+  hem als eigen paneel bovenaan. Voorheen was de degradatie stil: de run meldde
+  het aantal *te-doen* kaarten als "geembed" en de scheduler logde hooguit
+  "Ollama onbereikbaar?" naar de containerlog, waar niemand kijkt — kaarten
+  liepen zonder embedding rond en semantisch zoeken verslechterde ongemerkt.
+  **Het alarm dooft door herstel, niet door veroudering**: ook een geslaagde
+  run schrijft zijn regel (geen enkel UI-pad deed dat, dus een oude foutregel
+  bleef anders eeuwig de nieuwste embed-regel), en de cockpit leest een eigen
+  `lastEmbed`-veld in plaats van de 15 nieuwste logrijen — daar wordt een
+  nachtelijke embed-fout vóór de ochtend uit weggedrukt door de rijen van de
+  latere stappen. Alle jobs melden de uitval ook in hun eigen ketendetail, in
+  plaats van een omgevallen stap als geslaagd te tonen.
+  **Niet-geëmbedde items blijven staan** voor de volgende run (de pijplijn
+  selecteert op ontbrekende embedding), en bij de regel-index wordt de hele
+  bron overgeslagen in plaats van een complete index door een gatenkaas te
+  vervangen. **Doorlopen, maar niet eindeloos**: na drie opeenvolgende gefaalde
+  batches stopt de run en meldt dat, zodat een dode Ollama de beheer- en
+  schedulerlus niet urenlang bezet houdt. Het gebruik is begrensd in plaats van
+  het plafond verhoogd: `EMBED_BATCH_SIZE` (16 → 8) en een tekenbudget
+  `EMBED_BATCH_CHARS` (~8000), omdat de piek in het verzoek zit en
+  regel-secties (streefgrens 2400 tekens) veel zwaarder zijn dan kaartteksten.
   Model en dimensie blijven ongewijzigd — een kleinere batch is geen ander
-  model. *Route* `/admin` (paneel "Embeddings onvolledig" + logtabel).
+  model. *Route* `/admin` (paneel "Embeddings onvolledig" + logtabel) ·
+  *endpoint* `/api/admin/status` (`lastEmbed`).
 - **Lopende job afbreken** (#253) — naast de "Nu bezig"-voortgangsbalk staat
   een **Afbreken**-knop (met bevestiging) die de lopende job of het lopende
   pad coöperatief stopt; binnen enkele seconden is `running` weer leeg en kan

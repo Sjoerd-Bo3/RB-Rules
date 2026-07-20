@@ -2868,16 +2868,46 @@ vraagkant in plaats van aan het plafond:
    `EmbedAsync`/`EmbedOneAsync` blijven gooien — de interactieve paden (/ask,
    regels-/kaart-zoek) degraderen al netjes naar alleen-FTS en dat contract
    blijft staan.
-2. **De pijplijn logt zijn eigen uitval** naar `run_log` (kind `embed`,
-   status `error`, met de per-oorzaak-uitsplitsing), zodat het zichtbaar is
-   ongeacht wie hem startte — beheer-knop, job óf scheduler-tick. De ok-regel
-   blijft bij de aanroeper, dus een geslaagde run krijgt niet twee regels. De
-   admin-cockpit licht de nieuwste embed-foutregel als eigen paneel uit.
-3. **Herstel is stilstand, geen half resultaat.** Een gefaalde batch wordt
+2. **De pijplijn logt elke run mét werk** naar `run_log` (kind `embed`) — met de
+   per-oorzaak-uitsplitsing bij uitval — zodat het zichtbaar is ongeacht wie hem
+   startte: beheer-knop, job óf scheduler-tick. Dat de gesláágde run óók een
+   regel schrijft is niet cosmetisch: géén enkel vanuit de UI bereikbaar pad
+   schreef een embed-ok-regel (rb-web post alleen `/api/admin/jobs/{name}`, en
+   `JobRunner` logt `Kind = "job"`; de scheduler logde bij succes niets), dus
+   een oude foutregel bleef eeuwig de nieuwste embed-regel en het alarm doofde
+   nooit door herstel — alleen door veroudering. De endpoints schrijven geen
+   eigen embed-regel meer; anders zou elke run er twee krijgen.
+3. **`/api/admin/status` geeft `lastEmbed`** — de nieuwste embed-regel als eigen
+   veld, los van het 15-rijen-venster van `logs`. Dat venster was zelf een
+   herhaling van #282: een embed-fout om 02:00 wordt vóór de ochtend weggedrukt
+   door de rijen van stap 6-8, de job-afronding en de nachtelijke
+   claims-/clarify-/relations-jobs, waarna beheer er weer kerngezond uitziet. De
+   admin-cockpit hangt zijn paneel aan dit veld.
+4. **Herstel is stilstand, geen half resultaat.** Een gefaalde batch wordt
    overgeslagen (kaarten houden `Embedding == null` en komen vanzelf weer aan de
    beurt); bij de regel-index wordt de héle bron overgeslagen, want de
    oud-weg/nieuw-erin-swap zou een complete index vervangen door een gatenkaas.
-4. **Begrenzen boven verhogen.** De cap van 2,5 GiB blijft: na #279 is er geen
+   Bij annulering wordt de tally van eerder gefaalde batches nog weggeschreven
+   (met `CancellationToken.None`, zelfde les als de "bewust zonder
+   token"-afronding in `JobRunner`) vóór de `OperationCanceledException`
+   doorgaat.
+5. **Doorlopen, maar niet eindeloos.** Vóór #282 brak de pijplijn af bij de
+   eerste fout: een dode Ollama kostte één verzoek. Per-batch doorlopen mág dat
+   niet in een hangpartij veranderen — bij `Timeout` (5 min, geen retry) zou 179
+   batches ≈ 15 uur zijn, en met de één-job-gate van `JobRunner` plus de
+   synchrone aanroep in `ScanScheduler` ligt dan de hele beheer- én schedulerlus
+   stil. Na `MaxConsecutiveFailures` (3) opeenvolgende gefaalde batches stopt de
+   run en meldt dat; een geslaagde batch zet de teller terug.
+6. **Alle aanroepers gebruiken `EmbedRunResult.Summary` /
+   `RuleIndexResults.Summarize()`.** Een eigen samenvatting bouwen liet de uitval
+   weer wegvallen: `JobCatalog` meldde een omgevallen stap als `ok`, en
+   `"{r.Count} bronnen (herbouwd)"` telde gefaalde bronnen gewoon mee — zes
+   omgevallen bronnen werden "0 sectie-chunks over 6 bronnen (herbouwd)".
+   `SetReleaseService` was een échte regressie van #282 zelf: zijn `Step`-catch
+   zette voorheen `FOUT — …` in het ketendetail, maar de pijplijn gooit niet
+   meer, dus zonder `Summary` werd een omgevallen embed-stap als geslaagd
+   gemeld.
+7. **Begrenzen boven verhogen.** De cap van 2,5 GiB blijft: na #279 is er geen
    ruimte om te schuiven, en een hogere cap verplaatst de OOM alleen naar
    Postgres of Neo4j. Idle houdt Ollama ~69 MiB vast, dus de piek zit in het
    verzoek. `EMBED_BATCH_SIZE` 16 → **8**, plus een tekenbudget
@@ -2893,7 +2923,14 @@ vraagkant in plaats van aan het plafond:
 (`vector(1024)`) zijn ongewijzigd — een kleinere batch is geen ander model, en de
 dimensie-guard is juist versterkt tot een eigen, getelde uitkomst.
 `EmbedCallOutcome.cs`, `EmbedBatching.cs`, `EmbeddingSettings.cs`,
-`CardEmbeddingPipeline`, `RuleChunkPipeline`, `EmbedOutcomeTests`.
+`CardEmbeddingPipeline`, `RuleChunkPipeline`, `EmbedOutcomeTests`,
+`RuleChunkPipelineTests`.
+
+**Nuance bij het tekenbudget.** `RuleSectionParser.MaxSectionLength` (2400) is een
+streefwaarde, geen harde grens: `SplitLong` knipt op zinsgrens en laat één zin die
+zelf langer is heel, dus een punteloze tabeldump kan boven het budget uitkomen.
+`EmbedBatching` geeft zo'n uitschieter een eigen verzoek in plaats van hem weg te
+laten — input verdwijnt nooit, ook niet als hij niet past.
 
 ---
 

@@ -52,19 +52,10 @@ public static class AdminEndpoints
         {
             try
             {
-                var r = await pipeline.RunAsync(force ?? false);
-                // Uitval schrijft de pijplijn zelf al weg (#282, ook voor de
-                // scheduler-tick die hier nooit langskomt) — hier alleen de
-                // ok-afronding, zodat een gefaalde run niet twee regels krijgt.
-                if (!r.HasFailures)
-                {
-                    db.RunLogs.Add(new RunLog
-                    {
-                        Kind = "embed", Ref = "cards", Status = "ok", Detail = r.Summary,
-                    });
-                    await db.SaveChangesAsync();
-                }
-                return Results.Ok(r);
+                // De pijplijn schrijft zelf de embed-regel (ok én error, #282) — voor
+                // álle aanroepers, ook de scheduler-tick die hier nooit langskomt.
+                // Hier dus geen eigen regel: dat zou een dubbele opleveren.
+                return Results.Ok(await pipeline.RunAsync(force ?? false));
             }
             catch (Exception ex)
             {
@@ -115,20 +106,8 @@ public static class AdminEndpoints
         {
             try
             {
-                var results = await pipeline.RunAsync();
-                var total = results.Sum(r => r.Chunks);
-                // Overgeslagen bronnen logt de pijplijn zelf als error-regel (#282).
-                var indexed = results.Count(r => !r.Failed);
-                if (results.All(r => !r.Failed))
-                {
-                    db.RunLogs.Add(new RunLog
-                    {
-                        Kind = "embed", Ref = "rules", Status = "ok",
-                        Detail = $"{indexed} bronnen, {total} sectie-chunks",
-                    });
-                    await db.SaveChangesAsync();
-                }
-                return Results.Ok(results);
+                // Ook hier schrijft de pijplijn zelf zijn embed-regel (#282).
+                return Results.Ok(await pipeline.RunAsync());
             }
             catch (Exception ex)
             {
@@ -248,6 +227,17 @@ public static class AdminEndpoints
                     Decks = await db.Decks.CountAsync(),
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
+                // Embed-gezondheid (#282-review): de NIEUWSTE embed-regel, los van het
+                // 15-rijen-venster hierboven. Dat venster is precies de val die #282
+                // opnieuw zou introduceren — een nachtelijke embed-fout om 02:00 wordt
+                // vóór de ochtend weggedrukt door de regels van stap 6-8, de
+                // job-afronding en de claims-/clarify-/relations-jobs, waarna beheer er
+                // weer kerngezond uitziet. Eén rij, geen extra roundtrip.
+                LastEmbed = await db.RunLogs.AsNoTracking()
+                    .Where(l => l.Kind == "embed")
+                    .OrderByDescending(l => l.CreatedAt)
+                    .Select(l => new { l.Status, l.Detail, l.CreatedAt })
+                    .FirstOrDefaultAsync(),
             });
         });
 
