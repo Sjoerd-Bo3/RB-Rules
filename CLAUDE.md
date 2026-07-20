@@ -220,6 +220,26 @@ met quota en rate-limiting.
   `AiCallOutcome.ConcurrencyLimited` ("429 AI-slots vol") staat daarom náást
   `RateLimited`. Zelfde les als 503-vs-429 in #251: gelijk herstelgedrag ≠
   gelijke oorzaak.
+- **Een leespad migreren zonder de DEKKING van de opvolger te meten is een
+  stille blackout met groene tests** (#258). `CardInteractions` (oud) →
+  `Interactions` (gereïficeerd, #226) leek een kwestie van de query omzetten:
+  de nieuwe tabel is inhoudelijk beter, de oude is opgevolgd. Meting op
+  productie: oud 103 rijen over 94 kaarten, nieuw 8 rijen over 5 kaarten —
+  waarvan NUL gepromoveerde kaart↔kaart-paren. Filteren op de promotiepoort
+  (inhoudelijk juist!) had het kaartdetail op nul interacties gezet, zonder
+  ook maar één falende test: de tabel bestaat, de query klopt, hij is alleen
+  leeg. Oorzaak was niet het ontwerp maar de vulling (18 van 1311 kaarten
+  gemined, doordat de extractie op rb-ai-5xx strandt, #281). Regel: bij élke
+  bron-wissel in een leespad eerst `count(*)` op beide kanten én de dekking
+  over de entiteiten die de pagina toont; is de opvolger nog dun, dan een
+  expliciet EINDIGE brug (union + fallback) mét het criterium waarop hij weg
+  mag in de code, niet een "tijdelijke" union die er over een jaar nog zit.
+  Bijvangst uit dezelfde ronde: een keten-stap mag niet klakkeloos een
+  bestaande job hergebruiken als die job een ándere kostenprofiel-modus heeft —
+  `rules` draait `force:true` (volledige her-chunk + her-embed, bedoeld na een
+  parser-verbetering) en zou in de nachtelijke keten élke nacht de complete
+  regelindex herbouwen; de keten hoort de incrementele `rules-index` te
+  gebruiken.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`

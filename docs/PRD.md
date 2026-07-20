@@ -506,7 +506,17 @@ de globale duur-vangrail).
   `/api/cards/facets`, `/api/cards/search`.
 - **Kaartdetail** — het kaart-dossier: stats en tekst (met icoontokens),
   gekoppelde regels/errata, ontdekte interacties, en "similar-why" (semantische
-  uitleg waarom kaarten op elkaar lijken) met versies/varianten. Bij meerdere
+  uitleg waarom kaarten op elkaar lijken) met versies/varianten. De
+  interactie-lijst leest sinds #258 **beide** interactielagen: primair de
+  gereïficeerde laag (#226 — die de ROL agent/patient en de losse
+  window/status/cost-condities meedraagt, en alleen toont wat de promotiepoort
+  heeft goedgekeurd), aangevuld met de oude paar-lexicale tabel voor buren die
+  de opvolger nog niet kent. Die aanvulling is een expliciet eindige
+  **migratiebrug**: hard omschakelen zou vandaag het kaartdetail van 94 kaarten
+  naar nul zichtbare interacties brengen, omdat de nieuwe mining pas 1,4% van de
+  kaarten heeft bereikt (geblokkeerd door #281). De brug vervalt zodra die
+  dekking op orde is — zie `InteractionService.NeighborsAsync` voor het
+  criterium. Bij meerdere
   errata over dezelfde kaart (#168) wint de tekst met de hoogste
   temporele precedentie (TrustTier, dan nieuwste `EffectiveFrom`) — die staat
   bovenaan met "geldig sinds \<datum\>"; oudere versies blijven zichtbaar,
@@ -855,8 +865,8 @@ de globale duur-vangrail).
   form-acties en data-bindings ongewijzigd. *Route* `/admin`
   (+ `/admin/overview/[kind]`).
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
-  (scan, feeds, cards, embed, mine, rules, bans, graph, primer, interactions,
-  scout, classify, consolidatechanges, claims, clarify, relations,
+  (scan, feeds, cards, embed, mine, rules, rules-index, bans, graph, primer,
+  interactions, scout, classify, consolidatechanges, claims, clarify, relations,
   relationtriage, setrelease, decks, benchmark, benchmarksweep,
   regenerateknowledge) draaien via
   `JobRunner` met live-voortgang en run_log. *Route* `/admin` · *endpoints*
@@ -879,14 +889,25 @@ de globale duur-vangrail).
   (Infrastructure) en uitgevoerd door `PathRunner` als één gewone
   `JobRunner`-run onder de padnaam (dezelfde éénjob-gate, dezelfde
   live-Progress, dezelfde run_log-afronding als een losse job — de padnaam
-  verschijnt zo vanzelf op `/api/admin/status`). Vier paden: **Ingest-pad**
-  (scan → classify → consolidatechanges → mine → claims → clarify → embed →
-  graph — `consolidatechanges` #206: koppelt changes die hetzelfde event
-  vanuit meerdere bronnen melden), **Kaart-pad**
-  (cards → embed → graph), **Kennis-pad** (claims → clarify → relations →
-  relationtriage → graph) en **Volledige regeneratie** (primer + het
-  Kennis-pad — bewust ZONDER de wipe, die blijft de losse Gevarenzone-actie
-  `regenerateknowledge` hieronder). Een per-run gecapte stap kan
+  verschijnt zo vanzelf op `/api/admin/status`). Sinds #258 is het pad het
+  ENIGE ketenmechanisme: "Alles bijwerken" en de nachtrun waren met de hand
+  geschreven ketens met een eigen volgorde en zonder per-stap-historie, en zijn
+  nu dunne aliassen op een pad. Vier los startbare paden, elk een fase van de
+  keten: **Ingest-pad** (scan → rules-index → bans → classify →
+  consolidatechanges — `consolidatechanges` #206: koppelt changes die hetzelfde
+  event vanuit meerdere bronnen melden), **Kaart-pad** (cards → embed → mine →
+  graph), **Kennis-pad** (claims → clarify → relations → relationtriage →
+  primer → graph) en het nieuwe **Brein-pad** (breinentiteiten →
+  breinmine-interacties → breinmine-predicaten → breinprojectie → reason).
+  #258 verschoof daarbij vier dingen: `rules`/`bans` ontbraken in het
+  Ingest-pad (ze stonden alleen in "Alles bijwerken") en zijn toegevoegd als
+  `rules-index` — de incrementele variant, want de bestaande `rules`-knop
+  herbouwt bewust ALLES en hoort niet in een nachtelijke keten; `mine` verhuisde
+  naar het Kaart-pad omdat mechaniek-mining kaart-afgeleid is; `primer`
+  verhuisde naar het Kennis-pad, waardoor het aparte pad "Volledige regeneratie"
+  (dat het Kennis-pad plus primer wás) is vervallen; en het Brein-pad is nieuw.
+  De wipe zit nog steeds in geen enkel pad — die blijft de losse
+  Gevarenzone-actie `regenerateknowledge` hieronder. Een per-run gecapte stap kan
   **Drain**-gedrag hebben:
   `PathRunner` herhaalt diezelfde job tot `JobOutcome.Drained` true is (geen
   per-run-cap meer geraakt) — de les uit een handmatige Fase 2-
@@ -906,12 +927,17 @@ de globale duur-vangrail).
   draineren zou alleen failures herkauwen. Geen string-matching op de
   detailtekst. Faalt een stap, dan stopt het pad netjes (status error); de
   al-gedraaide stappen blijven staan (de onderliggende jobs zijn zelf
-  idempotent). Elke (herhaalde) stap logt apart naar run_log (Kind =
+  idempotent). De twee samengestelde ketens ("Alles bijwerken" en de nachtrun)
+  zijn juist **best-effort** (#258): daar wordt de fout wél gelogd maar loopt de
+  keten door — een nachtrun van uren mag niet stranden op één 5xx van rb-ai.
+  Afbreken via beheer stopt ook zo'n keten: dat is een beslissing, geen storing. Elke (herhaalde) stap logt apart naar run_log (Kind =
   padnaam, Ref = stapnaam), via een eigen verse DbContext-scope per
   schrijfactie — nooit de context waarin een stap net crashte. Periodiek
   inplannen is mogelijk (zelfde `JobLedger`-vensterlogica als de losse jobs)
-  maar nog niet benut — de bestaande nachtelijke/wekelijkse cadans van de
-  losse jobs is ongewijzigd. *Route* `/admin` (sectie "Paden", boven de
+  maar bewust niet benut: Ingest/Kaart/Brein zitten al in de nachtrun-keten, de
+  dure stappen van het Kennis-pad hebben hun eigen cadans als losse job (het pad
+  erbij plannen zou ze twee keer per etmaal draaien), en `primer` hoort niet in
+  een automaat omdat elke run drafts oplevert die een mens moet reviewen. *Route* `/admin` (sectie "Paden", boven de
   losse jobs) · *endpoints* `GET /api/admin/paths`,
   `POST /api/admin/paths/{name}` (meelift op `/api/admin/status`).
 - **Relatie-triage** (#199 v1) — job `relationtriage`: per open
@@ -1064,9 +1090,14 @@ de globale duur-vangrail).
   degradatiepaden (#122).
 - **Nachtelijke ongelimiteerde run** (#245) — binnen een klok-venster
   (default **00:00–11:00** lokaal, env-overschrijfbaar) draait de job
-  `nachtrun` de volledige **ongecapte** kennis-keten in één keer: "Alles
-  bijwerken" (met ongecapte mechaniek-mining) → brein-interacties →
-  brein-predicaten → projectie → reason. De dag-caps (mining op 40, e.d.)
+  `nachtrun` de volledige **ongecapte** kennis-keten in één keer: het Ingest-
+  en Kaart-pad (met ongecapte mechaniek-mining) → het Brein-pad
+  (canonieke entiteiten → brein-interacties → brein-predicaten → projectie →
+  reason), met ongecapte miners. Sinds #258 is dat één pad
+  (`JobPaths.Nightly`) in plaats van een met de hand geschreven keten; de job
+  bepaalt alleen nog de deadline. Winst voor de beheerder: **een run_log-regel
+  per stap**, zodat na een nacht zichtbaar is welke stap hoe lang draaide en
+  waar het strandde — voorheen was er alleen één afrondingsregel. De dag-caps (mining op 40, e.d.)
   zijn 's nachts nutteloos; deze run leegt de backlog zo ver het venster
   reikt en stopt netjes op de deadline (de rest volgt de volgende nacht via
   het watermark). Overdag blijven de losse jobs gecapt. Ook handmatig te
@@ -1415,6 +1446,13 @@ Uit de openstaande GitHub-issues, gegroepeerd op thema. **In-flight** =
 openstaande PR.
 
 **Ops & platform**
+- **#258** Jobs & paden opschonen — *in-flight*, zie §4.5. Eén ketenmechanisme:
+  "Alles bijwerken" en de nachtrun zijn dunne aliassen op een `PathDefinition`
+  geworden, de padenstructuur volgt de vier fases (ingest/kaart/kennis/brein),
+  `owlaudit` is een CI-assert, en de legacy interactie-miner is uit alle ketens.
+  Het uitfaseren van die miner zelf blijft geagendeerd achter #281: het
+  kaartdetail leunt nog op zijn data zolang de gereïficeerde mining pas 1,4% van
+  de kaarten heeft bereikt.
 - **#45** Ops-hardening voor de 8GB-VM: memory-limits, healthchecks +
   deploy-verificatie, één updatemechanisme (Watchtower vs push-to-deploy),
   log-rotatie, migratie-retry bij opstart, secrets-hygiëne, CSP/security-headers.

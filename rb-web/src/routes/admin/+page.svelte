@@ -52,11 +52,11 @@
 		{ name: 'cards', label: 'Kaarten synchroniseren', hint: 'nieuwe sets en reveals binnenhalen' },
 		{ name: 'embed', label: 'Embeddings berekenen', hint: 'voedt het semantisch zoeken' },
 		{ name: 'mine', label: 'Mechanieken analyseren', hint: 'LLM-analyse van kaartteksten' },
-		{ name: 'rules', label: 'Regels indexeren', hint: 'sectie-chunks en embeddings opbouwen' },
+		{ name: 'rules', label: 'Regels herindexeren', hint: 'ALLE documenten opnieuw chunken en embedden — voor na een parser-verbetering; de ketens gebruiken de incrementele variant' },
 		{ name: 'bans', label: 'Bans en errata structureren', hint: 'uit de officiële documenten' },
 		{ name: 'primer', label: 'Primer genereren', hint: 'spelbegrip-docs destilleren uit de regels (drafts ter review)' },
 		{ name: 'graph', label: 'Graph synchroniseren', hint: 'Neo4j bijwerken' },
-		{ name: 'interactions', label: 'Interacties minen', hint: 'kandidaten zoeken en LLM-verifiëren' },
+		{ name: 'interactions', label: 'Interacties minen (legacy)', hint: 'de oude paar-lexicale miner — opgevolgd door de brein-interactie-mining en uit alle ketens gehaald (#258); alleen nog handmatig, zolang het kaartdetail nog op zijn data terugvalt' },
 		{ name: 'setrelease', label: 'Set-release-keten', hint: 'kaarten → mechanieken → embeddings → graph → primer-herziening; draait automatisch zodra de classifier een set-release herkent' },
 		{ name: 'classify', label: 'Classificaties aanvullen', hint: 'changes zonder samenvatting/duiding alsnog classificeren' },
 		{ name: 'claims', label: 'Claims minen', hint: 'community-claims destilleren uit registerbronnen (trust 3+), met corroboratie en toets tegen de officiële regels' },
@@ -102,19 +102,19 @@
 	const PATHS: { name: string; label: string; hint: string }[] = [
 		{
 			name: 'ingest', label: 'Ingest-pad',
-			hint: 'nieuwe/gewijzigde bronnen volledig verwerken: bronnen scannen → classificaties aanvullen → mechanieken/claims/FAQ-concepten minen → embeddings → graph'
+			hint: 'nieuwe/gewijzigde bronnen volledig verwerken: bronnen scannen → regels indexeren → bans/errata → classificaties aanvullen → changes consolideren'
 		},
 		{
 			name: 'card', label: 'Kaart-pad',
-			hint: 'nieuwe/gewijzigde kaarten door de pijplijn: kaarten synchroniseren → embeddings → graph'
+			hint: 'nieuwe/gewijzigde kaarten door de pijplijn: kaarten synchroniseren → embeddings → mechanieken minen → graph'
 		},
 		{
 			name: 'knowledge', label: 'Kennis-pad',
-			hint: 'de LLM-afgeleide kennislaag bijwerken zonder de bron-scan opnieuw te draaien: claims → FAQ-concepten → relaties → graph'
+			hint: 'de LLM-afgeleide kennislaag bijwerken zonder de bron-scan opnieuw te draaien: claims → FAQ-concepten → relaties → triage → primer → graph; bevat NIET de wipe — die blijft de aparte Gevarenzone-actie hieronder'
 		},
 		{
-			name: 'full', label: 'Volledige regeneratie',
-			hint: 'primer → het hele kennis-pad (claims → FAQ-concepten → relaties → graph); bevat NIET de wipe — die blijft de aparte Gevarenzone-actie hieronder'
+			name: 'brein', label: 'Brein-pad',
+			hint: 'de gereïficeerde brein-laag bijwerken: canonieke entiteiten → interacties minen → predicaten minen → projectie → redeneren'
 		}
 	];
 
