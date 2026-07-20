@@ -614,9 +614,31 @@ failures; alle overige jobs zijn per definitie in één run klaar en laten de
 default `true` staan. `JobRunner`
 (Api) is de generieke, in-memory éénjob-gate: `TryStart(name, work)` zet
 `_current`, draait `work` in een losse scope + `Task.Run`, en schrijft bij
-afronding altijd een `run_log`-regel (Kind="job", Ref=naam, Status=ok/error,
-Detail) — ongeacht of `work` een gewone job of een heel pad is, want beide
-hebben exact dezelfde functiehandtekening.
+afronding altijd een `run_log`-regel (Kind="job", Ref=naam,
+Status=ok/error/cancelled, Detail) — ongeacht of `work` een gewone job of een
+heel pad is, want beide hebben exact dezelfde functiehandtekening.
+
+**Afbreken van een lopende run (#253).** `JobRunner` houdt per run een eigen
+`CancellationTokenSource` aan en geeft díé token aan `work` (voorheen
+`CancellationToken.None` — annulering bestond dus per ontwerp niet). Beheer
+breekt af via `POST /api/admin/jobs/cancel` → `JobRunner.TryCancel()`:
+literal-segment, dus geen botsing met `POST /jobs/{name}`; draait er niets,
+dan is het antwoord `200 {cancelled:false}` (net gedrag, geen 500/404).
+Cancel en de opruiming aan het eind van de run delen dezelfde lock, zodat
+Cancel nooit een net-gedisposede source raakt. Annulering is **coöperatief**:
+de services geven de token al door aan EF/HTTP, en `PathRunner` heeft
+bovendien een expliciet breekpunt tussen stappen — een stap die de token
+zelf niet fijnmazig doorgeeft, laat het pad dus in elk geval tussen twee
+stappen stoppen. `OperationCanceledException` (mét `IsCancellationRequested`
+als filter, zodat een échte fout gewoon "error" blijft) landt als status
+**`cancelled`** met de laatste voortgangsregel en de looptijd in het detail.
+Die afrondingsregel is het hele punt: `JobLedger.LastRunAsync` is
+status-agnostisch, dus een afgebroken run vult het scheduler-venster net zo
+goed als een geslaagde. Vóór #253 was `docker restart rb-v2-api` de enige
+uitweg — die schrijft géén `run_log`-regel, waarna de scheduler de nachtrun
+meteen opnieuw startte. De `run_log`-schrijfacties op dit pad (JobRunner's
+afronding én `PathRunner.LogAsync`) gaan bewust zónder token: bij een
+afbreking is de token al gecanceld en juist dán moet het spoor landen.
 
 **Per-item budget telt alleen nieuw werk (#200).** `ClaimMiningService`/
 `ClarificationMiningService.RunAsync` verhogen de per-run-teller

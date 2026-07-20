@@ -60,7 +60,10 @@ public static class PathRunner
                 {
                     Kind = path.Name, Ref = stepRef, Status = status, Detail = detail,
                 });
-                await db.SaveChangesAsync(ct);
+                // Bewust zonder token (#253): bij een afbreking is `ct` al
+                // gecanceld, en juist dán moet de stap-regel nog landen —
+                // anders verdwijnt het spoor van hoe ver het pad kwam.
+                await db.SaveChangesAsync(CancellationToken.None);
             }
             catch
             {
@@ -72,6 +75,9 @@ public static class PathRunner
 
         for (var i = 0; i < path.Steps.Count; i++)
         {
+            // Afbreekpunt (#253): een stap die de token zelf niet fijnmazig
+            // doorgeeft, laat het pad in elk geval tussen stappen stoppen.
+            ct.ThrowIfCancellationRequested();
             var step = path.Steps[i];
             var job = findJob(step.JobName)
                 ?? throw new InvalidOperationException(
@@ -91,6 +97,15 @@ public static class PathRunner
                 try
                 {
                     outcome = await job.Run(sp, p => report($"{stepLabel} — {p}"), ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // Afgebroken door beheer (#253): geen fout van de stap —
+                    // apart gelogd zodat de historie het onderscheid toont.
+                    // JobRunner sluit de hele padrun af als "cancelled".
+                    await LogAsync(step.JobName, "cancelled",
+                        step.Drain ? $"run {attempt}: afgebroken via beheer" : "afgebroken via beheer");
+                    throw;
                 }
                 catch (Exception ex)
                 {
