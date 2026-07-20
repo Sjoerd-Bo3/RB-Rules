@@ -97,9 +97,13 @@ hem vandaag bedient.
   deze op elkaar", gekoppelde regels/errata en ontdekte interacties; de
   graph-verkenner laat kaart↔mechaniek↔regel-verbanden doorlopen.
 - *Inspiratie opdoen bij community-decks en hun legaliteit checken.* De
-  deck-browser (`/decks`) toont Piltover Archive-decks met facet op domein en
-  een legaliteitsbadge; de detailpagina laat precies zien welke kaart een
+  deck-browser (`/decks`) toont Piltover Archive-decks met facet op domein, een
+  legaliteitsbadge, een filter op legaliteit en zoeken op deck-/legend-/
+  championnaam (#265); de detailpagina laat precies zien welke kaart een
   probleem geeft (nog niet legale set of geband) en linkt terug naar de bron.
+- *Een gedeelde deck-code uitlezen.* Een deck-code plakken op `/decks` (#264)
+  laat zien welke kaarten erin zitten en of het deck legaal is, zonder dat er
+  iets wordt opgeslagen.
 
 **Beheerder / curator**
 - *Kennis reviewen.* Nieuw gemijnde claims, relaties en mechaniek-kandidaten
@@ -1116,7 +1120,38 @@ de globale duur-vangrail).
   canonieke groep): de "Bekijk in de deck-browser"-link van het "In decks"-
   blok op de kaartpagina (spoor B) landt hier op een op die kaart gefilterde
   lijst, met een wisbare filterkop. *Route* `/decks` · *endpoints*
-  `/api/decks` (`domain`/`sort`/`page`/`format`/`card`), `/api/decks/facets`.
+  `/api/decks` (`domain`/`sort`/`page`/`format`/`card`/`legality`/`q`),
+  `/api/decks/facets`.
+- **Filteren op legaliteit en zoeken** *(#265)* — de deckbank is vol (ruim
+  10.000 decks) en een groot deel daarvan is niet legaal, wat de lijst als
+  inspiratiebron uitholde. `legality=legal|illegal|incomplete` filtert daar
+  nu op; op de pagina staat het als één klik ("Alleen legale decks") én als
+  keuze in de filter-rail, allebei als wisbare chip. **Zoeken** (`q`) gaat
+  over de deckname én de namen van de legend en champions — dat zijn de twee
+  dingen waaraan een deck herkenbaar is, dus "Yasuo" vindt Yasuo-decks ook als
+  de bouwer zijn deck anders noemde. Bewust géén zoeken over álle kaartregels:
+  die vraag beantwoordt het kaart-filter al, en het zou elk deck met een
+  populaire kaart erin opleveren. Beide filters zijn onderdeel van de query
+  (dus vóór de paginering), zodat het getoonde totaal klopt; een onbekende
+  filterwaarde levert de ongefilterde lijst op, geen fout.
+- **Deck-code plakken (import)** *(#264)* — een plakveld op `/decks` leest een
+  gedeelde deck-code uit: welke kaarten zitten erin en is het deck legaal.
+  Gekoppelde kaarten zijn klikbaar naar `/cards/[id]`, niet-gekoppelde regels
+  tonen de rauwe kaartcode met "niet in onze databank" (onbekend is data, geen
+  fout) en tellen mee als onvolledig. Er wordt niets opgeslagen — puur
+  uitlezen. De secties zijn die van het codeformaat zelf (hoofddeck,
+  sideboard, chosen champion) mét de notitie dat de PA-indeling in legend,
+  champions, battlefields en runes er niet in zit. Een ongeldige of afgekapte
+  code geeft de uitleg van de decoder terug ("Ongeldig teken 'x' in de
+  deck-code.") in plaats van een fout; de bestaande lijst blijft daarbij
+  staan. *Endpoint* `POST /api/decks/decode`.
+  **Export (deck-code genereren) bewust niet gebouwd**: het codeformaat kent
+  alleen main deck / sideboard / chosen champion, onze PA-decks hebben zeven
+  secties, en de PA-payload bevat géén deck-code — een gegenereerde code is
+  dus tegen niets round-trip te toetsen. Een kopieerknop die stilletjes het
+  verkeerde deck oplevert is schadelijker dan geen knop. Import heeft dat
+  probleem niet: `Decode` geeft kaartcodes die we al op `variantNumber`
+  matchen.
 - **Legaliteitscheck** (`DeckLegality`, pure Domain-logica) — een deck is
   legaal als al zijn gekoppelde kaarten (via `CanonicalRiftboundId`) in een
   legale set zitten (`SetLegality.StatusFor` op de set-releasedatum) én geen
@@ -1235,6 +1270,15 @@ openstaande PR.
   golf 1): (D) co-occurrence/archetype-signalen als kennispiramide-laag 3
   in /ask.
   Onderzoek in `docs/ENGINE.md` §5.
+- **#265** Deckbrowser: filter op legaliteit + zoeken op deck-/legend-/
+  championnaam — *in-flight*, zie §4.7. Afgesplitst van #15 na scoping: de
+  browser filterde alleen op domein terwijl het merendeel van de lijst niet
+  legaal is.
+- **#264** Deck-codes aansluiten: import via een plakveld op `/decks` —
+  *in-flight*, zie §4.7. Sluit de al bestaande `DeckCode`-port (fase 1) aan op
+  het product. Export blijft dicht tot er hard bewijs is voor de
+  sectie-mapping; de referentie-implementatie kent alleen main deck,
+  sideboard en chosen champion.
 
 ---
 

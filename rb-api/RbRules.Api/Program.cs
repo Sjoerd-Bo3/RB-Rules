@@ -114,6 +114,7 @@ builder.Services.AddScoped<SourceScoutService>();
 builder.Services.AddScoped<CardResolver>();
 builder.Services.AddScoped<CardDetailService>();
 builder.Services.AddScoped<DeckBrowserService>();
+builder.Services.AddScoped<DeckCodeService>();
 builder.Services.AddScoped<SourceDossierService>();
 builder.Services.AddScoped<SourceListService>();
 builder.Services.AddScoped<CardSimilarityService>();

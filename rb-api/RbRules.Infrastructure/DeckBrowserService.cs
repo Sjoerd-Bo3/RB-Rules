@@ -57,6 +57,10 @@ public class DeckBrowserService(RbRulesDbContext db)
     public const int PageSize = 24;
     public const string DefaultFormat = "constructed";
 
+    /// <summary>De secties die het deck een herkenbare identiteit geven —
+    /// daarop zoekt <see cref="ApplySearch"/> mee (naast de deckname).</summary>
+    private const string ChampionsSection = "champions";
+
     /// <summary>De canonieke sectievolgorde voor weergave: legend eerst (het
     /// legend-kaart-object), dan PiltoverDeckPage.CardSections in hun eigen
     /// vaste volgorde. Lege secties worden niet getoond.</summary>
@@ -65,9 +69,13 @@ public class DeckBrowserService(RbRulesDbContext db)
 
     public async Task<DeckListResponse> ListAsync(
         string? domain, string? sort, int page, string format = DefaultFormat,
-        string? card = null, CancellationToken ct = default)
+        string? card = null, string? legality = null, string? q = null,
+        CancellationToken ct = default)
     {
         page = Math.Max(1, page);
+        var context = await DeckLegalityContext.LoadAsync(db, format, ct);
+        var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.Date);
+
         var query = db.Decks.AsNoTracking().AsQueryable();
         if (!string.IsNullOrWhiteSpace(domain)) query = query.Where(d => d.Domains.Contains(domain));
 
@@ -84,6 +92,9 @@ public class DeckBrowserService(RbRulesDbContext db)
                 .ToListAsync(ct);
             query = query.Where(d => deckIdsWithCard.Contains(d.Id));
         }
+
+        query = ApplySearch(query, q);
+        query = ApplyLegalityFilter(query, legality, context, today);
 
         var total = await query.CountAsync(ct);
         query = sort switch
@@ -109,21 +120,92 @@ public class DeckBrowserService(RbRulesDbContext db)
             .ToListAsync(ct);
         var rowsByDeck = rows.GroupBy(r => r.DeckId).ToDictionary(g => g.Key, g => g.ToList());
 
-        var context = await LoadLegalityContextAsync(format, ct);
-        var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.Date);
-
         var items = decks.Select(d =>
         {
             var deckRows = rowsByDeck.GetValueOrDefault(d.Id, []);
-            var legality = DeckLegality.Evaluate(
+            var deckLegality = DeckLegality.Evaluate(
                 [.. deckRows.Select(r => context.ToLegalityCard(r.CardCode, null, r.CanonicalRiftboundId))],
                 today);
             return new DeckSummary(
                 d.PaId, d.Name, d.Domains, deckRows.Sum(r => r.Quantity), d.Views, d.Likes,
-                d.SourceUrl, d.PaUpdatedAt, DeckLegalityView.From(legality));
+                d.SourceUrl, d.PaUpdatedAt, DeckLegalityView.From(deckLegality));
         }).ToList();
 
         return new(items, total, page, PageSize, cardFilter);
+    }
+
+    /// <summary>Zoeken op deckname, of op de naam van de legend/champions van
+    /// het deck (#265) — dat zijn de twee dingen waarop een deck herkenbaar is
+    /// ("Yasuo" vindt de Yasuo-decks, ook als de bouwer zijn deck anders
+    /// noemde). Bewust géén zoeken over álle kaartregels: dat is een andere
+    /// vraag (die beantwoordt het kaart-filter al) en zou elk deck met een
+    /// populaire kaart erin opleveren. <c>ToLower().Contains</c> is bewezen
+    /// vertaalbaar (Npgsql → <c>strpos(lower(...))</c>) én draait op EF
+    /// InMemory, zodat de regressietest hetzelfde pad raakt als productie.</summary>
+    private IQueryable<Deck> ApplySearch(IQueryable<Deck> query, string? q)
+    {
+        if (string.IsNullOrWhiteSpace(q)) return query;
+        var needle = q.Trim().ToLowerInvariant();
+        return query.Where(d =>
+            (d.Name != null && d.Name.ToLower().Contains(needle))
+            || db.DeckCards.Any(c => c.DeckId == d.Id
+                && (c.Section == PiltoverDeckPage.LegendSection || c.Section == ChampionsSection)
+                && c.CanonicalRiftboundId != null
+                && db.Cards.Any(ca => ca.RiftboundId == c.CanonicalRiftboundId
+                    && ca.Name.ToLower().Contains(needle))));
+    }
+
+    /// <summary>Legaliteitsfilter (#265). Dit is bewust hetzelfde oordeel als
+    /// <see cref="DeckLegality.Evaluate"/>, maar als SQL-predicaat: in-memory
+    /// filteren ná de paginering zou de pagina's uithollen (en Total liegen).
+    /// De twee deck-id-subquery's zijn goedkoop omdat alle drie de lijsten
+    /// klein zijn — sets zijn een handvol rijen en de banlijst een handvol
+    /// kaarten. De vertaling van "status" naar predicaat:
+    /// <list type="bullet">
+    /// <item>harde overtreding = geband, of uit een set die aantoonbaar nog
+    /// niet uit is (Upcoming) — precies wat Evaluate als issue telt;</item>
+    /// <item>onbeoordeelbaar = niet-gekoppelde kaart, of een kaart waarvan de
+    /// set geen bekende releasedatum heeft (Announced) — Evaluate telt die in
+    /// UnknownCount en degradeert naar "onvolledig";</item>
+    /// <item>legaal = geen van beide. Illegaal wint van onvolledig, net als
+    /// in Evaluate.</item>
+    /// </list>
+    /// De regressietest pint beide implementaties op dezelfde uitkomst vast.</summary>
+    private IQueryable<Deck> ApplyLegalityFilter(
+        IQueryable<Deck> query, string? legality, DeckLegalityContext context, DateOnly today)
+    {
+        var wanted = legality?.Trim().ToLowerInvariant();
+        if (wanted is not ("legal" or "illegal" or "incomplete")) return query;
+
+        var banned = context.BannedCanonicalIds.ToList();
+        // Sets zonder bekende releasedatum vallen buiten "dated": hun kaarten
+        // zijn onbeoordeelbaar, niet illegaal (SetLegalityStatus.Announced).
+        var datedSets = context.SetPublishedOn
+            .Where(kv => kv.Value is not null).Select(kv => kv.Key).ToList();
+        var upcomingSets = context.SetPublishedOn
+            .Where(kv => kv.Value is { } on && on > today).Select(kv => kv.Key).ToList();
+
+        var deckIdsWithIssue = db.DeckCards
+            .Where(c => c.CanonicalRiftboundId != null
+                && (banned.Contains(c.CanonicalRiftboundId)
+                    || db.Cards.Any(ca => ca.RiftboundId == c.CanonicalRiftboundId
+                        && ca.SetId != null && upcomingSets.Contains(ca.SetId))))
+            .Select(c => c.DeckId);
+        var deckIdsWithUnknown = db.DeckCards
+            .Where(c => c.CanonicalRiftboundId == null
+                || (!banned.Contains(c.CanonicalRiftboundId)
+                    && !db.Cards.Any(ca => ca.RiftboundId == c.CanonicalRiftboundId
+                        && ca.SetId != null && datedSets.Contains(ca.SetId))))
+            .Select(c => c.DeckId);
+
+        return wanted switch
+        {
+            "illegal" => query.Where(d => deckIdsWithIssue.Contains(d.Id)),
+            "incomplete" => query.Where(d =>
+                !deckIdsWithIssue.Contains(d.Id) && deckIdsWithUnknown.Contains(d.Id)),
+            _ => query.Where(d =>
+                !deckIdsWithIssue.Contains(d.Id) && !deckIdsWithUnknown.Contains(d.Id)),
+        };
     }
 
     /// <summary>Zet een kaart-id (canoniek of variant) om naar het canonieke
@@ -168,7 +250,7 @@ public class DeckBrowserService(RbRulesDbContext db)
             .Select(c => new { c.RiftboundId, c.Name, c.ImageUrl, c.SetId })
             .ToDictionaryAsync(c => c.RiftboundId, ct);
 
-        var context = await LoadLegalityContextAsync(format, ct);
+        var context = await DeckLegalityContext.LoadAsync(db, format, ct);
         var today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.Date);
 
         var legality = DeckLegality.Evaluate(
@@ -198,32 +280,4 @@ public class DeckBrowserService(RbRulesDbContext db)
             sections, DeckLegalityView.From(legality));
     }
 
-    /// <summary>Eén keer per aanroep geladen: set-releasedatums (handvol
-    /// rijen) en de gebande canonieke kaarten voor dit format — daarna is elke
-    /// kaartregel een dictionary-lookup in plaats van een eigen query.</summary>
-    private async Task<LegalityContext> LoadLegalityContextAsync(string format, CancellationToken ct)
-    {
-        var setDates = await db.CardSets.AsNoTracking()
-            .ToDictionaryAsync(s => s.SetId, s => s.PublishedOn, ct);
-        var cardSets = await db.Cards.AsNoTracking()
-            .Where(c => c.VariantOf == null)
-            .Select(c => new { c.RiftboundId, c.SetId })
-            .ToDictionaryAsync(c => c.RiftboundId, c => c.SetId, ct);
-        var banned = await BanLookup.BannedCanonicalIdsAsync(db, format, ct);
-        return new(setDates, cardSets, banned);
-    }
-
-    private sealed record LegalityContext(
-        Dictionary<string, DateOnly?> SetPublishedOn,
-        Dictionary<string, string?> CanonicalCardSetId,
-        HashSet<string> BannedCanonicalIds)
-    {
-        public DeckLegalityCard ToLegalityCard(string cardCode, string? cardName, string? canonicalId)
-        {
-            var setId = canonicalId is not null ? CanonicalCardSetId.GetValueOrDefault(canonicalId) : null;
-            var publishedOn = setId is not null ? SetPublishedOn.GetValueOrDefault(setId) : null;
-            var banned = canonicalId is not null && BannedCanonicalIds.Contains(canonicalId);
-            return new(cardCode, cardName, canonicalId, publishedOn, banned);
-        }
-    }
 }

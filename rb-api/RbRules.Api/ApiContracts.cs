@@ -97,3 +97,10 @@ public record RelationBulkDecideRequest(
                         ? "asOf ontbreekt — stuur de geladen groeps-tijdstempel mee"
                         : null;
 }
+
+/// <summary>Deck-code-import (#264): de geplakte code, plus optioneel het
+/// format waartegen de legaliteit geoordeeld wordt (default "constructed").
+/// Beide nullable — een lege body geeft een nette 400 uit
+/// <see cref="RbRules.Infrastructure.DeckCodeService.DecodeAsync"/>, geen
+/// NRE-500.</summary>
+public record DeckDecodeRequest(string? Code, string? Format);
