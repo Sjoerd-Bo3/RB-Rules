@@ -168,6 +168,17 @@ public static class JobCatalog
             // automatische her-generatie hierna — expliciete, destructieve
             // beheerdersbeslissing (zie KnowledgeRegenerationService).
             new("regenerateknowledge", RegenerateKnowledgeAsync),
+            // Gerichte brein-mining-reset (#263): zet ALLEEN de mining-laag terug
+            // (interacties + hun watermark; de tweede knop ook de canonieke
+            // entiteiten/predicaten) zodat een verbeterde extractie dezelfde pool
+            // opnieuw kan minen. Twee losse namen i.p.v. een verborgen modus-vlag —
+            // zelfde keuze als "benchmark" vs. "benchmarksweep" hierboven: de scope
+            // blijft zichtbaar in het jobs-paneel én in het run_log. Bewust GEEN
+            // stap in "all", een pad of de nachtrun (destructief, expliciet).
+            new("breinreset-interacties", (sp, report, ct) =>
+                BreinResetAsync(sp, report, BreinResetScope.Interactions, ct)),
+            new("breinreset-volledig", (sp, report, ct) =>
+                BreinResetAsync(sp, report, BreinResetScope.InteractionsAndEntities, ct)),
         }.ToDictionary(j => j.Name);
 
     private static async Task<JobOutcome> RunAllAsync(
@@ -555,6 +566,16 @@ public static class JobCatalog
     {
         report("afgeleide kennis (claims, primer-docs, correcties, relaties) verwijderen");
         var r = await sp.GetRequiredService<KnowledgeRegenerationService>().WipeAsync(ct);
+        return new(r.Message);
+    }
+
+    private static async Task<JobOutcome> BreinResetAsync(
+        IServiceProvider sp, Action<string> report, BreinResetScope scope, CancellationToken ct)
+    {
+        report(scope == BreinResetScope.InteractionsAndEntities
+            ? "brein-mining-laag terugzetten (interacties, watermark, canonieke entiteiten en predicaten)"
+            : "brein-mining-laag terugzetten (interacties en het mined-watermark)");
+        var r = await sp.GetRequiredService<BreinMiningResetService>().ResetAsync(scope, ct);
         return new(r.Message);
     }
 }

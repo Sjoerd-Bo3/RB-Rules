@@ -258,6 +258,19 @@
 					<p class="step-desc">Eerst de canonieke entiteiten registreren (deterministisch, uit
 						het mechanic-vocabulaire en de regeltekst), daarna tool-forced, ontologie-begrensde
 						mining via rb-ai: gereïficeerde interacties en mechanic-predicaten.</p>
+						<!--
+							Gerichte mining-reset (#263): een verwerkte kaart draagt een watermark en
+							wordt bij een volgende run overgeslagen, dus een verbeterde extractie raakt
+							de bestaande pool niet. De reset zelf staat bewust in de Gevarenzone
+							(destructief, met bevestiging) — hier alleen de wegwijzer, zodat hij
+							vindbaar is vanaf de plek waar je hem nodig hebt.
+						-->
+						<p class="flaghint">
+							Een kaart die al een interactie opleverde, wordt bij een volgende run
+							overgeslagen. Wil je na een verbeterde extractie dezelfde pool opnieuw laten
+							minen, gebruik dan <a href="/admin#gevarenzone">Brein-mining resetten</a> in de
+							Gevarenzone.
+						</p>
 					<div class="jobrows">
 						{#each step1jobs as j (j.name)}
 							<div class="jobrow">

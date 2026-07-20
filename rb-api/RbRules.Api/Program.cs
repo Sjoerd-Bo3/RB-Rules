@@ -134,6 +134,9 @@ builder.Services.AddScoped<AgenticRelationService>();
 // Wipe-mechanisme voor de LLM-afgeleide kennislaag (#187): expliciete
 // admin-job, nooit automatisch.
 builder.Services.AddScoped<KnowledgeRegenerationService>();
+// Gerichte brein-mining-reset (#263): alleen de mining-laag terug naar nul zodat
+// een verbeterde extractie dezelfde pool opnieuw kan minen. Ook expliciet.
+builder.Services.AddScoped<BreinMiningResetService>();
 builder.Services.AddScoped<MechanicVocabularyService>();
 builder.Services.AddScoped<ReviewNoteService>();
 // Her-evaluatie van één Correction op een beheerder-opmerking (#184): draait

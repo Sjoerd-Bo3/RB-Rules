@@ -55,6 +55,25 @@ public class JobPathsTests
     }
 
     [Fact]
+    public void BreinReset_ZitInGeenEnkelPad()
+    {
+        // De gerichte brein-mining-reset (#263) is net als de wipe een expliciete,
+        // destructieve Gevarenzone-actie — nooit onderdeel van een pad dat vanzelf
+        // doorstroomt.
+        foreach (var path in JobPaths.AllPaths)
+            Assert.DoesNotContain(path.Steps, s => s.JobName.StartsWith("breinreset-"));
+    }
+
+    [Fact]
+    public void BreinReset_BestaatInBeideScopes()
+    {
+        // Twee losse namen i.p.v. een verborgen modus-vlag: de scope-keuze moet in
+        // het jobs-paneel én het run_log zichtbaar blijven (#263).
+        Assert.NotNull(JobCatalog.Find("breinreset-interacties"));
+        Assert.NotNull(JobCatalog.Find("breinreset-volledig"));
+    }
+
+    [Fact]
     public void KennisPad_HeeftClaimsClarifyRelationsRelationTriageAlsDrain_EnEindigtOpGraph()
     {
         var path = JobPaths.Find("knowledge");

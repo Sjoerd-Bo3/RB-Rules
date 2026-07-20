@@ -74,8 +74,23 @@
 		{
 			name: 'regenerateknowledge', label: 'Kennis regenereren (Engels)',
 			hint: 'verwijdert ALLE claims, primer-docs, correcties en relaties (de afgeleide/gemínede laag) en reset de mining-markers; genereert daarna NIETS automatisch — draai zelf primer → claims → clarify → relations, in die volgorde'
+		},
+		// Gerichte brein-mining-reset (#263): twee scopes, allebei alleen in het
+		// Gevarenzone-paneel hieronder — hier staan ze voor het label en het
+		// laatste-run-opzoekwerk, net als de wipe hierboven.
+		{
+			name: 'breinreset-interacties', label: 'Brein-mining resetten (interacties)',
+			hint: 'verwijdert de gereïficeerde interacties, hun condities/beslissingen en de interactie-assertions (het mined-watermark) zodat een verbeterde extractie dezelfde kaartenpool opnieuw kan minen; claims, primer, correcties, relaties, kaarten, regels en bans blijven staan'
+		},
+		{
+			name: 'breinreset-volledig', label: 'Brein-mining resetten (interacties + entiteiten)',
+			hint: 'hetzelfde, plus de canonieke entiteiten, de mechanic-predicaten en de merge-historie — voor een schone meting van zowel de interactie- als de entiteit-extractie'
 		}
 	];
+
+	// Destructieve acties: uit de gewone jobs-grid gefilterd en alleen in de
+	// Gevarenzone, elk met een eigen confirm()-stap.
+	const DANGER_JOBS = ['regenerateknowledge', 'breinreset-interacties', 'breinreset-volledig'];
 
 	// Paden (#190): geordende jobs die vanzelf doorstromen. De stappenlijst
 	// zelf komt van /api/admin/paths (pathDefs hieronder) — hier alleen het
@@ -615,7 +630,7 @@
 		<section class="section">
 			<h2>Acties</h2>
 			<div class="jobs">
-				{#each JOBS.filter((j) => j.name !== 'all' && j.name !== 'regenerateknowledge') as j (j.name)}
+				{#each JOBS.filter((j) => j.name !== 'all' && !DANGER_JOBS.includes(j.name)) as j (j.name)}
 					<form
 						method="POST" action="?/job"
 						use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}
@@ -1038,6 +1053,67 @@
 				</div>
 				<button disabled={running !== null} class="danger-button">
 					{running?.name === 'regenerateknowledge' ? 'Bezig' : 'Verwijder en her-mine'}
+				</button>
+			</form>
+
+			<!--
+				Gerichte brein-mining-reset (#263). Twee losse knoppen i.p.v. één knop
+				met een verborgen scope-schakelaar: de scope moet zichtbaar zijn vóór
+				je klikt, in de bevestiging én achteraf in het run_log.
+			-->
+			<form
+				method="POST" action="?/job"
+				use:enhance={({ cancel }) => {
+					if (!confirm('Dit verwijdert ALLE gereïficeerde interacties, hun condities en beslissingen, en de interactie-assertions die als mined-watermark dienen. De hele kaartenpool komt daarmee weer in aanmerking voor "Brein-interacties minen". Claims, primer, correcties, relaties, kaarten, regels en bans blijven ongemoeid; de mining-run-historie blijft staan als vergelijkingsbasis. Doorgaan?')) {
+						cancel();
+						return;
+					}
+					return async ({ update }) => { await update(); await invalidateAll(); };
+				}}
+				class="job panel danger"
+			>
+				<input type="hidden" name="name" value="breinreset-interacties" />
+				<div class="job-info">
+					<strong>Brein-mining resetten (interacties)</strong>
+					<span class="hint">
+						Scope: interacties, condities, beslissingen en de interactie-assertions (het
+						watermark). Grafstenen van de poort worden gelicht zodat eerder verworpen paren
+						opnieuw beoordeeld mogen worden; grafstenen die jij zelf zette blijven gelden. De
+						mining-run-historie blijft staan als vergelijkingsbasis. Draai daarna zelf
+						"Brein-interacties minen" en vervolgens "Graph synchroniseren" + "Brein-projectie".
+					</span>
+					{#if lastRunLabel('breinreset-interacties')}<span class="hint">{lastRunLabel('breinreset-interacties')}</span>{/if}
+				</div>
+				<button disabled={running !== null} class="danger-button">
+					{running?.name === 'breinreset-interacties' ? 'Bezig' : 'Interactie-laag resetten'}
+				</button>
+			</form>
+
+			<form
+				method="POST" action="?/job"
+				use:enhance={({ cancel }) => {
+					if (!confirm('Dit doet alles van de interactie-reset én verwijdert de canonieke entiteiten, de mechanic-predicaten en de volledige merge-historie (ook merges die jij zelf hebt goedgekeurd — hun audit-rijen kunnen niet los van de entiteiten blijven bestaan). De entiteitenlaag is daarna opnieuw op te bouwen met "Canonieke entiteiten registreren". Doorgaan?')) {
+						cancel();
+						return;
+					}
+					return async ({ update }) => { await update(); await invalidateAll(); };
+				}}
+				class="job panel danger"
+			>
+				<input type="hidden" name="name" value="breinreset-volledig" />
+				<div class="job-info">
+					<strong>Brein-mining resetten (interacties + entiteiten)</strong>
+					<span class="hint">
+						Scope: alles hierboven, plus de canonieke entiteiten, de mechanic-predicaten, de
+						merge-kandidaten en de merge-beslissingen — inclusief handmatig goedgekeurde merges,
+						die niet los van hun entiteiten kunnen blijven bestaan. Draai daarna zelf "Canonieke
+						entiteiten registreren" → "Brein-interacties minen" → "Brein-predicaten minen", en
+						tot slot "Graph synchroniseren" + "Brein-projectie".
+					</span>
+					{#if lastRunLabel('breinreset-volledig')}<span class="hint">{lastRunLabel('breinreset-volledig')}</span>{/if}
+				</div>
+				<button disabled={running !== null} class="danger-button">
+					{running?.name === 'breinreset-volledig' ? 'Bezig' : 'Interacties + entiteiten resetten'}
 				</button>
 			</form>
 		</section>
