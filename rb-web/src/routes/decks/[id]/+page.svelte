@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { domainColorVar } from '$lib/changeCard';
+	import { DECK_VIEW_KEY, parseDeckView, sectionTotal, type DeckView } from '$lib/deckView';
+	import type { DeckCardRow } from './+page.server';
 
 	let { data } = $props();
 	const deck = $derived(data.deck);
@@ -28,6 +30,29 @@
 
 	function formatDate(iso: string | null): string | null {
 		return iso ? new Date(iso).toLocaleDateString('nl-NL') : null;
+	}
+
+	// Weergave (#256): grid met kaartafbeeldingen is de standaard, de compacte
+	// tekstlijst blijft beschikbaar. De server rendert altijd het grid — de
+	// bewaarde keuze komt pas in de browser binnen, dus een lijst-gebruiker
+	// ziet één frame grid. Dat is de prijs voor een SSR-veilige start zonder
+	// hydration-mismatch; de keuze zelf blijft wel hangen.
+	let view = $state<DeckView>('grid');
+	$effect(() => {
+		try {
+			view = parseDeckView(localStorage.getItem(DECK_VIEW_KEY));
+		} catch {
+			/* private mode: grid blijft de standaard */
+		}
+	});
+
+	function setView(next: DeckView) {
+		view = next;
+		try {
+			localStorage.setItem(DECK_VIEW_KEY, next);
+		} catch {
+			/* private mode: keuze geldt alleen deze sessie */
+		}
 	}
 </script>
 
@@ -82,26 +107,71 @@
 		{/if}
 	</section>
 
+	<div class="view-switch" role="group" aria-label="Weergave">
+		<button type="button" class:on={view === 'grid'} aria-pressed={view === 'grid'} onclick={() => setView('grid')}>
+			Grid
+		</button>
+		<button type="button" class:on={view === 'list'} aria-pressed={view === 'list'} onclick={() => setView('list')}>
+			Lijst
+		</button>
+	</div>
+
 	<div class="sections">
 		{#each deck.sections as section (section.section)}
 			<div class="section">
-				<h2>{SECTION_LABEL[section.section] ?? section.section}</h2>
-				<ul class="cards">
-					{#each section.cards as card (card.cardCode)}
-						<li>
-							<span class="qty">{card.quantity}×</span>
+				<h2>
+					{SECTION_LABEL[section.section] ?? section.section}
+					<span class="sec-count tnum">{sectionTotal(section.cards)}</span>
+				</h2>
+				{#if view === 'grid'}
+					<div class="tiles">
+						{#each section.cards as card (card.cardCode)}
 							{#if card.canonicalRiftboundId}
-								<a href="/cards/{card.canonicalRiftboundId}">{card.cardName}</a>
+								<a class="tile" href="/cards/{card.canonicalRiftboundId}">
+									{@render tileFace(card)}
+								</a>
 							{:else}
-								<span class="unlinked">{card.cardName ?? card.cardCode}</span>
+								<!-- Onbekend is data, geen fout: geen link, wel de kaartcode zodat
+								     de gebruiker ziet wát er ontbreekt. -->
+								<div class="tile unknown" title="Niet gekoppeld aan onze kaartendatabank">
+									{@render tileFace(card)}
+								</div>
 							{/if}
-						</li>
-					{/each}
-				</ul>
+						{/each}
+					</div>
+				{:else}
+					<ul class="cards">
+						{#each section.cards as card (card.cardCode)}
+							<li>
+								<span class="qty">{card.quantity}×</span>
+								{#if card.canonicalRiftboundId}
+									<a href="/cards/{card.canonicalRiftboundId}">{card.cardName}</a>
+								{:else}
+									<span class="unlinked">{card.cardName ?? card.cardCode}</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
 			</div>
 		{/each}
 	</div>
 </main>
+
+<!-- Tegelvoorkant: afbeelding als we die hebben, anders een leesbare
+     tekstplaatshouder in dezelfde kaartverhouding — nooit een gat in het grid. -->
+{#snippet tileFace(card: DeckCardRow)}
+	{#if card.imageUrl}
+		<img src={card.imageUrl} alt={card.cardName ?? card.cardCode} loading="lazy" />
+	{:else}
+		<span class="face-fallback">
+			<span class="fb-name">{card.cardName ?? card.cardCode}</span>
+			{#if card.cardName}<span class="fb-code">{card.cardCode}</span>{/if}
+			{#if !card.canonicalRiftboundId}<span class="fb-note">niet in onze databank</span>{/if}
+		</span>
+	{/if}
+	<span class="qty-badge tnum">×{card.quantity}</span>
+{/snippet}
 
 <style>
 	main {
@@ -189,6 +259,34 @@
 		margin: 3px 0;
 		overflow-wrap: anywhere;
 	}
+	/* Weergaveschakelaar: segmented control, status via kleur + tekst. */
+	.view-switch {
+		display: inline-flex;
+		gap: 2px;
+		background: var(--surface-deep);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 3px;
+		margin: 0 0 16px;
+	}
+	.view-switch button {
+		background: none;
+		border: 0;
+		border-radius: 999px;
+		color: var(--muted);
+		font: inherit;
+		font-size: 0.85rem;
+		font-weight: 600;
+		padding: 6px 16px;
+		cursor: pointer;
+	}
+	.view-switch button:hover {
+		color: var(--text);
+	}
+	.view-switch button.on {
+		background: var(--accent);
+		color: var(--accent-ink);
+	}
 	.sections {
 		display: grid;
 		gap: 18px;
@@ -196,7 +294,84 @@
 	.section h2 {
 		font-size: 1rem;
 		color: var(--accent);
-		margin: 0 0 6px;
+		margin: 0 0 8px;
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+	}
+	/* Sectietelling: het totale aantal kaarten. We tonen bewust geen "40/40" —
+	   deckbouw-limieten staan nergens in onze data, dus een noemer zou een
+	   verzonnen regel zijn. */
+	.sec-count {
+		color: var(--muted);
+		font-size: 0.85rem;
+		font-weight: 400;
+	}
+
+	/* Kaartgrid: wrapt vanzelf: ~3 tegels op 390px, ~7 op desktop. */
+	.tiles {
+		display: grid;
+		gap: 10px;
+		grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+	}
+	.tile {
+		position: relative;
+		display: block;
+		border-radius: var(--radius);
+		overflow: hidden;
+		border: 1px solid var(--border);
+		background: var(--surface-deep);
+		aspect-ratio: 744 / 1039;
+		text-decoration: none;
+		color: inherit;
+	}
+	a.tile:hover {
+		border-color: var(--accent);
+	}
+	.tile img {
+		display: block;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+	.tile.unknown {
+		border-style: dashed;
+		border-color: var(--border-strong);
+	}
+	.face-fallback {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 4px;
+		height: 100%;
+		padding: 8px;
+		text-align: center;
+	}
+	.fb-name {
+		font-size: 0.78rem;
+		font-weight: 600;
+		overflow-wrap: anywhere;
+	}
+	.fb-code,
+	.fb-note {
+		font-size: 0.68rem;
+		color: var(--muted);
+		overflow-wrap: anywhere;
+	}
+	/* Aantal-badge: ondoorzichtig oppervlak, leesbaar over elke kaartillustratie
+	   in licht én donker. */
+	.qty-badge {
+		position: absolute;
+		right: 4px;
+		bottom: 4px;
+		background: var(--surface);
+		color: var(--text);
+		border: 1px solid var(--border-strong);
+		border-radius: 999px;
+		font-size: 0.72rem;
+		font-weight: 700;
+		padding: 1px 7px;
 	}
 	.cards {
 		list-style: none;
