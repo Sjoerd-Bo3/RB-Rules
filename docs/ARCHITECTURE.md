@@ -1091,7 +1091,8 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   drift); de server-side prompt-addenda `RESEARCH_CONTRACT` en
   `AGENT_ADDENDUM`; de in-process brein-MCP-server (`createBrainMcpServer`);
   `extractWithTool` (#226) — één geforceerde in-process MCP-tool die de
-  gevalideerde argumenten in een closure vangt (tool-forced structured output).
+  argumenten in een closure vangt (tool-forced structured output; de tool-vorm
+  is sinds #312 vast en de vocabulaire-poort een narekening — zie §6.6).
 - `src/failure.ts` — PUUR (zonder Agent SDK, unit-getest): de faaldiagnostiek
   van #281. Levert het redenen-vocabulaire (`AiFailureReason`), de twee
   vertalers (`describeThrown` voor een geworpen fout, `resultFailure` voor het
@@ -1115,10 +1116,16 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   structurele test bewaakt dat geen enkele andere module rechtstreeks naar
   stdout/stderr verwijst. Zie §6.6 voor waaróm dit bestand bestaat.
 - `src/extract.ts` — PUUR (zonder Agent SDK, unit-getest): de
-  vocabulaire→zod-schema-vertaling voor de brein-extractie (#226). Bouwt de
-  enum-poorten voor `emit_interactions`/`emit_mechanic_predicates` uit het door
-  rb-api aangeleverde ontologie-vocabulaire (spiegelt de .NET-Domain
-  `InteractionExtraction`/`MechanicPredicateExtraction`) + de request-validatie.
+  vocabulaire-poort voor de brein-extractie (#226). Sinds #312 is de tool-vorm
+  voor `emit_interactions`/`emit_mechanic_predicates` een CONSTANTE (vrije
+  strings in het zod-schema, description zonder vocabulaire): het door rb-api
+  aangeleverde ontologie-vocabulaire reist als prompt-invoer mee
+  (`interactionPromptText`/`predicatePromptText`) en het antwoord wordt
+  DETERMINISTISCH nagerekend (`enforceInteractionVocabulary`/
+  `enforcePredicateVocabulary` — geen term buiten het aangeboden lijstje
+  verlaat rb-ai; spiegelt de .NET-Domain
+  `InteractionExtraction`/`MechanicPredicateExtraction`, die de tweede muur
+  blijft). Plus de request-validatie. Zie §6.6 voor waaróm de vorm vast is.
 - `src/warmpool.ts` — signaal-gedreven warme-sessie-pool (#154): houdt na een
   `/prewarm`-signaal maximaal één voorverwarmde cheap-SDK-sessie klaar
   (subprocess boot alvast, API-call pas bij de vraag; één sessie = één call,
@@ -1921,14 +1928,56 @@ alle andere mining blijven ongemoeid.
 `POST /extract/predicates` (server.ts) krijgen kaart-/regeltekst + het
 ontologie-vocabulaire (aangeboden refs, kind-/conditie-/rol-enums, Window/Status-
 lexicon) van rb-api. `extractWithTool` (ai.ts) draait één geforceerde in-process
-MCP-tool (`emit_interactions`/`emit_mechanic_predicates`) waarvan het zod-schema —
-gebouwd door de PURE `extract.ts` uit dat vocabulaire — de enum-poorten
-dichttimmert: het model KAN geen ref/kind/window buiten de aangeboden set noemen.
-De tool-handler vangt de gevalideerde argumenten in een closure; de kandidaten
-reizen dus via de tool-input, niet via de antwoordtekst. Uitval (tool niet
-geroepen, timeout, run gefaald) → de endpoint antwoordt 500, wat `RbAiClient` als
-AI-uitval leest (null, nette degradatie); een 200 met lege lijst betekent "geen
-kandidaten" — dat onderscheid blijft bewaard.
+MCP-tool (`emit_interactions`/`emit_mechanic_predicates`). De tool-handler vangt
+de argumenten in een closure; de kandidaten reizen dus via de tool-input, niet
+via de antwoordtekst. Uitval (tool niet geroepen, timeout, run gefaald) → de
+endpoint antwoordt 500, wat `RbAiClient` als AI-uitval leest (null, nette
+degradatie); een 200 met lege lijst betekent "geen kandidaten" — dat onderscheid
+blijft bewaard.
+
+**De tool-vorm is vast; de gesloten vraag zit in de narekening (#312).** Tot
+#312 bakte `extract.ts` het aangeboden vocabulaire als zod-enum ín het schema,
+per aanroep. Dat sloot de vraag op schema-niveau (het model KON geen ref buiten
+de set noemen), maar had twee structurele kosten: elke kaart kreeg een ándere
+tool-definitie in het request-prefix (de prompt-cache brak dus op precies het
+deel dat over een mining-run heen stabiel kán zijn), en een voorverwarmde sessie
+was per constructie onbruikbaar — een warme sessie boot met één vaste tool-set
+(#154), en sessie A's schema paste nooit op kaart B. Sinds #312 is de tool-vorm
+een CONSTANTE (vrije strings, description zonder vocabulaire) en reist het
+vocabulaire als prompt-invoer mee, vóór de kaarttekst in de user-message — bewust
+níét in de system-prompt, want die is het stabiele deel van de aanroep. De
+gesloten-vraag-regel (CLAUDE.md: nooit een term buiten het aangeboden lijstje)
+verhuist daarmee naar een deterministische narekening in `extract.ts`
+(`enforce*Vocabulary`, aangeroepen in server.ts): een item met een ref/kind/
+conditie-term buiten het vocabulaire wordt geweigerd en GETELD (`rejected`/
+`rejectedConditions` in de `ai_call`-regel — maten, geen inhoud), en wat
+doorgaat wordt herbouwd tot exact de bekende velden. De narekening is bewust
+nooit strénger dan de .NET-muur (refs Ordinal-exact; kind/window/status
+case-insensitief; een invalide conditie kost de conditie, niet het item; een
+invalide `subject_role` wordt ge-nuld) — strenger zou dekking kosten op items
+die rb-api gewoon accepteert. Itemgranulariteit is een verbetering ten opzichte
+van de enum-poort: één verzonnen ref liet vroeger de hele tool-call op
+SDK-validatie stranden (en de run vaak als no_tool_call/timeout eindigen), nu
+kost hij één item.
+
+**De warme pool is op dit pad bewust NIET aangesloten (#312, gemeten).** Het
+generieke schema neemt de blokkade weg, maar de meting rechtvaardigt de
+aansluiting niet. De boot-kost die een warme sessie voorbetaalt
+(subprocess-spawn + MCP-registratie) is auth-onafhankelijk te meten als
+`query()` → `system/init` (het init-bericht komt vóór elke API-call): 0,41-0,46 s
+over 10 runs (mediaan 0,43 s, M-serie-Mac; de VM-CPU is grofweg 3-6× trager, dus
+orde 1-2,5 s daar). Tegen een mediane extractie van ~81 s en een timeout die
+inmiddels op 180 s staat is dat 1-3% wandklok — terwijl één extra idle warme
+sessie 300-400 MiB RSS vasthoudt op de 8 GB-VM waar de OOM-killer al eerder
+`llama-server` schoot (#282/#293), en de pool-slot (1) bij parallelle mining
+(#279, 3 background-workers) hooguit één op de drie aanroepen warm zou bedienen.
+De gedragstest "het extract-pad raakt de warme pool niet aan" (ai.test.ts) legt
+die grens vast en hoort bewust rood te gaan wanneer iemand dit later alsnog
+aansluit — met twee harde voorwaarden uit de extractWithTool-doc: een
+PRODUCTIE-meting die een boot-kost van ≥ enkele seconden aantoont, en een
+cheap-only-guard, want het audit-endpoint (task "hard", §6.7) zou via een warme
+claim stil op MODEL.cheap draaien met valse provenance in elke
+`interaction_audit`-rij.
 
 **Faaldiagnostiek op dat pad (#281).** Een mining-run over 40 kaarten meldde
 `22 rb-ai-uitval (5xx×22)` terwijl `docker logs rb-v2-ai` één regel bevatte: de

@@ -16,11 +16,15 @@ import { buildAuditExtraction, parseInteractionAuditRequest } from "./audit.js";
 import {
   buildInteractionToolShape,
   buildPredicateToolShape,
+  enforceInteractionVocabulary,
+  enforcePredicateVocabulary,
   INTERACTION_TOOL_ADDENDUM,
+  interactionPromptText,
   interactionToolDescription,
   parseInteractionExtractRequest,
   parsePredicateExtractRequest,
   PREDICATE_TOOL_ADDENDUM,
+  predicatePromptText,
   predicateToolDescription,
 } from "./extract.js";
 import { splitRelationProposals } from "./relations.js";
@@ -70,7 +74,14 @@ const server = createServer(async (req, res) => {
   let logged = false;
   // Payload-context van deze aanroep: GROOTTES en AANTALLEN, nooit inhoud
   // (werkafspraak 7). Wordt gevuld zodra de body gelezen en gevalideerd is.
-  let shape: { bytes?: number; refs?: number; items?: number; task?: string } = {};
+  let shape: {
+    bytes?: number;
+    refs?: number;
+    items?: number;
+    task?: string;
+    rejected?: number;
+    rejectedConditions?: number;
+  } = {};
   const note = (status: number, failure?: AiFailure) => {
     if (logged || !LOGGED_PATHS.has(path)) return;
     logged = true;
@@ -292,12 +303,15 @@ const server = createServer(async (req, res) => {
       try {
         const outcome = await extractWithTool({
           toolName: "emit_interactions",
-          description: interactionToolDescription(parsed.request),
-          schema: buildInteractionToolShape(parsed.request),
+          // Vaste tool-vorm (#312): description en schema zijn constanten; het
+          // vocabulaire reist als prompt-invoer mee en wordt hieronder
+          // deterministisch nagerekend (de gesloten-vraag-regel uit CLAUDE.md).
+          description: interactionToolDescription(),
+          schema: buildInteractionToolShape(),
           resultKey: "interactions",
           system: parsed.request.system,
           addendum: INTERACTION_TOOL_ADDENDUM,
-          text: parsed.request.text,
+          text: interactionPromptText(parsed.request),
           signal: abort.signal,
         });
         // null = tool niet geroepen / run gefaald: geef een 500 zodat rb-api dit als
@@ -305,8 +319,20 @@ const server = createServer(async (req, res) => {
         // Sinds #281 draagt die 500 de REDEN — dit was het endpoint waar 22 van
         // de 40 mining-kaarten spoorloos op strandden.
         if (outcome.items === null) return sendExtractFailure(outcome);
-        shape = { ...shape, items: outcome.items.length };
-        return sendExtractSuccess(outcome, { interactions: outcome.items });
+        // De narekening (#312): geen term buiten het aangeboden vocabulaire
+        // verlaat rb-ai. De weigeringen gaan als MAAT mee in de logregel —
+        // "hoe vaak kleurt het model buiten het lijstje" is precies de meting
+        // die de generieke tool-vorm moet bewaken.
+        const gate = enforceInteractionVocabulary(outcome.items, parsed.request);
+        shape = {
+          ...shape,
+          items: gate.accepted.length,
+          ...(gate.rejected > 0 ? { rejected: gate.rejected } : {}),
+          ...(gate.rejectedConditions > 0
+            ? { rejectedConditions: gate.rejectedConditions }
+            : {}),
+        };
+        return sendExtractSuccess(outcome, { interactions: gate.accepted });
       } catch (e) {
         if (e instanceof ConcurrencyLimitError)
           return send(
@@ -328,17 +354,24 @@ const server = createServer(async (req, res) => {
       try {
         const outcome = await extractWithTool({
           toolName: "emit_mechanic_predicates",
-          description: predicateToolDescription(parsed.request),
-          schema: buildPredicateToolShape(parsed.request),
+          // Vaste tool-vorm (#312), zelfde snit als /extract/interactions:
+          // subject + predicatenlijst als prompt-invoer, narekening hieronder.
+          description: predicateToolDescription(),
+          schema: buildPredicateToolShape(),
           resultKey: "predicates",
           system: parsed.request.system,
           addendum: PREDICATE_TOOL_ADDENDUM,
-          text: parsed.request.text,
+          text: predicatePromptText(parsed.request),
           signal: abort.signal,
         });
         if (outcome.items === null) return sendExtractFailure(outcome);
-        shape = { ...shape, items: outcome.items.length };
-        return sendExtractSuccess(outcome, { predicates: outcome.items });
+        const gate = enforcePredicateVocabulary(outcome.items, parsed.request);
+        shape = {
+          ...shape,
+          items: gate.accepted.length,
+          ...(gate.rejected > 0 ? { rejected: gate.rejected } : {}),
+        };
+        return sendExtractSuccess(outcome, { predicates: gate.accepted });
       } catch (e) {
         if (e instanceof ConcurrencyLimitError)
           return send(

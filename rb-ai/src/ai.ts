@@ -306,13 +306,30 @@ export function decideExtractOutcome(input: {
 
 /** Tool-forced brein-extractie (#226, docs/ARCHITECTURE brein-epic §3.1). Draait
  * één geforceerde in-process MCP-tool (createSdkMcpServer/tool, zelfde mechaniek als
- * de agentic brein-tools) waarvan het zod-schema de enum-poorten dichttimmert: het
- * model KAN geen ref/kind/window buiten het aangeboden vocabulaire noemen. De
- * tool-handler VANGT de gevalideerde argumenten in een closure en geeft een ack
- * terug; de daadwerkelijke kandidaten reizen dus niet via de antwoordtekst maar via
- * de tool-input. Puur SDK-gedreven en dus, net als askClaude, niet los unit-getest;
- * de vocabulaire→schema-vertaling in extract.ts en de faalvertaling in failure.ts
+ * de agentic brein-tools). Sinds #312 is de tool-VORM een constante (extract.ts):
+ * het vocabulaire reist als prompt-invoer mee en de gesloten-vraag-regel wordt in
+ * server.ts deterministisch nagerekend (`enforce*Vocabulary`) — het schema is dus
+ * niet langer de poort. De tool-handler VANGT de argumenten in een closure en geeft
+ * een ack terug; de daadwerkelijke kandidaten reizen dus niet via de antwoordtekst
+ * maar via de tool-input. Puur SDK-gedreven en dus, net als askClaude, niet los
+ * unit-getest; de vocabulaire-poort in extract.ts en de faalvertaling in failure.ts
  * zijn dat wél.
+ *
+ * BEWUST GEEN warme-pool-claim op dit pad (#312, gemeten). De boot-kost die een
+ * warme sessie voorbetaalt (subprocess-spawn + MCP-registratie, meetbaar als
+ * query()→system/init en auth-onafhankelijk) is 0,41-0,46 s lokaal (mediaan
+ * 0,43 s over 10 runs, M-serie); geëxtrapoleerd naar de VM-CPU is dat orde
+ * 1-2,5 s op een mediane run van ~81 s — terwijl één extra idle warme sessie
+ * 300-400 MiB RSS vasthoudt op de VM waar de OOM-killer al llama-server schoot
+ * (#282/#293). De generieke tool-vorm is de eigenlijke winst: het request-prefix
+ * (tools + system) is nu byte-stabiel over een mining-run, dus prompt-cache-baar,
+ * én de blokkade voor een latere warme aansluiting is weg. Sluit die pas aan
+ * wanneer een PRODUCTIE-meting van de boot-kost (≥ enkele seconden) het
+ * geheugenoffer rechtvaardigt; de guard-test in ai.test.ts ("extract-pad raakt de
+ * warme pool niet aan") is dan de plek die bewust rood hoort te gaan, en een
+ * claim mag er alléén komen voor task="cheap" — het audit-pad (task "hard",
+ * #255) zou anders stil op een warme cheap-sessie (MODEL.cheap) draaien met
+ * valse provenance.
  *
  * Wat de tool vóór een uitval al ving blijft geldig (dan is er gewoon een
  * resultaat); anders komt er `null` mét een {@link AiFailure} terug. */
