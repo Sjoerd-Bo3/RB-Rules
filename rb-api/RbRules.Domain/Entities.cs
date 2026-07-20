@@ -330,6 +330,24 @@ public class Card : IEmbeddable
     /// <summary>Alt-art/promo/herdruk-groepering: null = canonieke printing,
     /// anders het RiftboundId van de canonieke kaart met dezelfde naam.</summary>
     public string? VariantOf { get; set; }
+    /// <summary>Voortgangs-watermark van de brein-interactie-mining (#249-review):
+    /// gezet zodra de EXTRACTIE voor deze kaart geslaagd is (rb-ai antwoordde, de
+    /// envelop parseerde) — ook wanneer er niets promoveerde. Null = nog te doen.
+    ///
+    /// Dit veld verving het Assertion-als-watermark, dat het onderscheid principieel
+    /// niet kon maken: een Assertion ontstaat alléén op het accept-pad, dus een kaart
+    /// die niets oplevert (alle paren kaart↔eigen-keyword, alles verworpen, minder dan
+    /// twee aangeboden refs) liet géén spoor achter en bleef aan de kop van de
+    /// <c>OrderBy(RiftboundId)</c>-wachtrij staan — de gecapte job herkauwde eeuwig
+    /// dezelfde kop en het drain-signaal bleef permanent false. rb-ai-uitval en een
+    /// kapotte envelop zetten dit veld bewust NIET: die kaart moet juist terugkomen.
+    ///
+    /// Her-minen is daarmee een expliciete stap (veld leegmaken), zoals de
+    /// abonnement-tokenkost vereist (#232).</summary>
+    public DateTimeOffset? InteractionsMinedAt { get; set; }
+    /// <summary>De <see cref="MiningRun"/> die het watermark zette — provenance voor
+    /// een gerichte her-mine (bv. na een prompt-versie-bump).</summary>
+    public string? InteractionsMinedByRunId { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

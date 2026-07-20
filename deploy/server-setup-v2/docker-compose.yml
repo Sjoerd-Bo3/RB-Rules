@@ -58,6 +58,18 @@ services:
       # Ask-geschiedenis (#157): HMAC-secret voor de ip_hash-koppeling. Zonder
       # secret degradeert de anonieme geschiedenis stil naar leeg — geen crash.
       ASK_IP_HASH_SECRET: ${ASK_IP_HASH_SECRET:-}
+      # Nachtrun (#245) + noodrem (#249). MOETEN hier staan: Compose geeft alleen
+      # door wat expliciet onder environment: staat, dus een waarde in de VM-.env
+      # alléén bereikte de container nooit — de "noodrem" uit ea567ad deed in
+      # productie niets (printenv gaf niets). De defaults spiegelen
+      # NightlyRunSettings, zodat een ontbrekende .env-waarde het huidige gedrag
+      # houdt: nachtrun AAN, venster 00:00–11:00 Europe/Amsterdam. Uitzetten blijft
+      # een bewuste handeling (NIGHTLY_ENABLED=false in .env + compose up -d);
+      # handmatig starten via beheer werkt hoe dan ook.
+      NIGHTLY_ENABLED: ${NIGHTLY_ENABLED:-true}
+      NIGHTLY_START_HOUR: ${NIGHTLY_START_HOUR:-0}
+      NIGHTLY_END_HOUR: ${NIGHTLY_END_HOUR:-11}
+      NIGHTLY_TZ: ${NIGHTLY_TZ:-Europe/Amsterdam}
     depends_on:
       postgres:
         condition: service_healthy

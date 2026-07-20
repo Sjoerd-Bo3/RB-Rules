@@ -126,10 +126,19 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
 
             var toAdd = new List<MechanicPredicateAssertion>();
             var seenThisSubject = new HashSet<string>(StringComparer.Ordinal);
-            var parsed = MechanicPredicateExtraction.Parse(call.Raw);
+            var parsed = MechanicPredicateExtraction.ParseDetailed(call.Raw);
+            if (parsed.Malformed)
+            {
+                // HTTP 200 met een afgekapte/schema-vreemde body is UITVAL, geen leeg
+                // resultaat (#251-review): stil tot [] reduceren verstopte parse-fouten
+                // in de "geslaagd"-bak en maakte de uitvalmeting onbetrouwbaar.
+                failed++;
+                aiTally.Add(AiCallOutcome.Unparseable);
+                continue;
+            }
             // Geldig antwoord zonder predicaten is geslaagd werk, geen uitval.
-            aiTally.Add(parsed.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
-            foreach (var p in parsed)
+            aiTally.Add(parsed.Items.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
+            foreach (var p in parsed.Items)
             {
                 var key = MechanicPredicateDedupe.Key(subject.Id, p.Predicate, p.ObjectToken);
                 if (existingKeys.Contains(key) || !seenThisSubject.Add(key))

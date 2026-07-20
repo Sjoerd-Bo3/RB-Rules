@@ -407,6 +407,7 @@ public class EntityResolutionTests
         {
             RiftboundId = "ogn-001-002", Name = "Test", SetId = "ogn", Mechanics = ["Deflect"],
         });
+        SeedOfficialSource(db, "core-rules-pdf");
         db.RuleChunks.Add(new RuleChunk
         {
             SourceId = "core-rules-pdf", SectionCode = "701.4", ChunkIndex = 1,
@@ -428,6 +429,80 @@ public class EntityResolutionTests
         Assert.StartsWith("Deflect: prevent", entity.Definition);
         Assert.Equal(CanonicalEntityStatus.Canonical, entity.Status); // status ongemoeid
     }
+
+    // ── #250-review: de definitie-bron is op TRUST gefilterd ────────────────────
+    // rule_chunks bevat élke ingeschakelde bron, dus ook de community-beginnersgidsen
+    // (trust 3). Hun beknopte parafrase won de kortste-wint-regel van de officiële
+    // sectie, werd permanent (fill = nooit overschrijven) en ging ongelabeld de hover
+    // én de predicaat-mining in — een breuk in de kennislagen (docs/KNOWLEDGE.md).
+    [Fact]
+    public async Task VulPad_NegeertCommunityRegeltekst_EnNeemtDeOfficieleDefinitie()
+    {
+        using var db = NewDb();
+        var svc = new EntityResolutionService(db);
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-001-002", Name = "Test", SetId = "ogn", Mechanics = ["Deflect"],
+        });
+        SeedOfficialSource(db, "core-rules-pdf");
+        SeedCommunitySource(db, "beginners-guide-riftboundgg");
+        // De community-parafrase is KORTER en zou dus de kortste-wint-regel winnen.
+        db.RuleChunks.Add(new RuleChunk
+        {
+            SourceId = "beginners-guide-riftboundgg", ChunkIndex = 1,
+            Text = "Deflect is basically a shield that soaks the first hit.",
+        });
+        db.RuleChunks.Add(new RuleChunk
+        {
+            SourceId = "core-rules-pdf", SectionCode = "701.4", ChunkIndex = 1,
+            Text = "Deflect: prevent the next damage that would be dealt to this unit, "
+                 + "then remove the Deflect counter.",
+        });
+        await db.SaveChangesAsync();
+
+        await svc.RegisterExistingMechanicsAsync(CanonicalEntityKinds.Keyword);
+
+        var entity = await db.CanonicalEntities.SingleAsync();
+        Assert.StartsWith("Deflect: prevent the next damage", entity.Definition);
+    }
+
+    [Fact]
+    public async Task VulPad_AlleenCommunityRegeltekst_LaatDeDefinitieLeeg()
+    {
+        using var db = NewDb();
+        var svc = new EntityResolutionService(db);
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-001-002", Name = "Test", SetId = "ogn", Mechanics = ["Deflect"],
+        });
+        SeedCommunitySource(db, "beginners-guide-riftboundgg");
+        db.RuleChunks.Add(new RuleChunk
+        {
+            SourceId = "beginners-guide-riftboundgg", ChunkIndex = 1,
+            Text = "Deflect is basically a shield that soaks the first hit.",
+        });
+        await db.SaveChangesAsync();
+
+        var r = await svc.RegisterExistingMechanicsAsync(CanonicalEntityKinds.Keyword);
+
+        // Liever leeg dan een niet-officiële definitie: de hover degradeert al netjes.
+        Assert.Equal(0, r.Defined);
+        Assert.Null((await db.CanonicalEntities.SingleAsync()).Definition);
+    }
+
+    private static void SeedOfficialSource(RbRulesDbContext db, string id) =>
+        db.Sources.Add(new Source
+        {
+            Id = id, Name = id, Url = $"https://playriftbound.com/{id}",
+            Type = "official", TrustTier = 1, Parser = "pdf", Cadence = "daily",
+        });
+
+    private static void SeedCommunitySource(RbRulesDbContext db, string id) =>
+        db.Sources.Add(new Source
+        {
+            Id = id, Name = id, Url = $"https://example.test/{id}",
+            Type = "community", TrustTier = 3, Parser = "html", Cadence = "weekly",
+        });
 
     // ── InMemory-context (pgvector als tekst, zoals de andere service-tests) ──
     private static RbRulesDbContext NewDb() => new InMemoryDbContext(

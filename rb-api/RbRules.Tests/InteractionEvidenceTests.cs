@@ -5,7 +5,7 @@ namespace RbRules.Tests;
 /// <summary>De pure bouwstenen van de verscherpte bewijs-/tautologie-poort (#249):
 /// wanneer drukt bewijs een RELATIE uit, en wanneer is een rollenpaar niets meer dan
 /// een kaart met haar eigen keyword (al deterministisch bekend uit
-/// <c>Card.Mechanics</c> → HAS_KEYWORD in de graph)?</summary>
+/// <c>Card.Mechanics</c> → HAS_MECHANIC in de graph)?</summary>
 public class InteractionEvidenceTests
 {
     // ── ExpressesRelation ────────────────────────────────────────────────────

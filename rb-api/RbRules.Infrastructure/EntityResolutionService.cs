@@ -152,8 +152,20 @@ public class EntityResolutionService(RbRulesDbContext db)
         // Officiële regeltekst als definitie-bron: één keer geladen, per term
         // in-memory doorzocht (zelfde patroon als de partner-pool in de mining —
         // geen query per term, en de poort zelf is puur/Domain).
+        //
+        // ALLEEN trust-tier-1 (#250-review): rule_chunks bevat élke ingeschakelde bron,
+        // dus ook de community-beginnersgidsen (trust 3). Hun parafrase ("Deflect is
+        // basically a shield…") is korter dan de officiële sectie en won daardoor de
+        // kortste-wint-regel — waarna de fill "alleen aanvullen, nooit overschrijven"
+        // hem permanent maakte, ongelabeld, in de hover én als eerste bewijsregel voor
+        // de predicaat-mining. Dat breekt de kennislagen (docs/KNOWLEDGE.md) en
+        // logenstraft de belofte van deze methode.
+        var officialSourceIds = await db.Sources.AsNoTracking()
+            .Where(s => s.TrustTier == 1)
+            .Select(s => s.Id)
+            .ToListAsync(ct);
         var sectionTexts = await db.RuleChunks.AsNoTracking()
-            .Where(c => c.Text != "")
+            .Where(c => c.Text != "" && officialSourceIds.Contains(c.SourceId))
             .OrderBy(c => c.SourceId).ThenBy(c => c.ChunkIndex)
             .Select(c => c.Text)
             .ToListAsync(ct);

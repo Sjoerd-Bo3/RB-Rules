@@ -250,7 +250,7 @@ public class BreinInteractionMiningServiceTests
     // ── #249: kaart↔EIGEN keyword levert géén promoveerbare Interaction meer ─────
     // Regressie op de kernbevinding: 264 van 383 live interacties (69%) waren
     // kaart↔eigen-keyword. Dat feit staat al deterministisch in de graph
-    // (HAS_KEYWORD uit Card.Mechanics) en verdrong de gekwalificeerde interacties
+    // (HAS_MECHANIC uit Card.Mechanics) en verdrong de gekwalificeerde interacties
     // waar de tabel voor bedoeld is. De lexicale poort beloonde het bovendien
     // triviaal: de kaart ís de ene rol en haar keyword staat in haar eigen tekst.
     [Fact]
@@ -283,7 +283,7 @@ public class BreinInteractionMiningServiceTests
     }
 
     // De deterministische kaart→keyword-projectie blijft ONGEMOEID: Card.Mechanics
-    // is de bron waar GraphSyncService de HAS_KEYWORD-edges uit bouwt, en de mining
+    // is de bron waar GraphSyncService de HAS_MECHANIC-edges uit bouwt, en de mining
     // raakt dat bronveld niet aan (#249-acceptatie).
     [Fact]
     public async Task RunAsync_LaatCardMechanicsOngemoeid_GraphProjectieBlijftIntact()
@@ -373,12 +373,8 @@ public class BreinInteractionMiningServiceTests
         using var db = NewDb();
         // De kaarttekst noemt de labels NIET — alleen de regelsectie doet dat.
         await SeedCardAsync(db, "ogn-060", "Gamma", "Unit", "It has some ability.", ["Snipe", "Tank"]);
-        db.RuleChunks.Add(new RuleChunk
-        {
-            SourceId = "core-rules-pdf", SectionCode = "704.2", ChunkIndex = 1,
-            Text = "Tank reduces incoming damage before Snipe assigns its damage.",
-        });
-        await db.SaveChangesAsync();
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.2",
+            "Tank reduces incoming damage before Snipe assigns its damage.");
 
         var svc = Service(db, () => Interactions(new
         {
@@ -530,6 +526,230 @@ public class BreinInteractionMiningServiceTests
         Assert.Empty(await db.Interactions.ToListAsync());
     }
 
+    // ── #249-review: het watermark hangt aan de EXTRACTIE, niet aan een feit ────
+    // De blokkerende regressie van #249: de tautologie-poort slaat kaart↔eigen-keyword
+    // over vóór de promotie, dus zo'n kaart schreef geen Assertion — en juist die
+    // Assertion wás het voortgangs-watermark. Met OrderBy(RiftboundId).Take(cap) bleef
+    // die kaart aan de kop van de wachtrij staan: de gecapte job herkauwde eeuwig
+    // dezelfde kop, de nachtrun betaalde elke nacht opnieuw, en Drained bleef false.
+    [Fact]
+    public async Task RunAsync_KaartMetAlleenEigenKeyword_BlokkeertDeWachtrijNietBijDeTweedeRun()
+    {
+        using var db = NewDb();
+        // ogn-040 levert UITSLUITEND kaart↔eigen-keyword op ⇒ 0 feiten, 0 Assertions.
+        await SeedCardAsync(db, "ogn-040", "Cloth Armor", "Gear",
+            "[Equip] Attach to a unit.", ["Equip"]);
+        await SeedCardAsync(db, "ogn-041", "Second Card", "Gear",
+            "[Equip] Attach to a unit.", ["Equip"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "card:ogn-040", to = "mechanic:Equip", kind = "REQUIRES", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r1 = await svc.RunAsync(maxFocusCards: 1);
+        Assert.Equal(1, r1.SkippedKnown);
+        Assert.Empty(await db.Assertions.ToListAsync());   // geen feit ⇒ geen Assertion
+
+        // Het watermark staat er wél: de extractie sláágde, er viel alleen niets te
+        // promoveren. Dat onderscheid kon het Assertion-proxy principieel niet maken.
+        var first = await db.Cards.SingleAsync(c => c.RiftboundId == "ogn-040");
+        Assert.NotNull(first.InteractionsMinedAt);
+        Assert.Equal(await db.MiningRuns.Select(m => m.Id).FirstAsync(),
+            first.InteractionsMinedByRunId);
+
+        // Run 2 (cap 1) schuift dus DOOR naar de tweede kaart in plaats van dezelfde
+        // kop opnieuw aan rb-ai aan te bieden.
+        var stamp = first.InteractionsMinedAt;
+        var r2 = await svc.RunAsync(maxFocusCards: 1);
+        Assert.Equal(1, r2.FocusCards);
+        Assert.Equal(stamp, (await db.Cards.SingleAsync(c => c.RiftboundId == "ogn-040"))
+            .InteractionsMinedAt);   // niet opnieuw aangeboden
+        Assert.NotNull((await db.Cards.SingleAsync(c => c.RiftboundId == "ogn-041"))
+            .InteractionsMinedAt);
+
+        // Run 3: de pool is leeg ⇒ gedraind (geen CapHit), i.p.v. eeuwig 'nog werk over'.
+        var r3 = await svc.RunAsync(maxFocusCards: 1);
+        Assert.Equal(0, r3.FocusCards);
+        Assert.False(r3.CapHit);
+    }
+
+    // ── #249-review: rb-ai-uitval zet GEEN watermark — die kaart komt terug ──────
+    [Fact]
+    public async Task RunAsync_RbAiUitval_ZetGeenWatermark_KaartKomtDeVolgendeRunTerug()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        var down = Service(db, () => null); // 500 → RbAiClient geeft null
+        var r1 = await down.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r1.Failed);
+        Assert.Null((await db.Cards.SingleAsync()).InteractionsMinedAt);
+
+        // Zelfde kaart, rb-ai weer in de lucht: de kaart wordt opnieuw aangeboden en
+        // levert nu wél een feit. Een watermark op de uitval had haar permanent
+        // overgeslagen — dat is precies waarom het aan de GESLAAGDE extractie hangt.
+        var up = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Deflect", to = "mechanic:Assault", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+        var r2 = await up.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r2.FocusCards);
+        Assert.Equal(1, r2.Promoted);
+        Assert.NotNull((await db.Cards.SingleAsync()).InteractionsMinedAt);
+    }
+
+    // ── #249-review: ook een volledig VERWORPEN kaart verlaat de wachtrij ────────
+    [Fact]
+    public async Task RunAsync_AlleenVerworpenKandidaten_ZetTochHetWatermark()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-050", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Deflect", to = "mechanic:Assault", kind = "COUNTERS", interacts = false,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Rejected);
+        Assert.Empty(await db.Assertions.ToListAsync());   // weigering ⇒ geen Assertion
+        Assert.NotNull((await db.Cards.SingleAsync()).InteractionsMinedAt);
+    }
+
+    // ── #251-review: een kapotte envelop is UITVAL, geen leeg resultaat ──────────
+    // HTTP 200 met een afgekapte body of schema-drift werd door de Domain-parser stil
+    // tot [] gereduceerd en als 'geslaagd, leeg' geteld: een run waarin rb-ai bij élke
+    // kaart onzin teruggaf meldde 0% uitval. Dat ondermijnde de hele #251-meting.
+    [Theory]
+    [InlineData("{\"interactions\":[{\"from\":\"card:ogn-001\"")]   // afgekapt
+    [InlineData("{\"interactions\":\"none\"}")]                      // schema-drift
+    public async Task RunAsync_KapotteEnvelop_TeltAlsOnleesbaar_EnZetGeenWatermark(string body)
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        var svc = Service(db, () => body);
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Failed);
+        Assert.Equal("onleesbaar antwoord×1", r.FailureDetail);
+        // Géén watermark: een kaart met een kapot antwoord moet juist terugkomen.
+        Assert.Null((await db.Cards.SingleAsync()).InteractionsMinedAt);
+    }
+
+    // ── #249-review: woordgrens — generiek proza is geen bewijszin ───────────────
+    // TextContains was een kale substring-match. Sinds #249 is het HELE regelcorpus
+    // bewijsbron én ankertoets, en Riftbound-keywords zijn deels gewone Engelse
+    // woorden — "Deflection"/"assaulting" leverden zo een officieel-ogende bewijszin
+    // voor mechanic:Deflect ↔ mechanic:Assault die de termen niet eens noemt.
+    [Fact]
+    public async Task RunAsync_TermAlleenAlsWoorddeelInRegeltekst_GeeftGeenLexicaleSteun()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-080", "Alpha", "Unit", "It has some ability.",
+            ["Deflect", "Assault"]);
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "101.1",
+            "Deflection and assaulting are informal terms that players sometimes use.");
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Deflect", to = "mechanic:Assault", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(0, r.Promoted);
+        Assert.Equal(1, r.Candidates);   // wacht op corroboratie, geen valse promotie
+    }
+
+    // ── #249-review: gebracket + meerwoords blijft wél een treffer ───────────────
+    [Fact]
+    public async Task RunAsync_GebracktKeywordInRegeltekst_BlijftBewijs()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-081", "Alpha", "Unit", "It has some ability.",
+            ["Assault 2", "Tank"]);
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.3",
+            "[Assault 2] resolves before Tank reduces the incoming damage.");
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Assault", to = "mechanic:Tank", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Promoted);
+    }
+
+    // ── #249-review: community-regeltekst is geen deterministische steun ─────────
+    [Fact]
+    public async Task RunAsync_CommunityRegelsectie_TeltNietAlsBewijs()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-082", "Alpha", "Unit", "It has some ability.",
+            ["Snipe", "Tank"]);
+        await SeedRuleSectionAsync(db, "beginners-guide-riftboundgg", null,
+            "Tank basically cancels out Snipe, that is the rule of thumb.", trustTier: 3);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Snipe", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        // De kennislagen zijn bindend: officieel > community. Zonder officieel anker
+        // blijft dit kandidaat i.p.v. gepromoveerd op een forumparafrase.
+        Assert.Equal(0, r.Promoted);
+        Assert.Equal(1, r.Candidates);
+    }
+
+    // ── #249-review: de bewijs-begroting wordt niet door één paar opgesoupeerd ───
+    // De eerste drie secties die ≥2 labels noemen vulden MaxRuleSections, ook als het
+    // steeds hetzelfde paar was — de sectie die een ánder paar documenteert werd dan
+    // nooit geladen en dat paar bleef eeuwig kandidaat. De uitslag hing zo aan de
+    // corpusvolgorde (SourceId/ChunkIndex) in plaats van aan het bewijs.
+    [Fact]
+    public async Task RunAsync_BewijsBegroting_BereiktOokHetLaterGedocumenteerdePaar()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-090", "Alpha", "Unit", "It has some ability.",
+            ["Snipe", "Tank", "Vision", "Barrier"]);
+        // Drie vroege secties over hetzelfde paar (Snipe+Tank) …
+        for (var i = 1; i <= 3; i++)
+            await SeedRuleSectionAsync(db, "core-rules-pdf", $"70{i}.1",
+                "Tank reduces the damage that Snipe assigns.", chunkIndex: i);
+        // … en pas dáárna de sectie die Vision↔Barrier beschrijft.
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.1",
+            "Barrier hides a unit from Vision until the end of the turn.", chunkIndex: 4);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Barrier", to = "mechanic:Vision", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Promoted);
+        Assert.Equal(0, r.Candidates);
+    }
+
     // ── testinfra ─────────────────────────────────────────────────────────────
 
     private static BreinInteractionMiningService Service(RbRulesDbContext db, Func<string?> body) =>
@@ -544,6 +764,26 @@ public class BreinInteractionMiningServiceTests
         db.Cards.Add(new Card
         {
             RiftboundId = id, Name = name, Type = type, TextPlain = text, Mechanics = mechanics,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Een regelsectie mét haar bron-rij: de bewijsselectie filtert sinds de
+    /// #249-review op trust-tier-1, dus een chunk zonder (officiële) bron telt niet mee.</summary>
+    private static async Task SeedRuleSectionAsync(
+        RbRulesDbContext db, string sourceId, string? sectionCode, string text,
+        short trustTier = 1, int chunkIndex = 1)
+    {
+        if (!await db.Sources.AnyAsync(s => s.Id == sourceId))
+            db.Sources.Add(new Source
+            {
+                Id = sourceId, Name = sourceId, Url = $"https://playriftbound.com/{sourceId}",
+                Type = trustTier == 1 ? "official" : "community", TrustTier = trustTier,
+                Parser = "pdf", Cadence = "daily",
+            });
+        db.RuleChunks.Add(new RuleChunk
+        {
+            SourceId = sourceId, SectionCode = sectionCode, ChunkIndex = chunkIndex, Text = text,
         });
         await db.SaveChangesAsync();
     }

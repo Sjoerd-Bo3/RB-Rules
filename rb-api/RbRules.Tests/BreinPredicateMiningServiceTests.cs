@@ -156,6 +156,26 @@ public class BreinPredicateMiningServiceTests
         Assert.Equal(0, run.Verified);
     }
 
+    // ── #251-review: een kapotte envelop is UITVAL, geen leeg resultaat ─────────
+    [Theory]
+    [InlineData("{\"predicates\":[{\"predicate\":\"grants\"")]   // afgekapt
+    [InlineData("{\"predicates\":\"none\"}")]                     // schema-drift
+    public async Task RunAsync_KapotteEnvelop_TeltAlsOnleesbaar_NietAlsLeeg(string body)
+    {
+        using var db = NewDb();
+        await SeedMechanicAsync(db, "Bastion", definition: "Bastion grants Tank to a friendly unit.");
+
+        var svc = Service(db, () => body);
+
+        var r = await svc.RunAsync();
+
+        // Vroeger: stil tot [] gereduceerd en als 'geldig, leeg' geteld ⇒ 0% uitval,
+        // terwijl rb-ai onzin gaf. Dat maakte de #251-meting blind voor parse-fouten.
+        Assert.Equal(1, r.Failed);
+        Assert.Equal("onleesbaar antwoord×1", r.FailureDetail);
+        Assert.Empty(await db.MechanicPredicates.ToListAsync());
+    }
+
     // ── Nachtrun-deadline (#245) ───────────────────────────────────────────────
     [Fact]
     public async Task RunAsync_DeadlineVerstreken_StoptDirect_GeenPredicaat_MeerWerk()
