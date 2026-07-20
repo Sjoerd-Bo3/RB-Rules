@@ -39,23 +39,40 @@ public static class DeckPopularityQuery
     private static readonly string[] PopularitySections =
         ["champions", "maindeck", "runes", "battlefields"];
 
-    /// <summary>Aandeel van de recente decks dat deze kaart speelt (#15).
-    /// canonicalId is altijd al de canonieke groeps-id (CardText.CanonicalId)
-    /// — varianten en de basisprinting delen hetzelfde signaal, net als de
-    /// rest van het kaartdossier.</summary>
-    public static async Task<CardDeckPopularity> ForCanonicalAsync(
-        RbRulesDbContext db, string canonicalId, CancellationToken ct)
-    {
-        // Zelfde "recentst"-maat als het beheeroverzicht (AdminOverviewService.
-        // DecksAsync): PA's eigen updatedAt, met onze FetchedAt als terugval
-        // voor de zeldzame pagina zonder datum — consistent "recent" door de
-        // hele bank heen, in plaats van een tweede definitie.
-        var recentDeckIds = await db.Decks.AsNoTracking()
+    /// <summary>De "recent"-pool zelf: de <see cref="RecentDeckWindow"/> meest
+    /// recent bijgewerkte decks. Zelfde "recentst"-maat als het beheeroverzicht
+    /// (AdminOverviewService.DecksAsync): PA's eigen updatedAt, met onze
+    /// FetchedAt als terugval voor de zeldzame pagina zonder datum —
+    /// consistent "recent" door de hele bank heen, in plaats van een tweede
+    /// definitie. Apart opvraagbaar (#318-review B2) zodat een aanroeper met
+    /// meerdere kaarten — het /ask-deck-meta-kanaal — de pool één keer ophaalt
+    /// en hergebruikt: dit is de duurste query van het signaal (sort over de
+    /// hele deck-bank).</summary>
+    public static Task<List<long>> RecentDeckIdsAsync(
+        RbRulesDbContext db, CancellationToken ct) =>
+        db.Decks.AsNoTracking()
             .OrderByDescending(d => d.PaUpdatedAt ?? d.FetchedAt)
             .ThenBy(d => d.Id)
             .Take(RecentDeckWindow)
             .Select(d => d.Id)
             .ToListAsync(ct);
+
+    /// <summary>Aandeel van de recente decks dat deze kaart speelt (#15).
+    /// canonicalId is altijd al de canonieke groeps-id (CardText.CanonicalId)
+    /// — varianten en de basisprinting delen hetzelfde signaal, net als de
+    /// rest van het kaartdossier.</summary>
+    public static async Task<CardDeckPopularity> ForCanonicalAsync(
+        RbRulesDbContext db, string canonicalId, CancellationToken ct) =>
+        await ForCanonicalAsync(db, canonicalId, await RecentDeckIdsAsync(db, ct), ct);
+
+    /// <summary>Variant met een reeds opgehaalde recente-decks-pool
+    /// (#318-review B2): de pool is expliciete invoer — noemer én afbakening
+    /// van alle tellingen — zodat meerdere kaarten binnen één vraag tegen
+    /// exact dezelfde pool gemeten worden zonder de pool-query te herhalen.</summary>
+    public static async Task<CardDeckPopularity> ForCanonicalAsync(
+        RbRulesDbContext db, string canonicalId, List<long> recentDeckIds,
+        CancellationToken ct)
+    {
         var recentDeckCount = recentDeckIds.Count;
         if (recentDeckCount == 0) return new(0, 0, 0, null, true, []);
 

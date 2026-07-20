@@ -6,6 +6,10 @@ namespace RbRules.Domain;
 /// het aantal recente decks waarin beide kaarten samen voorkomen.</summary>
 public record DeckMetaCoPlay(string Name, int DeckCount);
 
+/// <summary>Kandidaat voor het deck-meta-kanaal: een canonieke kaart waarvan
+/// de naam letterlijk in de vraag voorkomt (CardsNamedIn-match).</summary>
+public record DeckMetaCard(string RiftboundId, string Name);
+
 /// <summary>Deck-meta voor één kaart zoals het /ask-kanaal hem aanlevert
 /// (kennislaag 3, #267): dezelfde velden als het "In decks"-dossierblok op de
 /// kaartpagina (CardDeckPopularity), maar dan de subset die de prompt nodig
@@ -37,6 +41,26 @@ public static class DeckMetaRetrieval
     /// buiten scope, #267).</summary>
     public static bool ShouldRetrieve(QuestionType type, bool mentionsCard) =>
         mentionsCard && type is QuestionType.Kaart or QuestionType.Lijst;
+
+    /// <summary>Kaart-selectie voor het kanaal (#318-review B1), dezelfde
+    /// dedup-regel als AgenticGate.CountDistinctMentions: een naam die
+    /// substring is van een langere match is dezélfde vermelding — "Jinx"
+    /// raakt binnen "Jinx, Loose Cannon" — en mag geen eigen slot (en dus
+    /// geen eigen deck-query's) verbruiken. Vrijwel elke legend "X, Epithet"
+    /// heeft een champion-unit "X" naast zich, dus zonder dedup zou bijna
+    /// elke legend-vraag een ongevraagde tweede kaart meenemen. Daarna de
+    /// langste (meest specifieke) naam eerst, deterministisch getie-breakt,
+    /// gecapt op <see cref="MaxCards"/>.</summary>
+    public static IReadOnlyList<DeckMetaCard> SelectCards(
+        IReadOnlyCollection<DeckMetaCard> matches) =>
+        [.. matches
+            .Where(m => !string.IsNullOrWhiteSpace(m.Name))
+            .Where(m => !matches.Any(other =>
+                other.Name.Length > m.Name.Length &&
+                other.Name.Contains(m.Name, StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(m => m.Name.Length)
+            .ThenBy(m => m.RiftboundId, StringComparer.Ordinal)
+            .Take(MaxCards)];
 
     /// <summary>Regel per kaart, invariant genoteerd (punt als decimaalteken,
     /// zelfde afspraak als ClaimRetrieval.PromptLabel). Bij ThinData (#15)

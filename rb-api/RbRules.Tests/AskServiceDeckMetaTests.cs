@@ -72,6 +72,63 @@ public class AskServiceDeckMetaTests
     }
 
     [Fact]
+    public async Task AskAsync_LegendVraag_SubstringMatchVerbruiktGeenTweedeSlot()
+    {
+        // #318-review B1: vrijwel elke legend "X, Epithet" heeft een
+        // champion-unit "X" naast zich. Een vraag over uitsluitend de legend
+        // raakt via de substring-match óók de basiskaart — die mag geen eigen
+        // deck-meta-regel, trace-ref of deck-query's opleveren (dedup op
+        // langste naam, zoals AgenticGate.CountDistinctMentions).
+        using var db = NewDb();
+        await SeedRulesAsync(db);
+        const string legendId = "ogn-100-298";
+        const string baseId = "ogn-101-298";
+        db.Cards.AddRange(
+            new Card { RiftboundId = legendId, Name = "Jinx, Loose Cannon", SetId = "OGN" },
+            new Card { RiftboundId = baseId, Name = "Jinx", SetId = "OGN" });
+        db.RuleChunks.Add(new RuleChunk
+        {
+            DocumentId = db.Documents.Single().Id, SourceId = SourceId,
+            SectionCode = "302.1", ChunkIndex = 1, Page = 4,
+            Text = "A legend such as Jinx, Loose Cannon may attack during a showdown.",
+        });
+        await db.SaveChangesAsync();
+        // Beide kaarten hebben een eigen deck-signaal: zonder dedup zou de
+        // basiskaart dus wél een tweede regel opleveren (mutatie-bewijs).
+        var decks = Enumerable.Range(0, 5).Select(i => new Deck
+        {
+            PaId = $"jinx-{i}",
+            SourceUrl = $"https://piltoverarchive.com/decks/view/jinx-{i}",
+            PaUpdatedAt = new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero).AddDays(i),
+        }).ToList();
+        db.Decks.AddRange(decks);
+        await db.SaveChangesAsync();
+        db.DeckCards.AddRange(
+            new DeckCard { DeckId = decks[0].Id, Section = "champions", CardCode = "OGN-100", CanonicalRiftboundId = legendId, Quantity = 1 },
+            new DeckCard { DeckId = decks[1].Id, Section = "champions", CardCode = "OGN-100", CanonicalRiftboundId = legendId, Quantity = 1 },
+            new DeckCard { DeckId = decks[2].Id, Section = "maindeck", CardCode = "OGN-101", CanonicalRiftboundId = baseId, Quantity = 3 },
+            new DeckCard { DeckId = decks[3].Id, Section = "maindeck", CardCode = "OGN-101", CanonicalRiftboundId = baseId, Quantity = 3 });
+        await db.SaveChangesAsync();
+
+        var ai = new RecordingAi("**Antwoord:** De legend valt aan. [1]");
+        var svc = Svc(db, ai);
+
+        var result = await svc.AskAsync("Wat doet Jinx, Loose Cannon in een deck?");
+
+        Assert.True(result.Ok);
+        Assert.Equal(1, svc.DeckMetaCalls);
+        var prompt = ai.AnswerPrompt();
+        // Precies één deck-meta-regel: de legend zelf.
+        Assert.Contains(
+            "- [deck-meta] Jinx, Loose Cannon: gespeeld in 2 van de 5 recentste decks",
+            prompt);
+        Assert.DoesNotContain("- [deck-meta] Jinx:", prompt);
+        Assert.Equal(
+            prompt.IndexOf("[deck-meta]", StringComparison.Ordinal),
+            prompt.LastIndexOf("[deck-meta]", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AskAsync_RegelvraagZonderKaart_GeenEnkeleDeckQuery()
     {
         // De hotpath-eis van #267: een regelvraag zonder kaartnamen mag het

@@ -29,6 +29,65 @@ public class DeckMetaRetrievalTests
         // kaart berekend (archetype-detectie is expliciet buiten scope).
         Assert.False(DeckMetaRetrieval.ShouldRetrieve(type, mentionsCard: false));
 
+    // ── Kaart-selectie (#318-review B1) ─────────────────────────────────
+
+    [Fact]
+    public void SelectCards_SubstringMatchValtAfBijLangereNaam()
+    {
+        // De legend-val: "Jinx" raakt binnen "Jinx, Loose Cannon" — dezelfde
+        // vermelding, dus géén eigen slot (regel van AgenticGate.
+        // CountDistinctMentions).
+        var selected = DeckMetaRetrieval.SelectCards(
+        [
+            new DeckMetaCard("base", "Jinx"),
+            new DeckMetaCard("legend", "Jinx, Loose Cannon"),
+        ]);
+
+        var only = Assert.Single(selected);
+        Assert.Equal("legend", only.RiftboundId);
+    }
+
+    [Fact]
+    public void SelectCards_SubstringDedup_IsHoofdletterOngevoelig()
+    {
+        var selected = DeckMetaRetrieval.SelectCards(
+        [
+            new DeckMetaCard("base", "jinx"),
+            new DeckMetaCard("legend", "Jinx, Loose Cannon"),
+        ]);
+
+        Assert.Equal("legend", Assert.Single(selected).RiftboundId);
+    }
+
+    [Fact]
+    public void SelectCards_OnafhankelijkeNamen_LangsteEerstEnGecapt()
+    {
+        var selected = DeckMetaRetrieval.SelectCards(
+        [
+            new DeckMetaCard("a", "Ekko"),
+            new DeckMetaCard("b", "Powder Monkey"),
+            new DeckMetaCard("c", "Get Excited!"),
+        ]);
+
+        // Drie onafhankelijke namen: cap op twee, langste (meest specifieke)
+        // eerst.
+        Assert.Equal(2, selected.Count);
+        Assert.Equal("Powder Monkey", selected[0].Name);
+        Assert.Equal("Get Excited!", selected[1].Name);
+    }
+
+    [Fact]
+    public void SelectCards_GelijkeLengte_DeterministischeTieBreakOpId()
+    {
+        var selected = DeckMetaRetrieval.SelectCards(
+        [
+            new DeckMetaCard("z-kaart", "Vex"),
+            new DeckMetaCard("a-kaart", "Zed"),
+        ]);
+
+        Assert.Equal(["a-kaart", "z-kaart"], selected.Select(s => s.RiftboundId));
+    }
+
     // ── Het prompt-blok ─────────────────────────────────────────────────
 
     private static RetrievedDeckMeta Meta(

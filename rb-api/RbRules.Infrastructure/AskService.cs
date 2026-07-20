@@ -1289,30 +1289,36 @@ public class AskService(
     /// signaal van het kaartdossier (DeckPopularityQuery — aandeel recente
     /// decks, gemiddeld aantal exemplaren, top-co-occurrence) voor de kaarten
     /// die letterlijk in de vraag genoemd worden, als expliciet gelabeld
-    /// laag-3-blok (DeckMetaRetrieval, Domain). Bij meerdere matchende namen
-    /// wint de langste (meest specifieke) naam — "Jinx, Loose Cannon" boven
-    /// het substring-geraakte "Jinx" (zelfde motivatie als AgenticGate).
-    /// Kaarten zonder enig deck-signaal leveren geen regel; zonder regels
-    /// geen blok. Virtual als test-seam: de regressietest van #267 bewijst
-    /// hiermee dat een niet-relevante vraag dit kanaal — en dus de
-    /// deck-query's — nooit raakt.</summary>
+    /// laag-3-blok. De selectie (DeckMetaRetrieval.SelectCards, Domain —
+    /// #318-review B1) dedupet substring-matches vóór de cap, zoals
+    /// AgenticGate.CountDistinctMentions: "Jinx" binnen "Jinx, Loose Cannon"
+    /// is dezelfde vermelding en verbruikt geen slot of deck-query's. De
+    /// recente-decks-pool wordt één keer opgehaald en voor alle kaarten
+    /// hergebruikt (#318-review B2) — dat is de duurste query van het
+    /// signaal, en zo meten beide kaarten tegen exact dezelfde pool. Kaarten
+    /// zonder enig deck-signaal leveren geen regel; zonder regels geen blok.
+    /// Virtual als test-seam: de regressietest van #267 bewijst hiermee dat
+    /// een niet-relevante vraag dit kanaal — en dus de deck-query's — nooit
+    /// raakt.</summary>
     protected virtual async Task<(string Block, List<string> Refs)> DeckMetaChannelAsync(
         RbRulesDbContext ctx, string qLower, CancellationToken ct)
     {
-        var namedCards = await CardsNamedIn(ctx, qLower)
-            .OrderByDescending(c => c.Name.Length)
-            .ThenBy(c => c.RiftboundId)
-            .Take(DeckMetaRetrieval.MaxCards)
+        var matches = await CardsNamedIn(ctx, qLower)
             .Select(c => new { c.RiftboundId, c.Name })
             .ToListAsync(ct);
+        var namedCards = DeckMetaRetrieval.SelectCards(
+            [.. matches.Select(m => new DeckMetaCard(m.RiftboundId, m.Name))]);
+        if (namedCards.Count == 0) return ("", []);
 
+        var recentDeckIds = await DeckPopularityQuery.RecentDeckIdsAsync(ctx, ct);
         var items = new List<RetrievedDeckMeta>();
         var refs = new List<string>();
         foreach (var card in namedCards)
         {
             // CardsNamedIn filtert al op VariantOf == null, dus RiftboundId
             // ís de canonieke groeps-id die de deck-rijen dragen.
-            var pop = await DeckPopularityQuery.ForCanonicalAsync(ctx, card.RiftboundId, ct);
+            var pop = await DeckPopularityQuery.ForCanonicalAsync(
+                ctx, card.RiftboundId, recentDeckIds, ct);
             if (pop.DeckCount == 0) continue; // geen signaal → geen regel
             items.Add(new RetrievedDeckMeta(
                 card.Name, pop.DeckCount, pop.RecentDeckCount, pop.Percentage,
