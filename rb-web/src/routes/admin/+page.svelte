@@ -26,6 +26,9 @@
 	interface Job {
 		name: string; status: string; startedAt: string;
 		finishedAt: string | null; detail: string | null; progress: string | null;
+		// Afbreken (#253): staat er een afbreekverzoek open? De job stopt
+		// coöperatief, dus tussen klik en afronding zit even niks-zichtbaars.
+		cancelRequested?: boolean;
 	}
 	interface Log { id: number; kind: string; ref: string | null; status: string; detail: string | null; createdAt: string; }
 	// Laatste afronding per job uit het run_log-grootboek (#122): overleeft
@@ -357,7 +360,11 @@
 	function lastRunLabel(name: string): string | null {
 		const r = live?.jobRuns?.find((x) => x.name === name);
 		if (!r) return null;
-		return `laatste run ${fmtAgo(r.at)} geleden${r.status === 'error' ? ' — mislukt' : ''}`;
+		// Afbreken (#253): een afgebroken run vult het scheduler-venster net zo
+		// goed als een geslaagde — laat dus zien dát hij afgebroken werd.
+		const uitkomst =
+			r.status === 'error' ? ' — mislukt' : r.status === 'cancelled' ? ' — afgebroken' : '';
+		return `laatste run ${fmtAgo(r.at)} geleden${uitkomst}`;
 	}
 
 	// Elke tegel klikt door naar het onderliggende overzicht (#61). De
@@ -442,19 +449,48 @@
 					<h4>Nu bezig</h4>
 					<span class="sp"></span>
 					<span class="live"><span class="p"></span>{jobLabel(running.name)}</span>
+					<!-- Afbreken (#253): stopt de run coöperatief — de API zet het
+					     verzoek klaar, de job stopt op zijn eerstvolgende breekpunt
+					     en sluit af als "cancelled" (met een run_log-regel, zodat de
+					     scheduler hem niet meteen herstart). Geen page-reload nodig:
+					     de status-poll toont vanzelf de afronding. -->
+					<form
+						method="POST"
+						action="?/cancelJob"
+						use:enhance={({ cancel }) => {
+							if (
+								!confirm(
+									`"${jobLabel(running.name)}" nu afbreken? De al opgeslagen voortgang blijft behouden; de run wordt afgesloten als afgebroken. Afbreken kan enkele seconden duren.`
+								)
+							) {
+								cancel();
+								return;
+							}
+							return async ({ update }) => { await update({ reset: false }); };
+						}}
+					>
+						<button class="ghost cancel-job" disabled={running.cancelRequested}>
+							{running.cancelRequested ? 'Afbreken…' : 'Afbreken'}
+						</button>
+					</form>
 				</div>
 				<div class="bar indet" role="progressbar" aria-label="Voortgang"><i></i></div>
 				<div class="barmeta">
 					<span>{running.progress ?? 'bezig…'}</span>
-					<span class="tnum">draait {fmtAgo(running.startedAt)}</span>
+					<span class="tnum">
+						{running.cancelRequested ? 'afbreken aangevraagd — ' : ''}draait {fmtAgo(running.startedAt)}
+					</span>
 				</div>
 			</div>
 		{:else if live?.lastJob}
 			{@const last = live.lastJob}
+			{@const cancelled = last.status === 'cancelled'}
 			<div class="panel status-line">
-				<span class="status-dot {last.status === 'ok' ? 'ok' : 'err'}"></span>
+				<span class="status-dot {last.status === 'ok' ? 'ok' : cancelled ? 'warn' : 'err'}"></span>
 				<strong>{jobLabel(last.name)}</strong>
-				<span class="meta">{last.status === 'ok' ? 'afgerond' : 'mislukt'} · {fmtAgo(last.finishedAt)} geleden</span>
+				<span class="meta">
+					{last.status === 'ok' ? 'afgerond' : cancelled ? 'afgebroken' : 'mislukt'} · {fmtAgo(last.finishedAt)} geleden
+				</span>
 				{#if last.detail}<span class="meta detail">{last.detail}</span>{/if}
 			</div>
 		{/if}
@@ -555,9 +591,16 @@
 					<div class="runlog">
 						{#each recentRuns as r (r.name + r.at)}
 							<div class="r">
-								<span class="status-dot {r.status === 'error' ? 'err' : 'ok'}"></span>
+								<span
+									class="status-dot {r.status === 'error'
+										? 'err'
+										: r.status === 'cancelled'
+											? 'warn'
+											: 'ok'}"
+								></span>
 								<span class="rk">{jobLabel(r.name)}</span>
-								{#if r.status === 'error'}<span class="meta">mislukt</span>{/if}
+								{#if r.status === 'error'}<span class="meta">mislukt</span>
+								{:else if r.status === 'cancelled'}<span class="meta">afgebroken</span>{/if}
 								<span class="rt tnum">{fmtAgo(r.at)}</span>
 							</div>
 						{/each}
@@ -1196,6 +1239,22 @@
 		height: 7px;
 		border-radius: 50%;
 		background: var(--ok);
+	}
+	/* De paneelkop van "Nu bezig" draagt sinds #253 ook de afbreekknop: op smalle
+	   schermen mag die netjes doorbreken i.p.v. horizontaal te overlopen. */
+	.live-panel .ph {
+		flex-wrap: wrap;
+		row-gap: 6px;
+	}
+	/* Afbreken (#253): destructief-maar-omkeerbaar — waarschuwingskleur, geen
+	   volle err-knop (de al opgeslagen voortgang blijft immers staan). */
+	.cancel-job {
+		color: var(--warn);
+		border-color: var(--warn);
+	}
+	.cancel-job:disabled {
+		opacity: 0.55;
+		cursor: default;
 	}
 	.bar {
 		height: 8px;

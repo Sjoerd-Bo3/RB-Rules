@@ -162,6 +162,20 @@ public static class AdminEndpoints
                 : Results.Conflict(new { error = "er draait al een job — wacht tot die klaar is" });
         });
 
+        // Afbreken (#253): één route voor jobs én paden — een pad draait als
+        // gewone JobRunner-run, dus de éénjob-gate kent maar één lopende run.
+        // Literal segment wint van de {name}-parameter hierboven, dus dit
+        // botst niet met een job die toevallig "cancel" zou heten. Niets aan
+        // het draaien = 200 met cancelled:false (net gedrag, geen 500/404):
+        // de knop kan altijd geklikt worden, ook als de run net zelf klaar is.
+        admin.MapPost("/jobs/cancel", (JobRunner jobs) =>
+        {
+            var cancelling = jobs.TryCancel();
+            return cancelling is null
+                ? Results.Ok(new { cancelled = false, message = "er draait geen job" })
+                : Results.Accepted("/api/admin/status", new { cancelled = true, job = cancelling.Name });
+        });
+
         // ── Paden (#190): geordende JobCatalog-jobs die vanzelf doorstromen.
         // De paddefinities zelf staan in JobPaths (Infrastructure); uitvoering
         // via PathRunner, als één gewone JobRunner-run onder de padnaam —

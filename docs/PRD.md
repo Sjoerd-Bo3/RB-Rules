@@ -747,6 +747,19 @@ de globale duur-vangrail).
   regenerateknowledge) draaien via
   `JobRunner` met live-voortgang en run_log. *Route* `/admin` · *endpoints*
   `/api/admin/jobs/{name}`, `/api/admin/status`, `/api/admin/logs`.
+- **Lopende job afbreken** (#253) — naast de "Nu bezig"-voortgangsbalk staat
+  een **Afbreken**-knop (met bevestiging) die de lopende job of het lopende
+  pad coöperatief stopt; binnen enkele seconden is `running` weer leeg en kan
+  een volgende job starten. Al opgeslagen voortgang blijft behouden (de jobs
+  committen per batch/watermark) — afbreken laat dus geen half feit achter.
+  De afbreking landt als gewone afronding in `run_log` met status
+  `cancelled` + de bereikte voortgang, en is als zodanig zichtbaar in "Recente
+  runs" en bij de laatste-run-regel per job. Dat de afronding geschreven
+  wordt is essentieel: de scheduler leest datzelfde grootboek, dus zonder die
+  regel zou hij de afgebroken (nacht)run meteen opnieuw starten — precies wat
+  er gebeurde toen `docker restart` de enige uitweg was. *Route* `/admin`
+  (paneel "Nu bezig") · *endpoint* `POST /api/admin/jobs/cancel` (200 met
+  `cancelled:false` als er niets draait) · *actie* `POST ?/cancelJob`.
 - **Paden** (#190) — geordende ketens van bestaande jobs die vanzelf
   doorstromen (één klik = de hele keten), gedefinieerd in `JobPaths`
   (Infrastructure) en uitgevoerd door `PathRunner` als één gewone

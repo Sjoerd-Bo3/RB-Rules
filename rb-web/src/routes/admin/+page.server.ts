@@ -80,6 +80,22 @@ export const actions: Actions = {
 			return fail(409, { error: e instanceof Error ? e.message : String(e) });
 		}
 	},
+	// Afbreken (#253): stopt de lopende job of het lopende pad coöperatief. De
+	// API antwoordt ook netjes (200, cancelled:false) als er niets meer draait
+	// — de run kan net zelf klaar zijn geweest — dus geen fail-pad daarvoor.
+	cancelJob: async ({ cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		try {
+			const r = await adminApi<{ cancelled: boolean; job?: string }>(
+				'/api/admin/jobs/cancel', { method: 'POST' }
+			);
+			return r.cancelled
+				? { cancelling: r.job ?? true }
+				: { cancelling: false };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
 	// Paden (#190): zelfde TryStart-conflictgedrag als losse jobs — één pad of
 	// job tegelijk (JobRunner-gate), dus dezelfde 409-afhandeling.
 	path: async ({ request, cookies }) => {
