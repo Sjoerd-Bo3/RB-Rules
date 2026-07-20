@@ -1,41 +1,11 @@
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { api } from '$lib/api';
+import type { CardDetail } from '$lib/types';
 
-export interface CardDetail {
-	riftboundId: string;
-	name: string;
-	type: string | null;
-	supertype: string | null;
-	rarity: string | null;
-	domains: string[];
-	energy: number | null;
-	might: number | null;
-	power: number | null;
-	setId: string | null;
-	setLabel: string | null;
-	collectorNumber: number | null;
-	textPlain: string | null;
-	imageUrl: string | null;
-	tags: string[];
-	mechanics: string[] | null;
-	triggers: string[] | null;
-	effects: string[] | null;
-	banned: boolean;
-	errataText: string | null;
-	variantOf: string | null;
-	/** Set-legaliteit (#22): releasedatum van de set (yyyy-mm-dd) of null. */
-	legalFrom: string | null;
-	legality: 'legal' | 'upcoming' | 'announced';
-	versions: {
-		riftboundId: string;
-		setId: string | null;
-		setLabel: string | null;
-		rarity: string | null;
-		collectorNumber: number | null;
-		imageUrl: string | null;
-	}[];
-}
+// CardDetail is sinds #252 gedeeld met de graph-node-proxy en staat daarom in
+// $lib/types.ts (docs/CONVENTIONS.md); hier alleen doorgegeven aan de pagina.
+export type { CardDetail };
 
 interface Interaction {
 	otherId: string;
