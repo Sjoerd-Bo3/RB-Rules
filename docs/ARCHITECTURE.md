@@ -1423,22 +1423,68 @@ geroepen, timeout, run gefaald) → de endpoint antwoordt 500, wat `RbAiClient` 
 AI-uitval leest (null, nette degradatie); een 200 met lege lijst betekent "geen
 kandidaten" — dat onderscheid blijft bewaard.
 
-**rb-api-kant (mining-orkestratie).** Twee jobs in `JobCatalog`, bewust GEEN stap
-in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk — expliciete beheerdersactie,
-zelfde lijn als `graph`/`reason`/`claims`):
+**rb-api-kant (mining-orkestratie).** Drie jobs in `JobCatalog`. De twee
+LLM-jobs staan bewust NIET in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk —
+expliciete beheerdersactie, zelfde lijn als `graph`/`reason`/`claims`); de
+deterministische entiteiten-stap ervóór is goedkoop en draait wél mee in de
+nachtrun:
 
+- `breinentiteiten` (`EntityResolutionService.RegisterExistingMechanicsAsync`,
+  #250). Het **enige pad dat `CanonicalEntity`-rijen aandraagt**: de mining
+  RESOLVEERT bewust alleen (leest), dus zonder deze stap blijft de entiteitenlaag
+  leeg — live stond `canonicalEntities` op 0 terwijl 387 interacties naar
+  `mechanic:{label}` verwezen, vond `breinmine-predicaten` nul subjects en bleven
+  de mechanic-hovers zonder definitie. Bron: `Card.Mechanics[]` + geaccepteerde
+  `MechanicKeyword`-termen; elke rij krijgt status `candidate` + `CreatedByRunId`
+  (geen stille promotie naar `canonical` — dat blijft de review-poort). De
+  definitie komt deterministisch uit de officiële regeltekst
+  (`KeywordDefinition`, Domain/puur): alleen een `RuleChunk` die met de term
+  ÓPENT telt als definitie, anders blijft het veld leeg (de hover degradeert al
+  netjes, en een verzonnen definitie is erger dan geen). Idempotent — herhaald
+  draaien levert `Created = 0`; bestaande entiteiten zonder definitie worden
+  alsnog aangevuld zónder hun status te raken. Geen LLM, geen migratie.
 - `breinmine-interacties` (`BreinInteractionMiningService`). Per bounded batch
-  focus-kaarten: bouwt het aangeboden vocabulaire (de kaart + haar
-  entity-geresolvete keyword-refs + partner-kaarten die een mechaniek delen),
-  haalt kandidaten via rb-ai, en laat elke kandidaat door
-  `InteractionPromotionService` — schema ∧ (lexicaal ∨ consensus) ∧ verdict, met de
-  cold-start-tier voor emergente card×card-hypotheses. **Entity-resolutie (fase 1)
-  draait VÓÓR kandidaat-creatie**: een keyword-surface-form wordt tegen de canonieke
-  laag geresolveerd zodat "Deflecting"/"Deflect 2" op één ref landen (versla #2). De
-  **lexicale poort** toetst tegen de RAUWE kaarttekst (het bewijsanker), niet tegen
-  de ref-headers die de prompt draagt. Feit + provenance (`Assertion` met
-  `DERIVED_FROM` = de bronkaart) worden **atomair** door de promotie-service
-  gepersisteerd; deze job voegt geen eigen graaf-write toe.
+  focus-kaarten: bouwt het aangeboden vocabulaire, haalt kandidaten via rb-ai, en
+  laat elke kandidaat door `InteractionPromotionService` — schema ∧ (lexicaal ∨
+  consensus) ∧ verdict, met de cold-start-tier voor emergente card×card-hypotheses.
+  **Entity-resolutie (fase 1) draait VÓÓR kandidaat-creatie**: een
+  keyword-surface-form wordt tegen de canonieke laag geresolveerd zodat
+  "Deflecting"/"Deflect 2" op één ref landen (versla #2). De **lexicale poort**
+  toetst tegen de RAUWE bron-tekst (het bewijsanker), niet tegen de ref-headers die
+  de prompt draagt. Feit + provenance (`Assertion` met `DERIVED_FROM` = de
+  bronkaart) worden **atomair** door de promotie-service gepersisteerd; deze job
+  voegt geen eigen graaf-write toe.
+
+  **Herijkt in #249 (`PromptVersion` → `breinmine-interactions-v2`).** Een meting
+  op 383 live interacties liet zien dat 264 (69%) kaart↔EIGEN-keyword was — een
+  feit dat al gratis en deterministisch bestaat (`GraphSyncService.MechanicPairs`
+  projecteert `Card.Mechanics[]` als `HAS_MECHANIC`-edges, en de keywords staan
+  gebracket in de kaarttekst) — terwijl mech↔mech, het eigenlijke doel, op 5
+  (1,3%) bleef en 77% geen enkele conditie droeg. Oorzaak: de aanbieding bood
+  vooral een kaart mét haar eigen keywords aan, en de lexicale poort beloonde
+  precies die tautologie (de kaart ÍS de ene rol; haar keyword staat in haar eigen
+  tekst). Drie samenhangende wijzigingen:
+  1. **kaart↔eigen-keyword wordt niet meer geminded** — het paar wordt ná de parse
+     en vóór de promotie overgeslagen (apart geteld als `SkippedKnown`, zichtbaar
+     in het run-detail), met een guard in de promotie-poort als tweede slot
+     (`InteractionTautology`, Domain/puur). **Geen grafsteen**: er is niets
+     verworpen dat later gegrond kan blijken, en een tombstone zou een latere
+     échte gekwalificeerde interactie op dezelfde sleutel blokkeren.
+  2. **de aanbieding is herzien** — de keyword-refs van de HELE gedeelde-mechaniek-
+     buurt (focus + partners) i.p.v. alleen die van de focus-kaart, plus
+     `RuleChunk`s die ≥2 aangeboden keyword-labels noemen als **bewijstekst**. Die
+     regelsecties zijn nadrukkelijk GEEN offered ref: de HAS_ROLE-range is
+     Card/Keyword, een `RuleSection` kan geen agent/patient zijn. Zo kunnen
+     mech↔mech-paren überhaupt ontstaan én een officieel anker hebben.
+  3. **de lexicale poort is verscherpt** — rollen moeten verschillende entiteiten
+     zijn, en het bewijs moet een RELATIE uitdrukken: beide rollen verankerd in
+     ÉÉN bewijs-eenheid én minstens één van beide TEXTUEEL (`InteractionEvidence`
+     met `EvidenceAnchor` None/Identity/Textual). Twee identiteits-ankers ("deze
+     kaart is deze kaart") tellen niet meer als steun.
+
+  De **deterministische graph-projectie blijft ongemoeid**: kaart→mechanic-edges
+  bestaan gewoon door, ze komen alleen niet meer uit een dure LLM-omweg
+  (regressietest `GraphMechanicProjectionTests` op `GraphSyncService.MechanicPairs`).
 - `breinmine-predicaten` (`BreinPredicateMiningService`). Per canonieke
   mechanic/keyword-entiteit (het subject IS al geresolveerd) haalt getypeerde
   predicaten (`triggers_on`/`prevents`/`grants`/`requires_target` + object-token)
