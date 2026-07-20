@@ -82,13 +82,25 @@ public class BreinInteractionMiningService(
         var windowLexicon = InteractionQualifierLexicon.Windows;
         var statusLexicon = InteractionQualifierLexicon.Statuses;
 
-        // Voortgangs-watermark (#226-review, versla defect 1/2): focus-kaarten die al
-        // een interactie-feit aandroegen — herkenbaar aan hun Assertion-provenance
-        // (DERIVED_FROM = card:X, FactKind = interaction) — worden overgeslagen, zodat
-        // de selectie run-over-run DOOR de pool schuift i.p.v. altijd dezelfde eerste
-        // maxFocusCards te herkauwen. Spiegelt het reeds-gepredikeerd-filter van
-        // BreinPredicateMiningService; her-mining van een verwerkte kaart is een
-        // expliciete stap, zo blijft de abonnement-tokenkost begrensd (#232).
+        // Voortgangs-watermark (#226-review defect 1/2; herzien in #249-review).
+        //
+        // Het watermark kwam uit de Assertion-provenance (DERIVED_FROM = card:X,
+        // FactKind = interaction). Die proxy kan het noodzakelijke onderscheid
+        // principieel niet maken: een Assertion ontstaat ALLEEN op het accept-pad, dus
+        // elke kaart die niets promoveerde — sinds #249 de meerderheid, want 69% van de
+        // live-tabel was kaart↔eigen-keyword en dat wordt nu overgeslagen — liet géén
+        // spoor achter. Met OrderBy(RiftboundId).Take(cap) blijft zo'n kaart aan de kop
+        // van de wachtrij staan: de gecapte job herkauwt eeuwig dezelfde 40, de nachtrun
+        // betaalt elke nacht opnieuw rb-ai-calls, en Drained (!CapHit) blijft permanent
+        // false. Dezelfde gaten bestonden al bij Rejected en bij offered.Refs.Count < 2.
+        //
+        // Nu een EXPLICIETE markering per kaart (Card.InteractionsMinedAt): gezet zodra
+        // de extractie GESLAAGD is (rb-ai antwoordde, envelop parseerde), ook zonder
+        // promotie — en bewust NIET bij rb-ai-uitval of een kapotte envelop, zodat zo'n
+        // kaart juist terugkomt. Het oude Assertion-watermark blijft als achtervang
+        // meelopen zodat de al-verwerkte productiekaarten na deploy niet één keer
+        // gratis opnieuw gemined worden. Her-minen blijft een expliciete stap (veld
+        // leegmaken), zo blijft de abonnement-tokenkost begrensd (#232).
         var minedRefs = await db.Assertions.AsNoTracking()
             .Where(a => a.FactKind == FactKinds.Interaction)
             .Select(a => a.DerivedFromRef)
@@ -102,9 +114,10 @@ public class BreinInteractionMiningService(
         // Focus-kaarten: canonieke printings met tekst die keywords dragen (die tekst
         // ís het bewijsanker), minus de al-verwerkte. Bounded per run; herhaald draaien
         // is idempotent én schuift op.
-        var focus = await db.Cards.AsNoTracking()
+        var focus = await db.Cards
             .Where(c => c.VariantOf == null && c.Mechanics != null
                         && c.TextPlain != null && c.TextPlain != ""
+                        && c.InteractionsMinedAt == null
                         && !minedIds.Contains(c.RiftboundId))
             .OrderBy(c => c.RiftboundId)
             .Take(maxFocusCards + 1)
@@ -153,7 +166,14 @@ public class BreinInteractionMiningService(
             progress?.Invoke($"interacties extraheren via rb-ai: {processed}/{focus.Count}");
 
             var offered = await BuildOfferedRefsAsync(card, partnerPool, ruleSections, maxPartners, ct);
-            if (offered.Refs.Count < 2) continue; // niets zinnigs om over te redeneren
+            if (offered.Refs.Count < 2)
+            {
+                // Niets zinnigs om over te redeneren — en dat is een DETERMINISTISCHE
+                // uitkomst, geen uitval: opnieuw aanbieden levert opnieuw niets. Wel
+                // markeren, anders blijft deze kaart de wachtrij-kop bezetten (#249-review).
+                MarkMined(card, run.Id);
+                continue;
+            }
 
             var vocab = new ExtractionVocab(
                 offered.Refs.Select(r => new OfferedRef(r.Ref, r.Label, r.Type)).ToList(),
@@ -184,19 +204,36 @@ public class BreinInteractionMiningService(
             }
 
             var byRef = offered.Refs.ToDictionary(r => r.Ref, StringComparer.Ordinal);
-            var parsed = InteractionExtraction.Parse(call.Raw, vocab);
+            var parsed = InteractionExtraction.ParseDetailed(call.Raw, vocab);
+            if (parsed.Malformed)
+            {
+                // HTTP 200 met een afgekapte of schema-vreemde body (bv.
+                // {"interactions":"none"}) is UITVAL, geen leeg resultaat (#251-review):
+                // stil tot [] reduceren telde parse-fouten als geslaagd werk en maakte
+                // de uitvalmeting blind. Géén watermark: deze kaart moet terugkomen.
+                failed++;
+                aiTally.Add(AiCallOutcome.Unparseable);
+                continue;
+            }
             // Geldig antwoord zonder kandidaten is geslaagd werk, geen uitval —
             // apart geteld zodat "rb-ai gaf niets" en "rb-ai wist niets" niet meer
             // op één hoop belanden.
-            aiTally.Add(parsed.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
-            foreach (var ix in parsed)
+            aiTally.Add(parsed.Items.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
+
+            // Vanaf hier is de extractie GESLAAGD (#249-review): het watermark hoort bij
+            // "deze kaart is aangeboden en beantwoord", niet bij "deze kaart leverde een
+            // feit op". Zetten vóór de promotie-lus, zodat ook een kaart die uitsluitend
+            // tautologieën of verwerpingen oplevert de wachtrij verlaat.
+            MarkMined(card, run.Id);
+
+            foreach (var ix in parsed.Items)
             {
                 if (!byRef.TryGetValue(ix.FromRef, out var from)
                     || !byRef.TryGetValue(ix.ToRef, out var to))
                     continue; // buiten de aangeboden set — parse gate't dit al, dubbel slot
 
                 // Tautologie-poort (#249): kaart↔eigen-keyword is al deterministisch
-                // bekend (HAS_KEYWORD uit Card.Mechanics, GraphSyncService) — niet
+                // bekend (HAS_MECHANIC uit Card.Mechanics, GraphSyncService) — niet
                 // minen, niet promoveren, en ook niet als "geëxtraheerd" tellen: het
                 // is geen kandidaat maar herkauwde kennis. Apart geteld zodat de
                 // cockpit ziet hoe vaak het model er nog naartoe trekt.
@@ -359,6 +396,30 @@ public class BreinInteractionMiningService(
         // evidence-teksten zijn de RAUWE bron-teksten (per eenheid) — de lexicale poort
         // mag niet triviaal slagen op een label dat we zelf in een header plakten.
         return new(refs, string.Join("\n", promptParts), evidence, ownKeywords);
+    }
+
+    /// <summary>Alle ongeordende label-paren uit één regelsectie — de eenheid waarin de
+    /// begrotings-diversiteit gemeten wordt (#249-review). Ordinaal genormaliseerd zodat
+    /// (K1,K2) en (K2,K1) hetzelfde paar zijn.</summary>
+    private static IEnumerable<(string, string)> LabelPairs(IReadOnlyList<string> labels)
+    {
+        for (var i = 0; i < labels.Count; i++)
+            for (var j = i + 1; j < labels.Count; j++)
+                yield return string.CompareOrdinal(labels[i], labels[j]) <= 0
+                    ? (labels[i], labels[j])
+                    : (labels[j], labels[i]);
+    }
+
+    /// <summary>Zet het voortgangs-watermark op een verwerkte focus-kaart (#249-review).
+    /// Alleen aanroepen wanneer de kaart deterministisch klaar is: extractie geslaagd
+    /// (ongeacht de poort-uitslag) of niets zinnigs om aan te bieden. NOOIT bij
+    /// rb-ai-uitval of een kapotte envelop — die kaart hoort de volgende run terug te
+    /// komen. De SaveChanges gebeurt aan het einde van de run (of eerder, meeliftend op
+    /// de promotie-transactie); de kaart is getrackt.</summary>
+    private static void MarkMined(Card card, string runId)
+    {
+        card.InteractionsMinedAt = DateTimeOffset.UtcNow;
+        card.InteractionsMinedByRunId = runId;
     }
 
     /// <summary>Resolveert een keyword-surface-form tegen de canonieke laag (fase 1):
