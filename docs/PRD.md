@@ -1010,10 +1010,31 @@ de globale duur-vangrail).
   job **`breinentiteiten`**: het enige pad dat canonieke entiteiten aandraagt —
   zonder die stap bleef de laag leeg, vond predicaat-mining nul subjects en
   bleven mechanic-hovers zonder definitie. Definities komen uit de officiële
-  regeltekst en alleen als een sectie mét de term ópent; anders leeg (een
-  verzonnen definitie is erger dan geen). **rb-ai-uitval wordt nu per oorzaak
-  geteld** (rate-limit/timeout/serverfout/parsefout/leeg) en staat in het
-  run-detail en de cockpit, met bounded retry bij rate-limits.
+  regeltekst — alleen uit **trust-tier-1-bronnen** (een community-parafrase mag
+  geen keyword-definitie worden) en alleen uit een sectie die de term als heel
+  woord introduceert mét definitie-vorm ("Deflect: …", "Tank N — …", "Deflect is
+  …"); een procedure-zin die toevallig met het keyword begint telt niet. Vindt de
+  poort niets, dan blijft de definitie leeg — een verzonnen definitie is erger
+  dan geen. **rb-ai-uitval wordt nu per oorzaak geteld**
+  (rate-limit/overbelasting/timeout/serverfout/parsefout/leeg) en staat in het
+  run-detail en de cockpit, met bounded retry bij rate-limits en overbelasting.
+  Een HTTP 200 met een afgekapte of schema-vreemde body telt daarbij als
+  **onleesbaar antwoord**, niet langer als "geldig maar leeg" — anders meldt een
+  run waarin rb-ai bij elke kaart onzin teruggeeft 0% uitval. En 503 heet "503
+  overbelast" in plaats van "429 rate-limit": het herstelgedrag is hetzelfde,
+  maar de beheerder moet een herstartende sidecar kunnen onderscheiden van een
+  throttelend abonnement.
+- **Interactie-mining schuift gegarandeerd door de kaartenpool** (#249-review) —
+  het voortgangs-watermark staat sinds deze ronde expliciet op de kaart en wordt
+  gezet zodra de extractie **geslaagd** is, ook als er niets te promoveren viel.
+  Daarvóór werd het afgeleid uit de vastgelegde feiten, en bleef een kaart die
+  alleen al-bekende of verworpen paren opleverde eeuwig aan de kop van de
+  wachtrij staan: de gecapte job herkauwde elke keer dezelfde 40 kaarten, de
+  nachtrun betaalde elke nacht opnieuw, en beheer meldde permanent "nog werk
+  over". rb-ai-uitval en een kapot antwoord zetten het watermark bewust niet —
+  die kaart komt juist terug. Zichtbaar effect: het drain-signaal in beheer klopt
+  weer, en de pool loopt daadwerkelijk leeg. *Na deploy geen actie nodig — de
+  al verwerkte kaarten blijven herkend.*
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
   er ook als signaalregel op (#171, `SourceDossierCompleteness`), met

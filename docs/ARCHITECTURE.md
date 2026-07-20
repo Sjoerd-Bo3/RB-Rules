@@ -1335,6 +1335,17 @@ hoofdletterongevoelig) schakelt uit — een typfout in de `.env` mag de keten ni
 stilletjes stilleggen. Een ongeldig VENSTER laat de pauze-keuze intact
 (`NightlyRunSettings.FromEnvironment`, getest).
 
+> **Valkuil, duur betaald.** De noodrem werkte in productie NIET tot de
+> follow-up van #268: `NIGHTLY_ENABLED` stond wel in de `.env` maar niet onder
+> `environment:` van de `rb-api`-service in
+> `deploy/server-setup-v2/docker-compose.yml`. Docker Compose geeft **alleen door
+> wat expliciet onder `environment:` staat** — een variabele in de VM-`.env` is
+> een *substitutie*-bron voor de compose-file, geen container-env. `docker exec
+> rb-v2-api printenv | grep -i nightly` gaf dan ook niets: we dáchten een
+> noodrem te hebben. Elke nieuwe env-vlag die rb-api/rb-web leest moet dus in
+> dezelfde beweging aan de compose-`environment:` worden toegevoegd, met een
+> `${VAR:-default}` die het bestaande gedrag houdt.
+
 ### 6.3 De graph-sync
 
 `GraphSyncService.SyncAsync` projecteert Postgres naar Neo4j binnen **één
@@ -1516,11 +1527,30 @@ nachtrun:
   `MechanicKeyword`-termen; elke rij krijgt status `candidate` + `CreatedByRunId`
   (geen stille promotie naar `canonical` — dat blijft de review-poort). De
   definitie komt deterministisch uit de officiële regeltekst
-  (`KeywordDefinition`, Domain/puur): alleen een `RuleChunk` die met de term
-  ÓPENT telt als definitie, anders blijft het veld leeg (de hover degradeert al
-  netjes, en een verzonnen definitie is erger dan geen). Idempotent — herhaald
-  draaien levert `Created = 0`; bestaande entiteiten zonder definitie worden
-  alsnog aangevuld zónder hun status te raken. Geen LLM, geen migratie.
+  (`KeywordDefinition`, Domain/puur). Die poort is in de #250-review op twee
+  punten aangescherpt, want "opent met de term" bleek géén definitie te
+  betekenen:
+  - **bron op trust gefilterd** — alleen `RuleChunk`s van `TrustTier == 1`
+    -bronnen tellen mee. `rule_chunks` bevat élke ingeschakelde bron, dus ook de
+    community-beginnersgidsen (trust 3); hun beknopte parafrase won de
+    kortste-wint-regel van de officiële sectie en werd daarna permanent (de fill
+    is "alleen aanvullen, nooit overschrijven"), ongelabeld, in de hover én als
+    eerste bewijsregel voor `breinmine-predicaten`. Dat brak de kennislagen
+    (`docs/KNOWLEDGE.md`); zelfde filter als `BanErrataSyncService`
+    ("officieel wint").
+  - **definitie-vorm vereist** — de sectie moet met de term openen als HEEL
+    woord én daarna (hooguit na een magnitude, "Tank N") een definitie-marker
+    dragen: `:`, een gedachtestreep, of "is"/"are". Zonder die eis passeerde elke
+    procedure-zin die toevallig met het keyword begint ("Ready units can be
+    exhausted…", "Tank counters are removed…") — en omdat de kortste kandidaat
+    wint, versloeg zo'n korte zin systematisch de échte glossariumsectie. De
+    woordgrens-eis sluit meteen het meerwoords-geval: "Reaction Window: …"
+    definieert `Reaction Window`, niet `Reaction`.
+
+  Vindt de poort niets, dan blijft het veld leeg — de hover degradeert al netjes,
+  en een verzonnen definitie is erger dan geen. Idempotent — herhaald draaien
+  levert `Created = 0`; bestaande entiteiten zonder definitie worden alsnog
+  aangevuld zónder hun status te raken. Geen LLM, geen migratie.
 - `breinmine-interacties` (`BreinInteractionMiningService`). Per bounded batch
   focus-kaarten: bouwt het aangeboden vocabulaire, haalt kandidaten via rb-ai, en
   laat elke kandidaat door `InteractionPromotionService` — schema ∧ (lexicaal ∨
@@ -1563,6 +1593,40 @@ nachtrun:
   De **deterministische graph-projectie blijft ongemoeid**: kaart→mechanic-edges
   bestaan gewoon door, ze komen alleen niet meer uit een dure LLM-omweg
   (regressietest `GraphMechanicProjectionTests` op `GraphSyncService.MechanicPairs`).
+
+  **Review-fixes op #249 (vier stuks, migratie `InteractionMiningWatermark249`).**
+  4. **Het voortgangs-watermark staat nu expliciet op de kaart**
+     (`card.interactions_mined_at` + `interactions_mined_by_run_id`) in plaats van
+     afgeleid te worden uit de `Assertion`-provenance. Die proxy kon het
+     noodzakelijke onderscheid principieel niet maken: een `Assertion` ontstaat
+     alléén op het accept-pad, dus elke kaart die niets promoveerde liet geen
+     spoor achter — en na wijziging 1 hierboven is dat de MEERDERHEID (de 69%
+     kaart↔eigen-keyword schreef vóór #249 juist het watermark). Met
+     `OrderBy(RiftboundId).Take(cap)` bleef zo'n kaart aan de kop van de
+     wachtrij: de gecapte job herkauwde eeuwig dezelfde 40, de nachtrun betaalde
+     elke nacht opnieuw rb-ai-calls, en `Drained` (`!CapHit`) bleef permanent
+     false. Het veld wordt gezet zodra de **extractie geslaagd** is (rb-ai
+     antwoordde, de envelop parseerde) — ook zonder promotie, en ook bij
+     `offered.Refs.Count < 2` — en bewust NIET bij rb-ai-uitval of een kapotte
+     envelop: zo'n kaart hoort juist terug te komen. Het oude Assertion-filter
+     loopt als achtervang mee zodat al-verwerkte productiekaarten na deploy niet
+     één keer gratis opnieuw gemined worden. Her-minen is een expliciete stap
+     (veld leegmaken).
+  5. **De bewijstekst is op trust gefilterd** — alleen `RuleChunk`s van
+     `TrustTier == 1` -bronnen. Anders promoveert een community-parafrase als
+     "bewijszin gevonden", precies op de plek waar de deterministische steun
+     náást het LLM-verdict moet staan (`docs/KNOWLEDGE.md`).
+  6. **De anker-toets kent woordgrenzen** (`TermMatch`, Domain/puur). Een kale
+     substring-match was verdedigbaar op korte kaartteksten, maar #249 zette hem
+     op het HELE regelcorpus — en het Riftbound-vocabulaire bestaat deels uit
+     gewone Engelse woorden, dus "Deflection"/"assaulting"/"tanking" leverden
+     valse lexicale steun voor een direct-promoverend paar. Gebrackte vormen
+     (`[Assault 2]`) en meerwoordstermen ("Reaction Window") blijven werken.
+  7. **De bewijs-begroting eist diversiteit** — een sectie telt alleen mee als ze
+     minstens één nog niet gedekt label-PAAR toevoegt. Anders vulden drie vroege
+     secties over hetzelfde paar de `MaxRuleSections`-begroting en werd de sectie
+     die een ánder paar documenteert nooit geladen: de poort-uitslag hing dan aan
+     de corpusvolgorde (`SourceId`/`ChunkIndex`) in plaats van aan het bewijs.
 - `breinmine-predicaten` (`BreinPredicateMiningService`). Per canonieke
   mechanic/keyword-entiteit (het subject IS al geresolveerd) haalt getypeerde
   predicaten (`triggers_on`/`prevents`/`grants`/`requires_target` + object-token)
@@ -1574,9 +1638,10 @@ nachtrun:
 Beide jobs zijn **bounded per run en idempotent** (de promotie-dedupe-sleutel resp.
 de predicaat-dedupe-sleutel + de reeds-gepredikeerd-filter), en **degraderen netjes**:
 rb-ai null → dat item wordt overgeslagen (Failed++), er wordt GEEN half feit
-geschreven, en de job rondt af. **Geen migratie** — er wordt uitsluitend naar
-bestaande tabellen (`Interaction`/`InteractionCondition`/`Assertion`/`MiningRun`/
-`MechanicPredicate`) geschreven. De orkestratie + parsing + poort-koppeling zijn als
+geschreven, en de job rondt af. De feiten zelf gaan naar bestaande tabellen
+(`Interaction`/`InteractionCondition`/`Assertion`/`MiningRun`/`MechanicPredicate`);
+de enige schema-uitbreiding is het voortgangs-watermark op `card`
+(migratie `InteractionMiningWatermark249`). De orkestratie + parsing + poort-koppeling zijn als
 pure .NET-logica getest met een gemockte rb-ai (`BreinInteractionMiningServiceTests`,
 `BreinPredicateMiningServiceTests`); de echte LLM-extractie is verifieerbaar bij de
 eerste run (integratie-follow-up, §8). Het qualifier-lexicon (Window/Status) is een
