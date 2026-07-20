@@ -427,6 +427,27 @@ met quota en rate-limiting.
   `chunks[i].Text = texts[i]` schrijft de afkapping stil de database in. Aan
   kaartkant vangt een test dat af; aan regelkant NIET, want EF InMemory kent geen
   `ExecuteDeleteAsync` en het geslaagde swap-pad is daar dus niet te draaien.
+- **Een guard die BRONCODE leest, bewaakt de verkeerde laag** (#289). De
+  projectie↔ontologie-drift moest bewaakt worden ("schrijft de projectie een edge
+  die het schema niet kent?") en vier eerdere pogingen sneuvelden op hetzelfde:
+  ze scanden de `.cs`-tekst, dus een alias hernoemen (`m` → `mech`), Cypher
+  herformatteren of een statement naar een helper verplaatsen ging rood zonder dat
+  er iets veranderde. Draai in plaats daarvan de service tegen een **opnemende
+  driver** (`RecordingDriver`) en lees de UITGEVOERDE Cypher — dan is het gedrag
+  het contract en niet de opmaak. Drie dingen die daarbij horen. (a) Toets als
+  **verzameling**, nooit op volgorde: dat een rebuild zijn stappen herschikt is
+  geen drift. (b) Zo'n lijst heeft **twee richtingen** nodig — "elke geschreven
+  edge staat in de catalogus" én "elke catalogus-entry wordt echt geschreven".
+  Zonder die tweede is het binnen een jaar een lijst die niemand onderhoudt, en
+  betrapt een hernoeming maar de helft van zichzelf. (c) De hele opzet leunt op
+  één aanname: dat het corpus **rij-onafhankelijk** is. Dat klopt hier omdat élk
+  statement onvoorwaardelijk vuurt (`RunPairsAsync`/`RunRowsAsync`/`RunEdgesAsync`
+  draaien ook met lege `$rows`), dus een probe tegen een LEGE database levert de
+  volledige Cypher. Test die aanname expliciet, anders verliest de guard stil
+  dekking zodra iemand een statement in `if (rows.Count > 0)` wikkelt. En
+  vergeet niet dat Cypher **witruimte-tolerant** is: een regex die `-[:X]->` wel
+  matcht maar `- [ :X ] ->` niet, leest een herformattering als een verdwenen
+  edge (precies zo betrapt tijdens de mutatie-verificatie).
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`
