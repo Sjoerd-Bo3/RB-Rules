@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { ChangeCardData, ChangeConfirmation } from '$lib/types';
+	import RbText from '$lib/RbText.svelte';
 	import {
 		diffLines,
 		domainColorVar,
@@ -76,8 +77,8 @@
 			>
 		</header>
 
-		{#if change.summary}<p class="summary">{change.summary}</p>{/if}
-		{#if !compact && change.meaning}<p class="impact">{change.meaning}</p>{/if}
+		{#if change.summary}<p class="summary"><RbText text={change.summary} /></p>{/if}
+		{#if !compact && change.meaning}<p class="impact"><RbText text={change.meaning} /></p>{/if}
 
 		{#if !compact}
 			{#if hasConfirmations}
@@ -103,9 +104,9 @@
 						<summary>Bevestiging(en) tonen</summary>
 						{#each confirmations as cb (cb.id)}
 							{#if cb.summary}
-								<p class="confirmation"><strong>{cb.sourceName}:</strong> {cb.summary}</p>
+								<p class="confirmation"><strong>{cb.sourceName}:</strong> <RbText text={cb.summary} /></p>
 							{/if}
-							{#if cb.meaning}<p class="confirmation">{cb.meaning}</p>{/if}
+							{#if cb.meaning}<p class="confirmation"><RbText text={cb.meaning} /></p>{/if}
 							{#if cb.diff}
 								<div class="diff">
 									{#each diffLines(cb.diff) as l, i (i)}

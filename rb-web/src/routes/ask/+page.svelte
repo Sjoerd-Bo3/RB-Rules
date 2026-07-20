@@ -650,11 +650,11 @@
 							<!-- Bovenliggende regels: zonder § 466.2 is 466.2.c onleesbaar -->
 							<div class="parents">
 								{#each c.parents as par (par.code)}
-									<p class="parent"><a href="/rules/{encodeURIComponent(par.code)}">§ {par.code}</a> {par.text}</p>
+									<p class="parent"><a href="/rules/{encodeURIComponent(par.code)}">§ {par.code}</a> <RbText text={par.text} /></p>
 								{/each}
 							</div>
 						{/if}
-						{#if c.text}<p class="cite-text">{c.text}</p>{/if}
+						{#if c.text}<p class="cite-text"><RbText text={c.text} /></p>{/if}
 						<p class="cite-links meta">
 							{#if c.section}
 								<a href="/rules/{encodeURIComponent(c.section)}">Sectiepagina</a>
@@ -682,9 +682,9 @@
 							<strong>{cl.topicRef}</strong>
 							<span class="meta">{cl.corroboration} {cl.corroboration === 1 ? 'bron leest' : 'bronnen lezen'} dit zo · trust {cl.trustScore.toFixed(2)}</span>
 							{#if cl.officialStatus === 'confirmed'}<span class="confirmed">officieel bevestigd</span>{/if}
-							<span class="cite-essence">{cl.statement}</span>
+							<span class="cite-essence"><RbText text={cl.statement} /></span>
 						</summary>
-						<p class="cite-text">{cl.statement}</p>
+						<p class="cite-text"><RbText text={cl.statement} /></p>
 						{#if cl.sources?.length}
 							<ul class="claim-sources">
 								{#each cl.sources as s (s.url)}
@@ -714,9 +714,9 @@
 							<span class="misconception-badge">misvatting</span>
 							<strong>{m.topicRef}</strong>
 							{#if m.rebuttalSection}<span class="meta">weerlegd door § {m.rebuttalSection}</span>{/if}
-							<span class="cite-essence">{m.statement}</span>
+							<span class="cite-essence"><RbText text={m.statement} /></span>
 						</summary>
-						<p class="cite-text misread">{m.statement}</p>
+						<p class="cite-text misread"><RbText text={m.statement} /></p>
 						{#if m.sources?.length}
 							<ul class="claim-sources">
 								{#each m.sources as s (s.url)}

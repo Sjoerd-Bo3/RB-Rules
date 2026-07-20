@@ -3,6 +3,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import AnswerView from '$lib/AnswerView.svelte';
 	import ChangeCard from '$lib/ChangeCard.svelte';
+	import RbText from '$lib/RbText.svelte';
 	import { trustLabel } from '$lib/changeCard';
 
 	let { data, form } = $props();
@@ -600,7 +601,7 @@
 					<div class="review-row panel">
 						<div class="review-body">
 							{#if c.question}<p class="q">{c.question}</p>{/if}
-							<p class="t">{c.text}</p>
+							<p class="t"><RbText text={c.text} /></p>
 							{#if c.statusReason}
 								<p class="meta"><span class="badge warn-b">ter review</span> {c.statusReason}</p>
 							{/if}
@@ -878,7 +879,7 @@
 							<p class="t"><strong>{k.title}</strong> <span class="badge warn-b">Draft</span></p>
 							<details>
 								<summary class="meta">Lees de gegenereerde tekst (gebaseerd op {k.sectionRefs || 'regels'})</summary>
-								<p class="primer-body">{k.body}</p>
+								<p class="primer-body"><RbText text={k.body} /></p>
 							</details>
 						</div>
 						<div class="review-actions">

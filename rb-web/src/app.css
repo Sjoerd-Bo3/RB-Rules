@@ -268,28 +268,37 @@ a { color: inherit; }
 .tok-svg { width: 15px; height: 15px; }
 .tok-might path { fill: #e5766a; }
 .tok-exhaust path { fill: var(--muted); }
+/* Domein-runen in kaarttekst (:rb_rune_fury: …): sinds #257 een echt getekend
+   symbool met een eigen VORM per domein — daarvóór waren het zeven identieke
+   ruitjes die alleen in kleur verschilden (order en body vrijwel gelijk op
+   deze maat). De vulling komt uit de canonieke domein-tokens (#214), dus de
+   kleur blijft op één plek geregeld, gelijk aan randstreep en chips. */
 .tok-rune {
-	width: 11px;
-	height: 11px;
-	border-radius: 3px;
-	transform: rotate(45deg);
-	border: 1px solid rgba(0, 0, 0, 0.45);
-	margin: 0 3px;
+	width: 14px;
+	height: 14px;
+	margin: 0 2px;
+	/* Dunne omranding: houdt lichte vullingen (order) leesbaar op een licht
+	   vlak en zet de vorm af tegen de tekst. */
+	stroke: rgba(17, 20, 28, 0.4);
+	stroke-width: 0.5;
+	stroke-linejoin: round;
 }
-/* Domein-runen in kaarttekst (:rb_fury: …) delen nu de canonieke domein-
-   tokens (#214) — één plek voor elke domeinkleur, gelijk aan de randstreep
-   en chips op de ChangeCard. */
-.tok-rune-fury { background: var(--dom-fury); }
-.tok-rune-calm { background: var(--dom-calm); }
-.tok-rune-mind { background: var(--dom-mind); }
-.tok-rune-body { background: var(--dom-body); }
-.tok-rune-order { background: var(--dom-order); }
-.tok-rune-chaos { background: var(--dom-chaos); }
-.tok-rune-rainbow {
-	background: conic-gradient(
-		var(--dom-fury), var(--dom-order), var(--dom-calm),
-		var(--dom-mind), var(--dom-chaos), var(--dom-fury));
-}
+.tok-rune-fury { fill: var(--dom-fury); }
+.tok-rune-calm { fill: var(--dom-calm); }
+.tok-rune-mind { fill: var(--dom-mind); }
+.tok-rune-body { fill: var(--dom-body); }
+.tok-rune-order { fill: var(--dom-order); }
+.tok-rune-chaos { fill: var(--dom-chaos); }
+/* "Willekeurige rune": zeshoek met alle zes domeinen als segment. De segmenten
+   liggen op de omrande basiszeshoek, dus geen spaken door het icoon. */
+.tok-rune-rainbow { fill: var(--dom-colorless); }
+.tok-rune-rainbow path:not(.hex) { stroke: none; }
+.tok-rune-rainbow .w-fury { fill: var(--dom-fury); }
+.tok-rune-rainbow .w-body { fill: var(--dom-body); }
+.tok-rune-rainbow .w-order { fill: var(--dom-order); }
+.tok-rune-rainbow .w-calm { fill: var(--dom-calm); }
+.tok-rune-rainbow .w-mind { fill: var(--dom-mind); }
+.tok-rune-rainbow .w-chaos { fill: var(--dom-chaos); }
 
 /* Markdown-weergave (rulings) */
 .md :is(h1, h2, h3) { font-size: 1.02rem; color: var(--accent); margin: 18px 0 6px; }

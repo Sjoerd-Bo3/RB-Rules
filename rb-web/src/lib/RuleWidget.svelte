@@ -1,4 +1,6 @@
 <script lang="ts">
+	import RbText from '$lib/RbText.svelte';
+
 	interface Parent { code: string; text: string }
 	interface CitationLike {
 		section: string | null;
@@ -33,11 +35,11 @@
 		{#if cite.parents?.length}
 			<div class="parents">
 				{#each cite.parents as p (p.code)}
-					<p><a href="/rules/{encodeURIComponent(p.code)}">§ {p.code}</a> {p.text}</p>
+					<p><a href="/rules/{encodeURIComponent(p.code)}">§ {p.code}</a> <RbText text={p.text} /></p>
 				{/each}
 			</div>
 		{/if}
-		{#if cite.text}<p class="body">{cite.text}</p>{/if}
+		{#if cite.text}<p class="body"><RbText text={cite.text} /></p>{/if}
 		<p class="links">
 			<a href="/rules/{encodeURIComponent(code)}">Sectiepagina</a>
 			{#if cite.pdfUrl}

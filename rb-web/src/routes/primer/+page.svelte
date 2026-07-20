@@ -1,4 +1,5 @@
 <script lang="ts">
+	import RbText from '$lib/RbText.svelte';
 	import { useShell } from '$lib/shell.svelte';
 
 	let { data } = $props();
@@ -46,7 +47,7 @@
 		{#each data.docs as d (d.id)}
 			<section id={d.topic} class="doc panel">
 				<h2>{d.title}</h2>
-				<p class="body">{d.body}</p>
+				<p class="body"><RbText text={d.body} /></p>
 				{#if refs(d.sectionRefs).length}
 					<p class="refs meta">
 						Gebaseerd op:
