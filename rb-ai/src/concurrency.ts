@@ -42,9 +42,14 @@
 
 export class ConcurrencyLimitError extends Error {
   readonly code = "concurrency_limit";
-  constructor(max: number, maxWaitMs: number) {
+  /** De cap die deze aanvraag daadwerkelijk raakte: `max` voor interactief
+   * verkeer, de achtergrond-deelcap voor batch-werk (#279). Het onderscheid
+   * staat in de melding omdat het naar een andere knop wijst — "mining raakte
+   * zijn deelcap" is iets heel anders dan "de hele sidecar zit vol". */
+  constructor(limit: number, maxWaitMs: number, priority: AiPriority = "interactive") {
     super(
-      `alle AI-slots bezet (cap ${max}); na ${Math.round(maxWaitMs / 1000)}s wachten afgewezen`,
+      `alle AI-slots bezet (${priority === "background" ? "achtergrond-deelcap" : "cap"} ` +
+        `${limit}); na ${Math.round(maxWaitMs / 1000)}s wachten afgewezen`,
     );
     this.name = "ConcurrencyLimitError";
   }
@@ -143,7 +148,9 @@ export class AiSemaphore {
         this.rejectedTotal += 1;
         // De rij achter deze wachter kan nu mogelijk wél (kop-blokkade weg).
         this.drain();
-        reject(new ConcurrencyLimitError(this.max, opts.maxWaitMs));
+        reject(
+          new ConcurrencyLimitError(this.limitFor(priority), opts.maxWaitMs, priority),
+        );
       }, opts.maxWaitMs);
       timer.unref?.();
       const onAbort = () => {

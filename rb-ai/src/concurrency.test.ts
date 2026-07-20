@@ -241,3 +241,19 @@ test("tellers: waited en rejected lopen mee voor bijstelling op cijfers", async 
   assert.equal(snap.rejectedTotal, 1);
   assert.equal(snap.maxConcurrency, 1);
 });
+
+test("de afwijzing noemt de cap die je daadwerkelijk raakte", async () => {
+  // "achtergrond-deelcap 1" wijst naar een andere knop dan "cap 3": zonder dat
+  // onderscheid zoek je de fout in de totale sidecar-capaciteit terwijl alleen
+  // het batch-aandeel op was.
+  const sem = new AiSemaphore(3, 1);
+  const release = await sem.acquire(1, { maxWaitMs: 1_000, priority: "background" });
+  await withKeepAlive(() =>
+    assert.rejects(
+      sem.acquire(1, { maxWaitMs: 15, priority: "background" }),
+      (e: unknown) =>
+        e instanceof ConcurrencyLimitError && /achtergrond-deelcap 1/.test(e.message),
+    ),
+  );
+  release();
+});
