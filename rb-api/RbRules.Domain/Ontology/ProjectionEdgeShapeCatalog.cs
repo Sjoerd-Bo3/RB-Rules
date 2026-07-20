@@ -114,8 +114,8 @@ public static class ProjectionLabelCheck
         if (relation is null) return [];
 
         var findings = new List<ProjectionLabelFinding>();
-        Add(findings, shape, EdgeEndpoint.From, relation.Domain);
-        Add(findings, shape, EdgeEndpoint.To, relation.Range);
+        Add(findings, shape, EdgeEndpoint.From, relation, relation.Domain);
+        Add(findings, shape, EdgeEndpoint.To, relation, relation.Range);
         return findings;
     }
 
@@ -123,25 +123,31 @@ public static class ProjectionLabelCheck
         List<ProjectionLabelFinding> findings,
         ProjectionEdgeShape shape,
         EdgeEndpoint side,
+        OntologyRelation relation,
         IReadOnlyList<EntityType> declared)
     {
         var labels = shape.Labels(side);
+
+        // EERST de sterkste uitspraak. Een gekwalificeerde relatie (COUNTERS,
+        // MODIFIES, GRANTS, REQUIRES) is VERBODEN als kale edge — ze hoort via een
+        // Interaction gereïficeerd te worden — en dan doet het er niet toe wélke
+        // labels eraan hangen, of dat het er geen zijn. Zou de label-loos-tak
+        // hiervóór staan, dan kwam zo'n verboden edge met een label-loze kant terug
+        // als het mildere "niet te garanderen", en dat is precies de verdoezeling die
+        // deze guard moet voorkomen. Vuurt vandaag nergens (geen van de vier wordt
+        // geprojecteerd), maar de dag dat er één opduikt hoort dat luidruchtig te
+        // zijn — en de volgorde bepaalt hóe luid.
+        if (relation.MustReify || declared.Count == 0)
+        {
+            findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Violates, labels));
+            return;
+        }
 
         // Label-loze match: de projectie legt hier niets op. Niet fout, wel
         // ongegarandeerd — en dus een expliciete beslissing waard.
         if (labels.Count == 0)
         {
             findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Unenforceable, labels));
-            return;
-        }
-
-        // Een gekwalificeerde relatie (RequiresReification) declareert een LEGE
-        // domain/range: ze is verboden als kale edge. Elke vorm schendt dat dus.
-        // Vuurt vandaag nergens — de vier zulke relaties worden niet geprojecteerd —
-        // maar de dag dat er één opduikt hoort dat luidruchtig te zijn.
-        if (declared.Count == 0)
-        {
-            findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Violates, labels));
             return;
         }
 

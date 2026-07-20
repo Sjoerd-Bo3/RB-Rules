@@ -262,6 +262,20 @@ public class ProjectionLabelCheckTests
     }
 
     [Fact]
+    public void GekwalificeerdeRelatie_IsAltijdEenSchending_OokLabelLoos()
+    {
+        // COUNTERS/MODIFIES/GRANTS/REQUIRES dragen RequiresReification: ze zijn
+        // verboden als KALE edge en horen via een Interaction te lopen. Dan doet het
+        // er niet toe welke labels eraan hangen — ook niet dat het er geen zijn.
+        // Stond de label-loos-tak vóór deze, dan kwam zo'n verboden edge terug als het
+        // mildere "niet te garanderen"; de sterkste uitspraak hoort te winnen.
+        Assert.All(Check("COUNTERS", ["Card"], ["Card"]),
+            f => Assert.Equal(ProjectionLabelVerdict.Violates, f.Verdict));
+        Assert.All(Check("REQUIRES", [], []),
+            f => Assert.Equal(ProjectionLabelVerdict.Violates, f.Verdict));
+    }
+
+    [Fact]
     public void NietGedeclareerdeEdge_LevertNiets() =>
         // ABOUT/HAS_TAG/HAS_ROLE staan (nog) niet in OntologySchema — #304. Er is dan
         // niets om tegen te toetsen; de vorm wordt wél geregistreerd, zodat de toets
