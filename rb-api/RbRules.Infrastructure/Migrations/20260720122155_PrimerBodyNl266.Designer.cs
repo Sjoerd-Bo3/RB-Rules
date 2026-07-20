@@ -13,7 +13,7 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    [Migration("20260720120549_PrimerBodyNl266")]
+    [Migration("20260720122155_PrimerBodyNl266")]
     partial class PrimerBodyNl266
     {
         /// <inheritdoc />
@@ -724,6 +724,15 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("image_width");
 
+                    b.Property<DateTimeOffset?>("InteractionsMinedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("interactions_mined_at");
+
+                    b.Property<string>("InteractionsMinedByRunId")
+                        .HasMaxLength(26)
+                        .HasColumnType("character varying(26)")
+                        .HasColumnName("interactions_mined_by_run_id");
+
                     b.PrimitiveCollection<string[]>("Mechanics")
                         .HasColumnType("text[]")
                         .HasColumnName("mechanics");
@@ -798,6 +807,9 @@ namespace RbRules.Infrastructure.Migrations
 
                     NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Embedding"), "hnsw");
                     NpgsqlIndexBuilderExtensions.HasOperators(b.HasIndex("Embedding"), new[] { "vector_cosine_ops" });
+
+                    b.HasIndex("InteractionsMinedAt")
+                        .HasDatabaseName("ix_card_interactions_mined_at");
 
                     b.HasIndex("Name")
                         .HasDatabaseName("ix_card_name");
