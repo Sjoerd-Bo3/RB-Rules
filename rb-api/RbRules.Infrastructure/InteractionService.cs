@@ -9,7 +9,20 @@ public record InteractionMineResult(int Candidates, int Verified);
 public record ResolveResult(string Answer, IReadOnlyList<Citation> Citations);
 
 /// <summary>S3: interactie-mining (kandidaten → LLM-verificatie → opslag +
-/// graph-edges) en de resolver ("hoe werkt kaart A tegen kaart B?").</summary>
+/// graph-edges), het kaart-buren-leespad en de resolver ("hoe werkt kaart A
+/// tegen kaart B?").
+///
+/// Status na #258: <see cref="MineAsync"/> is LEGACY — paar-lexicaal en
+/// conditie-loos, inhoudelijk opgevolgd door BreinInteractionMiningService. Hij
+/// staat in geen enkele keten meer (alleen nog handmatig startbaar), zodat de
+/// nachtrun zijn LLM-budget niet meer aan de voorganger besteedt. Het leespad
+/// (<see cref="NeighborsAsync"/>) leest sindsdien primair de gereïficeerde laag
+/// en valt op de oude tabel terug zolang de opvolger nog niet genoeg dekking
+/// heeft — zie daar voor de meting en het weg-criterium van die brug.
+///
+/// <see cref="ResolveAsync"/> heeft nooit interactie-rijen gelezen (het bouwt
+/// zijn antwoord uit kaartteksten, errata en regelsecties); /api/resolve raakt
+/// dus geen van beide lagen en had aan deze migratie niets te doen.</summary>
 public class InteractionService(
     RbRulesDbContext db, RbAiClient ai, EmbeddingService embeddings, IDriver driver)
 {
@@ -116,7 +129,31 @@ public class InteractionService(
     }
 
     /// <summary>Als <see cref="NeighborsForCardAsync"/>, maar op een al
-    /// gecanonicaliseerd groeps-id.</summary>
+    /// gecanonicaliseerd groeps-id.
+    ///
+    /// MIGRATIEBRUG (#258) — leest BEIDE interactielagen en voegt ze samen:
+    /// eerst de gereïficeerde <see cref="Interaction"/>-laag (#226, de opvolger),
+    /// daarna de oude <see cref="CardInteraction"/>-laag als aanvulling. De
+    /// gereïficeerde rij wint bij een dubbele buur (hij draagt rol en condities;
+    /// de oude alleen vrije proza).
+    ///
+    /// Waarom niet gewoon omschakelen? Gemeten op productie (2026-07): de oude
+    /// tabel heeft 103 rijen over 94 kaarten, de gereïficeerde 8 rijen over 5
+    /// kaarten — waarvan NUL gepromoveerde kaart↔kaart-paren. Hard omschakelen
+    /// zou het kaartdetail van 94 kaarten naar 0 zichtbare interacties brengen,
+    /// met groene tests. Niet omdat de opvolger slechter is, maar omdat hij nog
+    /// nauwelijks gedraaid heeft: 18 van de 1311 kaarten hebben een
+    /// interactions_mined_at (1,4%), doordat het gros van de extracties op een
+    /// 5xx van rb-ai strandt (#281).
+    ///
+    /// WEG-CRITERIUM voor deze brug — bewust concreet, zodat hij niet "tijdelijk"
+    /// blijft: zodra (a) #281 opgelost is, (b) een volle nachtelijke mining-run
+    /// de kaartendekking boven ~80% heeft gebracht, en (c) het aantal
+    /// gepromoveerde kaart↔kaart-interacties dat van de oude tabel evenaart,
+    /// vervalt de legacy-tak hieronder, samen met de job "interactions",
+    /// <see cref="MineAsync"/> en uiteindelijk de tabel zelf. Tot die tijd is de
+    /// oude tabel BEVROREN (geen enkele keten schrijft er nog in) maar wél
+    /// leidend voor wat de bezoeker ziet.</summary>
     public async Task<List<InteractionNeighbor>> NeighborsAsync(
         string canonicalId, int take, CancellationToken ct = default)
     {
@@ -126,17 +163,38 @@ public class InteractionService(
             .ToListAsync(ct);
         if (groupIds.Count == 0) groupIds = [canonicalId];
 
-        var rows = await db.CardInteractions.AsNoTracking()
+        // Gereïficeerde laag: alleen kaart↔kaart en alleen wat de promotiepoort
+        // heeft goedgekeurd. De ref-vorm is "card:{id}" (BrainRef), dus de
+        // groeps-ids worden naar refs vertaald vóór de query — StartsWith en
+        // List.Contains vertalen allebei naar SQL (geen client-eval).
+        var groupRefs = groupIds.Select(id => BrainRef.Card(id).Format()).ToList();
+        var displayable = ReifiedInteractionDisplay.DisplayableStatuses;
+        var reifiedRows = await db.Interactions.AsNoTracking()
+            .Include(x => x.Conditions)
+            .Where(x => displayable.Contains(x.Status)
+                && (groupRefs.Contains(x.AgentRef) || groupRefs.Contains(x.PatientRef)))
+            .OrderByDescending(x => x.Status == InteractionStatus.Promoted)
+            .ThenBy(x => x.Kind)
+            .Take(take)
+            .ToListAsync(ct);
+
+        var legacyRows = await db.CardInteractions.AsNoTracking()
             .Where(x => groupIds.Contains(x.CardAId) || groupIds.Contains(x.CardBId))
             .OrderBy(x => x.Kind)
             .Take(take)
             .ToListAsync(ct);
 
         var groupSet = groupIds.ToHashSet();
-        var otherIds = rows
+        // Kaartnamen voor beide lagen in één query (projectie zonder
+        // embedding-vectoren, #43).
+        var otherIds = legacyRows
             .Select(r => groupSet.Contains(r.CardAId) ? r.CardBId : r.CardAId)
+            .Concat(reifiedRows
+                .SelectMany(r => new[] { r.AgentRef, r.PatientRef })
+                .Where(ReifiedInteractionDisplay.IsCardRef)
+                .Select(ReifiedInteractionDisplay.CardIdOf))
+            .Distinct()
             .ToList();
-        // Projectie zonder embedding-vectoren (#43).
         var others = await db.Cards.AsNoTracking()
             .Where(c => otherIds.Contains(c.RiftboundId))
             .Select(c => new Card
@@ -145,7 +203,14 @@ public class InteractionService(
             })
             .ToDictionaryAsync(c => c.RiftboundId, c => c, ct);
 
-        return VariantGrouping.InteractionNeighbors(rows, groupSet, others);
+        var neighbors = ReifiedInteractionDisplay.Neighbors(reifiedRows, groupSet, others);
+        // Legacy-aanvulling: buren die de gereïficeerde laag nog niet kent.
+        var covered = neighbors.Select(n => n.OtherId).ToHashSet();
+        neighbors.AddRange(VariantGrouping
+            .InteractionNeighbors(legacyRows, groupSet, others)
+            .Where(n => !covered.Contains(n.OtherId)));
+
+        return neighbors.Count > take ? neighbors[..take] : neighbors;
     }
 
     /// <summary>Resolver: 2-3 kaartnamen → gecombineerd antwoord (effectieve
