@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Neo4j.Driver;
 using Pgvector.EntityFrameworkCore;
 using RbRules.Domain;
+using RbRules.Domain.Ontology;
 
 namespace RbRules.Infrastructure;
 
@@ -94,11 +95,16 @@ public class InteractionService(
                     ["kind"] = x.Kind, ["explanation"] = x.Explanation,
                 }).ToList();
                 await using var session = driver.AsyncSession();
+                // Edge-naam uit het register (#289), niet uit een literal: dit is
+                // dezelfde tweespalt-klasse die #274 voor HAS_MECHANIC/HAS_DOMAIN
+                // opruimde. Interpolatie in Cypher is veilig — de waarde komt uit het
+                // compile-time schema-register, nooit uit invoer.
+                var interactsWith = OntologySchema.Relations[RelationType.InteractsWith].EdgeName;
                 await session.RunAsync(
-                    """
+                    $$"""
                     UNWIND $pairs AS p
                     MATCH (a:Card {id: p.a}), (b:Card {id: p.b})
-                    MERGE (a)-[r:INTERACTS_WITH]->(b)
+                    MERGE (a)-[r:{{interactsWith}}]->(b)
                       SET r.kind = p.kind, r.explanation = p.explanation, r.verified = true
                     """,
                     new Dictionary<string, object> { ["pairs"] = pairs });
