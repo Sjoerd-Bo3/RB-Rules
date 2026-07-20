@@ -261,7 +261,10 @@ public static partial class MechanicMiner
     /// magnitude is gestript ("[Assault 2]" → "Assault"), want 'Assault 2' en
     /// 'Assault 3' zijn dezelfde mechaniek — zij mag nooit tot een aparte
     /// entiteit uiteenvallen (zie <see cref="CanonicalEntity.CanonicalLabel"/>);
-    /// de magnitude rijdt in de graaf als parameter op HAS_MECHANIC mee. Eén
+    /// de magnitude wordt hier WEGGEGOOID (`NumericParameter().Replace`). De
+    /// ontologie declareert weliswaar een `magnitude`-parameter op HAS_MECHANIC,
+    /// maar de projectie schrijft geen edge-properties — die parameter is dus
+    /// voorgenomen, niet bestaand (#274-review). Eén
     /// herkenner voor de mechaniek-extractie, de kandidaten-harvest én het
     /// bewijs-snippet — die drie mogen niet uiteenlopen.</summary>
     private static IEnumerable<(Match Match, string Term)> BracketedKeywords(string textPlain)

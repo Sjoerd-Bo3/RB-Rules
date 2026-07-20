@@ -59,9 +59,11 @@ public class GovernanceServiceTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.RecordVersionAsync(OntologyBaseline.Version, OntologyBumpKind.Patch, "terugval", "run-2"));
 
-        // Semver-sort (niet lexicaal): x.10.0 > x.9.0.
-        var negende = new SemVer(NextVersion.Major, 9, 0);
-        var tiende = new SemVer(NextVersion.Major, 10, 0);
+        // Semver-sort (niet lexicaal): x.(n+10) > x.(n+9). Relatief tellen vanaf
+        // NextVersion, want een vastgespijkerde 9/10 breekt zodra de baseline-minor
+        // die waarden voorbij groeit (#274-review).
+        var negende = new SemVer(NextVersion.Major, NextVersion.Minor + 9, 0);
+        var tiende = new SemVer(NextVersion.Major, NextVersion.Minor + 10, 0);
         await svc.RecordVersionAsync(negende, OntologyBumpKind.Minor, "", "run-3");
         await svc.RecordVersionAsync(tiende, OntologyBumpKind.Minor, "", "run-4");
         Assert.Equal(tiende, await svc.GetLatestVersionAsync());

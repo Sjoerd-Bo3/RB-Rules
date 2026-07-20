@@ -29,7 +29,9 @@ public class CanonicalEntity : IEmbeddable
     /// <summary>De canonieke, gedrukte naam (EN, brontaal — CONVENTIONS #187),
     /// magnitude-vrij: de FAMILIE-naam. 'Assault 2' en 'Assault 3' delen de
     /// canonieke entiteit 'Assault'; de magnitude rijdt als parameter mee op
-    /// HAS_MECHANIC (kritiek Risico 2a), zij wordt NOOIT in het label weggestript
+    /// HAS_MECHANIC — voorgenomen: de ontologie declareert die parameter, maar de
+    /// projectie schrijft nog geen edge-properties (#274-review). Wat hier telt is
+    /// Risico 2a: de magnitude wordt NOOIT in het label weggestript
     /// tot een aparte entiteit.</summary>
     public required string CanonicalLabel { get; set; }
 

@@ -114,11 +114,32 @@ public static class OntologySchema
         // maakte het schema onvalideerbaar én de reasoner inert: de gegenereerde
         // property-chain-Cypher matchte een edge (HAS_KEYWORD) en een knooplabel
         // (:Keyword) die nergens geschreven worden.
-        // Range is dus Mechanic, niet Keyword. De gedrukte keyword-vorm leeft als
-        // magnitude-parameter op de edge ("Assault 2" → familie Assault + 2), niet
-        // als eigen knoop; Keyword blijft wél een klasse (HAS_ROLE-filler,
-        // ERRATA_OF-range, canonieke entiteit-kind) en INVOKES blijft de fijnere,
-        // vandaag níet geprojecteerde brug Keyword → Mechanic.
+        // Range is dus Mechanic, niet Keyword.
+        //
+        // TWEE EERLIJKE KANTTEKENINGEN (#274-review), bewust niet weggepoetst:
+        // (a) De tweespalt is hiermee VERPLAATST, niet opgelost. Card.Mechanics[]
+        //     bevat gedrukte keywords die de canonieke laag als kind 'keyword'
+        //     registreert (JobCatalog → RegisterExistingMechanicsAsync,
+        //     BreinInteractionMiningService.ResolveKeywordLabelAsync), terwijl de
+        //     projectie er :Mechanic-knopen van maakt en Keyword ⟂ Mechanic hierboven
+        //     disjunct staat. Dezelfde entiteit draagt dus twee klassen die dit schema
+        //     onverenigbaar noemt. Vóór #274 liep de breuk tussen schema en projectie,
+        //     nu tussen schema en entiteit-laag. Geen live gevolg — ValidateTriple
+        //     heeft buiten de tests geen aanroepers — dus dit is ontwerpschuld die
+        //     hoort bij het samenvoegen van die twee lagen, niet bij een hernoeming.
+        // (b) De magnitude-parameter hieronder is VOORGENOMEN, niet bestaand:
+        //     MechanicMiner stript het getal weg en de projectie schrijft geen
+        //     edge-properties. De declaratie blijft staan als vastgelegde bedoeling
+        //     (Risico 2a: 'Assault 2' mag nooit een eigen entiteit worden).
+        //
+        // Keyword blijft een klasse: ERRATA_OF-range, canoniek entiteit-kind, en het
+        // rol-filler-type in ValidateReifiedInteraction. (De HAS_ROLE-edge zelf wordt
+        // wél geprojecteerd maar is géén geregistreerd RelationType — ook dat valt
+        // buiten deze ÉNE bron; zie de follow-up over projectie↔ontologie-drift.)
+        // INVOKES (Keyword → Mechanic) is na deze wijziging DOOD: geen enkele relatie
+        // bereikt Keyword nog vanaf Card, v2 schrijft nergens een (:Keyword)-knoop, en
+        // dus kan INVOKES in geen enkele gegenereerde regel meer voorkomen. Het blijft
+        // hier staan als gedeclareerde modellering, niet als werkend pad.
         new(RelationType.HasMechanic, "HAS_MECHANIC",
             Domain: AnyCard, Range: [EntityType.Mechanic],
             MinCardinality: 0, MaxCardinality: null,

@@ -81,7 +81,9 @@ public static class AliasNormalizer
 
 /// <summary>Magnitude-behoud (kritiek Risico 2a). Een keyword als <c>Assault 2</c>
 /// hoort tot de gedeelde <em>familie</em> <c>Assault</c> met de numerieke waarde 2
-/// als parameter (HAS_MECHANIC {magnitude}) — niet tot een aparte entiteit. Deze parser
+/// als parameter — niet tot een aparte entiteit. (De ontologie declareert daarvoor
+/// een `magnitude`-parameter op HAS_MECHANIC; de projectie schrijft die vandaag nog
+/// niet weg — #274-review.) Deze parser
 /// splitst een trailing geheel getal af: <c>("Assault 2")</c> → basis
 /// <c>"Assault"</c> + waarde 2; zonder magnitude → de kale basis + <c>null</c>. De
 /// basis behoudt zijn oorspronkelijke casing (voor de CanonicalLabel); resolutie

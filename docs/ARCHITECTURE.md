@@ -437,9 +437,13 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   losse regel-lijst ernaast): **isa-closure** (GOVERNED_BY-overerving over de
   type-lattice uit `OntologySchema.Ancestors`), **property-chain** (ketens die uit de
   relatie-domain/range in een GOVERNED_BY→RuleSection uitkomen, bv.
-  `HAS_MECHANIC ∘ GOVERNED_BY` — een Deflect-vraag bereikt §7.4 in één hop; sinds
-  #274 loopt die keten over de edge én het knooplabel die de projectie ECHT
-  schrijft, daarvóór mikte ze op `HAS_KEYWORD`→`:Keyword` en raakte niets),
+  `HAS_MECHANIC ∘ GOVERNED_BY`; sinds #274 loopt hop 1 van die keten over de edge én
+  het knooplabel die de projectie ECHT schrijft, daarvóór mikte ze op
+  `HAS_KEYWORD`→`:Keyword`. **Hop 2 blijft ongeprojecteerd**: er bestaat geen
+  `(:Mechanic)-[:GOVERNED_BY]->(:RuleSection)`-edge — `GOVERNED_BY` wordt uitsluitend
+  vanaf een `:Interaction` geschreven — dus de keten levert vandaag nog steeds nul
+  afgeleide edges. Zie §6.4 hieronder: die projectie-uitbreiding is de openstaande
+  follow-up, #274 heeft alleen de naam-tweespalt weggenomen),
   **symmetrische sluiting** (uit de `Symmetric`-trait: INTERACTS_WITH/CONTRADICTS) en
   **subproperty-collapse** (alias-kind → canonieke super-property uit
   `OntologySchema.RelatesToKindSubProperties`, v0 leeg). De denorm-cache RELATES_TO en
