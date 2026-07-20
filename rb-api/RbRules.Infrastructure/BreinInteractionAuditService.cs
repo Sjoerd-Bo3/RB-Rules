@@ -39,14 +39,18 @@ public sealed record BreinInteractionAuditResult(
 /// <see cref="ReasoningConflict"/> in het reviewqueue-kanaal, waar een beheerder
 /// beslist. Een LLM-oordeel draagt geen actie alleen.
 ///
-/// <b>1-op-N-selectie met watermark.</b> De pool is "gepromoveerd, nog geen oordeel
-/// op de huidige promptversie"; de steekproef is deterministisch <c>Id % N == 0</c>
-/// (N beheerd via <see cref="ManagedSettingsCatalog"/>, #254 — geen env-only vlag,
-/// gelezen op het GEBRUIKSMOMENT zodat een bijgestelde dichtheid meteen geldt). De
-/// audit-rij zélf is het watermark: een geauditeerde interactie komt niet terug
-/// vóór de pool rond is (een prompt-bump heropent hem), en een GEFAALDE audit
-/// schrijft géén rij — die interactie komt de volgende run gewoon terug (#249-les:
-/// nooit een watermark op uitval).
+/// <b>1-op-N-selectie met watermark.</b> De steekproef is deterministisch
+/// <c>Id % N == 0</c> (N beheerd via <see cref="ManagedSettingsCatalog"/>, #254 —
+/// geen env-only vlag, gelezen op het GEBRUIKSMOMENT zodat een bijgestelde
+/// dichtheid meteen geldt). Let op wat dat WEL en NIET is (#255-review): een
+/// VASTE deelverzameling, geen rotatie — bij N=10 wordt ~90% van de gepromoveerde
+/// interacties nooit geauditeerd, onder geen enkele promptversie. Dat is precies
+/// wat een steekproef hoort te zijn (de meting generaliseert over de populatie);
+/// wie volledige dekking wil, zet N op 1. Binnen de steekproef is de audit-rij
+/// zélf het watermark: een beoordeeld lid komt niet terug vóór de steekproef
+/// rond is (een prompt-bump heropent hem), en een GEFAALDE audit schrijft géén
+/// rij — die interactie komt de volgende run gewoon terug (#249-les: nooit een
+/// watermark op uitval).
 ///
 /// Sequentieel, bewust: de steekproef is per constructie klein (pool ÷ N, gecapt
 /// per run) en elke oproep is een dure hard-model-call — parallelliseren koopt hier
@@ -187,7 +191,15 @@ public class BreinInteractionAuditService(
     /// bestaande reviewqueue-kanaal (<see cref="ReasoningConflict"/>) is precies de
     /// "reviewqueue-achtige" plek die het issue eist: de rij verschijnt in de
     /// conflicts-verkenner, een beheerder beslist. Idempotent op de dedupe-sleutel
-    /// zodat een her-audit (na een prompt-bump) geen tweede open rij maakt.</summary>
+    /// zodat een her-audit (na een prompt-bump) geen tweede open rij maakt.
+    ///
+    /// LET OP (#255-review): die dedupe is bewust promptversie- én status-blind —
+    /// de sleutel is <c>patternId|subject|</c> en de check telt élke status mee.
+    /// Vandaag is dat onschuldig omdat er geen resolve-flow voor deze rijen
+    /// bestaat: één zichtbare melding per interactie is precies genoeg. Komt er
+    /// ooit een pad dat zo'n conflict op resolved/dismissed zet, dan moet deze
+    /// dedupe mee herzien worden — anders verdwijnt een héér-dispute na een
+    /// prompt-bump onzichtbaar achter de afgehandelde rij.</summary>
     private async Task QueueDisputeAsync(
         Interaction interaction, InteractionAuditVerdict verdict, string runId,
         CancellationToken ct)

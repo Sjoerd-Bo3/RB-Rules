@@ -15,6 +15,7 @@ import { extractWithTool, type QueryRunner } from "./ai.js";
 import {
   AUDIT_TOOL_ADDENDUM,
   auditToolDescription,
+  buildAuditExtraction,
   buildAuditToolShape,
   parseInteractionAuditRequest,
 } from "./audit.js";
@@ -75,6 +76,47 @@ describe("addendum en description dwingen de vorm af", () => {
     assert.match(AUDIT_TOOL_ADDENDUM, /PRECIES ÉÉN keer/);
     assert.match(auditToolDescription(), /correct/);
     assert.match(auditToolDescription(), /supported_by_evidence/);
+  });
+});
+
+// ── De endpoint-bedrading zelf (#255-review) ─────────────────────────────────
+// De adversariële review toonde het gat: `task: "hard"` weghalen uit de handler
+// hield tsc én alle tests groen, terwijl elke audit-rij "claude-opus-4-8" bleef
+// stempelen over een run die stil op het cheap-model draaide — valse provenance
+// voor exact de meting waarvan "sterker model" de pointe is. De bedrading ligt
+// daarom in de pure `buildAuditExtraction`, en hier op GEDRAG vast.
+
+describe("buildAuditExtraction — de endpoint-bedrading", () => {
+  it("bedraadt task 'hard': de modelkeuze is het feature", () => {
+    const opts = buildAuditExtraction({ text: "claim + bewijs", system: "sys" });
+    assert.equal(opts.task, "hard");
+    assert.equal(opts.toolName, "emit_audit_verdict");
+    assert.equal(opts.resultKey, "verdicts");
+    assert.equal(opts.addendum, AUDIT_TOOL_ADDENDUM);
+    assert.equal(opts.system, "sys");
+    assert.equal(opts.text, "claim + bewijs");
+  });
+
+  it("geeft het abort-signaal door (weggelopen client breekt de run af)", () => {
+    const controller = new AbortController();
+    assert.equal(
+      buildAuditExtraction({ text: "x" }, controller.signal).signal,
+      controller.signal,
+    );
+  });
+
+  it("keten-test: builder → extractWithTool eindigt op het sterkere model", async () => {
+    // Eén test over de HELE bedrading: valt de task uit de builder óf verandert
+    // de MODEL-mapping, dan is dit rood — niet alleen de losse schakels.
+    let model: string | undefined;
+    const runQuery = (async function* (arg: { options: { model?: string } }) {
+      model = arg.options.model;
+      yield { type: "result", subtype: "success", is_error: false, result: "klaar" };
+    }) as unknown as QueryRunner;
+
+    await extractWithTool({ ...buildAuditExtraction({ text: "claim + bewijs" }), runQuery });
+
+    assert.equal(model, "claude-opus-4-8");
   });
 });
 

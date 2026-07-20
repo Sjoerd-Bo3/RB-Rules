@@ -760,8 +760,11 @@
 			</p>
 		{:else}
 			<p class="empty">
-				Nog geen audit-oordelen &mdash; draai de job &ldquo;Steekproef-audit&rdquo; in de
-				pipeline hierboven.
+				Nog geen audit-oordelen. De steekproef pakt een vast deel van de gepromoveerde
+				interacties (1 op N, op basis van het interactie-id) &mdash; bij een kleine pool
+				kan de job &ldquo;Steekproef-audit&rdquo; dus niets te doen hebben. Zet de
+				steekproefdichtheid op 1 op 1 voor volledige dekking, of draai eerst de
+				interactie-mining.
 			</p>
 		{/if}
 

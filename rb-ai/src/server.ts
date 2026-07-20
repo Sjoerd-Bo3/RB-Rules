@@ -12,12 +12,7 @@ import {
   safeDetail,
   type AiFailure,
 } from "./failure.js";
-import {
-  AUDIT_TOOL_ADDENDUM,
-  auditToolDescription,
-  buildAuditToolShape,
-  parseInteractionAuditRequest,
-} from "./audit.js";
+import { buildAuditExtraction, parseInteractionAuditRequest } from "./audit.js";
 import {
   buildInteractionToolShape,
   buildPredicateToolShape,
@@ -365,19 +360,14 @@ const server = createServer(async (req, res) => {
       const body = await readJson(req);
       const parsed = parseInteractionAuditRequest(body.value);
       if (!parsed.ok) return send(400, { error: parsed.error });
-      shape = { bytes: body.bytes, task: "hard" };
+      // De volledige aanroep komt uit de PURE builder (#255-review): dáár ligt
+      // de task-"hard"-bedrading vast en dáár wordt ze op gedrag getest — een
+      // inline optieobject hier was precies het onbewaakte pad waarlangs de
+      // audit stil op het cheap-model kon terugvallen met valse provenance.
+      const extraction = buildAuditExtraction(parsed.request, abort.signal);
+      shape = { bytes: body.bytes, task: extraction.task };
       try {
-        const outcome = await extractWithTool({
-          toolName: "emit_audit_verdict",
-          description: auditToolDescription(),
-          schema: buildAuditToolShape(),
-          resultKey: "verdicts",
-          system: parsed.request.system,
-          addendum: AUDIT_TOOL_ADDENDUM,
-          text: parsed.request.text,
-          signal: abort.signal,
-          task: "hard",
-        });
+        const outcome = await extractWithTool(extraction);
         if (outcome.items === null) return sendExtractFailure(outcome);
         shape = { ...shape, items: outcome.items.length };
         return sendExtractSuccess(outcome, { verdicts: outcome.items });

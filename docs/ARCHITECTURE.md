@@ -2576,7 +2576,10 @@ van weggemiddeld.
 
 **De flow.** `breinaudit-interacties` (zie de job-beschrijving in §5) selecteert
 deterministisch 1 op de N gepromoveerde interacties (`Id % N == 0`; N is de
-beheerde instelling `brein.audit.sample_n`, default 10), componeert per
+beheerde instelling `brein.audit.sample_n`, default 10 — let op: dat is een
+VASTE deelverzameling, geen rotatie; bij N=10 wordt ~90% van de pool nooit
+geauditeerd, onder geen enkele promptversie, en dat hoort zo voor een
+steekproef — N=1 geeft volledige dekking), componeert per
 interactie de bewering (rollen + kind + condities, in de brontaal) en het bewijs
 (rolteksten/definities, de GOVERNED_BY-sectie, de DERIVED_FROM-bron uit de
 provenance-Assertion, en officiële secties waarin beide rollen samen voorkomen —

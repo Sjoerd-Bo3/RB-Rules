@@ -10,6 +10,9 @@
 // meegegeven bewijs? Het oordeel is data met eigen provenance — rb-api legt het
 // vast als aparte audit-regel en verandert er NOOIT zelfstandig een tier mee.
 import { z } from "zod";
+// Type-only: audit.ts blijft runtime-puur (geen Agent SDK-import), maar de
+// builder hieronder moet wél het Task-vocabulaire van ai.ts spreken.
+import type { Task } from "./ai.js";
 
 /** De audit-request: rb-api componeert claim + bewijs al tot één tekst (net als de
  * extract-endpoints krijgt deze sidecar nooit losse database-toegang). */
@@ -56,6 +59,45 @@ export function auditToolDescription(): string {
     "`supported_by_evidence` (wordt ze gedragen door het meegeleverde bewijs?), " +
     "`motivation` (1-3 zinnen, Engels)."
   );
+}
+
+/** De VOLLEDIGE extractWithTool-aanroep van het audit-endpoint, als puur object
+ * (#255-review). Waarom dit bestaat: de `task: "hard"`-bedrading was onbewaakt —
+ * haal hem uit de server.ts-handler en tsc én alle tests bleven groen, terwijl
+ * elke `interaction_audit`-rij "claude-opus-4-8" zou stempelen over een run die
+ * stil op het cheap-model draaide. Valse provenance voor exact de meting waarvan
+ * "sterker model" de pointe is. De handler spreidt dit object ongewijzigd in
+ * `extractWithTool`; de tests toetsen hier het GEDRAG (task "hard", en via de
+ * runQuery-naad: dat de keten op het opus-model eindigt). `task` is bewust
+ * niet-optioneel in het return-type: wie hem verwijdert, krijgt de compiler én
+ * de tests tegen zich. */
+export function buildAuditExtraction(
+  request: InteractionAuditRequest,
+  signal?: AbortSignal,
+): {
+  toolName: string;
+  description: string;
+  schema: z.ZodRawShape;
+  resultKey: string;
+  system?: string;
+  addendum: string;
+  text: string;
+  signal?: AbortSignal;
+  task: Task;
+} {
+  return {
+    toolName: "emit_audit_verdict",
+    description: auditToolDescription(),
+    schema: buildAuditToolShape(),
+    resultKey: "verdicts",
+    system: request.system,
+    addendum: AUDIT_TOOL_ADDENDUM,
+    text: request.text,
+    signal,
+    // Het sterkere model — de hele pointe van de audit (#255): MODEL.hard via de
+    // bestaande taak-typering.
+    task: "hard",
+  };
 }
 
 export type AuditParseResult =
