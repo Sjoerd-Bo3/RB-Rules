@@ -88,15 +88,24 @@ public static class OfferedRefBudget
 /// <param name="MaxSections">Hoeveel officiële regelsecties er als bewijs meegaan.</param>
 /// <param name="MaxEvidenceCards">Hoeveel kaartteksten er als bewijs meegaan
 /// (mechanic-niveau; bij kaart-niveau zijn dat de partner-rollen zelf).</param>
+/// <param name="ReservedPartnerCards">Hoeveel partner-rollen de begroting NOOIT
+/// weggeeft aan de gedrukte keywords (#286-review). Zonder deze reserve verdringt een
+/// kaart met veel eigen keywords haar eigen partner-rollen, en dan draait de kaart-pass
+/// wél maar kan hij per constructie niets vinden dat álleen hij kan vinden —
+/// kaart↔kaart en kaart↔andermans-keyword hebben een tweede KAART-ref nodig. Dat de
+/// gedrukte keywords daarvoor wijken is precies goed: de paren die zíj opleveren
+/// (eigen-keyword↔eigen-keyword) zijn sinds #286 het werk van de mechanic-pass, die ze
+/// uitputtender dekt dan één kaart ooit kon.</param>
 public sealed record OfferingLimits(
     int MaxRefs, int MaxNeighbourKeywords, int MaxPartnerCards, int MaxSections,
-    int MaxEvidenceCards = 0)
+    int MaxEvidenceCards = 0, int ReservedPartnerCards = 0)
 {
     /// <summary>Kaart-niveau: anker + eigen keywords + hooguit vier directe buren +
-    /// hooguit drie partner-kaarten. In de praktijk ~8-12 refs waar het hele
-    /// buurt-vocabulaire er 39 gaf.</summary>
+    /// hooguit drie partner-kaarten, waarvan er twee gereserveerd zijn. In de praktijk
+    /// ~8-12 refs waar het hele buurt-vocabulaire er 39 gaf.</summary>
     public static readonly OfferingLimits Card = new(
-        MaxRefs: 12, MaxNeighbourKeywords: 4, MaxPartnerCards: 3, MaxSections: 3);
+        MaxRefs: 12, MaxNeighbourKeywords: 4, MaxPartnerCards: 3, MaxSections: 3,
+        MaxEvidenceCards: 0, ReservedPartnerCards: 2);
 
     /// <summary>Mechanic-niveau: alleen keyword-rollen (het anker + zijn directe
     /// buren). Kaarten en regelsecties zijn hier bewijstekst, geen rol — de vraag
@@ -124,10 +133,14 @@ public sealed record OfferingSection(string? Ref, string Label, string Text);
 /// de focus-kaart plus de gekozen partners; de partner-rollen staan óók in
 /// <paramref name="Refs"/>).</param>
 /// <param name="Sections">De gekozen regelsecties (bewijs + citeerbare ankers).</param>
+/// <param name="Definition">De officiële keyword-definitie die als bewijs meegaat
+/// (mechanic-niveau) — trust-tier-1-regeltekst, geen LLM-output. Null als er geen
+/// definitie is.</param>
 public sealed record OfferingPlan(
     IReadOnlyList<OfferedRefCandidate> Refs,
     IReadOnlyList<OfferingCard> Cards,
-    IReadOnlyList<OfferingSection> Sections);
+    IReadOnlyList<OfferingSection> Sections,
+    string? Definition = null);
 
 /// <summary>Puur en deterministisch: WELK vocabulaire krijgt één extractie-aanroep
 /// aangeboden (#286)?
@@ -173,16 +186,49 @@ public static class InteractionOffering
 
         var own = new HashSet<string>(focus.KeywordLabels, StringComparer.OrdinalIgnoreCase);
 
-        // Partners eerst, dán buren. De aanroeper levert alleen kaarten die minstens
-        // één mechaniek met de focus delen, dus ze zijn per constructie relevant; de
-        // volgorde is deterministisch (RiftboundId). Deze volgorde — niet andersom —
-        // garandeert dat élke aangeboden buur in een AANGEBODEN bewijs-eenheid staat.
-        // Een buur die zijn gewicht aan een tekst ontleent die de prompt niet haalt,
-        // zou de lexicale poort nooit kunnen passeren.
-        var partners = partnerCandidates.Take(limits.MaxPartnerCards).ToList();
+        // ── Tier-verdeling, VOORAF en deterministisch (#286-review) ──────────
+        //
+        // De oude volgorde was "neem partners, scoor buren, gooi het geheel door de
+        // begroting". Dat had twee gaten die elkaar versterkten: een partner kon ná het
+        // scoren alsnog uit de refs vallen (en dan was hij bij het scoren wél als
+        // identiteits-anker geteld, terwijl hij dat in de prompt niet meer is), en bij
+        // veel gedrukte keywords vielen ALLE partner-rollen weg — precies de twee
+        // gevallen die alleen de kaart-pass kan vinden.
+        //
+        // Nu rekenen we de verdeling eerst uit. Daardoor geldt per constructie
+        // 1 + printed + buren + partners <= MaxRefs, is elke gekozen partner
+        // gegarandeerd een ref, en is het identiteits-anker bij het scoren dus eerlijk.
+        var printedCeiling = Math.Max(0,
+            limits.MaxRefs - 1 - limits.MaxNeighbourKeywords - limits.ReservedPartnerCards);
+
+        // Welke gedrukte keywords bij een krappe begroting voorgaan is geen alfabetische
+        // loterij: keywords die LETTERLIJK in de kaarttekst staan winnen van keywords die
+        // de kaart alleen via Card.Mechanics draagt. Dezelfde "lees eerst wat gedrukt
+        // is"-lijn als #211/#249.
+        var printed = own
+            .OrderByDescending(l => TermMatch.ContainsWord(focus.Text, l) ? 1 : 0)
+            .ThenBy(l => l, StringComparer.Ordinal)
+            .Take(printedCeiling)
+            .ToList();
+
+        var partnerFloor = Math.Min(limits.ReservedPartnerCards, limits.MaxPartnerCards);
+        var partnerTake = Math.Clamp(
+            limits.MaxRefs - 1 - printed.Count - limits.MaxNeighbourKeywords,
+            partnerFloor, limits.MaxPartnerCards);
+        var partners = partnerCandidates.Take(partnerTake).ToList();
+
+        var printedSet = new HashSet<string>(printed, StringComparer.OrdinalIgnoreCase);
+
+        // ── Bewijs kiezen VÓÓR het scoren ────────────────────────────────────
+        //
+        // De secties die de prompt halen zijn precies de secties waartegen we scoren.
+        // Andersom (scoren tegen twaalf kandidaten, er drie aanbieden) leverde buren op
+        // die hun gewicht ontleenden aan tekst die de prompt nooit zag — per constructie
+        // onpromoveerbaar.
+        var sections = PickSections(sectionCandidates, printedSet, vocabulary, limits.MaxSections);
 
         // Bewijs-eenheden waarin een buur zich mag bewijzen: de focus-tekst, de
-        // partner-teksten en de officiële regelsecties.
+        // partner-teksten en de gekozen regelsecties.
         //
         // Kaartteksten zijn IDENTITEITS-verankerd: die kaart is zelf een aangeboden rol,
         // dus haar naam of haar eigen keywords hoeven er niet in te staan. Dat is niet
@@ -193,29 +239,25 @@ public static class InteractionOffering
         // eigen tekst.
         var units = new List<EvidenceText> { new(focus.Text, IdentityAnchored: true) };
         units.AddRange(partners.Select(p => new EvidenceText(p.Text, IdentityAnchored: true)));
-        units.AddRange(sectionCandidates.Select(s => new EvidenceText(s.Text, IdentityAnchored: false)));
+        units.AddRange(sections.Select(s => new EvidenceText(s.Text, IdentityAnchored: false)));
 
         // Kandidaat-buren: de keywords van de partners ÉN het volledige canonieke
         // vocabulaire. Dat laatste is geen terugval naar "stuur alles mee" — het
-        // vocabulaire wordt hier alleen GELEZEN om te scoren, en alleen wat
-        // aantoonbaar co-occurreert haalt de (begrensde) aanbieding. Het maakt de
-        // kaart-vraag zelfs breder dan voorheen: een keyword dat de focus-kaart in haar
-        // tekst noemt maar dat geen enkele partner draagt, kón vroeger niet worden
-        // aangeboden en kan dat nu wel.
+        // vocabulaire wordt hier alleen GELEZEN om te scoren, en alleen wat aantoonbaar
+        // co-occurreert haalt de (begrensde) aanbieding. Het maakt de kaart-vraag zelfs
+        // breder dan voorheen: een keyword dat de focus-kaart in haar tekst noemt maar
+        // dat geen enkele partner draagt, kón vroeger niet worden aangeboden en kan dat
+        // nu wel. Uitgesloten zijn ÁLLE eigen labels (ook de door de begroting getrimde)
+        // — anders kwam een getrimd eigen keyword via de achterdeur alsnog binnen.
         var neighbours = RankNeighbours(
-            partners.SelectMany(p => p.KeywordLabels).Concat(vocabulary), own, own, units,
+            partners.SelectMany(p => p.KeywordLabels).Concat(vocabulary), own, printedSet, units,
             limits.MaxNeighbourKeywords);
-
-        var offeredLabels = new HashSet<string>(own, StringComparer.OrdinalIgnoreCase);
-        foreach (var (label, _) in neighbours) offeredLabels.Add(label);
-
-        var sections = PickSections(sectionCandidates, offeredLabels, limits.MaxSections);
 
         var candidates = new List<OfferedRefCandidate>
         {
             new(focus.Ref, focus.Name, focus.Type, OfferedRefTier.Anchor),
         };
-        candidates.AddRange(focus.KeywordLabels.Select(
+        candidates.AddRange(printed.Select(
             l => new OfferedRefCandidate(
                 BrainRef.Mechanic(l).Format(), l, EntityType.Keyword, OfferedRefTier.Printed)));
         candidates.AddRange(neighbours.Select(
@@ -225,16 +267,11 @@ public static class InteractionOffering
         candidates.AddRange(partners.Select(
             p => new OfferedRefCandidate(p.Ref, p.Name, p.Type, OfferedRefTier.Context)));
 
+        // De begroting is hier een VANGNET, geen scheidsrechter meer: de verdeling
+        // hierboven past per constructie. Hij blijft staan zodat een toekomstige
+        // uitbreiding met een nieuwe rol-bron niet stilletjes over de grens loopt.
         var refs = OfferedRefBudget.Apply(candidates, limits.MaxRefs);
 
-        // Alle partners gaan als BEWIJS mee, ook wie als ROL door de begroting viel
-        // (dat kan bij een kaart met veel eigen keywords). Dat is geen slordigheid maar
-        // het hele punt van de meting: refs zijn duur, prompt-tekst is dat niet — 3 refs
-        // en 39 refs verschilden in duur, niet in tekstlengte. Zou zo'n partner ook zijn
-        // tekst verliezen, dan zou een buur die zijn gewicht juist dáár haalde stil zonder
-        // bewijs komen te staan; nu blijft de belofte hard dat élke aangeboden buur in
-        // een aangeboden bewijs-eenheid staat. BuildOffer geeft een partner zonder rol
-        // bewust geen ref-header, zodat hij ook geen identiteits-anker wordt.
         var cards = new List<OfferingCard> { focus };
         cards.AddRange(partners);
 
@@ -254,7 +291,8 @@ public static class InteractionOffering
     public static OfferingPlan ForMechanic(
         string subjectLabel, IReadOnlyList<string> vocabulary,
         IReadOnlyList<OfferingCard> carrierCandidates,
-        IReadOnlyList<OfferingSection> sectionCandidates, OfferingLimits limits)
+        IReadOnlyList<OfferingSection> sectionCandidates, OfferingLimits limits,
+        string? definition = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subjectLabel);
         ArgumentNullException.ThrowIfNull(vocabulary);
@@ -264,27 +302,33 @@ public static class InteractionOffering
 
         var subject = new HashSet<string>([subjectLabel], StringComparer.OrdinalIgnoreCase);
 
-        // Bewijskaarten eerst kiezen, dán buren scoren — zelfde reden als bij
-        // ForCard: een buur moet zich bewijzen in tekst die de prompt ook echt haalt.
+        // Bewijs eerst kiezen, dán buren scoren — zelfde reden als bij ForCard: een buur
+        // moet zich bewijzen in tekst die de prompt ook echt haalt.
         var cards = carrierCandidates
             .Where(c => TermMatch.ContainsWord(c.Text, subjectLabel))
             .Take(limits.MaxEvidenceCards)
             .ToList();
-        // Géén identiteits-ankers hier: op mechanic-niveau is geen enkele kaart een
+        var sections = PickSections(sectionCandidates, subject, vocabulary, limits.MaxSections);
+
+        // De DEFINITIE hoort er nadrukkelijk bij (#286-review). CanonicalEntity.Definition
+        // is de officiële trust-tier-1-regelzin die het keyword introduceert — precies de
+        // plek waar "Tank reduces damage from Assault" letterlijk staat. Zij ging al als
+        // bewijs de prompt in en de lexicale poort las er al op; haar buiten het scoren
+        // houden betekende dus dat een mech↔mech-paar dat ALLEEN in de definitie samen
+        // staat nooit werd aangeboden, terwijl het de poort wél zou passeren. De beste
+        // bron lag ongebruikt.
+        var units = new List<EvidenceText>();
+        if (!string.IsNullOrWhiteSpace(definition))
+            units.Add(new(definition!, IdentityAnchored: false));
+        // Géén identiteits-ankers verder: op mechanic-niveau is geen enkele kaart een
         // aangeboden rol, dus elke buur moet zich TEXTUEEL naast het subject bewijzen.
         // Dat is strenger dan op kaart-niveau — en terecht, want het is precies wat de
         // lexicale poort straks ook eist.
-        var units = cards.Select(c => new EvidenceText(c.Text, IdentityAnchored: false))
-            .Concat(sectionCandidates.Select(s => new EvidenceText(s.Text, IdentityAnchored: false)))
-            .ToList();
+        units.AddRange(cards.Select(c => new EvidenceText(c.Text, IdentityAnchored: false)));
+        units.AddRange(sections.Select(s => new EvidenceText(s.Text, IdentityAnchored: false)));
 
         var neighbours = RankNeighbours(
             vocabulary, subject, subject, units, limits.MaxNeighbourKeywords);
-
-        var offeredLabels = new HashSet<string>(subject, StringComparer.OrdinalIgnoreCase);
-        foreach (var (label, _) in neighbours) offeredLabels.Add(label);
-
-        var sections = PickSections(sectionCandidates, offeredLabels, limits.MaxSections);
 
         var candidates = new List<OfferedRefCandidate>
         {
@@ -296,7 +340,8 @@ public static class InteractionOffering
                 BrainRef.Mechanic(n.Label).Format(), n.Label, EntityType.Keyword,
                 OfferedRefTier.Neighbour, n.Weight)));
 
-        return new(OfferedRefBudget.Apply(candidates, limits.MaxRefs), cards, sections);
+        return new(
+            OfferedRefBudget.Apply(candidates, limits.MaxRefs), cards, sections, definition);
     }
 
     /// <summary>Eén bewijstekst zoals de buur-weging haar ziet.
@@ -343,23 +388,46 @@ public static class InteractionOffering
             .Select(kv => (kv.Key, kv.Value))];
     }
 
-    /// <summary>Regelsecties die minstens TWEE aangeboden labels noemen — daar staat
-    /// een keyword↔keyword-relatie officieel opgeschreven. De begrotings-diversiteit
-    /// uit de #249-review blijft: een sectie telt alleen mee als ze minstens één nog
-    /// niet gedekt label-PAAR toevoegt, anders vullen drie vroege secties die
-    /// toevallig hetzelfde paar noemen de hele begroting en hangt de uitslag aan de
+    /// <summary>De regelsecties die als bewijs meegaan. Een sectie telt mee als ze een
+    /// ANKER-label noemt én in totaal minstens twee labels — daar staat een
+    /// keyword↔keyword-relatie officieel opgeschreven.
+    ///
+    /// Herzien in de #286-review: dit was "≥2 AANGEBODEN labels", wat pas kon draaien
+    /// nadat de buren gekozen waren. Daardoor werd er gescoord tegen alle (tot twaalf)
+    /// kandidaat-secties terwijl er hooguit drie werden aangeboden, en kon een buur zijn
+    /// gewicht ontlenen aan een sectie die de prompt nooit zag. De vraag is nu
+    /// anker-relatief en dus beantwoordbaar vóór het scoren — waarmee de gekozen
+    /// verzameling exact de verzameling is waartegen gescoord wordt.
+    ///
+    /// De begrotings-diversiteit uit de #249-review blijft: een sectie telt alleen als ze
+    /// minstens één nog niet gedekt label-PAAR toevoegt, anders vullen drie vroege
+    /// secties over hetzelfde paar de hele begroting en hangt de uitslag aan de
     /// corpusvolgorde in plaats van aan het bewijs.</summary>
     private static List<OfferingSection> PickSections(
-        IReadOnlyList<OfferingSection> candidates, IReadOnlySet<string> labels, int max)
+        IReadOnlyList<OfferingSection> candidates, IReadOnlySet<string> anchors,
+        IReadOnlyList<string> vocabulary, int max)
     {
         var picked = new List<OfferingSection>();
-        if (labels.Count < 2 || max <= 0) return picked;
+        if (anchors.Count == 0 || max <= 0) return picked;
 
         var covered = new HashSet<(string, string)>();
         foreach (var s in candidates)
         {
             if (picked.Count >= max) break;
-            var hits = labels.Where(l => TermMatch.ContainsWord(s.Text, l)).ToList();
+
+            // Minstens één ANKER (anders gaat de sectie niet over dit onderwerp) en in
+            // totaal minstens TWEE labels (anders beschrijft ze geen relatie). Het tweede
+            // label mag óók een ander anker zijn: een sectie die twee eigen keywords van
+            // dezelfde kaart aan elkaar knoopt is volwaardig bewijs.
+            var anchorHits = anchors.Where(a => TermMatch.ContainsWord(s.Text, a)).ToList();
+            if (anchorHits.Count == 0) continue;
+            var hits = anchorHits
+                .Concat(vocabulary
+                    .Select(v => (v ?? "").Trim())
+                    .Where(v => v.Length > 0 && !anchors.Contains(v)
+                                && TermMatch.ContainsWord(s.Text, v)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             if (hits.Count < 2) continue;
 
             var pairs = LabelPairs(hits).ToList();

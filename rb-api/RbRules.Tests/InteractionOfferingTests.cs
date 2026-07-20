@@ -116,29 +116,65 @@ public class InteractionOfferingTests
         Assert.Equal(["card:focus", "mechanic:Tank"], plan.Refs.Select(r => r.Ref));
     }
 
-    /// <summary>Refs zijn duur, prompt-tekst is dat niet — dat is precies wat de meting
-    /// van #286 liet zien (3 vs. 39 refs verschilden in duur, niet in tekstlengte). Een
-    /// partner die als ROL door de begroting valt (kaart met veel eigen keywords) houdt
-    /// daarom zijn tekst als BEWIJS. Anders zou een buur die zijn gewicht juist aan die
-    /// tekst ontleende stil zonder steun komen te staan.</summary>
+    /// <summary>#286-review, blokkade 6: de Context-tier (partner-kaarten) was het
+    /// EERSTE dat de begroting weggooide, dus bij ≥8 gedrukte keywords bleef
+    /// <c>card:focus</c> als enige kaart-ref over. Dan draait de kaart-pass wél maar kan
+    /// hij per constructie niets vinden dat álleen hij kan vinden — kaart↔kaart en
+    /// kaart↔andermans-keyword hebben een tweede KAART-ref nodig. De reserve draait dat
+    /// om: de gedrukte keywords wijken, want de paren die zíj opleveren zijn het werk
+    /// van de mechanic-pass.</summary>
     [Fact]
-    public void ForCard_PartnerBuitenDeBegroting_BlijftBewijs()
+    public void ForCard_VeelGedrukteKeywords_HoudtDePartnerRollen()
     {
-        var printed = Enumerable.Range(1, 10).Select(i => $"Eigenkw{i}").ToList();
-        var partner = new OfferingCard(
-            "card:p1", "Partner", EntityType.Card,
-            "Eigenkw1 works together with Buurkw.", ["Eigenkw1", "Buurkw"]);
+        var printed = Enumerable.Range(1, 12).Select(i => $"Eigenkw{i}").ToList();
+        var partners = Enumerable.Range(1, 3)
+            .Select(i => new OfferingCard(
+                $"card:p{i}", $"Partner {i}", EntityType.Card,
+                $"Eigenkw1 works with Buurkw{i}.", ["Eigenkw1", $"Buurkw{i}"]))
+            .ToList();
 
         var plan = InteractionOffering.ForCard(
             new OfferingCard("card:focus", "Focus", EntityType.Card, "Veel keywords.", printed),
-            [partner], [], ["Buurkw"], OfferingLimits.Card);
+            partners, [], [], OfferingLimits.Card);
 
-        // De begroting is op na anker + 10 gedrukte + de buur; de partner-ROL valt af...
-        Assert.DoesNotContain("card:p1", plan.Refs.Select(r => r.Ref));
-        // ...maar zijn tekst blijft als bewijs staan, zodat de buur die daar zijn
-        // gewicht haalde ook echt onderbouwd is.
-        Assert.Contains(partner, plan.Cards);
-        Assert.Contains("mechanic:Buurkw", plan.Refs.Select(r => r.Ref));
+        var refs = plan.Refs.Select(r => r.Ref).ToList();
+        var cardRefs = refs.Where(r => r.StartsWith("card:")).ToList();
+
+        // Anker + minstens de gereserveerde partner-rollen.
+        Assert.True(
+            cardRefs.Count >= 1 + OfferingLimits.Card.ReservedPartnerCards,
+            $"slechts {cardRefs.Count} kaart-refs; kaart↔kaart wordt dan onmogelijk");
+        Assert.Contains("card:focus", refs);
+        Assert.True(refs.Count <= 12);
+    }
+
+    /// <summary>Elke gekozen partner is per constructie ook een REF (#286-review,
+    /// blokkade 3). Anders zou hij bij het scoren als identiteits-anker meetellen
+    /// terwijl <c>BuildOffer</c> hem in de prompt geen ref-header geeft — en dan geeft
+    /// de begroting een ref uit aan een buur die nooit kan promoveren.</summary>
+    [Fact]
+    public void ForCard_ElkeGekozenPartner_IsOokEenRef()
+    {
+        foreach (var printedCount in Enumerable.Range(0, 13))
+        {
+            var printed = Enumerable.Range(1, printedCount).Select(i => $"Eigenkw{i}").ToList();
+            var partners = Enumerable.Range(1, 3)
+                .Select(i => new OfferingCard(
+                    $"card:p{i}", $"Partner {i}", EntityType.Card,
+                    $"Text with Buurkw{i}.", [$"Buurkw{i}"]))
+                .ToList();
+
+            var plan = InteractionOffering.ForCard(
+                new OfferingCard("card:focus", "Focus", EntityType.Card, "Tekst.", printed),
+                partners, [], [], OfferingLimits.Card);
+
+            var refs = plan.Refs.Select(r => r.Ref).ToHashSet();
+            foreach (var partner in plan.Cards.Where(c => c.Ref != "card:focus"))
+                Assert.True(refs.Contains(partner.Ref),
+                    $"{partner.Ref} is bewijs maar geen rol bij {printedCount} gedrukte keywords");
+            Assert.True(plan.Refs.Count <= OfferingLimits.Card.MaxRefs,
+                $"{plan.Refs.Count} refs bij {printedCount} gedrukte keywords");
+        }
     }
 
     /// <summary>Een regelsectie telt alleen als bewijs wanneer ze twee aangeboden
@@ -157,6 +193,33 @@ public class InteractionOfferingTests
 
         Assert.Contains("mechanic:Snipe", plan.Refs.Select(r => r.Ref));
         Assert.Equal([section], plan.Sections);
+    }
+
+    /// <summary>#286-review, blokkade 4: er werd gescoord tegen ALLE kandidaat-secties
+    /// (tot twaalf) terwijl er hooguit drie worden aangeboden. Een buur kon zo zijn
+    /// gewicht ontlenen aan een sectie die de prompt nooit zag — een ref uitgegeven aan
+    /// een paar dat per constructie onpromoveerbaar is. Nu is de gekozen sectie-set
+    /// exact de set waartegen gescoord wordt.</summary>
+    [Fact]
+    public void ForCard_BuurUitEenNietGekozenSectie_WordtNietAangeboden()
+    {
+        // Vier secties die Tank elk met een ánder keyword paren; MaxSections is 3.
+        var sections = new[] { "Aaa", "Bbb", "Ccc", "Ddd" }
+            .Select((kw, i) => new OfferingSection(
+                $"section:core/{i}", $"core §{i}", $"Tank interacts with {kw}."))
+            .ToList();
+
+        var plan = InteractionOffering.ForCard(
+            new OfferingCard("card:focus", "Focus", EntityType.Card, "Tekst.", ["Tank"]),
+            partnerCandidates: [], sectionCandidates: sections,
+            vocabulary: ["Tank", "Aaa", "Bbb", "Ccc", "Ddd"], OfferingLimits.Card);
+
+        Assert.Equal(OfferingLimits.Card.MaxSections, plan.Sections.Count);
+
+        // Élke aangeboden buur moet in een AANGEBODEN bewijstekst staan.
+        var offeredText = string.Join("\n", plan.Sections.Select(x => x.Text));
+        foreach (var neighbour in plan.Refs.Where(r => r.Tier == OfferedRefTier.Neighbour))
+            Assert.Contains(neighbour.Label, offeredText);
     }
 
     // ── Mechanic-niveau ──────────────────────────────────────────────────────
@@ -181,6 +244,24 @@ public class InteractionOfferingTests
         Assert.DoesNotContain("mechanic:Recycle", plan.Refs.Select(r => r.Ref));
         // De kaart gaat wél mee als bewijs.
         Assert.Equal([carrier], plan.Cards);
+    }
+
+    /// <summary>#286-review, punt 5 — omgekeerde scheefheid: de DEFINITIE ging al als
+    /// bewijs de prompt in en de lexicale poort las er al op, maar zij telde niet mee
+    /// bij het kiezen van de buren. Een mech↔mech-paar dat alléén in de officiële
+    /// keyword-definitie samen staat werd dus nooit aangeboden, terwijl het de poort wél
+    /// zou passeren. Dat is de beste bron die er is — trust-tier-1-regeltekst, geen
+    /// LLM-output — en die lag ongebruikt.</summary>
+    [Fact]
+    public void ForMechanic_PaarDatAlleenInDeDefinitieStaat_WordtAangeboden()
+    {
+        var plan = InteractionOffering.ForMechanic(
+            "Tank", ["Tank", "Assault"],
+            carrierCandidates: [], sectionCandidates: [], OfferingLimits.Mechanic,
+            definition: "Tank reduces the damage that Assault would deal.");
+
+        Assert.Contains("mechanic:Assault", plan.Refs.Select(r => r.Ref));
+        Assert.Equal("Tank reduces the damage that Assault would deal.", plan.Definition);
     }
 
     /// <summary>Ook mechanic-niveau blijft begrensd: het vocabulaire groeit met elke

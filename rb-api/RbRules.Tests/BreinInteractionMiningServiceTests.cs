@@ -779,40 +779,52 @@ public class BreinInteractionMiningServiceTests
     // ══ #286: de vraag herijkt — minder vocabulaire, meer vragen, mechanic-niveau ══
 
     /// <summary>DE regressietest van #286. Op productie stuurde één kaart-aanroep 39
-    /// refs mee (focus + 4 partners + de keywords van die HELE buurt) en liep daarmee
-    /// tegen de 90s-timeout van rb-ai; met 3 refs lukte dezelfde kaart in 49s. Het
-    /// aangeboden vocabulaire IS dus de kostenpost, en het groeit met elke set — een
-    /// schaalklip, geen vaste faalkans.
+    /// refs mee en liep daarmee tegen de 90s-timeout van rb-ai; met 3 refs lukte
+    /// dezelfde kaart in 49s. Het aangeboden vocabulaire IS dus de kostenpost, en het
+    /// groeit met elke set — een schaalklip, geen vaste faalkans.
     ///
-    /// Deze test bewaakt precies dat: een buurt met 24 verschillende buur-keywords mag
-    /// nooit als 24 refs de prompt in. Zodra iemand de begrenzing terugdraait — of een
-    /// nieuwe rol-bron ongelimiteerd toevoegt — valt hij om.</summary>
+    /// De fixture bootst die 39-ref-situatie ECHT na (#286-review, blokkade 1): 39
+    /// canonieke keyword-entiteiten, waarvan er 35 in de focus-tekst voorkomen en dus
+    /// allemaal scoorbaar zijn. Zonder dat vocabulaire kón de oude versie van deze test
+    /// de begroting onder geen enkele instelling overschrijden — hij was groen bij
+    /// `MaxNeighbourKeywords: 999`, en bewees dus niets.
+    ///
+    /// De drempel is bewust een LETTERLIJKE 12 en niet
+    /// <c>OfferingLimits.Card.MaxRefs</c>: een assertie tegen de constante die ze
+    /// bewaakt schuift mee als je die constante verhoogt.</summary>
     [Fact]
     public async Task RunAsync_GroteBuurt_BiedtNooitHetHeleVocabulaireAan()
     {
         using var db = NewDb();
-        await SeedCardAsync(db, "ogn-000", "Focus", "Unit", "Tank reduces damage.", ["Tank"]);
-        // Twaalf partners die de mechaniek Tank delen en samen 24 eigen keywords
-        // dragen — de situatie die live 39 refs opleverde.
+
+        // 39 canonieke keywords — precies de productie-orde van grootte.
+        await SeedEntityAsync(db, "Tank");
+        var vocab = Enumerable.Range(1, 35).Select(i => $"Vocabkw{i}").ToList();
+        foreach (var label in vocab) await SeedEntityAsync(db, label);
+        foreach (var label in new[] { "Losskw1", "Losskw2", "Losskw3" })
+            await SeedEntityAsync(db, label);
+
+        // De focus-tekst noemt ze allemaal: zonder begroting zijn dat ~39 refs.
+        await SeedCardAsync(db, "ogn-000", "Focus", "Unit",
+            "Tank reduces damage from " + string.Join(", ", vocab) + ".", ["Tank"]);
         for (var i = 1; i <= 12; i++)
             await SeedCardAsync(db, $"ogn-{i:000}", $"Partner {i}", "Unit",
-                $"Tank interacts with Kwaa{i} and Kwbb{i}.", ["Tank", $"Kwaa{i}", $"Kwbb{i}"]);
+                $"Tank interacts with Vocabkw{i}.", ["Tank", $"Vocabkw{i}"]);
 
         var bodies = new List<string>();
         var svc = CapturingService(db, bodies, () => Interactions());
 
-        await svc.RunAsync(maxFocusCards: 1);
+        await svc.RunAsync(maxFocusCards: 1, maxMechanicSubjects: 0);
 
         var refs = OfferedRefs(Assert.Single(bodies));
-        Assert.True(
-            refs.Count <= BreinInteractionMiningService.MaxOfferedRefsPerCard,
-            $"kaart-aanroep bood {refs.Count} refs aan, boven de begroting van " +
-            $"{BreinInteractionMiningService.MaxOfferedRefsPerCard} (#286)");
+        Assert.True(refs.Count <= 12,
+            $"kaart-aanroep bood {refs.Count} refs aan; de begroting van #286 is 12");
 
         // En de begroting mag geen dekking kosten waar het om gaat: het GEDRUKTE
-        // keyword van de kaart zelf blijft altijd staan.
+        // keyword van de kaart zelf en de kaart-rollen blijven staan.
         Assert.Contains("mechanic:Tank", refs);
         Assert.Contains("card:ogn-000", refs);
+        Assert.True(refs.Count(r => r.StartsWith("card:")) >= 2, "geen partner-rol over");
     }
 
     /// <summary>Dekking mag niet dalen (#286): de begrensde aanbieding houdt de
@@ -885,6 +897,64 @@ public class BreinInteractionMiningServiceTests
         var entities = await db.CanonicalEntities.OrderBy(e => e.Id).ToListAsync();
         Assert.NotNull(entities[0].InteractionsMinedAt);
         Assert.Null(entities[1].InteractionsMinedAt);
+    }
+
+    /// <summary>#286-review, blokkade 2 — de tegenhanger van
+    /// <see cref="RunAsync_RbAiUitval_ZetGeenWatermark_KaartKomtDeVolgendeRunTerug"/>
+    /// voor mechanic-subjecten. Zonder deze test blijft de hele suite groen als je
+    /// <c>MarkEntityMinedAsync</c> onvoorwaardelijk maakt, en dat is letterlijk de
+    /// #249-bug: een subject krijgt bij rb-ai-uitval een watermark, verdwijnt uit de
+    /// wachtrij en komt nooit meer terug. Met >50% rb-ai-uitval op productie is dat het
+    /// zwaarste pad dat er is.</summary>
+    [Fact]
+    public async Task RunAsync_RbAiUitval_ZetGeenMechanicWatermark_SubjectKomtTerug()
+    {
+        using var db = NewDb();
+        await SeedEntityAsync(db, "Tank");
+        await SeedEntityAsync(db, "Assault");
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+
+        var down = Service(db, () => null); // 500 → RbAiClient geeft null
+        var r1 = await down.RunAsync(maxFocusCards: 0, maxMechanicSubjects: 1);
+
+        Assert.Equal(1, r1.Failed);
+        Assert.All(await db.CanonicalEntities.ToListAsync(),
+            e => Assert.Null(e.InteractionsMinedAt));
+
+        // Zelfde subject, rb-ai weer in de lucht: het wordt opnieuw aangeboden en levert
+        // nu wél een feit. Een watermark op de uitval had het permanent overgeslagen.
+        var up = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Assault", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+        var r2 = await up.RunAsync(maxFocusCards: 0, maxMechanicSubjects: 1);
+
+        Assert.Equal(1, r2.MechanicSubjects);
+        var entities = await db.CanonicalEntities.OrderBy(e => e.Id).ToListAsync();
+        Assert.NotNull(entities[0].InteractionsMinedAt);
+        Assert.Single(await db.Interactions.ToListAsync());
+    }
+
+    /// <summary>Een kapotte envelop op mechanic-niveau is UITVAL, geen leeg resultaat —
+    /// dus ook géén watermark (#251-review, nu ook voor de mechanic-pass).</summary>
+    [Fact]
+    public async Task RunAsync_KapotteEnvelop_ZetGeenMechanicWatermark()
+    {
+        using var db = NewDb();
+        await SeedEntityAsync(db, "Tank");
+        await SeedEntityAsync(db, "Assault");
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+
+        var svc = Service(db, () => "{\"interactions\":\"none\"}");
+
+        var r = await svc.RunAsync(maxFocusCards: 0, maxMechanicSubjects: 1);
+
+        Assert.Equal(1, r.Failed);
+        Assert.All(await db.CanonicalEntities.ToListAsync(),
+            e => Assert.Null(e.InteractionsMinedAt));
     }
 
     /// <summary>Op mechanic-niveau zijn ALLEEN keywords een rol; kaarten en

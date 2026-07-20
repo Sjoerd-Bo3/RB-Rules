@@ -386,8 +386,12 @@ public class BreinInteractionMiningService(
             .ToList();
         var sections = SectionCandidates(context.RuleSections, [label]);
 
+        // De definitie gaat als BEWIJS mee én telt mee bij het kiezen van de buren
+        // (#286-review): het is de officiële trust-tier-1-zin die het keyword
+        // introduceert, dus vaak de enige plek waar twee mechanieken samen staan.
         var plan = InteractionOffering.ForMechanic(
-            label, context.Vocabulary, carriers, sections, OfferingLimits.Mechanic);
+            label, context.Vocabulary, carriers, sections, OfferingLimits.Mechanic,
+            subject.Definition);
 
         // Minder dan twee rollen = geen paar om over te redeneren. Dat is een
         // DETERMINISTISCHE uitkomst, geen uitval: opnieuw aanbieden levert opnieuw
@@ -398,7 +402,7 @@ public class BreinInteractionMiningService(
             return;
         }
 
-        var offer = BuildOffer(plan, subject.Definition);
+        var offer = BuildOffer(plan);
         var succeeded = await ExtractAndPromoteAsync(
             offer, BrainRef.Mechanic(label).Format(), MiningPhase.Mechanic,
             ownKeywordRefs: new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal),
@@ -465,7 +469,7 @@ public class BreinInteractionMiningService(
             return;
         }
 
-        var offer = BuildOffer(plan, definition: null);
+        var offer = BuildOffer(plan);
         var succeeded = await ExtractAndPromoteAsync(
             offer, focusRef, MiningPhase.Card, ownKeywordRefs, gatekeeper, context, ct);
 
@@ -593,16 +597,16 @@ public class BreinInteractionMiningService(
     /// plakten, en co-occurrence moet binnen ÉÉN eenheid gelden. Een kaart die geen
     /// aangeboden rol is (mechanic-pass) krijgt bewust géén ref-header en telt niet als
     /// identiteits-anker: zij is bewijs, geen rol.</summary>
-    private static Offer BuildOffer(OfferingPlan plan, string? definition)
+    private static Offer BuildOffer(OfferingPlan plan)
     {
         var offeredRefs = plan.Refs.Select(r => r.Ref).ToHashSet(StringComparer.Ordinal);
         var promptParts = new List<string>();
         var evidence = new List<EvidenceUnit>();
 
-        if (!string.IsNullOrWhiteSpace(definition))
+        if (!string.IsNullOrWhiteSpace(plan.Definition))
         {
-            promptParts.Add($"[definitie] {definition}");
-            evidence.Add(new(CardRef: null, definition!));
+            promptParts.Add($"[definitie] {plan.Definition}");
+            evidence.Add(new(CardRef: null, plan.Definition!));
         }
 
         foreach (var c in plan.Cards)
