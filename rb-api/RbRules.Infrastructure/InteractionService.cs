@@ -255,7 +255,13 @@ public class InteractionService(
         // Relevante regelsecties: zoek op de gecombineerde mechanieken + teksten.
         var searchText = string.Join(" ", cards.SelectMany(c => c.Mechanics ?? [])
             .Concat(cards.Select(c => c.TextPlain ?? "")));
-        var qv = await embeddings.EmbedOneAsync(searchText[..Math.Min(searchText.Length, 1500)], ct);
+        // Stond hier tot #301 als `searchText[..Math.Min(searchText.Length, 1500)]` —
+        // een handmatige snee met een getal dat nergens anders voorkomt en niets met
+        // de gemeten Ollama-grens te maken had. Precies de ad-hoc oplossing die #301
+        // opheft: één aanroepplek beschermd, de andere elf niet. De begrenzing zit nu
+        // in EmbeddingService en geldt voor iedereen, dus dit mag gewoon de volledige
+        // zoektekst zijn.
+        var qv = await embeddings.EmbedOneAsync(searchText, ct);
         var chunks = await db.RuleChunks
             .Where(c => c.Embedding != null)
             .OrderBy(c => c.Embedding!.CosineDistance(qv))

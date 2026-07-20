@@ -343,9 +343,18 @@
 	// `logs`, dat maar 15 rijen diep is (#282-review). Dat de pijplijn óók bij succes
 	// logt is wat het alarm laat DOVEN door herstel in plaats van door veroudering:
 	// geen enkel UI-pad schreef voorheen een embed-ok-regel.
-	const embedFailed = $derived(
-		live?.lastEmbed?.status === 'error' ? live.lastEmbed : null
+	//
+	// 'warn' hoort er sinds #299 bij. Een run die invoer AFKAPTE maar verder slaagde
+	// schreef een 'ok'-regel, en dit paneel keek alleen naar 'error' — dus de kapping
+	// stond alleen in de logtabel en zakte daar na 15 rijen uit het venster. Netto:
+	// een waarschuwing die nooit opkwam, de spiegelvorm van de "alarm dooft alleen
+	// door veroudering"-fout die de #282-review al betaald heeft.
+	const embedAlert = $derived(
+		live?.lastEmbed?.status === 'error' || live?.lastEmbed?.status === 'warn'
+			? live.lastEmbed
+			: null
 	);
+	const embedFailed = $derived(embedAlert?.status === 'error');
 
 	// Recente runs (#122): laatste afronding per job, nieuwste eerst.
 	const recentRuns = $derived(
@@ -532,23 +541,42 @@
 
 		<!-- Embed-uitval (#282): Ollama valt om (OOM) en de embed-stap slaat over.
 		     Zonder deze melding merkte niemand het: de run liep "geslaagd" door en
-		     alleen `dmesg` op de VM wist ervan. Status = kleur + tekst, geen emoji. -->
-		{#if embedFailed}
-			<div class="panel embed-failure">
-				<span class="status-dot err"></span>
+		     alleen `dmesg` op de VM wist ervan. Sinds #299 toont hetzelfde paneel ook
+		     de 'warn'-toestand: invoer AFGEKAPT, wél geëmbed. Status = kleur + tekst,
+		     geen emoji. -->
+		{#if embedAlert}
+			<div class="panel embed-failure" class:is-warn={!embedFailed}>
+				<span class="status-dot {embedFailed ? 'err' : 'warn'}"></span>
 				<div>
-					<strong>Embeddings onvolledig — laatste embed-run meldde uitval</strong>
+					<strong>
+						{embedFailed
+							? 'Embeddings onvolledig — laatste embed-run meldde uitval'
+							: 'Embeddings deels afgekapt — laatste embed-run zat boven het tekenbudget'}
+					</strong>
 					<p class="meta">
-						{embedFailed.detail ?? 'geen details'} · {fmtAgo(embedFailed.createdAt)} geleden
+						{embedAlert.detail ?? 'geen details'} · {fmtAgo(embedAlert.createdAt)} geleden
 					</p>
-					<p class="meta">
-						De betrokken kaarten/regelsecties hebben géén embedding gekregen en staan
-						nog in de wachtrij; semantisch zoeken en retrieval missen ze zolang. Bij
-						5xx of "onbereikbaar" is Ollama vermoedelijk door de geheugengrens gegaan
-						(zie EMBED_BATCH_SIZE/EMBED_BATCH_CHARS naast de memory-cap in de
-						compose-file). Draai daarna "Kaarten embedden" opnieuw — al geëmbedde
-						kaarten worden overgeslagen.
-					</p>
+					{#if embedFailed}
+						<p class="meta">
+							De betrokken kaarten/regelsecties hebben géén embedding gekregen en staan
+							nog in de wachtrij; semantisch zoeken en retrieval missen ze zolang. Bij
+							5xx of "onbereikbaar" is Ollama vermoedelijk door de geheugengrens gegaan
+							(zie EMBED_BATCH_SIZE/EMBED_BATCH_CHARS naast de memory-cap in de
+							compose-file). Draai daarna "Kaarten embedden" opnieuw — al geëmbedde
+							kaarten worden overgeslagen.
+						</p>
+					{:else}
+						<p class="meta">
+							Geen fout: de kaarten en regelsecties zijn geëmbed en de opgeslagen tekst
+							is volledig — alleen de embed-invoer is op het budget gekort, zodat
+							llama-server niet omvalt. De betrokken vectoren kennen dus alleen het
+							begin van hun tekst en zijn als zodanig gemarkeerd
+							(embedding_truncated_at). Knelt dit, kijk dan naar de langste invoer in de
+							melding hierboven: pas als die structureel boven EMBED_BATCH_CHARS ligt is
+							een groter budget de moeite — en dat kan alleen samen met de memory-cap van
+							rb-v2-ollama in de compose-file.
+						</p>
+					{/if}
 				</div>
 			</div>
 		{/if}
@@ -1459,6 +1487,13 @@
 	}
 	.embed-failure .meta {
 		margin: 3px 0 0;
+	}
+	/* Afgekapte invoer is geen uitval (#299): dezelfde plek, maar in de
+	   waarschuwingskleur — rood zou de beheerder naar een fout laten zoeken die er
+	   niet is, terwijl de melding wél moet opvallen. Kleur + tekst, geen emoji. */
+	.embed-failure.is-warn {
+		border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+		background: var(--warn-soft);
 	}
 
 	/* ── Paden ─────────────────────────────────────────────────────── */

@@ -2417,7 +2417,12 @@ telling alleen zegt niets over de kosten: 8 regel-secties (tot 2400 tekens,
 kaartteksten (~300 tekens). Vóór #282 kon één verzoek 16×2400 ≈ 38k tekens
 bevatten. Dat tekenbudget stond tot **#293** op 8000 — gemeten precies de waarde
 waarop `llama-server` omvalt (7000 → 200, 8000 → 400 in 3 van de 3 pogingen), dus
-de begrenzing stond op de klip in plaats van eronder. Zie ADR-20.
+de begrenzing stond op de klip in plaats van eronder. Sinds **#301** is dat budget
+bovendien een garantie in plaats van een afspraak: `EmbeddingService` kapt en
+splitst elk verzoek zelf, dus ook de tien aanroepplekken buiten de twee
+embed-pijplijnen (primer-drafts, `/ask`, correcties) kunnen `llama-server` niet
+meer omver duwen. Het env-plafond ligt sinds **#303** op `MaxConfigurableBatchChars`
+(6300) in plaats van op de meetwaarde 7000 — die is de klifrand zelf. Zie ADR-20.
 
 **Elke nieuwe env-vlag hoort óók in de compose-`environment:`** (#268-follow-up).
 Voor #279 gaat het om `AI_MAX_CONCURRENCY` + `AI_INTERACTIVE_RESERVE` (rb-ai) en
@@ -3403,6 +3408,70 @@ tussen 7000 en 8000. Drie ingrepen:
    kaarttekst blijven volledig. Bijeffect: mét `CapItems` ervóór is élke batch
    gegarandeerd ≤ het budget, wat de "ongeveer" uit `Split` opheft.
 
+**Correctie #301/#299/#302/#303 — de garantie dekte 2 van de ~12 aanroepplekken.**
+De adversariële review op #293 legde vier gaten bloot in precies dezelfde laag; ze
+zijn samen opgelost omdat ze elkaars code raken.
+
+4. **De kap hoort in `EmbeddingService`, niet in de pijplijnen** (#301). #293 zette
+   `CapItems` in `CardEmbeddingPipeline` en `RuleChunkPipeline` en noemde dat "élk
+   verzoek blijft binnen het gemeten veilige bereik" — maar `EmbedAsync`/
+   `EmbedOneAsync` kenden `BatchChars` niet, dus de andere tien aanroepplekken
+   (`PrimerService`, `AdminEndpoints` ×2, `ReviewNoteService`, `ChatRulingService`,
+   `ClaimMiningService`, `ClarificationMiningService`, `AskService` ×2) gingen
+   ongelimiteerd naar Ollama. De reële is `AdminEndpoints`' primer-draft-bewerking:
+   die her-embedt `Title + Body` zodra een reviewer de tekst plakt, zonder
+   lengtegrens — bij 8000+ tekens geen mislukte embed maar een OOM-kill van
+   `llama-server`, oftewel een VM-breed geheugenincident dat de `catch` daar als een
+   hikje liet ogen. `TryEmbedAsync` **kapt en splitst nu zelf**, met dezelfde
+   `EmbeddingSettings`: per item op `BatchChars` (anders duwt één uitschieter de
+   runner om) én de aanroep in deelverzoeken van hoogstens `BatchSize`/`BatchChars`
+   (anders doet een aanroeper met tien teksten het alsnog — `AskService` stuurt zijn
+   query-rewrites in één aanroep). Deelverzoeken zijn alles-of-niets, zodat de
+   index-koppeling vector↔entiteit nooit verschuift. *Een garantie die de aanroeper
+   moet naleven is geen garantie.* Bewijs dat dit ad hoc werd opgelost:
+   `InteractionService` sneed zijn zoektekst met de hand op 1500 tekens — een getal
+   dat nergens anders voorkomt en niets met de gemeten grens te maken had; die snee
+   is weg. De pijplijnen houden hun eigen `CapItems` — daar is hij nu een no-op,
+   maar zij moeten weten **welke** rij gekapt is (zie hieronder).
+5. **Provenance van een gekapte vector hoort op de RIJ** (#299). Een vector over
+   afgekapte invoer is materieel een provenance-variant, en `docs/CONVENTIONS.md`
+   eist provenance op de rij. Tot #299 stond de kap alleen in de run-melding — per
+   run, nooit per rij — en run_log-rijen verouderen; "welke vectoren zijn partieel?"
+   was daarmee over een half jaar niet eens te reconstrueren, want het budget kan
+   intussen verschoven zijn. Vandaar `embedding_truncated_at` (nullable int,
+   additieve migratie) op `card`, `rule_chunk` én `knowledge_doc`: null = de vector
+   dekt de volledige tekst, een getal = de kaplengte van dat moment. De kaplengte en
+   niet een vlag, zodat met een verhoogd budget direct te zien is welke rijen daar
+   baat bij hebben; EF-vertaalbaar, dus `Where(c => c.EmbeddingTruncatedAt != null)`
+   is de her-embed-lijst. Wordt bij élke (her)embed geschreven, óók naar null —
+   anders blijft een rij die intussen wél past voor eeuwig als partieel gemarkeerd.
+   Tweede helft van #299: een run die kapte maar verder slaagde schreef
+   `Status = "ok"`, terwijl het beheer-paneel alléén op `error` reageert. De melding
+   stond dus nergens in beheer en zakte na 15 rijen uit het log-venster — de "alarm
+   dat alleen door veroudering dooft"-klasse uit de #282-review, nu in spiegelbeeld:
+   niet een fout die wegzakt maar een waarschuwing die nooit opkwam. Zulke runs
+   schrijven nu `Status = "warn"`; het paneel toont ze in de waarschuwingskleur met
+   eigen tekst (geen fout — de rij ís geëmbed). Een echte fout wint altijd van een
+   kap, zodat `warn` het alarm van #282 niet maskeert.
+6. **`CappedItems.LongestOriginal` was dood en het commentaar loog** (#302). Het
+   doc-commentaar beloofde dat de melding "laat zien hoe ver eroverheen we zaten",
+   terwijl de melding `CappedAt` gebruikte (de kaplengte) en `LongestOriginal` buiten
+   de tests nergens gelezen werd. Gekozen voor **bedraden** in plaats van weghalen:
+   "afgekapt op 6000 tekens" zegt niet of het om 6001 of om 20000 ging, en dát
+   bepaalt of het budget knelt of ruim zit. De melding luidt nu "… afgekapt op 6000
+   tekens (langste invoer 20000)", aan beide kanten (`EmbedRunResult.Summary` en
+   `RuleIndexResults.Summarize`, die de langste over alle bronnen neemt). Het getal
+   verschijnt alleen als er ook echt gekapt is; bij elke run een lengte noemen maakt
+   het getal betekenisloos.
+7. **Het env-plafond stond op de klifrand** (#303). #293 verlaagde het van 100000
+   naar `MeasuredSafeMaxBatchChars` (7000) — een grote verbetering, maar 7000 is de
+   waarde die dezelfde ADR "de klifrand zelf, en geen veilige plek" noemt: het is de
+   laatste waarde die het HAALDE. De default kreeg marge (6000), de handmatige knop
+   niet, en juist die knop wordt gebruikt op een moment dat het al misgaat. Het
+   plafond is nu `MaxConfigurableBatchChars` = `MeasuredSafeMaxBatchChars * 9 / 10`
+   = **6300**: bewust niet gelijk aan de default, want dan is de knop alleen nog een
+   noodrem omlaag en kan een beheerder niet meer bijstellen zonder deploy.
+
 ---
 
 ## 10. Kwaliteitsscenario's
@@ -3425,9 +3494,11 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Q12 | rb-ai onbereikbaar tijdens de mechaniek-mining | De gebrackete mechanieken worden tóch geschreven (deterministisch, ADR-17), inclusief magnitude-familie; de kaart blijft in de wachtrij omdat `Triggers` null blijft en wordt de volgende run afgemaakt — nooit een half feit dat als "gemined" telt | `MechanicMiningService` (#211), `MechanicMiningServiceTests` |
 | Q13 | Vertaalstap van de primer valt uit of vernederlandst een spelterm (Runes, Battlefields, showdown, Might, …) of laat een §-verwijzing vallen | De vertaling wordt niet opgeslagen (`body_nl` blijft null); `/primer` toont de canonieke Engelse tekst met een expliciete melding erbij, nooit een leeg vak en nooit een half-vernederlandste tekst. Het doc blijft draft tot de beheerder het goedkeurt | `PrimerTranslation.Leaks`, `PrimerService.TranslateAsync` (#266, ADR-19), `PrimerTranslationTests`, `PrimerServiceTranslationTests`, `primerText.test.ts` |
 | Q14 | Ollama valt om (OOM-kill van `llama-server`) tijdens een embed-run | De gefaalde batch wordt overgeslagen, de run gaat door en meldt achteraf per oorzaak hoeveel kaarten/chunks bleven liggen — in het resultaat én als `run_log`-regel (kind `embed`, status `error`), ongeacht welke aanroeper de pijplijn startte, mét Ollama's ruwe foutbody. De betrokken kaarten houden `Embedding == null` en komen de volgende run weer aan de beurt; bij de regel-index blijft de bestaande index van die bron staan i.p.v. half vervangen te worden | `EmbedCallOutcome`, `CardEmbeddingPipeline`, `RuleChunkPipeline` (#282, ADR-20; #293), `EmbedOutcomeTests` |
-| Q14b | Eén kaarttekst of regel-chunk komt op zichzelf boven het embed-tekenbudget uit | De embed-invoer wordt gekapt op het budget, zodat élk verzoek binnen het gemeten veilige bereik blijft en de tekst niet elke run opnieuw een OOM-kill uitlokt. Het aantal gekapte teksten en de kaplengte staan in de run-melding — nooit stil | `EmbedBatching.CapItems`, `EmbedRunResult.Capped`, `RuleIndexResult.Capped` (#293), `EmbedOutcomeTests` (kaartkant, incl. de kap op de wire), `RuleChunkPipelineTests` (regelkant, kap op de wire) |
+| Q14b | Eén kaarttekst of regel-chunk komt op zichzelf boven het embed-tekenbudget uit | De embed-invoer wordt gekapt op het budget, zodat élk verzoek binnen het gemeten veilige bereik blijft en de tekst niet elke run opnieuw een OOM-kill uitlokt. Het aantal gekapte teksten, de kaplengte én de langste originele invoer staan in de run-melding — nooit stil | `EmbedBatching.CapItems`, `EmbedRunResult.Capped`/`CappedLongest`, `RuleIndexResult.Capped`/`CappedLongest` (#293, #302), `EmbedOutcomeTests` (kaartkant, incl. de kap op de wire), `RuleChunkPipelineTests` (regelkant, kap op de wire) |
 | Q14b′ | De opgeslagen tekst blijft volledig bij een gekapte embed-invoer | Alleen de embed-invoer wordt gekort; `RuleChunk.Text` en de kaarttekst blijven onaangeraakt, zodat de regels-browser en het kaartdetail nooit een half afgebroken tekst tonen. **Dekking is asymmetrisch:** aan kaartkant is dit door een test afgedwongen (`Embed_KaartBovenHetBudget…` controleert `TextPlain` ná de run); aan regelkant is het alleen door een code-comment bewaakt, omdat EF InMemory geen `ExecuteDeleteAsync` kent en het geslaagde swap-pad daar dus niet te draaien is. Aan kaartkant is de invoer bovendien een pure projectie (`CardText.Compose`), aan regelkant liggen `chunks` en `texts` als broertjes in dezelfde lus — dáár zit het reële regressierisico | `EmbedOutcomeTests` (kaartkant), `RuleChunkPipeline` (comment bij de embed-lus) (#293) |
-| Q14c | Iemand zet `EMBED_BATCH_CHARS` boven de gemeten veilige grens | De waarde wordt geweigerd en de pijplijn draait op de veilige default; het plafond is de meetwaarde `MeasuredSafeMaxBatchChars`, geen ruime bovengrens. De terugval wordt gemeld via de `warn`-callback, die bij opstart in een `ILogger`-regel landt — dus in `docker logs rb-v2-api`, **niet** in beheer. Dat is dezelfde zwakke zichtbaarheid die CLAUDE.md elders veroordeelt; de uitkomst is hier goedaardig (de veilige waarde wint hoe dan ook), maar noem dit geen alarm | `EmbeddingSettings.FromEnvironment` (#293), `EmbedOutcomeTests` |
+| Q14c | Iemand zet `EMBED_BATCH_CHARS` boven het toegestane plafond | De waarde wordt geweigerd en de pijplijn draait op de veilige default. Het plafond is sinds #303 `MaxConfigurableBatchChars` (6300 = 10% ónder de meetwaarde 7000) en niet meer de meetwaarde zelf: 7000 is de klifrand, dus geen plek om een beheerder legaal neer te zetten — maar bewust ook niet gelijk aan de default, anders is de knop alleen nog een noodrem omlaag. De terugval wordt gemeld via de `warn`-callback, die bij opstart in een `ILogger`-regel landt — dus in `docker logs rb-v2-api`, **niet** in beheer. Dat is dezelfde zwakke zichtbaarheid die CLAUDE.md elders veroordeelt; de uitkomst is hier goedaardig (de veilige waarde wint hoe dan ook), maar noem dit geen alarm | `EmbeddingSettings.FromEnvironment` (#293, #303), `EmbedOutcomeTests` |
+| Q14d | Een aanroeper búiten de twee embed-pijplijnen biedt een te lange tekst aan (reviewer plakt een primer-body van 8000+ tekens, `/ask` stuurt tien query-rewrites in één aanroep) | `EmbeddingService.TryEmbedAsync` kapt elke tekst op `BatchChars` en knipt de aanroep in deelverzoeken van hoogstens `BatchSize`/`BatchChars` — geen enkele aanroeper kan er meer omheen, want er is geen pad naar Ollama dat er niet doorheen gaat. Deelverzoeken zijn alles-of-niets, dus de koppeling vector↔entiteit verschuift nooit. De kap komt als data terug (`EmbedBatchResult.Capped`/`CappedAt`/`LongestOriginal`) zodat de aanroeper hem op de rij kan vastleggen | `EmbeddingService` (#301), `EmbedOutcomeTests` (kap op de wire zonder pijplijn, opknippen, volgorde-behoud, alles-of-niets) |
+| Q14e | Over een half jaar is de vraag "welke vectoren zijn berekend over afgekapte invoer?" | `embedding_truncated_at` staat op `card`, `rule_chunk` en `knowledge_doc`: null = volledige tekst, een getal = de kaplengte van dát moment. EF-vertaalbaar, dus de her-embed-lijst is één `Where(... != null)`. Wordt bij élke (her)embed geschreven, óók naar null, zodat een rij die intussen past niet voor eeuwig partieel heet. Een run die kapte maar verder slaagde schrijft `run_log`-status `warn` (niet `ok`) en het beheer-paneel toont hem in de waarschuwingskleur; een echte fout wint altijd van een kap | `Card`/`RuleChunk`/`KnowledgeDoc.EmbeddingTruncatedAt`, `CardEmbeddingPipeline`, `RuleChunkPipeline`, `admin/+page.svelte` (#299), `EmbedOutcomeTests`, `RuleChunkPipelineTests` |
 
 ---
 

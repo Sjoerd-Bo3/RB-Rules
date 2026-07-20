@@ -122,10 +122,17 @@ services:
       # Verhogen = de OOM terughalen; verhoog dan eerst de cap hieronder, en alleen
       # als er op de VM ruimte is (Postgres 1g + Neo4j 1,5g + Ollama 2,5g +
       # rb-ai 2,44g + api 1,5g op 8 GB). Let op: rb-api weigert een EMBED_BATCH_CHARS
-      # boven de gemeten veilige grens (EmbeddingSettings.MeasuredSafeMaxBatchChars,
-      # 7000) en valt dan mét een waarschuwing terug op de default — verhogen is dus
-      # een codewijziging naast deze compose-wijziging, precies omdat de twee bij
-      # elkaar horen. Omlaag bijstellen kan hier gewoon.
+      # boven EmbeddingSettings.MaxConfigurableBatchChars (6300 — sinds #303 tien
+      # procent ONDER de meetwaarde 7000, want die is de klifrand zelf en dus geen
+      # plek om een beheerder legaal neer te zetten) en valt dan mét een waarschuwing
+      # terug op de default. Écht hoger willen is dus een codewijziging naast deze
+      # compose-wijziging, precies omdat de twee bij elkaar horen. Omlaag bijstellen
+      # kan hier gewoon.
+      #
+      # Sinds #301 is die grens bovendien een GARANTIE en niet langer een afspraak:
+      # EmbeddingService kapt en splitst elk verzoek zelf, dus ook de tien
+      # aanroepplekken buiten de twee embed-pijplijnen (primer-drafts, /ask,
+      # correcties) kunnen llama-server niet meer omver duwen.
       EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-8}
       EMBED_BATCH_CHARS: ${EMBED_BATCH_CHARS:-6000}
     depends_on:

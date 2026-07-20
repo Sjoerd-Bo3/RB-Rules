@@ -484,6 +484,46 @@ public class EmbedOutcomeTests
         }
     }
 
+    // ── DE REGRESSIETEST VAN #303 ────────────────────────────────────────────
+    // #293 verlaagde het env-plafond van 100000 naar de meetwaarde 7000. Dat is een
+    // grote verbetering, maar 7000 is exact de waarde die diezelfde PR "de klifrand
+    // zelf, en geen veilige plek" noemt: het is de laatste waarde die het HAALDE, dus
+    // de echte grens ligt daarboven en schuift mee met wat Postgres/Neo4j/rb-ai van de
+    // 8 GB-VM claimen. De default kreeg marge, de handmatige knop niet.
+
+    [Fact]
+    public void Settings_HetPlafondLigtNietOpDeKlifrand()
+    {
+        // UITGESCHREVEN LITERALS, met opzet — zie Settings_DefaultBlijftOnderDeGemetenKlip.
+        // 7000/8000 zijn WAARNEMINGEN aan een draaiend systeem; het plafond verzetten
+        // hoort deze test bewust rood te maken in plaats van stil mee te schuiven.
+        Assert.Equal(6300, EmbeddingSettings.MaxConfigurableBatchChars);
+        Assert.True(EmbeddingSettings.MaxConfigurableBatchChars < 7000,
+            "het plafond hoort ONDER de laatste geslaagde meting te liggen, niet erop");
+
+        // 7000 mag er niet meer in — de knop mag een beheerder niet legaal op de rand
+        // zetten met een waarde waarvan de code zelf zegt dat hij onbetrouwbaar is.
+        using (new EnvScope(("EMBED_BATCH_CHARS", "7000")))
+        {
+            var warnings = new List<string>();
+            var s = EmbeddingSettings.FromEnvironment(warnings.Add);
+
+            Assert.Equal(EmbeddingSettings.DefaultBatchChars, s.BatchChars);
+            Assert.Contains(warnings, w => w.Contains("EMBED_BATCH_CHARS"));
+        }
+
+        // Maar de knop moet wél een knop blijven: bijstellen binnen de marge kan, en
+        // omlaag (de noodrem) sowieso. Zonder deze helft zou een plafond gelijk aan de
+        // default net zo goed slagen — en dan is de conclusie "de knop is dood".
+        using (new EnvScope(("EMBED_BATCH_CHARS", "6300")))
+        {
+            var warnings = new List<string>();
+
+            Assert.Equal(6300, EmbeddingSettings.FromEnvironment(warnings.Add).BatchChars);
+            Assert.Empty(warnings);
+        }
+    }
+
     // ── De 4xx-hint stuurde de beheerder de verkeerde kant op ────────────────
 
     [Fact]
@@ -637,6 +677,294 @@ public class EmbedOutcomeTests
         Assert.Contains("afgekapt", Assert.Single(db.RunLogs).Detail);
     }
 
+    // ── #299: de kap moet op de RIJ staan, niet alleen in een run-melding ────
+    // Een run_log-regel veroudert; over een half jaar is "welke vectoren zijn partieel?"
+    // dan onbeantwoordbaar — en niet eens te reconstrueren, want het budget kan intussen
+    // verschoven zijn. Vandaar de kaplengte op de rij zelf.
+
+    [Fact]
+    public async Task Embed_GekapteKaart_KrijgtDeKaplengteOpDeRij()
+    {
+        await using var db = NewDb();
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-999", Name = "Reuzentekst", Type = "Unit",
+            TextPlain = new string('x', 2000),
+        });
+        await db.SaveChangesAsync();
+
+        await Pipeline(db, req => OkEmbeddings(BatchTexts(req)), Krap).RunAsync();
+
+        var kaart = await db.Cards.SingleAsync();
+        Assert.NotNull(kaart.Embedding);
+        Assert.Equal(500, kaart.EmbeddingTruncatedAt);
+    }
+
+    [Fact]
+    public async Task Embed_KaartBinnenHetBudget_KrijgtGEEN_Spoor()
+    {
+        // Zonder deze tegenhanger bewijst de test hierboven niets: een implementatie die
+        // de kolom altijd vult zou hem ook halen, en dan is "welke vectoren zijn
+        // partieel?" nog steeds onbeantwoordbaar — alleen andersom.
+        await using var db = NewDb();
+        db.Cards.AddRange(Cards(3));
+        await db.SaveChangesAsync();
+
+        await Pipeline(db, req => OkEmbeddings(BatchTexts(req)), Krap).RunAsync();
+
+        Assert.Equal(3, await db.Cards.CountAsync(c => c.Embedding != null));
+        Assert.All(await db.Cards.ToListAsync(), c => Assert.Null(c.EmbeddingTruncatedAt));
+    }
+
+    [Fact]
+    public async Task Embed_KaartDieWeerPast_VerliestZijnSpoor()
+    {
+        // De reden dat de kolom bestaat: zodra het budget omhoog kan zijn de partiële
+        // vectoren op te zoeken en opnieuw te embedden. Blijft de markering daarna
+        // staan, dan is de lijst na één her-embed alweer onbetrouwbaar.
+        await using var db = NewDb();
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-999", Name = "Was te lang", Type = "Unit",
+            TextPlain = "Deal 2 damage.", EmbeddingTruncatedAt = 500,
+        });
+        await db.SaveChangesAsync();
+
+        await Pipeline(db, req => OkEmbeddings(BatchTexts(req)), Krap).RunAsync();
+
+        Assert.Null((await db.Cards.SingleAsync()).EmbeddingTruncatedAt);
+    }
+
+    [Fact]
+    public async Task Embed_GekapteRun_SchrijftWarn_ZodatHetBeheerPaneelHemToont()
+    {
+        // Het paneel in rb-web hangt aan de status van de nieuwste embed-regel en keek
+        // alleen naar 'error'. Een gekapte-maar-geslaagde run schreef 'ok' en was
+        // daarmee in beheer ONZICHTBAAR: de melding stond alleen in de logtabel en zakte
+        // daar na 15 rijen uit het venster. Een waarschuwing die nooit opkomt.
+        await using var db = NewDb();
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-999", Name = "Reuzentekst", Type = "Unit",
+            TextPlain = new string('x', 2000),
+        });
+        await db.SaveChangesAsync();
+
+        var r = await Pipeline(db, req => OkEmbeddings(BatchTexts(req)), Krap).RunAsync();
+
+        Assert.False(r.HasFailures);           // geen fout: de kaart IS geembed
+        var log = Assert.Single(db.RunLogs.Where(l => l.Kind == "embed"));
+        Assert.Equal("warn", log.Status);
+    }
+
+    [Fact]
+    public async Task Embed_KappenNaastEchteUitval_BlijftError()
+    {
+        // 'warn' mag een echte fout nooit maskeren — dat zou het alarm van #282
+        // wegnemen in ruil voor de waarschuwing van #299.
+        await using var db = NewDb();
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-999", Name = "Reuzentekst", Type = "Unit",
+            TextPlain = new string('x', 2000),
+        });
+        await db.SaveChangesAsync();
+
+        await Pipeline(db, _ => new HttpResponseMessage(HttpStatusCode.InternalServerError), Krap)
+            .RunAsync();
+
+        Assert.Equal("error", Assert.Single(db.RunLogs.Where(l => l.Kind == "embed")).Status);
+    }
+
+    [Fact]
+    public async Task EmbedGezondheid_EenWarnRegelKomtDoorAlsLastEmbed()
+    {
+        // Dezelfde query die /admin/status als `lastEmbed` teruggeeft. Zonder deze
+        // schakel schrijft de pijplijn keurig 'warn' en ziet het paneel hem alsnog
+        // nooit, want het veld filtert op kind — niet op status.
+        await using var db = NewDb();
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = "embed", Ref = "cards", Status = "warn", Detail = "1 afgekapt",
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var lastEmbed = await db.RunLogs.AsNoTracking()
+            .Where(l => l.Kind == "embed")
+            .OrderByDescending(l => l.CreatedAt)
+            .Select(l => new { l.Status, l.Detail, l.CreatedAt })
+            .FirstOrDefaultAsync();
+
+        Assert.Equal("warn", lastEmbed?.Status);
+    }
+
+    // ── #302: de melding noemt de langste ORIGINELE invoer ───────────────────
+
+    [Fact]
+    public async Task Embed_MeldingNoemtHoeVerErovereenWeZaten()
+    {
+        // CappedItems.LongestOriginal was buiten de tests dood, terwijl het
+        // doc-commentaar erboven beloofde dat de melding hem gebruikte. "afgekapt op
+        // 500 tekens" zegt niet of het om 501 of om 20.000 ging — en juist dát bepaalt
+        // of het budget knelt of ruim zit.
+        await using var db = NewDb();
+        var kaart = new Card
+        {
+            RiftboundId = "ogn-999", Name = "Reuzentekst", Type = "Unit",
+            TextPlain = new string('x', 2000),
+        };
+        db.Cards.Add(kaart);
+        await db.SaveChangesAsync();
+
+        var r = await Pipeline(db, req => OkEmbeddings(BatchTexts(req)), Krap).RunAsync();
+
+        // Onafhankelijk uitgerekend uit de kaart zelf, niet uit r.CappedLongest —
+        // anders zou de assertie zichzelf bevestigen.
+        var origineel = CardText.Compose(kaart).Length;
+        Assert.True(origineel > 500, "de testkaart moet juist bóven het budget liggen");
+        Assert.Equal(origineel, r.CappedLongest);
+        Assert.Contains($"afgekapt op 500 tekens (langste invoer {origineel})", r.Summary);
+    }
+
+    [Fact]
+    public async Task Embed_ZonderKapping_ZwijgtOverDeLengte()
+    {
+        // Een run-melding die bij élke run een lengte noemt is ruis; het getal hoort
+        // alleen te verschijnen waar het ergens over gaat.
+        await using var db = NewDb();
+        db.Cards.AddRange(Cards(3));
+        await db.SaveChangesAsync();
+
+        var r = await Pipeline(db, req => OkEmbeddings(BatchTexts(req)), Krap).RunAsync();
+
+        Assert.Equal(0, r.CappedLongest);
+        Assert.DoesNotContain("langste invoer", r.Summary);
+        Assert.DoesNotContain("afgekapt", r.Summary);
+    }
+
+    // ── DE REGRESSIETEST VAN #301 ────────────────────────────────────────────
+    // #293 zette de kap in de twee PIJPLIJNEN en noemde dat "élk verzoek blijft binnen
+    // het gemeten veilige bereik". Dat gold voor 2 van de ~12 aanroepplekken; de andere
+    // tien gingen via EmbedOneAsync/EmbedAsync ongelimiteerd naar Ollama. De reële is
+    // AdminEndpoints' primer-draft-bewerking: die her-embedt Title + Body zodra een
+    // reviewer de tekst plakt, zonder lengtegrens. 8000 tekens is daar geen mislukte
+    // embed maar een OOM-kill van llama-server — een VM-breed geheugenincident, terwijl
+    // de catch op die plek het als een hikje laat ogen.
+    //
+    // Deze tests draaien op `Krap` (500 tekens), niet op de productiedefault: ze toetsen
+    // het GEDRAG "de service begrenst zelf", niet het getal. Dat de productiewaarde
+    // onder de gemeten klip ligt bewaakt Settings_DefaultBlijftOnderDeGemetenKlip.
+
+    [Fact]
+    public async Task Service_EmbedOne_KaptZELF_ZonderPijplijnEromheen()
+    {
+        var sent = new List<int>();
+        var svc = Service(req => { sent.AddRange(InputLengths(req)); return OkEmbeddings(BatchTexts(req)); },
+            Krap);
+
+        // Een geplakte primer-body van 20.000 tekens — precies het scenario uit #301.
+        await svc.EmbedOneAsync(new string('x', 20_000));
+
+        var verstuurd = Assert.Single(sent);
+        Assert.True(verstuurd <= 500,
+            $"tekst van {verstuurd} tekens ging ongekapt de deur uit — de garantie moet "
+            + "in EmbeddingService zitten, niet bij de aanroeper");
+    }
+
+    [Fact]
+    public async Task Service_VeelTekstenInEenAanroep_WordenOpgeknipt_NietOpgeteld()
+    {
+        // Per item kappen alléén dicht het gat maar half: AskService stuurt zijn
+        // query-rewrites in ÉÉN EmbedAsync-aanroep, en 10 × 500 is net zo goed 5000
+        // tekens in één verzoek. De grens geldt per VERZOEK, dus de service knipt.
+        var perVerzoek = new List<int>();
+        var svc = Service(req =>
+        {
+            perVerzoek.Add(InputLengths(req).Sum());
+            return OkEmbeddings(BatchTexts(req));
+        }, Krap);
+
+        await svc.EmbedAsync([.. Enumerable.Repeat(new string('x', 200), 10)]);
+
+        Assert.True(perVerzoek.Count > 1,
+            "10 × 200 tekens hoort niet in één verzoek van 2000 tekens te passen");
+        Assert.All(perVerzoek, totaal => Assert.True(totaal <= 500,
+            $"verzoek van {totaal} tekens ging over het budget van 500"));
+    }
+
+    [Fact]
+    public async Task Service_OpknippenLaatDeVolgordeEnKoppelingHeel()
+    {
+        // De prijs van opknippen is dat vector[i] bij tekst[i] moet blijven horen. Gaat
+        // dat mis, dan krijgt elke entiteit de vector van een ander — een fout die geen
+        // enkele foutmelding oplevert en pas maanden later in slechte zoekresultaten
+        // opduikt. De stub echoot de lengte van elke tekst in de eerste component.
+        var lengtes = new[] { 10, 300, 20, 480, 40, 60 };
+        var teksten = lengtes.Select(n => new string('x', n)).ToArray();
+        var svc = Service(EchoLengths, Krap);
+
+        var vectors = await svc.EmbedAsync(teksten);
+
+        Assert.Equal(lengtes.Length, vectors.Length);
+        Assert.Equal(lengtes.ToList(), vectors.Select(v => (int)v.ToArray()[0]).ToList());
+    }
+
+    [Fact]
+    public async Task Service_EenMisluktDeelverzoek_GeeftNooitEenHalfResultaat()
+    {
+        // Alles-of-niets, zelfde regel als EmbedBatchResult altijd al had: een deels
+        // gevulde uitslag zou vectoren aan de verkeerde entiteit koppelen.
+        var calls = 0;
+        var svc = Service(req => ++calls == 1
+            ? OkEmbeddings(BatchTexts(req))
+            : new HttpResponseMessage(HttpStatusCode.InternalServerError), Krap);
+
+        var r = await svc.TryEmbedAsync([.. Enumerable.Repeat(new string('x', 200), 10)]);
+
+        Assert.False(r.Ok);
+        Assert.Null(r.Vectors);
+        Assert.Equal(EmbedCallOutcome.ServerError, r.Outcome);
+    }
+
+    [Fact]
+    public async Task Service_MeldtDeKap_ZodatDeAanroeperHemOpDeRijKanZetten()
+    {
+        // Een kap die alleen "gebeurt" is precies de stille degradatie die #282/#284
+        // wegnamen. Op servicenniveau is het resultaat het enige kanaal — zonder deze
+        // velden kan AdminEndpoints niet weten dat de vector maar een deel dekt.
+        var svc = Service(req => OkEmbeddings(BatchTexts(req)), Krap);
+
+        var gekapt = await svc.TryEmbedAsync([new string('x', 1234)]);
+
+        Assert.True(gekapt.Ok);
+        Assert.Equal(1, gekapt.Capped);
+        Assert.Equal(500, gekapt.CappedAt);
+        Assert.Equal(1234, gekapt.LongestOriginal);
+
+        // En andersom — anders bewijst het bovenstaande niets: een implementatie die
+        // ALTIJD "gekapt" meldt zou de eerste helft ook halen.
+        var heel = await svc.TryEmbedAsync([new string('x', 200)]);
+
+        Assert.True(heel.Ok);
+        Assert.Equal(0, heel.Capped);
+        Assert.Equal(0, heel.CappedAt);
+    }
+
+    [Fact]
+    public async Task Service_KapFeitenOverlevenEenMislukteAanroep()
+    {
+        // Anders zou een aanroeper die op de uitkomst afgaat concluderen dat er niets
+        // gekapt is, puur omdat Ollama daarna omviel.
+        var svc = Service(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError), Krap);
+
+        var r = await svc.TryEmbedAsync([new string('x', 1234)]);
+
+        Assert.False(r.Ok);
+        Assert.Equal(1, r.Capped);
+        Assert.Equal(500, r.CappedAt);
+    }
+
     [Fact]
     public void Settings_OnzinOfBuitenBereik_ValtTerugOpDeDefault_MaarNietStil()
     {
@@ -689,12 +1017,32 @@ public class EmbedOutcomeTests
         });
 
     private static CardEmbeddingPipeline Pipeline(
-        RbRulesDbContext db, Func<HttpRequestMessage, HttpResponseMessage> respond) =>
-        new(db, Service(respond), EmbeddingSettings.Default);
+        RbRulesDbContext db, Func<HttpRequestMessage, HttpResponseMessage> respond,
+        EmbeddingSettings? settings = null) =>
+        new(db, Service(respond, settings), settings ?? EmbeddingSettings.Default);
 
     private static EmbeddingService Service(
-        Func<HttpRequestMessage, HttpResponseMessage> respond) =>
-        new(new HttpClient(new StubHandler(respond)) { BaseAddress = new Uri("http://ollama.test") });
+        Func<HttpRequestMessage, HttpResponseMessage> respond,
+        EmbeddingSettings? settings = null) =>
+        new(new HttpClient(new StubHandler(respond)) { BaseAddress = new Uri("http://ollama.test") },
+            settings);
+
+    /// <summary>Een krap budget dat NIETS met de productiewaarden te maken heeft, zodat
+    /// de verwachtingen in een test zijn eigen getallen zijn en niet meeschuiven met
+    /// <see cref="EmbeddingSettings.DefaultBatchChars"/> (#293-les: een assertie tegen
+    /// de constante die ze bewaakt bewijst niets).</summary>
+    private static readonly EmbeddingSettings Krap = new(BatchSize: 4, BatchChars: 500);
+
+    /// <summary>Geeft per aangeboden tekst een vector terug waarvan de EERSTE component
+    /// de lengte van die tekst is. Zo is achteraf te controleren dat vector[i] echt bij
+    /// tekst[i] hoort — de enige manier om te zien of het opknippen in deelverzoeken de
+    /// index-koppeling heel laat (#301).</summary>
+    private static HttpResponseMessage EchoLengths(HttpRequestMessage req)
+    {
+        var vectors = InputLengths(req).Select(len =>
+            $"[{len}{string.Concat(Enumerable.Repeat(",0.0", EmbeddingConfig.Dimensions - 1))}]");
+        return Json(HttpStatusCode.OK, $$"""{"embeddings":[{{string.Join(",", vectors)}}]}""");
+    }
 
     /// <summary>Aantal teksten in het verzoek — zodat de stub precies zoveel vectoren
     /// teruggeeft als er gevraagd zijn.</summary>

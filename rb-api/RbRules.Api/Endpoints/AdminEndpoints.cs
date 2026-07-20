@@ -518,14 +518,28 @@ public static class AdminEndpoints
                 doc.BodyNl = string.IsNullOrWhiteSpace(patch.BodyNl) ? null : patch.BodyNl.Trim();
             if (changed)
             {
-                try
+                // Zelfde embed-input als PrimerService, zodat /ask de bewerkte
+                // versie direct semantisch vindt.
+                //
+                // DIT IS DE AANROEPPLEK UIT #301. Een reviewer plakt hier een
+                // body van willekeurige lengte, en tot #301 ging die zonder
+                // lengtegrens naar Ollama: bij 8000+ tekens geen mislukte embed
+                // maar een OOM-kill van llama-server — een VM-breed
+                // geheugenincident (Ollama deelt de 8 GB met Postgres, Neo4j en
+                // rb-ai), dat de catch hieronder als een hikje liet ogen. De
+                // begrenzing zit nu in EmbeddingService en kan dus niet meer
+                // omzeild worden. TryEmbedAsync i.p.v. EmbedOneAsync omdat een
+                // kap alleen langs dit kanaal terugkomt; hij belandt op de rij
+                // (#299) zodat een halve vector achteraf herkenbaar blijft.
+                var input = $"{doc.Title}\n{doc.Body}";
+                var embed = await embeddings.TryEmbedAsync([input]);
+                if (embed.Ok)
                 {
-                    // Zelfde embed-input als PrimerService, zodat /ask de
-                    // bewerkte versie direct semantisch vindt.
-                    doc.Embedding = await embeddings.EmbedOneAsync($"{doc.Title}\n{doc.Body}");
+                    doc.Embedding = embed.Vectors![0];
                     doc.EmbeddingModel = EmbeddingConfig.Model;
+                    doc.EmbeddingTruncatedAt = embed.Capped > 0 ? embed.CappedAt : null;
                 }
-                catch
+                else
                 {
                     // Ollama tijdelijk weg — opslaan telt (zelfde patroon als
                     // corrections/verify). De oude embedding hoort bij de oude
@@ -534,6 +548,7 @@ public static class AdminEndpoints
                     // volgende bewerking.
                     doc.Embedding = null;
                     doc.EmbeddingModel = null;
+                    doc.EmbeddingTruncatedAt = null;
                 }
             }
             doc.UpdatedAt = DateTimeOffset.UtcNow;
@@ -543,6 +558,10 @@ public static class AdminEndpoints
                 doc.Id, doc.Kind, doc.Topic, doc.Title, doc.Body, doc.BodyNl,
                 doc.SectionRefs, doc.Status, doc.UpdatedAt,
                 Embedded = doc.Embedding != null,
+                // Null = de vector dekt de volledige tekst. Een getal betekent dat
+                // alleen de eerste N tekens geëmbed zijn (#299/#301) — de bewaarde
+                // body blijft onaangeraakt, maar /ask vindt dit doc dan op een deel.
+                doc.EmbeddingTruncatedAt,
             });
         });
 
