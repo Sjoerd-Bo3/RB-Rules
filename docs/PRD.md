@@ -1249,6 +1249,16 @@ de globale duur-vangrail).
   het gemiddelde aantal aangeboden termen, zodat de winst zichtbaar is in plaats
   van beweerd. *Na deploy: draai eerst `breinreset-interacties` als je de oude en
   nieuwe extractie op dezelfde pool wilt vergelijken.*
+- **De regelsectie-verankering werkt nu écht** (#315) — de #286-belofte hierboven
+  (het model wijst de verankerende regelsectie aan) strandde in de praktijk in
+  rb-ai: het meegestuurde `sections`-veld werd daar nooit gelezen en de tool-vorm
+  kende geen `governed_by`, dus het model kon het anker per constructie niet
+  noemen en de sectie-verwijzing bleef in productie altijd leeg. Sinds #315 leest
+  rb-ai de aangeboden secties wél, biedt ze het model als gesloten lijstje aan en
+  rekent het antwoord erop na (een verzonnen sectie wordt ge-nuld, precies zoals
+  de bestaande poorten). Zichtbaar effect: gepromoveerde interacties kunnen nu
+  daadwerkelijk naar hun officiële regelsectie doorverwijzen; het aandeel mét zo'n
+  verwijzing was tot deze fix per constructie 0% en is het meetpunt van de issue.
 - **Brein-mining draait parallel** (#279) — de extractie kostte ~40 s per kaart
   en liep één kaart tegelijk: 40 kaarten was een half uur, een ongecapte
   nachtrun (~900 kaarten) tien uur. De kaart- en subject-lus verwerken nu

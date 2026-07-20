@@ -1927,7 +1927,8 @@ alle andere mining blijven ongemoeid.
 **rb-ai-kant (tool-forced structured output).** `POST /extract/interactions` en
 `POST /extract/predicates` (server.ts) krijgen kaart-/regeltekst + het
 ontologie-vocabulaire (aangeboden refs, kind-/conditie-/rol-enums, Window/Status-
-lexicon) van rb-api. `extractWithTool` (ai.ts) draait één geforceerde in-process
+lexicon, en sinds #315 óók de citeerbare `sections`-refs voor `governed_by`)
+van rb-api. `extractWithTool` (ai.ts) draait één geforceerde in-process
 MCP-tool (`emit_interactions`/`emit_mechanic_predicates`). De tool-handler vangt
 de argumenten in een closure; de kandidaten reizen dus via de tool-input, niet
 via de antwoordtekst. Uitval (tool niet geroepen, timeout, run gefaald) → de
@@ -1955,7 +1956,11 @@ doorgaat wordt herbouwd tot exact de bekende velden. De narekening is bewust
 nooit strénger dan de .NET-muur (refs Ordinal-exact; kind/window/status
 case-insensitief; een invalide conditie kost de conditie, niet het item; een
 invalide `subject_role` wordt ge-nuld) — strenger zou dekking kosten op items
-die rb-api gewoon accepteert. Itemgranulariteit is een verbetering ten opzichte
+die rb-api gewoon accepteert. Sinds #315 hoort ook `governed_by` bij die
+narekening: Ordinal-exact tegen de aangeboden `sections`, buiten de lijst →
+ge-nuld terwijl het item blijft, en — anders dan de lege-lijst-fallback van de
+window/status-lexica — nult een lége sectie-aanbieding álles, want zo toetst
+de .NET-muur (`sectionSet.Contains`) het ook. Itemgranulariteit is een verbetering ten opzichte
 van de enum-poort: één verzonnen ref liet vroeger de hele tool-call op
 SDK-validatie stranden (en de run vaak als no_tool_call/timeout eindigen), nu
 kost hij één item.
@@ -2450,10 +2455,21 @@ nachtrun:
   10. **Rijkere vraag in dezelfde aanroep.** Omdat de vaste kosten toch betaald zijn,
      is een extra veld over tekst die al in de prompt staat vrijwel gratis. De
      extractie vraagt nu ook `governed_by`: welke aangeboden regelsectie verankert de
-     interactie normatief? Gesloten enum over de meegestuurde `section:`-refs, met de
+     interactie normatief? Gesloten vraag over de meegestuurde `section:`-refs, met de
      parser als tweede muur — een verzonnen sectie valt weg zoals een verzonnen
      rol-ref. Dat vult `Interaction.GovernedByRef` (GOVERNED_BY), dat sinds #226
-     bestond maar in de praktijk altijd `null` bleef.
+     bestond maar in de praktijk altijd `null` bleef. **Kanttekening (#315,
+     gevonden tijdens #312/#314):** deze verankering bestond tussen #286 en #315
+     alleen op papier — rb-api stuurde `sections` netjes mee en de .NET-muur was er
+     klaar voor, maar rb-ai las het veld nergens en de tool-vorm kende geen
+     `governed_by` (vóór #312 niet in het zod-enum-schema, ná #312 niet in de vaste
+     vorm), dus het model kón het anker nooit emitten en `GovernedByRef` bleef ook
+     ná #286 altijd null. Sinds #315 leest rb-ai de secties wél, biedt ze ze als
+     vocabulaire-regel in de prompt aan, draagt de vaste tool-vorm
+     `governed_by: string|null`, en rekent `enforceInteractionVocabulary` het
+     antwoord erop na (zie de narekening-paragraaf hierboven). Meetpunt: het
+     aandeel gepromoveerde interacties mét `GovernedByRef` — tot #315 per
+     constructie 0%.
 
   **Review-ronde op #286 (vijf punten).**
   11. **De tier-verdeling wordt VOORAF uitgerekend**, niet achteraf weggesneden. Zo

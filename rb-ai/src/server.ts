@@ -90,6 +90,7 @@ export const server = createServer(async (req, res) => {
   let shape: {
     bytes?: number;
     refs?: number;
+    sections?: number;
     items?: number;
     task?: string;
     rejected?: number;
@@ -310,9 +311,17 @@ export const server = createServer(async (req, res) => {
       const body = await readJson(req);
       const parsed = parseInteractionExtractRequest(body.value);
       if (!parsed.ok) return send(400, { error: parsed.error });
-      // refs = de omvang van het aangeboden vocabulaire; samen met bytes maakt
-      // dat de vraag "vallen juist de grote aanbiedingen om?" direct toetsbaar.
-      shape = { bytes: body.bytes, refs: parsed.request.refs.length };
+      // refs/sections = de omvang van het aangeboden vocabulaire; samen met
+      // bytes maakt dat de vraag "vallen juist de grote aanbiedingen om?"
+      // direct toetsbaar. sections telt sinds #315 mee: de sectie-refs zijn
+      // vocabulaire dat met de kennisbank meegroeit (#281/#288-schaalklip).
+      shape = {
+        bytes: body.bytes,
+        refs: parsed.request.refs.length,
+        ...(parsed.request.sections.length > 0
+          ? { sections: parsed.request.sections.length }
+          : {}),
+      };
       try {
         const outcome = await deps.extractWithTool({
           toolName: "emit_interactions",

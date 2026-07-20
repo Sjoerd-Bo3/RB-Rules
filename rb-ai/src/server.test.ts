@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { after, before, test } from "node:test";
+import { z } from "zod";
 import type { ExtractOutcome } from "./ai.js";
 
 // Vóór de import: server.ts leest PORT bij module-load en gaat meteen
@@ -119,6 +120,93 @@ test("POST /extract/predicates: de narekening zit ECHT in de bedrading", async (
   assert.equal(calls.length, 1);
   assert.match(String(calls[0]?.text), /Toegestane predicaten/);
   assert.match(String(calls[0]?.text), /Accelerate \(mechanic:Accelerate\)/);
+});
+
+test("POST /extract/interactions: sections → governed_by, end-to-end door de handler (#315)", async () => {
+  // De NAAD, niet alleen de pure functie: #315 was precies een bug die élke
+  // unit-test miste — parse, prompt en narekening klopten stuk voor stuk, maar
+  // het `sections`-veld werd op de request-grens nooit gelezen, dus het model
+  // kon geen anker emitten en de muur nulde alles. Dit geval loopt daarom van
+  // JSON-request tot JSON-respons door de échte handler.
+  const calls = stubExtract([
+    {
+      from: "mechanic:Deflect",
+      to: "mechanic:Assault",
+      kind: "COUNTERS",
+      interacts: true,
+      governed_by: "section:core-4.2b",
+    },
+    {
+      from: "mechanic:Assault",
+      to: "mechanic:Deflect",
+      kind: "MODIFIES",
+      interacts: true,
+      governed_by: "section:verzonnen",
+    },
+  ]);
+
+  const { status, body } = await post("/extract/interactions", {
+    ...interactionRequest,
+    sections: ["section:core-4.2b"],
+  });
+
+  assert.equal(status, 200);
+  assert.deepEqual(body.interactions, [
+    {
+      from: "mechanic:Deflect",
+      to: "mechanic:Assault",
+      kind: "COUNTERS",
+      interacts: true,
+      // De aangeboden sectie overleeft als anker (overleef-richting, #295-les)…
+      governed_by: "section:core-4.2b",
+    },
+    {
+      from: "mechanic:Assault",
+      to: "mechanic:Deflect",
+      kind: "MODIFIES",
+      interacts: true,
+      // …en de verzonnen sectie is ge-nuld terwijl het item bleef (muur-semantiek).
+    },
+  ]);
+
+  // Prompt-bedrading: de aangeboden secties reizen als vocabulaire-regel mee.
+  // Wordt `sections` niet meer geparset, dan verdwijnt deze regel én wordt het
+  // geldige anker hierboven ge-nuld — beide asserts gaan dan rood.
+  assert.equal(calls.length, 1);
+  assert.match(String(calls[0]?.text), /governed_by \(sectie-refs\): section:core-4\.2b/);
+
+  // Schema-bedrading: de vorm die de handler aan de SDK geeft moet governed_by
+  // KENNEN, anders stript de zod-parse het veld vóór de narekening het ooit
+  // ziet (de tweede helft van de #315-bug).
+  const shape = z.object(calls[0]?.schema as z.ZodRawShape);
+  const doorDeVorm = shape.parse({
+    interactions: [
+      { from: "a", to: "b", kind: "K", interacts: true, governed_by: "section:x" },
+    ],
+  }) as { interactions: Array<{ governed_by?: string | null }> };
+  assert.equal(doorDeVorm.interactions[0]?.governed_by, "section:x");
+});
+
+test("POST /extract/interactions: zonder sections blijft het contract intact (pre-#286 rb-api)", async () => {
+  // Backwards compatible: een aanroeper die geen sections stuurt krijgt exact
+  // het oude gedrag — 200, en een toch geëmit anker wordt ge-nuld (dat deed de
+  // .NET-muur met een lege sectionSet ook al).
+  stubExtract([
+    {
+      from: "mechanic:Deflect",
+      to: "mechanic:Assault",
+      kind: "COUNTERS",
+      interacts: true,
+      governed_by: "section:core-4.2b",
+    },
+  ]);
+
+  const { status, body } = await post("/extract/interactions", interactionRequest);
+
+  assert.equal(status, 200);
+  assert.deepEqual(body.interactions, [
+    { from: "mechanic:Deflect", to: "mechanic:Assault", kind: "COUNTERS", interacts: true },
+  ]);
 });
 
 test("POST /extract/interactions: uitval blijft een 500 met reden — de gate eet geen fouten", async () => {
