@@ -247,6 +247,34 @@ test("boot-fout is gedegradeerd gedrag: teller omhoog, pool blijft bruikbaar", (
   assert.equal(calls, 2);
 });
 
+test("boot-fout lekt geen token, ook niet via een geïnjecteerde log-sink (#292)", () => {
+  // De default-sink loopt door `logEvent` en is dus per constructie geredacteerd
+  // — maar een MEEGEGEVEN sink (zoals hier, en zoals elke test) omzeilt die
+  // poort. Daarom wordt de tekst óók bij de bron al geclassificeerd en
+  // geredacteerd: een boot-fout is een rauwe SDK-melding, en die kan een
+  // auth-header dragen (werkafspraak 7).
+  const token = "sk-ant-oat01-XXXXXXXX-warmpool-boot-token-42";
+  const regels: string[] = [];
+  const p = new WarmPool({
+    boot: () => {
+      throw new Error(`spawn faalde — Authorization: Bearer ${token}`);
+    },
+    enabled: true,
+    ttlMs: 60_000,
+    log: (line) => regels.push(line),
+  });
+  p.prewarm();
+  p.observe(SIG);
+  p.claim(SIG);
+
+  assert.equal(regels.length, 1);
+  assert.equal(regels[0].includes(token), false, regels[0]);
+  assert.doesNotMatch(regels[0], /oat01/, regels[0]);
+  // Diagnostisch bruikbaar blijven: de melding zegt nog steeds wát er misging.
+  assert.match(regels[0], /voorverwarmen mislukt/);
+  assert.match(regels[0], /spawn/);
+});
+
 test("prewarm is idempotent zolang er al een warme sessie staat", () => {
   const { p, boots } = pool();
   p.prewarm();

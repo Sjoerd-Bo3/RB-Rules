@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   AiRunError,
   describeThrown,
   failureOf,
   logCall,
+  logEvent,
   redactSecrets,
   resultFailure,
   RetryTracker,
@@ -508,4 +511,91 @@ test("failureOf behoudt een al vastgestelde reden en verzint er geen nieuwe", ()
   // bestaande fout-body van het agentic pad).
   assert.equal(String(known), "AiRunError: max_turns: subtype=error_max_turns");
   assert.equal(failureOf(new Error("spawn ENOMEM")).reason, "spawn");
+});
+
+// ── logEvent: de poort zelf (#292) ────────────────────────────────────────
+// #281 zette de redactie-poort neer, maar twee oudere console.log's in ai.ts
+// liepen er omheen. Deze tests toetsen de poort op GEDRAG: wat komt er echt uit
+// stdout als je hem probeert te voeden met iets gevaarlijks?
+
+test("logEvent redacteert ELK veld — ook eentje dat geen string is", () => {
+  const token = "sk-ant-oat01-YYYYYYYY-geheim-token-uit-een-object-77";
+  withEnv({ CLAUDE_CODE_OAUTH_TOKEN: token }, () => {
+    const lines = captureLog(() => {
+      logEvent("proef", {
+        tekst: `auth faalde met ${token}`,
+        // Een object zou via JSON.stringify ONGEREDACTEERD in de regel belanden
+        // als de poort alleen strings zou behandelen — precies het soort gaatje
+        // waardoor #292 kon ontstaan.
+        brok: { header: `Bearer ${token}` },
+        fout: new Error(`401 unauthorized voor ${token}`),
+      });
+    });
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].includes(token), false, lines[0]);
+    assert.doesNotMatch(lines[0], /geheim-token/, lines[0]);
+    const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+    assert.equal(parsed.evt, "proef");
+    // De regel blijft diagnostisch bruikbaar: de niet-geheime context staat er.
+    assert.match(String(parsed.tekst), /auth faalde met \[redacted\]/);
+    assert.match(String(parsed.fout), /401 unauthorized/);
+  });
+});
+
+test("logEvent laat getallen met rust en gooit lege velden weg — 0 blijft staan", () => {
+  const lines = captureLog(() => {
+    logEvent("proef", { bytes: 0, tools: 3, warm: false, weg: undefined, ook_weg: null });
+  });
+  const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+  assert.equal(parsed.bytes, 0, "een maat van 0 is informatie, geen 'onbekend'");
+  assert.equal(parsed.tools, 3);
+  assert.equal(parsed.warm, false);
+  assert.equal("weg" in parsed, false);
+  assert.equal("ook_weg" in parsed, false);
+});
+
+test("logEvent schrijft precies één parseerbare JSON-regel", () => {
+  const lines = captureLog(() => {
+    logEvent("proef", { detail: "regel1\n   regel2" });
+  });
+  assert.equal(lines.length, 1);
+  assert.equal((JSON.parse(lines[0]) as Record<string, unknown>).detail, "regel1 regel2");
+});
+
+// ── Eén poort, geen tweede pad (#292) ─────────────────────────────────────
+
+test("failure.ts is de ENIGE module in rb-ai die naar stdout schrijft", () => {
+  // WAT DEZE TEST WEL EN NIET IS. Hij is structureel: hij leest broncode, geen
+  // gedrag. Dat maakt hem principieel zwakker dan de tests hierboven — hij ziet
+  // niet of een logregel geredacteerd is, alleen wie er schrijft, en een
+  // hernoeming of verplaatsing kan hem laten struikelen zonder dat er iets mis
+  // is. Hij staat hier voor precies één ding dat gedragstests niet kunnen
+  // dekken: het BESTAAN van een tweede stdout-pad. #292 ontstond niet doordat de
+  // poort verkeerd redacteerde, maar doordat twee regels er langs liepen — en
+  // geen enkele test kon dat zien, want ze testten alleen de poort.
+  //
+  // De regel is daarom bewust NIET "geen template-interpolatie in console.log"
+  // (die vorm-check faalt op een refactor en mist een concatenatie of een
+  // String(e)), maar "alleen failure.ts schrijft". Alles wat de sidecar wil
+  // melden gaat via logEvent/logCall; wie dat wil omzeilen moet deze test
+  // aanpassen, en dat is precies het moment waarop iemand moet nadenken.
+  const dir = fileURLToPath(new URL(".", import.meta.url));
+  const modules = readdirSync(dir).filter(
+    (f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== "failure.ts",
+  );
+  assert.ok(modules.length >= 5, `verwacht meerdere modules, kreeg ${modules.length}`);
+  const schrijvers = /(?:^|[^.\w])console\s*\.\s*\w+\s*\(|process\s*\.\s*std(?:out|err)\s*\.\s*write\s*\(/g;
+  for (const naam of modules) {
+    const src = readFileSync(`${dir}${naam}`, "utf8");
+    const treffers = [...src.matchAll(schrijvers)].map((m) => {
+      const regel = src.slice(0, m.index ?? 0).split("\n").length;
+      return `${naam}:${regel}`;
+    });
+    assert.deepEqual(
+      treffers,
+      [],
+      `${treffers.join(", ")} schrijft rechtstreeks naar stdout/stderr. ` +
+        "Gebruik logEvent/logCall uit failure.ts — die redacteert (werkafspraak 7).",
+    );
+  }
 });

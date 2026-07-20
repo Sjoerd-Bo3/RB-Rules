@@ -6,6 +6,7 @@ import {
   buildQueryOptions,
   buildUserMessage,
   collectAnswer,
+  noteBrainStep,
   warmBootOptions,
   type CollectProgress,
 } from "./ai.js";
@@ -356,4 +357,69 @@ test("model-override slaat de warme-pool-claim over (#174, bedrading)", () => {
     /!model/,
     "de guard moet een model-override uitsluiten van de warme-pool-claim",
   );
+});
+
+// ── Brein-stappen: de vraag hoort in de trace, niet in de containerlog (#292) ─
+// Tot #292 logde de tool-handler `[agentic] ${step}` naar stdout, en `step`
+// bevat de tool-ARGUMENTEN — bij semantic_search in de praktijk de vraagtekst
+// van de gebruiker. Dat is geen secret-probleem (`safeDetail` zou er niets aan
+// doen) maar een privacy-probleem: containerlogs worden losser behandeld dan
+// `ask_trace`, waar de vraag bewust wél staat, achter de admin-poort.
+//
+// Deze test is bewust GEDRAG, geen grep: hij roept de functie aan die de
+// tool-handler ook aanroept, en kijkt naar wat er echt uit stdout komt.
+
+/** Vang stdout, zodat de test de ECHTE logregel ziet in plaats van een
+ * reconstructie ervan. (Dezelfde drie regels als in failure.test.ts — een
+ * gedeelde test-helper is hier meer ceremonie dan winst.) */
+function captureLog(fn: () => void): string[] {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  try {
+    fn();
+  } finally {
+    console.log = original;
+  }
+  return lines;
+}
+
+test("brein-stap: de vraagtekst gaat naar de trace, nooit naar stdout", () => {
+  const vraag = "mag Yasuo blokkeren als mijn buurman Sjoerd hem exhaust";
+  const steps: string[] = [];
+  const lines = captureLog(() => {
+    noteBrainStep("semantic_search", { query: vraag, k: 5 }, (s) => steps.push(s));
+  });
+
+  // Kanaal 1 — de aanroeper (server.ts `steps` → AskTrace.BrainSteps): volledig,
+  // inclusief argumenten. Dáár hoort de stap, en daar verandert #292 niets aan.
+  assert.equal(steps.length, 1);
+  assert.match(steps[0], /^semantic_search /);
+  assert.ok(steps[0].includes("Yasuo"), steps[0]);
+
+  // Kanaal 2 — de containerlog: toolnaam en MAAT, geen inhoud.
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+  assert.equal(parsed.evt, "brain_step");
+  assert.equal(parsed.tool, "semantic_search");
+  assert.ok(typeof parsed.bytes === "number" && parsed.bytes > 0, lines[0]);
+  for (const woord of ["Yasuo", "Sjoerd", "blokkeren", "buurman", "exhaust"]) {
+    assert.equal(
+      lines[0].toLowerCase().includes(woord.toLowerCase()),
+      false,
+      `"${woord}" uit de vraag van de gebruiker staat in de containerlog: ${lines[0]}`,
+    );
+  }
+});
+
+test("brein-stap zonder onStep logt nog steeds inhoudsloos (geen tweede pad)", () => {
+  const lines = captureLog(() => {
+    noteBrainStep("get_node", { ref: "card:OGN-123", notitie: "geheime-context-xyz" });
+  });
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].includes("geheime-context-xyz"), false, lines[0]);
+  assert.equal(lines[0].includes("OGN-123"), false, lines[0]);
+  assert.equal((JSON.parse(lines[0]) as Record<string, unknown>).tool, "get_node");
 });
