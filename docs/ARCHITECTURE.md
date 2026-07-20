@@ -92,7 +92,8 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
 |---|---|---|
 | **playriftbound.com / Rules Hub** | Officiële regel-PDF's, patch notes, errata (laag 0) | `IngestService` via `SafeExternalHttp`; bronnen in `SourceSeed.cs` |
 | **playriftbound.com/en-us/news/…** (bron-feeds, #167) | Index-pagina's die periodiek nieuwe artikel-URL's opleveren — ontdekt bronnen, ís er geen | `FeedCrawlService` (`RiotNewsFeed`-parser) via `SafeExternalHttp`; feeds in `SourceFeedSeed.cs` |
-| **Riot-kaartgallery** | Leidende kaartenbron (JSON, set-facetten, token-kaarten); de riftcodex-API vult daarna alleen aan — extra kaarten en set-metadata, bestaande kaarten blijven onaangeraakt (#150) | `CardSyncService` |
+| **Riot-kaartgallery** | Leidende kaartenbron (JSON, set-facetten, token-kaarten, en sinds #270 de presentatievelden: afmetingen/`orientation`, kleuren, `accessibilityText`, illustrator, `mightBonus`, `effect`, `flags`, `publicCode`); de riftcodex-API vult daarna alleen lege velden en ontbrekende kaarten aan (#150/#270) | `CardSyncService`, `CardMerge` |
+| **Riot-glyph-CDN** | Officiële icoon-SVG's voor de `:rb_…:`-tokens in kaartteksten (`assetcdn.rgpub.io/…/riot-glyphs/rb/latest/`). **Niet** live bevraagd: de 22 glyphs zijn gevendord in `rb-web/static/glyphs/` (#257, ADR-16) | `scripts/fetch-glyphs.sh`, `$lib/rbtokens.ts` |
 | **Community-bronnen** | riftbound.gg, fanfinity, UVS Games-PDF, mobalytics (laag 1-3) | `SourceSeed.cs`, `ClaimMiningService`, `BanErrataSyncService` |
 | **Piltover Archive** | Community-decks (#15, fundament meta-laag 3) | `DeckIngestService` via `SafeExternalHttp`; **alleen** de sitemap en publieke `/decks/view/{uuid}`-pagina's — hun `/api/` is robots-disallowed en wordt nooit aangeraakt; attributie + deep-link per deck |
 | **Claude Agent SDK** | LLM-uitvoering op abonnement | `rb-ai` (sidecar), intern koppelvlak `/ask` |
@@ -217,7 +218,10 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   (identiteitsconventie), `QuestionRouter`, `QueryRewriter`, `RrfFusion`,
   `RuleSectionParser`, `SetLegality`, `VariantGrouping`, `RiftboundIds`
   (id-parse/normalisatie, #144), `RiftcodexCardMapper` (bronvorm-adapter,
-  #144), `SetCoverage` (dekking per set, #145), `ClaimMining`,
+  #144), `CardPresentation` (#270 — lokale terugval voor de presentatievelden:
+  afmetingen uit de Sanity-URL, zelf samengestelde alt-tekst, hexkleur-
+  validatie), `CardMerge` (#270 — de voorrangsregel van de kaart-upsert op
+  één plek, zie ADR-15), `SetCoverage` (dekking per set, #145), `ClaimMining`,
   `RelationMining`, `RelationTriage` (prompt + tolerante parser voor de
   relatie-triage, #199 v1), `AgenticGate`, `SourceSeed`, `SourceFeedSeed` (#167),
   `RiotCardMapper`, `HubDiscovery`, `RiotNewsFeed` (bron-feed-parser, #167),
@@ -1021,7 +1025,12 @@ behouden.
 
 Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 `RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `ChangeCard.svelte`,
-`markdown.ts` + `rbtokens.ts` (sanitize + icoon-injectie vóór `{@html}`),
+`markdown.ts` + `rbtokens.ts` (sanitize + icoon-injectie vóór `{@html}`; sinds
+#257 injecteert `rbtokens.ts` Riots officiële glyphs uit `static/glyphs/` — zie
+ADR-16 — achter een allowlist van 22 tokens, met een zichtbare tekst-terugval
+als een glyph niet laadt), `cardImage.ts` (#269/#270 — verhouding, alt-tekst,
+laadkleur en "New"-markering per kaart; één plek voor het deckgrid, de
+kaartlijst, de kaartpagina en de kaartwidget),
 `answerFormat.ts`, `changeCard.ts`, `passkeys.ts`, `quota.ts`, `ranges.ts`
 (compacte reeksweergave, #145), `graphNode.ts` (ref-splitsing, knoop-label/
 -samenvatting en doorklik-links van de graph-verkenner — gedeeld door de
@@ -2146,6 +2155,51 @@ kostengate zijn puur en getest. EF-migratie `Governance230`.
 `RbRules.Domain/Ontology/OntologyVersion.cs`, `SchemaProposal.cs`,
 `RbRules.Domain/KnowledgeLifecycle.cs`, `ErrataLifecycle.cs`,
 `ModelUpgradeInvalidation.cs`, `OntologyGovernanceService`, `KnowledgeLifecycleService`.
+
+### ADR-15 — Bronvoorrang zonder per-veld-herkomstadministratie (#150, #270)
+
+**Context.** Kaarten komen uit twee bronnen: de officiële Riot-gallery en de
+riftcodex-API. #150 loste naamschade op door riftcodex bestaande kaarten
+volledig te laten overslaan. Met de presentatievelden uit #270 werd dat te
+grof: Riot levert geen `supertype`, riftcodex wél — en er zijn ~141 kaarten
+(JDG-promo's) die alléén via riftcodex binnenkomen.
+
+**Beslissing.** Eén regel, in `CardMerge`: de **leidende** bron schrijft
+onvoorwaardelijk — ook een lege waarde, want ontbreekt een veld in Riots
+payload dan hééft de kaart het niet; een **aanvullende** bron vult alleen lege
+velden en raakt gevulde nooit aan. "Leidend" is een rol in de run, geen
+eigenschap van de bron: valt Riot uit, dan is riftcodex leidend — anders
+bevriest de kaartenset zolang Riot plat ligt.
+
+**Gevolg.** Geen kolom per veld die bijhoudt wie wat schreef: zodra Riot een
+waarde levert overschrijft die de aanvulling vanzelf, en een aanvulling kan
+Riot-data per constructie niet beschadigen. De aanvul-pass mag daardoor
+veilig gaten dichten op kaarten die Riot al kent. `CardMerge` meldt apart of
+naam of tekst wijzigde, zodat embedding-invalidatie en het legen van de
+gelijkenis-uitleg aan een échte wijziging hangen en niet aan elke run.
+`CardMerge`, `CardMergeTests`, `CardSyncService.UpsertCardAsync`.
+
+### ADR-16 — Riot-glyphs vendoren in plaats van hotlinken (#257)
+
+**Context.** Riots kaartteksten bevatten `:rb_…:`-icon-tokens. Die renderden
+als zelfgetekende SVG's en CSS-ruitjes, terwijl Riot de echte iconen
+publiceert op een glyph-CDN waarvan de bestandsnamen 1-op-1 op de tokennamen
+mappen.
+
+**Beslissing.** De 22 glyphs staan byte-voor-byte in `rb-web/static/glyphs/`,
+opgehaald met `scripts/fetch-glyphs.sh` — niet gehotlinkt. Same-origin houdt
+een derde-partij-host uit het renderpad van élke pagina, het werkt offline in
+de PWA, en het `/latest/`-segment in Riots CDN-pad kan stil roteren. De kosten
+zijn eenmalig ~30 KB; het script is tegelijk de herkomstadministratie en de
+manier om ze bij te werken.
+
+**Gevolg.** `rbtokens.ts` rendert alleen tokens uit een allowlist, zodat een
+onbekend token letterlijk blijft staan in plaats van een 404-afbeelding te
+worden; een test houdt elk gerenderd pad tegen de bestanden op schijf. Riot
+tekent de glyphs voor een donkere UI (`might`/`exhaust` zijn puur wit, de
+energieschijf verliest zijn rand op licht), dus `app.css` corrigeert per thema
+in plaats van de assets zelf te bewerken. Ze schalen mee met de tekstregel
+(1.15em, ondergrens 14px): onder ~14px slibt het binnenwerk dicht.
 
 ---
 

@@ -93,9 +93,28 @@ met quota en rate-limiting.
   hashes — matchen op ankertekst ("Core Rules"). Gallery-JSON bevat
   set-facetten en token-kaarten met lege type-lijst (regressietests bestaan).
 - Kaart-sync: Riot-gallery is de **leidende** bron; de riftcodex-API (werkt
-  wél vanaf de VM) vult alleen aan en raakt bestaande kaarten niet aan —
-  riftcodex-eerst conserveerde naamschade (#150). Riftcodex-site/Mobalytics
-  blokkeren datacenter-IP's (Cloudflare).
+  wél vanaf de VM) vult aan — riftcodex-eerst conserveerde naamschade (#150).
+  Sinds #270 staat die voorrang op één plek (`CardMerge`, ADR-15): leidend
+  schrijft **onvoorwaardelijk** (ook leeg — ontbreekt een veld in Riots
+  payload, dan hééft de kaart het niet), aanvullend vult **alleen lege
+  velden**. De aanvul-pass slaat bestaande kaarten dus niet meer volledig
+  over maar dicht hun gaten; beschadigen kan hij per constructie niet.
+  "Leidend" is een rol in de run: valt Riot uit, dan is riftcodex leidend —
+  anders bevriest de kaartenset zolang Riot plat ligt.
+  Riftcodex-site/Mobalytics blokkeren datacenter-IP's (Cloudflare).
+- **Wat een mapper mapt is geen bewijs van wat een bron levert** (#270): de
+  aanname dat riftcodex geen alt-tekst/illustrator/orientation heeft kwam uit
+  het lezen van `RiftcodexCardMapper`, maar hun API levert `media.artist`,
+  `media.accessibility_text`, `orientation` en een `new`-vlag wél (kleuren,
+  `mightBonus`, `effect` en `publicCode` niet). Bevraag bij twijfel de live
+  bron; datzelfde gold voor de Riot-gallery, die per kaart veel meer
+  meestuurde dan we bewaarden.
+- Riot publiceert de icoon-glyphs voor de `:rb_…:`-tokens zelf, met
+  bestandsnamen die 1-op-1 op de tokennaam mappen
+  (`assetcdn.rgpub.io/…/riot-glyphs/rb/latest/{token}.svg`). Nooit zelf
+  natekenen; ze staan gevendord in `rb-web/static/glyphs/`
+  (`scripts/fetch-glyphs.sh`, ADR-16). Let op: ze zijn getekend voor een
+  **donkere** UI (`might`/`exhaust` puur wit) en slibben dicht onder ~14px.
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`
