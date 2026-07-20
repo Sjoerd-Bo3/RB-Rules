@@ -350,14 +350,34 @@ public class RbAiOutcomeTests
     public async Task Extractie_429MetCodeEnReden_LeestBeideUitEenLezing()
     {
         // `code` (#279, de sidecar-cap) en `reason` (#281) zitten in dezelfde body;
-        // ze mogen elkaar niet in de weg zitten.
+        // ze mogen elkaar niet in de weg zitten. De reden zelf voegt hier niets toe
+        // aan de uitkomst en wordt daarom weggelaten — anders staat er
+        // "429 AI-slots vol×1 (concurrency_limit×1)" in het run-detail, precies de
+        // ruis die de uitsplitsing onleesbaar maakt (#281-review).
         var ai = Ai(_ => Json(HttpStatusCode.TooManyRequests,
             """{"error":"alle AI-slots bezet","code":"concurrency_limit","reason":"concurrency_limit"}"""));
 
         var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+        var tally = new AiOutcomeTally();
+        tally.Add(r.Outcome, r.Reason);
 
         Assert.Equal(AiCallOutcome.ConcurrencyLimited, r.Outcome);
-        Assert.Equal("concurrency_limit", r.Reason);
+        Assert.Null(r.Reason);
+        Assert.Equal("429 AI-slots vol×1", tally.Summary);
+    }
+
+    [Fact]
+    public async Task Extractie_429MetAFWIJKENDEReden_BehoudtDieWel()
+    {
+        // Alleen de 1-op-1 corresponderende reden is ruis; alles wat écht iets
+        // toevoegt blijft staan.
+        var ai = Ai(_ => Json(HttpStatusCode.TooManyRequests,
+            """{"error":"vol","code":"concurrency_limit","reason":"api_error"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ConcurrencyLimited, r.Outcome);
+        Assert.Equal("api_error", r.Reason);
     }
 
     // ── #281: een afgekapte extractie is een TIMEOUT, geen generieke 5xx ─────

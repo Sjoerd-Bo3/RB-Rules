@@ -303,12 +303,29 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
     /// in het run-detail landen — ruis die de uitsplitsing juist onleesbaar maakt.
     /// Zodra rb-ai wél iets extra's weet (een timeout die in werkelijkheid een
     /// aanhoudende API-fout was: "timeout×22 (api_error×14)") blijft de reden
-    /// gewoon staan. Puur cosmetisch; de meting zelf verandert niet.</summary>
+    /// gewoon staan. Puur cosmetisch; de meting zelf verandert niet.
+    ///
+    /// De koppeling is EXPLICIET en niet op naamgelijkenis (#281-review): een
+    /// <c>outcome.ToString()</c>-vergelijking dekte wel <c>Timeout</c>/"timeout"
+    /// maar niet <c>ConcurrencyLimited</c>/"concurrency_limit", waardoor precies
+    /// de ruis die deze helper moet doden alsnog doorkwam als
+    /// "429 AI-slots vol×1 (concurrency_limit×1)". rb-ai's redenen-vocabulaire
+    /// (<c>rb-ai/src/failure.ts</c>) is snake_case en volgt zijn eigen leven; die
+    /// twee namen laten samenvallen is toeval, geen contract.</summary>
     private static string? Distinct(AiCallOutcome outcome, string? reason) =>
-        reason is not null && string.Equals(reason, outcome.ToString(),
-            StringComparison.OrdinalIgnoreCase)
+        reason is not null && RedundantReasons.TryGetValue(outcome, out var redundant)
+        && string.Equals(reason, redundant, StringComparison.OrdinalIgnoreCase)
             ? null
             : reason;
+
+    /// <summary>Per uitkomst de rb-ai-reden die er niets aan toevoegt. Alleen
+    /// uitkomsten waar rb-ai een 1-op-1 corresponderende reden voor stuurt staan
+    /// erin; al het andere blijft bewaard.</summary>
+    private static readonly Dictionary<AiCallOutcome, string> RedundantReasons = new()
+    {
+        [AiCallOutcome.Timeout] = "timeout",
+        [AiCallOutcome.ConcurrencyLimited] = ConcurrencyLimitCode,
+    };
 
     private static AiCallOutcome Classify(System.Net.HttpStatusCode status) => status switch
     {

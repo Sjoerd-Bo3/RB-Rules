@@ -4,7 +4,13 @@
 import { createServer } from "node:http";
 import { askClaude, extractWithTool, warmPool } from "./ai.js";
 import { aiSemaphore, ConcurrencyLimitError } from "./concurrency.js";
-import { failureOf, logCall, safeDetail, type AiFailure } from "./failure.js";
+import {
+  extractFailureResponse,
+  failureOf,
+  logCall,
+  safeDetail,
+  type AiFailure,
+} from "./failure.js";
 import {
   buildInteractionToolShape,
   buildPredicateToolShape,
@@ -24,11 +30,6 @@ const PORT = Number(process.env.PORT ?? 8090);
  * `/prewarm` staan er bewust NIET bij: die worden geregeld gepolld en zouden
  * het signaal onder duizenden regels ruis begraven — het gaat om de aanroepen
  * die een LLM-run doen. */
-/** Machine-leesbare code op een afgekapte extractie (#281) — zelfde vorm als
- * `concurrency_limit` (#279), zodat rb-api de oorzaak niet uit proza hoeft te
- * raden. De 504 draagt hem al; de code is de expliciete bevestiging. */
-const EXTRACT_TIMEOUT_CODE = "extract_timeout";
-
 const LOGGED_PATHS = new Set([
   "/ask",
   "/ask/stream",
@@ -101,30 +102,30 @@ const server = createServer(async (req, res) => {
     detail: failure.detail,
   });
 
-  /** Uitval van een extractie-endpoint, met de TIMEOUT als eigen HTTP-status
-   * (#281).
-   *
-   * Vóór deze PR vielen drie totaal verschillende oorzaken samen in één
-   * ononderscheidbare `500 {"error":"extractie mislukt"}`: het model rondde af
-   * zonder de geforceerde tool te roepen, onze 90 s-timeout sloeg toe, of er
-   * ging echt iets stuk. Een productie-experiment liet zien dat het in de
-   * praktijk vooral de tweede was (3 refs → 200 na 49,0 s; 39 refs → 500 na
-   * 92,1 s), maar dat was van buitenaf niet te zien.
-   *
-   * Een afgekapte run krijgt daarom **504 Gateway Timeout** plus een
-   * machine-leesbare `code` — dezelfde vorm als de `concurrency_limit` van
-   * #279. `RbAiClient.Classify` vertaalt 504 al naar `AiCallOutcome.Timeout`,
-   * dus het run-detail meldt vanaf nu "timeout×22" in plaats van "5xx×22",
-   * zonder dat rb-api een nieuwe enum-waarde nodig heeft. Alle andere oorzaken
-   * blijven de vertrouwde 500. */
+  /** Uitval van een extractie-endpoint. De beslissing zelf woont in
+   * `extractFailureResponse` (puur, gedragsgetest); hier alleen de bedrading. */
   const sendExtractFailure = (outcome: { failure?: AiFailure; timedOut?: boolean }) => {
-    const failure = outcome.failure ?? { reason: "unknown" as const, detail: "" };
-    const status = outcome.timedOut ? 504 : 500;
-    const body = outcome.timedOut
-      ? { ...errorBody("extractie afgebroken op de tijdslimiet", failure), code: EXTRACT_TIMEOUT_CODE }
-      : errorBody("extractie mislukt", failure);
-    return send(status, body, failure);
+    const { status, error, code, failure } = extractFailureResponse(outcome);
+    const body = errorBody(error, failure);
+    return send(status, code ? { ...body, code } : body, failure);
   };
+
+  /** Geslaagde extractie. Vuurde de tool nog vóór de tijdslimiet maar werd de
+   * run daarna afgekapt, dan gaan de kandidaten gewoon mee (200 — weggooien zou
+   * geldig werk vernietigen), maar de logregel MOET de afkapping vermelden
+   * (#281-review): anders vallen juist de traagste kaarten uit de schaalklip-
+   * meting weg, en dat is precies de meting waarvoor deze PR bestaat.
+   *
+   * Gevolg voor de logregel: `outcome` blijft `ok` (er kwam bruikbaar werk uit)
+   * terwijl `reason` op `timeout` staat. Dat is geen tegenspraak maar twee
+   * verschillende vragen, en het maakt beide greps kloppend:
+   *   `grep '"outcome":"error"'`  → wat er misging
+   *   `grep '"reason":"timeout"'` → alles wat tegen de tijdslimiet aan liep,
+   *                                 geslaagd of niet. */
+  const sendExtractSuccess = (
+    outcome: { failure?: AiFailure; timedOut?: boolean },
+    body: unknown,
+  ) => send(200, body, outcome.timedOut ? outcome.failure : undefined);
 
   // Weggelopen client = Claude-call afbreken (review #31): zonder deze
   // koppeling maakt de sidecar elke geannuleerde vraag gewoon af en schrijft
@@ -210,8 +211,10 @@ const server = createServer(async (req, res) => {
         // gedaan waren gaan mee in de fout-body — juist de hangende run wil
         // de beheerder in de trace kunnen inspecteren. Overige taken volgen
         // het bestaande pad (outer catch → 500 {error}).
-        if (agentic)
-          return send(500, { ...errorBody(String(e), failureOf(e)), steps }, failureOf(e));
+        if (agentic) {
+          const failure = failureOf(e);
+          return send(500, { ...errorBody(String(e), failure), steps }, failure);
+        }
         throw e;
       }
     }
@@ -300,7 +303,7 @@ const server = createServer(async (req, res) => {
         // de 40 mining-kaarten spoorloos op strandden.
         if (outcome.items === null) return sendExtractFailure(outcome);
         shape = { ...shape, items: outcome.items.length };
-        return send(200, { interactions: outcome.items });
+        return sendExtractSuccess(outcome, { interactions: outcome.items });
       } catch (e) {
         if (e instanceof ConcurrencyLimitError)
           return send(
@@ -332,7 +335,7 @@ const server = createServer(async (req, res) => {
         });
         if (outcome.items === null) return sendExtractFailure(outcome);
         shape = { ...shape, items: outcome.items.length };
-        return send(200, { predicates: outcome.items });
+        return sendExtractSuccess(outcome, { predicates: outcome.items });
       } catch (e) {
         if (e instanceof ConcurrencyLimitError)
           return send(

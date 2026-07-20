@@ -104,6 +104,28 @@ test("een korte env-waarde wordt niet als secret behandeld (geen ruis-redactie)"
   });
 });
 
+test("safeDetail redacteert VÓÓR het afkapt — anders glipt een half token door", () => {
+  // Volgorde-regressie (#281-review): kap je eerst af, dan kan MAX_DETAIL midden
+  // door een token snijden en is het restant te kort voor de patronen.
+  const token = `sk-ant-oat01-${"Z".repeat(40)}-staart`;
+  withEnv({ CLAUDE_CODE_OAUTH_TOKEN: token }, () => {
+    const detail = safeDetail(`${"x".repeat(280)} ${token}`);
+    assert.doesNotMatch(detail, /sk-ant/);
+    assert.equal(detail.includes(token.slice(0, 30)), false);
+  });
+});
+
+test("describeThrown leest NOOIT e.stack — een stack trace lekt niets mee", () => {
+  const token = "sk-ant-oat01-STACKGEHEIM-0123456789";
+  withEnv({ CLAUDE_CODE_OAUTH_TOKEN: token }, () => {
+    const e = new Error("kapot");
+    e.stack = `Error: kapot\n    at auth (${token})\n    at run (/app/src/ai.ts:1:1)`;
+    const f = describeThrown(e);
+    assert.doesNotMatch(f.detail, /STACKGEHEIM/);
+    assert.doesNotMatch(f.detail, /ai\.ts/, "stack-frames horen er sowieso niet in");
+  });
+});
+
 test("safeDetail kapt lange meldingen af en normaliseert witruimte", () => {
   const detail = safeDetail(`regel1\n   regel2\t${"x".repeat(500)}`);
   assert.match(detail, /^regel1 regel2 x+…$/);

@@ -334,50 +334,12 @@ test("de extract-timeout start ná de permit, niet bij binnenkomst (#281)", () =
   );
 });
 
-// ── Een afgekapte extractie is onderscheidbaar (#281) ──────────────────────
-// Op productie gereproduceerd: identieke kaarttekst, alleen het aantal
-// aangeboden refs verschilt — 3 refs → 200 na 49,0 s, 39 refs → 500 na 92,1 s.
-// Die 500 was ONZE 90 s-timeout, maar viel op de draad samen met "model riep de
-// tool niet" en "er ging echt iets stuk". Deze test faalt zodra een timeout
-// weer als generieke fout naar buiten komt.
-test("de timeout-tak markeert timedOut én krijgt een eigen HTTP-status (#281)", () => {
-  const ai = readFileSync(fileURLToPath(new URL("./ai.ts", import.meta.url)), "utf8");
-  const start = ai.indexOf("export async function extractWithTool");
-  const end = ai.indexOf("\n/** Bericht-vorm voor streaming input", start);
-  const body = ai.slice(start, end);
-
-  // 1. De timeout-tak in extractWithTool moet zichzelf als zodanig melden —
-  //    los van failure.reason, want withRetries mag die overschrijven met de
-  //    upstream-oorzaak.
-  const timeoutBranch = body.slice(body.indexOf("if (timedOut)"));
-  assert.match(
-    timeoutBranch.slice(0, 400),
-    /timedOut:\s*true/,
-    "de timeout-tak moet timedOut: true teruggeven",
-  );
-
-  // 2. server.ts moet daar een andere status aan hangen dan de generieke 500,
-  //    plus een machine-leesbare code (zelfde vorm als concurrency_limit).
-  const server = readFileSync(fileURLToPath(new URL("./server.ts", import.meta.url)), "utf8");
-  assert.match(
-    server,
-    /outcome\.timedOut\s*\?\s*504\s*:\s*500/,
-    "een afgekapte extractie hoort een 504 te krijgen, geen 500",
-  );
-  assert.match(server, /EXTRACT_TIMEOUT_CODE\s*=\s*"extract_timeout"/);
-  // Beide extractie-endpoints lopen via dezelfde poort — anders drift er één weg.
-  assert.equal(
-    (server.match(/sendExtractFailure\(outcome\)/g) ?? []).length,
-    2,
-    "beide extractie-endpoints moeten dezelfde faalpoort gebruiken",
-  );
-});
-
-test("de extract-timeout is verstelbaar maar verandert standaard niets (#281)", () => {
-  const src = readFileSync(fileURLToPath(new URL("./ai.ts", import.meta.url)), "utf8");
-  assert.match(src, /AI_EXTRACT_TIMEOUT_MS/, "er hoort een ops-knop te zijn");
-  assert.match(src, /:\s*90_000;/, "de default blijft 90 s — geen stille gedragswijziging");
-});
+// De twee bron-grep-tests die hier stonden (#281) zijn vervangen door echte
+// gedragstests in extract-timeout.test.ts. Ze checkten met regexes op deze
+// broncode dát `timedOut: true` en `? 504 : 500` erin voorkwamen — en toen een
+// pure refactor die tekens verplaatste zonder één gedragswijziging, faalden ze,
+// terwijl ze de omgekeerde mutatie (`timedOut = true` weghalen, waardoor elke
+// timeout weer een generieke 500 werd) juist NIET zagen. Precies verkeerd om.
 
 // ── Model-override slaat de warme pool over (#174) ─────────────────────────
 // De voorverwarmde sessie is altijd op MODEL.cheap gebootstrapt

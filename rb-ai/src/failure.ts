@@ -156,7 +156,13 @@ export function redactSecrets(text: string): string {
 }
 
 /** Redacteer én kap af. Elke tekst die dit bestand naar buiten laat gaat hier
- * doorheen — één poort, zodat er geen tweede pad kan ontstaan dat hem mist. */
+ * doorheen — één poort, zodat er geen tweede pad kan ontstaan dat hem mist.
+ *
+ * DE VOLGORDE IS LOAD-BEARING (#281-review): eerst redacteren, DAN afkappen.
+ * Andersom kan `MAX_DETAIL` midden door een token snijden, waarna het
+ * overgebleven fragment te kort is voor de patronen hieronder en alsnog in de
+ * log belandt. Wie dit ooit "opruimt" tot kappen-dan-redacteren maakt er een
+ * lek van. */
 export function safeDetail(text: string): string {
   const cleaned = redactSecrets(text).replace(/\s+/g, " ").trim();
   return cleaned.length > MAX_DETAIL ? `${cleaned.slice(0, MAX_DETAIL)}…` : cleaned;
@@ -205,6 +211,12 @@ const AUTH_PATTERNS = [
  * (zie {@link resultFailure}). */
 export function describeThrown(e: unknown): AiFailure {
   const name = e instanceof Error ? e.name : typeof e;
+  // BEWUST GEEN `e.stack` (#281-review): een stack trace draagt frames, paden en
+  // soms geïnterpoleerde argumenten mee — een onbegrensd kanaal waar van alles
+  // in kan zitten. `name` + `message` + `cause` is genoeg om de faalsoort te
+  // bepalen, en is begrensd tot wat de werper zelf formuleerde. Voeg `stack`
+  // hier niet toe "voor de diagnose": dat vergroot het lekoppervlak zonder de
+  // classificatie te verbeteren.
   const message = e instanceof Error ? e.message : String(e);
   // `cause` draagt bij de SDK vaak de echte systeemfout (spawn/ENOMEM); zonder
   // meelezen blijft die onzichtbaar achter een generieke wrapper.
@@ -400,6 +412,39 @@ export function withRetries(failure: AiFailure, retries: RetryTracker): AiFailur
   return { reason, detail: safeDetail(`${failure.detail} | ${summary}`) };
 }
 
+/** Machine-leesbare code op een afgekapte extractie (#281) — zelfde vorm als
+ * `concurrency_limit` (#279), zodat rb-api de oorzaak niet uit proza hoeft te
+ * raden. De 504 draagt hem al; de code is de expliciete bevestiging. */
+export const EXTRACT_TIMEOUT_CODE = "extract_timeout";
+
+/** Het HTTP-antwoord op een MISLUKTE extractie, als pure functie (#281-review).
+ *
+ * Dit is de kern van #281 in één beslissing: drie totaal verschillende oorzaken
+ * vielen samen in één ononderscheidbare `500 {"error":"extractie mislukt"}` —
+ * het model rondde af zonder de geforceerde tool te roepen, onze tijdslimiet
+ * sloeg toe, of er ging echt iets stuk. Een afgekapte run krijgt daarom **504**
+ * plus een `code`; `RbAiClient.Classify` vertaalt 504 al naar
+ * `AiCallOutcome.Timeout`, dus het run-detail meldt "timeout×22" in plaats van
+ * "5xx×22" zonder dat rb-api een nieuwe enum-waarde nodig heeft.
+ *
+ * Puur en apart van server.ts omdat die bij import meteen gaat luisteren: zo is
+ * de beslissing te toetsen op GEDRAG in plaats van met een grep op de
+ * broncode — en een grep-test vangt zijn eigen bug niet. */
+export function extractFailureResponse(outcome: {
+  failure?: AiFailure;
+  timedOut?: boolean;
+}): { status: number; error: string; code?: string; failure: AiFailure } {
+  const failure = outcome.failure ?? { reason: "unknown" as const, detail: "" };
+  return outcome.timedOut
+    ? {
+        status: 504,
+        error: "extractie afgebroken op de tijdslimiet",
+        code: EXTRACT_TIMEOUT_CODE,
+        failure,
+      }
+    : { status: 500, error: "extractie mislukt", failure };
+}
+
 /** Ringbuffer voor de stderr van het Claude-subprocess (#281).
  *
  * De Agent SDK biedt een `stderr`-callback op `Options`; die gebruikten we
@@ -443,10 +488,22 @@ export function withStderr(failure: AiFailure, stderr: StderrTail): AiFailure {
 /** Eén regel per rb-ai-aanroep, als JSON zodat hij te grepp'en en te tellen is
  * (`docker logs rb-v2-ai | grep ai_call`).
  *
- * Wat er WEL in staat: endpoint, duur, uitkomst, uitvalsoort en een korte
- * ge-redacte toelichting. Wat er NOOIT in staat: prompt-inhoud, kaartteksten,
- * modeloutput en secrets (werkafspraak 7) — de toelichting komt uitsluitend uit
- * foutmeldingen en gaat verplicht door {@link safeDetail}. */
+ * Wat er WEL in staat: endpoint, duur, uitkomst, uitvalsoort, payload-MATEN
+ * (bytes/refs/items) en een korte ge-redacte toelichting.
+ *
+ * Secrets staan er NOOIT in: elke tekst gaat verplicht door {@link safeDetail},
+ * en dat is getest tegen tien aanvalsvormen (JSON-embedded, over chunks
+ * gesplitst, afgekapt door de ringbuffer, via een stack trace, met een
+ * env-naam die het patroon niet matcht).
+ *
+ * Over prompt-inhoud is de eerlijke formulering ZWAKKER dan "nooit"
+ * (#281-review). Wat rb-ai zélf samenstelt bevat geen promptmateriaal: de
+ * toelichting komt uit foutmeldingen en SDK-metadata. Maar {@link StderrTail}
+ * is een ONGECONTROLEERD kanaal — wat het Claude-subprocess naar stderr
+ * schrijft belandt in `detail`, en draait de CLI ooit verbose, dan kan daar
+ * kaarttekst tussen zitten. Dat is publieke Riot-tekst, dus de schade is nihil
+ * en het diagnostisch nut groot; het is een bewust genomen residu, geen
+ * garantie. Bouw er dus geen "hier staat gegarandeerd geen invoer"-aanname op. */
 export function logCall(entry: {
   endpoint: string;
   ms: number;

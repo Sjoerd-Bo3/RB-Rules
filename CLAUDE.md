@@ -238,7 +238,8 @@ met quota en rate-limiting.
   niet: de payload werd niet *afgewezen*, maar dreef wel de **latency**, en
   latency tegen een vaste timeout is precies wat uitval bepaalt. Een
   productie-experiment met identieke kaarttekst gaf 3 refs → 200 na 49,0 s en
-  39 refs → 504 na 92,1 s. Toets een omvang-hypothese dus altijd óók op DUUR,
+  39 refs → 500 na 92,1 s (meting van vóór de fix; sindsdien is dat een 504 met
+  `code: extract_timeout`). Toets een omvang-hypothese dus altijd óók op DUUR,
   niet alleen op limieten. Tweede fout in dezelfde analyse: 45 → 47 → 55% werd
   als "schommelt dus willekeurig" gelezen terwijl het monotoon stíjgt — en een
   gefaalde kaart krijgt geen watermark, dus zo'n klim is juist het handtekening-

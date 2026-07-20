@@ -1658,6 +1658,11 @@ Twee kleine fixes zaten in dezelfde meting:
   Daarvóór at een volle achtergrond-deelcap tot 30 s (`AI_QUEUE_WAIT_MS`) van
   het 90 s-budget op en verscheen dat als een timeout die naar de LLM leek te
   wijzen. Sinds de mining parallel draait (#279) is die wachttijd de regel.
+  **Gevolg dat erbij hoort:** de worst-case wandkloktijd van één aanroep gaat
+  van 90 s naar `AI_QUEUE_WAIT_MS + AI_EXTRACT_TIMEOUT_MS` = 30 + 90 = **120 s**.
+  Dat past ruim binnen de HttpClient-timeout van 6 minuten aan de rb-api-kant,
+  dus er verandert niets aan het degradatiepad; het is wél de bovengrens die je
+  moet meerekenen als je aan één van beide knoppen draait.
 - **"tool niet geroepen" is niet langer hetzelfde als "run gefaald"**: een run
   die netjes afrondt zonder de geforceerde tool te callen krijgt
   `reason: "no_tool_call"` — een prompt-/schemaprobleem, een andere knop dan een
@@ -1679,7 +1684,12 @@ aangeboden refs verschilt:
 | refs | payload | uitkomst |
 |---|---|---|
 | 3 | 0,5k tekens | 200 na **49,0 s** |
-| 39 | 2,2k tekens | 504 na **92,1 s** (afgekapt) |
+| 39 | 2,2k tekens | **500** na **92,1 s** (afgekapt) |
+
+Die 500 is precies het probleem waar #281 over gaat: het experiment draaide op
+de toen-live sidecar, dus de afkapping kwam als generieke serverfout naar
+buiten, ononderscheidbaar van "tool niet geroepen" en "er ging iets stuk". Ná
+deze PR geeft dezelfde run een **504** met `code: "extract_timeout"`.
 
 Niet de kaarttekst drijft de duur, maar **het aantal aangeboden refs** — het
 ontologie-vocabulaire dat `BuildOfferedRefsAsync` per kaart meestuurt. Bij 3
@@ -1723,6 +1733,23 @@ Bewust NIET aangepast: `EXTRACT_MAX_TURNS` (3) en de verhouding tussen onze
 timeout en de SDK-`max_retries` (10) — een timeout die korter is dan de eigen
 retry-keten eronder is aantoonbaar scheef, maar #281 ging over meten en de
 structurele fix staat in #288.
+
+**Grens van de redactie-garantie.** `redactSecrets`/`safeDetail` is de enige
+poort waar diagnostiek doorheen gaat, en hij is getest tegen tien
+aanvalsvormen (JSON-embedded, over chunks gesplitst, afgekapt door de
+ringbuffer, via een stack trace, met een env-naam die het patroon niet matcht).
+Twee ontwerpkeuzes zijn daarbij load-bearing en staan als zodanig in de code:
+`describeThrown` leest **nooit** `e.stack` (een stack trace is een onbegrensd
+kanaal), en `safeDetail` redacteert **vóór** het afkapt (andersom snijdt
+`MAX_DETAIL` een token doormidden en glipt het restant langs de patronen).
+
+Voor SECRETS is de garantie hard. Voor PROMPT-INHOUD is ze zwakker en dat is
+bewust: `StderrTail` is een ongecontroleerd kanaal — wat het Claude-subprocess
+naar stderr schrijft belandt in `detail`, en draait de CLI ooit verbose, dan
+kan daar kaarttekst tussen zitten. Dat is publieke Riot-tekst, dus het residu
+is aanvaard in ruil voor de diagnostische waarde. Twee oudere `console.log`'s
+in `ai.ts` (de agentic tool-call-log en het warmpool-faalpad) omzeilen de poort
+volledig; die staan al op main en zijn los opgepakt in **#292**.
 
 **rb-api-kant (mining-orkestratie).** Drie jobs in `JobCatalog`. De twee
 LLM-jobs staan bewust NIET in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk —
