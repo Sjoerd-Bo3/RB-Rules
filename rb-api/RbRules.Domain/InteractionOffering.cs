@@ -227,11 +227,16 @@ public static class InteractionOffering
 
         var refs = OfferedRefBudget.Apply(candidates, limits.MaxRefs);
 
-        // Alleen de partners die de begroting overleefden gaan als bewijs mee: een
-        // kaarttekst aanbieden waarvan de rol wegviel is ruis zonder rol.
-        var keptRefs = refs.Select(r => r.Ref).ToHashSet(StringComparer.Ordinal);
+        // Alle partners gaan als BEWIJS mee, ook wie als ROL door de begroting viel
+        // (dat kan bij een kaart met veel eigen keywords). Dat is geen slordigheid maar
+        // het hele punt van de meting: refs zijn duur, prompt-tekst is dat niet — 3 refs
+        // en 39 refs verschilden in duur, niet in tekstlengte. Zou zo'n partner ook zijn
+        // tekst verliezen, dan zou een buur die zijn gewicht juist dáár haalde stil zonder
+        // bewijs komen te staan; nu blijft de belofte hard dat élke aangeboden buur in
+        // een aangeboden bewijs-eenheid staat. BuildOffer geeft een partner zonder rol
+        // bewust geen ref-header, zodat hij ook geen identiteits-anker wordt.
         var cards = new List<OfferingCard> { focus };
-        cards.AddRange(partners.Where(p => keptRefs.Contains(p.Ref)));
+        cards.AddRange(partners);
 
         return new(refs, cards, sections);
     }

@@ -116,6 +116,31 @@ public class InteractionOfferingTests
         Assert.Equal(["card:focus", "mechanic:Tank"], plan.Refs.Select(r => r.Ref));
     }
 
+    /// <summary>Refs zijn duur, prompt-tekst is dat niet — dat is precies wat de meting
+    /// van #286 liet zien (3 vs. 39 refs verschilden in duur, niet in tekstlengte). Een
+    /// partner die als ROL door de begroting valt (kaart met veel eigen keywords) houdt
+    /// daarom zijn tekst als BEWIJS. Anders zou een buur die zijn gewicht juist aan die
+    /// tekst ontleende stil zonder steun komen te staan.</summary>
+    [Fact]
+    public void ForCard_PartnerBuitenDeBegroting_BlijftBewijs()
+    {
+        var printed = Enumerable.Range(1, 10).Select(i => $"Eigenkw{i}").ToList();
+        var partner = new OfferingCard(
+            "card:p1", "Partner", EntityType.Card,
+            "Eigenkw1 works together with Buurkw.", ["Eigenkw1", "Buurkw"]);
+
+        var plan = InteractionOffering.ForCard(
+            new OfferingCard("card:focus", "Focus", EntityType.Card, "Veel keywords.", printed),
+            [partner], [], ["Buurkw"], OfferingLimits.Card);
+
+        // De begroting is op na anker + 10 gedrukte + de buur; de partner-ROL valt af...
+        Assert.DoesNotContain("card:p1", plan.Refs.Select(r => r.Ref));
+        // ...maar zijn tekst blijft als bewijs staan, zodat de buur die daar zijn
+        // gewicht haalde ook echt onderbouwd is.
+        Assert.Contains(partner, plan.Cards);
+        Assert.Contains("mechanic:Buurkw", plan.Refs.Select(r => r.Ref));
+    }
+
     /// <summary>Een regelsectie telt alleen als bewijs wanneer ze twee aangeboden
     /// labels noemt — dáár staat een keyword↔keyword-relatie officieel opgeschreven.</summary>
     [Fact]
