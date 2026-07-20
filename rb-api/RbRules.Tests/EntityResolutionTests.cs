@@ -348,12 +348,85 @@ public class EntityResolutionTests
         await db.SaveChangesAsync();
 
         var created = await svc.RegisterExistingMechanicsAsync(CanonicalEntityKinds.Mechanic);
-        Assert.Equal(2, created);   // Deflect (casing-dupe samengevouwen) + Conquer
+        Assert.Equal(2, created.Created);   // Deflect (casing-dupe samengevouwen) + Conquer
         var second = await svc.RegisterExistingMechanicsAsync(CanonicalEntityKinds.Mechanic);
-        Assert.Equal(0, second);    // idempotent
+        Assert.Equal(0, second.Created);    // idempotent
+        Assert.Equal(2, second.Existing);   // beide resolveren nu tegen het lexicon
 
         var card = await db.Cards.SingleAsync();
         Assert.Equal(["Deflect", "deflect", "Conquer"], card.Mechanics!); // bronveld ongemoeid
+    }
+
+    // ── #250: het vul-pad vult de canonieke laag daadwerkelijk ───────────────
+    // Live stond canonicalEntities op 0 terwijl honderden interacties naar
+    // mechanic:{label} verwezen: de mining RESOLVEERT alleen en er was geen enkel
+    // pad dat registreerde. Deze test bewaakt dat het vul-pad rijen aandraagt met
+    // provenance + status candidate (geen stille promotie), zodat de predicaat-
+    // mining subjects vindt.
+    [Fact]
+    public async Task VulPad_RegistreertKeywordEntiteiten_MetProvenance_StatusKandidaat()
+    {
+        using var db = NewDb();
+        var svc = new EntityResolutionService(db);
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-001-001", Name = "Test", SetId = "ogn", Mechanics = ["Deflect"],
+        });
+        // Geaccepteerd vocabulaire vult aan (een keyword dat op géén kaart staat).
+        db.MechanicKeywords.Add(new MechanicKeyword { Term = "Assault", Status = "accepted" });
+        // Niet-geaccepteerde termen tellen NIET mee (review-poort blijft leidend).
+        db.MechanicKeywords.Add(new MechanicKeyword { Term = "Verzonnen", Status = "candidate" });
+        await db.SaveChangesAsync();
+
+        var r = await svc.RegisterExistingMechanicsAsync(CanonicalEntityKinds.Keyword);
+
+        Assert.Equal(2, r.Created);
+        var entities = await db.CanonicalEntities.OrderBy(e => e.CanonicalLabel).ToListAsync();
+        Assert.Equal(["Assault", "Deflect"], entities.Select(e => e.CanonicalLabel));
+        Assert.All(entities, e =>
+        {
+            Assert.Equal(CanonicalEntityKinds.Keyword, e.Kind);
+            Assert.Equal(CanonicalEntityStatus.Candidate, e.Status);   // geen stille promotie
+            Assert.False(string.IsNullOrWhiteSpace(e.CreatedByRunId)); // 0a-provenance
+        });
+        // De predicaat-mining selecteert precies deze subjects (levend, kind keyword).
+        Assert.Equal(2, await db.CanonicalEntities
+            .CountAsync(e => e.Status != CanonicalEntityStatus.Merged
+                             && e.Kind == CanonicalEntityKinds.Keyword));
+    }
+
+    // Definities komen deterministisch uit de officiële regeltekst; een reeds
+    // bestaande entiteit zonder definitie wordt bij een volgende run aangevuld
+    // (de mechanic-hover vult zich dan alsnog) — status blijft ongemoeid.
+    [Fact]
+    public async Task VulPad_HaaltDefinitieUitRegeltekst_EnVultBestaandeEntiteitAan()
+    {
+        using var db = NewDb();
+        var svc = new EntityResolutionService(db);
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-001-002", Name = "Test", SetId = "ogn", Mechanics = ["Deflect"],
+        });
+        db.RuleChunks.Add(new RuleChunk
+        {
+            SourceId = "core-rules-pdf", SectionCode = "701.4", ChunkIndex = 1,
+            Text = "Deflect: prevent the next damage that would be dealt to this unit.",
+        });
+        // Bestaande entiteit zonder definitie (zoals live: geregistreerd, leeg veld).
+        db.CanonicalEntities.Add(new CanonicalEntity
+        {
+            Kind = CanonicalEntityKinds.Keyword, CanonicalLabel = "Deflect",
+            Status = CanonicalEntityStatus.Canonical, CreatedByRunId = Ulid.NewUlid(),
+        });
+        await db.SaveChangesAsync();
+
+        var r = await svc.RegisterExistingMechanicsAsync(CanonicalEntityKinds.Keyword);
+
+        Assert.Equal(0, r.Created);     // bestond al — geen duplicaat
+        Assert.Equal(1, r.Defined);
+        var entity = await db.CanonicalEntities.SingleAsync();
+        Assert.StartsWith("Deflect: prevent", entity.Definition);
+        Assert.Equal(CanonicalEntityStatus.Canonical, entity.Status); // status ongemoeid
     }
 
     // ── InMemory-context (pgvector als tekst, zoals de andere service-tests) ──

@@ -45,6 +45,9 @@ public sealed record BrainCockpit(
     int MechanicPredicates,
     BrainJobRunItem? MineInteractionsRun,
     BrainJobRunItem? MinePredicatesRun,
+    // Stap 1 — entiteiten-registratie (#250): het deterministische vul-pad dat de
+    // canonieke laag vult; zonder deze run vindt de predicaat-mining nul subjects.
+    BrainJobRunItem? RegisterEntitiesRun,
     // Stap 2 — Projectie (breinprojectie → Neo4j)
     int CanonicalEntities,
     BrainJobRunItem? ProjectionRun,
@@ -198,7 +201,8 @@ public class BrainExplorerService(RbRulesDbContext db)
         // De brein-jobs waarvan de cockpit de laatste afronding toont (+ de nachtrun).
         var brainJobs = new[]
         {
-            "breinmine-interacties", "breinmine-predicaten", "breinprojectie", "reason", "nachtrun",
+            "breinentiteiten", "breinmine-interacties", "breinmine-predicaten",
+            "breinprojectie", "reason", "nachtrun",
         };
         // Greatest-n-per-group (nieuwste run per Ref) kan Npgsql niet server-side
         // vertalen — de kandidaatrijen vertaalbaar (Where+Select) ophalen en
@@ -224,6 +228,7 @@ public class BrainExplorerService(RbRulesDbContext db)
             MechanicPredicates: await db.MechanicPredicates.CountAsync(ct),
             MineInteractionsRun: lastByJob.GetValueOrDefault("breinmine-interacties"),
             MinePredicatesRun: lastByJob.GetValueOrDefault("breinmine-predicaten"),
+            RegisterEntitiesRun: lastByJob.GetValueOrDefault("breinentiteiten"),
             CanonicalEntities: await db.CanonicalEntities.CountAsync(ct),
             ProjectionRun: lastByJob.GetValueOrDefault("breinprojectie"),
             Conflicts: await db.ReasoningConflicts.CountAsync(ct),
