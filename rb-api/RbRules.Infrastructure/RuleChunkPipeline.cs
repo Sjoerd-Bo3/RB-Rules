@@ -128,6 +128,17 @@ public class RuleChunkPipeline(
                     [.. texts.Skip(offset).Take(count)], ct);
                 tally.Add(result.Outcome, count, result.Error);
                 if (!result.Ok) break; // deze bron is verloren; niet de volgende
+                // LET OP bij het uitbreiden van deze lus: `texts` is de (mogelijk
+                // GEKAPTE) embed-invoer en `chunks` zijn de te PERSISTEREN entiteiten.
+                // Alleen de vector mag hier overgezet worden — een `chunks[i].Text =
+                // texts[i]` zou de afkapping de database in schrijven en daarmee de
+                // regels-browser (§-permalinks) een half afgebroken regeltekst tonen.
+                // Die invariant is aan deze kant NIET door een test afgedekt: EF
+                // InMemory kent geen ExecuteDeleteAsync, dus het geslaagde swap-pad
+                // hieronder is in RuleChunkPipelineTests niet te draaien. De
+                // kaart-pijplijn bewaakt hetzelfde patroon wél
+                // (EmbedOutcomeTests.Embed_KaartBovenHetBudget…), dus lees die test
+                // als de bedoeling en houd deze lus daarmee in de pas.
                 for (var k = 0; k < count; k++)
                 {
                     chunks[offset + k].Embedding = result.Vectors![k];

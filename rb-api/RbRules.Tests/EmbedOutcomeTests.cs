@@ -425,11 +425,21 @@ public class EmbedOutcomeTests
     [Fact]
     public void Settings_DefaultBlijftOnderDeGemetenKlip()
     {
+        // UITGESCHREVEN LITERALS, met opzet. Vergelijken met de constanten uit
+        // EmbeddingSettings zou zelfreferentieel zijn: wie de default op 8000 zet én de
+        // meetconstanten meeverschuift (waar de doc-comment "alleen na een nieuwe
+        // meting" letterlijk toe uitnodigt) houdt dan een groene test met exact de
+        // waarde die OOM-kilt. De 7000/8000 hieronder zijn WAARNEMINGEN aan een draaiend
+        // systeem, geen ontwerpkeuze — ze horen niet mee te bewegen met de code, en een
+        // nieuwe meting hoort deze test bewust rood te maken zodat iemand de reeks
+        // opnieuw langsloopt in plaats van een getal te verzetten.
+        Assert.Equal(7000, EmbeddingSettings.MeasuredSafeMaxBatchChars);
+        Assert.Equal(8000, EmbeddingSettings.MeasuredFailingBatchChars);
+
         Assert.True(
-            EmbeddingSettings.DefaultBatchChars <= EmbeddingSettings.MeasuredSafeMaxBatchChars,
+            EmbeddingSettings.DefaultBatchChars <= 7000,
             $"EMBED_BATCH_CHARS-default {EmbeddingSettings.DefaultBatchChars} ligt boven de "
-            + $"hoogste GEMETEN veilige waarde ({EmbeddingSettings.MeasuredSafeMaxBatchChars}). "
-            + $"Bij {EmbeddingSettings.MeasuredFailingBatchChars} tekens sterft llama-server "
+            + "hoogste GEMETEN veilige waarde (7000). Bij 8000 tekens sterft llama-server "
             + "aan een OOM-kill (#293) — verhogen mag pas ná een nieuwe meting én een hogere "
             + "memory:-cap voor rb-v2-ollama in deploy/server-setup-v2/docker-compose.yml.");
 
@@ -437,9 +447,10 @@ public class EmbedOutcomeTests
         // dus de echte grens ligt daar ergens boven en schuift mee met wat Postgres/
         // Neo4j/rb-ai op dat moment van de 8 GB-VM claimen.
         Assert.True(
-            EmbeddingSettings.DefaultBatchChars
-                <= EmbeddingSettings.MeasuredSafeMaxBatchChars * 9 / 10,
-            "De default hoort met marge onder de klip te liggen, niet er vlak onder.");
+            EmbeddingSettings.DefaultBatchChars <= 6300,
+            $"De default ({EmbeddingSettings.DefaultBatchChars}) hoort met marge onder de "
+            + "klip te liggen (≤ 6300, oftewel ~10% onder de laatste geslaagde meting), "
+            + "niet er vlak onder.");
     }
 
     [Fact]
@@ -589,10 +600,11 @@ public class EmbedOutcomeTests
         // Stil afkappen is precies de klasse fout die #282/#284 wegnamen, dus het
         // aantal en de kaplengte horen in de run-melding.
         await using var db = NewDb();
+        var origineel = string.Concat(Enumerable.Repeat("woord ", 3000));
         db.Cards.Add(new Card
         {
             RiftboundId = "ogn-999", Name = "Reuzentekst", Type = "Unit",
-            TextPlain = string.Concat(Enumerable.Repeat("woord ", 3000)),
+            TextPlain = origineel,
         });
         await db.SaveChangesAsync();
 
@@ -608,7 +620,17 @@ public class EmbedOutcomeTests
         // 2. De kaart is wél geembed; overslaan zou hem elke run opnieuw laten falen.
         Assert.Equal(1, r.Embedded);
         Assert.Equal(1, await db.Cards.CountAsync(c => c.Embedding != null));
-        // 3. En het staat er met zoveel woorden.
+        // 3. De OPGESLAGEN tekst is niet aangeraakt — alleen de embed-invoer is gekort.
+        //    Dit is de riskantste claim van #293: hij staat in de PR-body, in
+        //    ARCHITECTURE (Q14b) en in de run-melding die de beheerder leest ("de
+        //    opgeslagen tekst blijft volledig"), en zonder deze assertie is een
+        //    `card.TextPlain = texts[i]` in de embed-lus een groene regressie.
+        var kaart = await db.Cards.SingleAsync();
+        Assert.Equal(origineel, kaart.TextPlain);
+        Assert.True(kaart.TextPlain!.Length > EmbeddingSettings.DefaultBatchChars,
+            "de testkaart moet juist LANGER zijn dan het budget, anders bewijst de "
+            + "assertie hierboven niets");
+        // 4. En het staat er met zoveel woorden.
         Assert.Equal(1, r.Capped);
         Assert.Contains("afgekapt", r.Summary);
         Assert.Contains($"{EmbeddingSettings.DefaultBatchChars}", r.Summary);

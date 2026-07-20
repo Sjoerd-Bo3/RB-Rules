@@ -391,7 +391,13 @@ met quota en rate-limiting.
   6000; 7000 is de klifrand zelf, en die schuift mee met wat Postgres/Neo4j/rb-ai
   van de 8 GB-VM claimen); (b) zet de meetwaarden als constanten in de code
   (`MeasuredSafeMaxBatchChars`/`MeasuredFailingBatchChars`) met een regressietest
-  eraan, anders is de volgende ronde weer giswerk; (c) een env-knop die alléén
+  eraan, anders is de volgende ronde weer giswerk — maar **assert in die test met
+  UITGESCHREVEN literals**, want een test die de default tegen die meetconstanten
+  afzet is zelfreferentieel: verschuif ze samen en 8000 staat groen terug. Dat is
+  exact de #286-les ("een assertie tegen de constante die ze bewaakt schuift mee")
+  die hier bij de review opnieuw betrapt moest worden — meetwaarden zijn
+  WAARNEMINGEN en horen niet mee te bewegen met de code, dus een nieuwe meting
+  hoort de test bewust rood te maken; (c) een env-knop die alléén
   omlaag veilig is, hoort een plafond op die meetwaarde te krijgen in plaats van
   een ruime bovengrens — verhogen kan dan niet zonder de bijbehorende
   `memory:`-cap ook aan te raken. Let op: die meting is alleen geldig bij de
@@ -415,7 +421,12 @@ met quota en rate-limiting.
   alles-of-niets per bron (één te lange chunk blokkeert die bron voorgoed) en
   kaarten zonder embedding komen elke run terug (dus elke run dezelfde OOM-kill).
   Gekapt wordt alleen de embed-INVOER — `RuleChunk.Text` en de kaarttekst blijven
-  volledig — en het aantal + de kaplengte staan altijd in de run-melding.
+  volledig — en het aantal + de kaplengte staan altijd in de run-melding. Let op
+  bij het uitbreiden van die embed-lussen: de gekapte `texts` en de te
+  persisteren entiteiten liggen als broertjes naast elkaar, en een
+  `chunks[i].Text = texts[i]` schrijft de afkapping stil de database in. Aan
+  kaartkant vangt een test dat af; aan regelkant NIET, want EF InMemory kent geen
+  `ExecuteDeleteAsync` en het geslaagde swap-pad is daar dus niet te draaien.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`
