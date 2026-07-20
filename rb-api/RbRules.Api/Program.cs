@@ -94,6 +94,9 @@ builder.Services.AddSingleton(sp => new ManagedSettingsService(
 // draaien tegen de live Neo4j + pgvector (INTEGRATIE-FOLLOW-UP: niet in CI — de
 // adapters degraderen bij uitval naar leeg, zodat /ask nooit een 500 krijgt). De
 // orchestrator + service zijn scoped (per request), net als AskService zelf.
+// Brein-mining-parallellisme (#279): singleton uit env (default 3 workers — precies
+// rb-ai's achtergrond-deelcap, zodat /ask altijd slots overhoudt).
+builder.Services.AddSingleton(_ => BreinMiningSettings.FromEnvironment());
 builder.Services.AddScoped<IGazetteerSource, PostgresGazetteerSource>();
 builder.Services.AddScoped<INodeContextSimilarity, PgVectorNodeSimilarity>();
 builder.Services.AddScoped<INodeAdjacency, Neo4jNodeAdjacency>();

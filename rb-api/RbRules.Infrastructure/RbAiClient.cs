@@ -191,6 +191,14 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
                 }
 
                 var outcome = Classify(res.StatusCode);
+                // 429 komt uit twee heel verschillende bronnen (#279): Anthropic's
+                // rate-limit op het abonnement, óf onze eigen semaphore in rb-ai die
+                // alle slots bezet zag. Alleen die laatste draagt een machine-leesbare
+                // code — zonder dit onderscheid meet een parallelle mining-run zijn
+                // eigen cap als "de LLM is overbelast".
+                if (outcome == AiCallOutcome.RateLimited
+                    && await IsConcurrencyLimitAsync(res, ct))
+                    outcome = AiCallOutcome.ConcurrencyLimited;
                 // Alleen rate-limit/overbelasting is het wachten waard; de rest faalt
                 // bij een directe herhaling vrijwel zeker opnieuw.
                 if (AiOutcomeTally.IsRetryable(outcome) && attempt < MaxAttempts)
@@ -236,6 +244,34 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
     }
 
     private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(60);
+
+    /// <summary>Draagt deze 429 rb-ai's eigen <c>{"code":"concurrency_limit"}</c>
+    /// (#279)? Best-effort en bewust defensief: een onleesbare of lege body betekent
+    /// alleen "geen bewijs voor de sidecar-cap" en laat de uitslag op de bestaande
+    /// <see cref="AiCallOutcome.RateLimited"/> staan — een meet-verfijning mag nooit
+    /// zelf een uitvalpad worden.</summary>
+    private static async Task<bool> IsConcurrencyLimitAsync(
+        HttpResponseMessage res, CancellationToken ct)
+    {
+        try
+        {
+            var body = await res.Content.ReadAsStringAsync(ct);
+            if (!LooksLikeJson(body)) return false;
+            using var doc = JsonDocument.Parse(body!);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("code", out var code)
+                && code.ValueKind == JsonValueKind.String
+                && code.GetString() == ConcurrencyLimitCode;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>De machine-leesbare code die rb-ai's <c>ConcurrencyLimitError</c>
+    /// meestuurt (rb-ai/src/concurrency.ts) — één string, twee kanten.</summary>
+    private const string ConcurrencyLimitCode = "concurrency_limit";
 
     private static AiCallOutcome Classify(System.Net.HttpStatusCode status) => status switch
     {

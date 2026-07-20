@@ -175,9 +175,16 @@ export async function extractWithTool(opts: {
   const systemPrompt = [system, addendum].filter(Boolean).join("\n\n");
   let release: (() => void) | undefined;
   try {
+    // Background (#279): de extractie-endpoints zijn batch-werk voor de
+    // brein-mining — er zit geen bezoeker op te wachten. Ze mogen daarom
+    // hoogstens de achtergrond-deelcap bezetten en worden in de rij altijd
+    // ingehaald door /ask. Een mining-kaart die hierdoor een 429 krijgt komt
+    // de volgende run gewoon terug (per-kaart-watermark); een weggestuurde
+    // bezoeker niet.
     release = await aiSemaphore.acquire(1, {
       signal: controller.signal,
       maxWaitMs: AI_QUEUE_WAIT_MS,
+      priority: "background",
     });
     const options: Options = {
       model: MODEL.cheap,
@@ -485,9 +492,12 @@ export async function askClaude(opts: {
   try {
     // Permit vóór elke sessie-start (koud én warm-claim) — de voorverwarmde
     // boot zelf telt niet (idle, geen API-call; de pool-cap begrenst die al).
+    // Interactief (#279, de default): dit pad draagt /ask, dus het mag tot aan
+    // de volle cap en haalt wachtend mining-werk in.
     release = await aiSemaphore.acquire(agentic ? 2 : 1, {
       signal: controller.signal,
       maxWaitMs: AI_QUEUE_WAIT_MS,
+      priority: "interactive",
     });
 
     if (task === "cheap" && !model && warmPool.isEnabled()) {

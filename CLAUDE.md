@@ -192,6 +192,28 @@ met quota en rate-limiting.
   blijft de bootstrap-default, de DB-override wint, en lezen gebeurt op het
   gebruiksmoment zodat een toggle direct werkt. Env-only is nog prima voor
   secrets en infra-adressen — niet voor gedrag dat je wilt kunnen bijsturen.
+- **Werk parallelliseren = drie dingen tegelijk regelen, niet één** (#279).
+  (a) `DbContext` is niet thread-safe: elke worker een eigen context uit de
+  `IDbContextFactory` (patroon: optionele factory-parameter, zoals `AskService`
+  #152 — zonder factory val je terug op sequentieel, zodat de EF-InMemory-tests
+  ongewijzigd blijven werken). (b) Zoek naar **lees-dan-schrijf op een unieke
+  index**: de interactie-promotie dedupet op `(AgentRef, PatientRef, Kind)` en
+  twee kaarten kúnnen hetzelfde paar voorstellen — gelijktijdig concluderen ze
+  allebei "bestaat nog niet" en de tweede knalt. Serialiseer zo'n poort met één
+  slot; dat kost niets als de winst in een 40s-LLM-call zit. (c) De rb-ai-
+  semaphore is **gedeeld met /ask**: batch-werk krijgt een deelcap
+  (`AI_INTERACTIVE_RESERVE` blijft vrij) én wijkt in de wachtrij, anders ziet
+  een bezoeker tijdens de nachtrun "AI weg". Reserve ≥ 2, want een agentic
+  vraag kost 2 permits. Bijkomend: `AI_MAX_CONCURRENCY` en het memory-plafond
+  van `rb-v2-ai` horen bij elkaar (~300-400 MiB RSS per gelijktijdige sessie) —
+  verhoog nooit het één zonder het ander.
+- **Meet je eigen cap niet als "de LLM is overbelast"** (#279) — rb-ai's
+  semaphore-afwijzing komt óók als 429 terug, maar mét
+  `{"code":"concurrency_limit"}`. Zonder dat onderscheid telt zelf-veroorzaakte
+  verdringing mee in de generieke rb-ai-uitval en verdraai je de verkeerde knop.
+  `AiCallOutcome.ConcurrencyLimited` ("429 AI-slots vol") staat daarom náást
+  `RateLimited`. Zelfde les als 503-vs-429 in #251: gelijk herstelgedrag ≠
+  gelijke oorzaak.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`

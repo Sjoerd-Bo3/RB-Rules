@@ -27,8 +27,26 @@ public sealed record BreinPredicateMiningResult(
 /// promotie draagt.
 ///
 /// Degradatie is het verwachte pad: rb-ai null → subject overgeslagen (Failed++),
-/// geen half feit. Bounded per run en idempotent via de dedupe-sleutel.</summary>
-public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
+/// geen half feit. Bounded per run en idempotent via de dedupe-sleutel.
+///
+/// PARALLEL sinds #279, langs dezelfde lijn als
+/// <see cref="BreinInteractionMiningService"/>: de kosten zitten in de rb-ai-call per
+/// subject, dus subjecten gaan met meerdere workers tegelijk door de extractie, elk met
+/// een eigen <see cref="RbRulesDbContext"/> uit de
+/// <see cref="IDbContextFactory{TContext}"/> (DbContext is niet thread-safe). Zonder
+/// factory (unit-tests op EF InMemory) valt de lus terug op één worker en het oude
+/// sequentiële pad.
+///
+/// Eén verschil met de interactie-mining, en het is de reden dat hier GEEN schrijf-slot
+/// nodig is: de dedupe-sleutel van een predicaat begint bij het subject
+/// (<see cref="MechanicPredicateDedupe.Key"/>) en elk subject wordt door precies één
+/// worker opgepakt. Twee workers kunnen dus per constructie niet om dezelfde sleutel
+/// vechten — waar de interactie-poort juist wél twee kaarten op hetzelfde paar kan
+/// zien uitkomen.</summary>
+public class BreinPredicateMiningService(
+    RbRulesDbContext db, RbAiClient ai,
+    IDbContextFactory<RbRulesDbContext>? dbFactory = null,
+    BreinMiningSettings? settings = null)
 {
     private const int DefaultMaxSubjects = 40;
     private const int MaxEvidenceCards = 3;
@@ -75,104 +93,188 @@ public class BreinPredicateMiningService(RbRulesDbContext db, RbAiClient ai)
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        int mined = 0, skipped = 0, failed = 0;
-        var aiTally = new AiOutcomeTally();   // uitval per oorzaak (#251)
-        var processed = 0;
-        var deadlineHit = false;
-        foreach (var subject in subjects)
+        var tally = new RunTally();
+        var cursor = -1;
+
+        // Eén worker = één subject tegelijk, met een eigen context per subject. Werk
+        // wordt uit een gedeelde teller getrokken, dus een traag subject houdt de rest
+        // niet op.
+        async Task WorkerAsync()
         {
-            // Nachtrun-deadline (#245): stop netjes op venster-einde; het reeds-
-            // gepredikeerd-watermark bewaart de voortgang voor de volgende nacht.
-            if (deadline is { } dl && DateTimeOffset.UtcNow >= dl) { deadlineHit = true; break; }
-            processed++;
-            progress?.Invoke($"predicaten extraheren via rb-ai: {processed}/{subjects.Count}");
-
-            var text = BuildEvidenceText(subject, cards);
-            if (string.IsNullOrWhiteSpace(text))
+            while (true)
             {
-                skipped++;
-                continue;
-            }
+                var index = Interlocked.Increment(ref cursor);
+                if (index >= subjects.Count) return;
 
-            var subjectRef = subject.Ref.Format();
-            var call = await ai.ExtractStructuredDetailedAsync(
-                "/extract/predicates",
-                new
+                // Nachtrun-deadline (#245): stop netjes op venster-einde; het reeds-
+                // gepredikeerd-watermark bewaart de voortgang voor de volgende nacht.
+                if (deadline is { } dl && DateTimeOffset.UtcNow >= dl)
                 {
-                    system = MechanicPredicateExtraction.SystemPrompt,
-                    text,
-                    subjectRef,
-                    subjectLabel = subject.CanonicalLabel,
-                    predicates = MechanicPredicateKinds.All,
-                    objectHints,
-                }, ct);
-
-            if (call.Raw is null)
-            {
-                failed++;                  // degradatie: geen half feit
-                aiTally.Add(call.Outcome); // maar de oorzaak wordt geteld (#251)
-                continue;
-            }
-
-            // Bestaande dedupe-sleutels van dit subject (elke status telt: een eerder
-            // verworpen predicaat mag niet stil heropenen).
-            var existing = await db.MechanicPredicates.AsNoTracking()
-                .Where(p => p.SubjectEntityId == subject.Id)
-                .Select(p => new { p.Predicate, p.ObjectToken })
-                .ToListAsync(ct);
-            var existingKeys = existing
-                .Select(p => MechanicPredicateDedupe.Key(subject.Id, p.Predicate, p.ObjectToken))
-                .ToHashSet(StringComparer.Ordinal);
-
-            var toAdd = new List<MechanicPredicateAssertion>();
-            var seenThisSubject = new HashSet<string>(StringComparer.Ordinal);
-            var parsed = MechanicPredicateExtraction.ParseDetailed(call.Raw);
-            if (parsed.Malformed)
-            {
-                // HTTP 200 met een afgekapte/schema-vreemde body is UITVAL, geen leeg
-                // resultaat (#251-review): stil tot [] reduceren verstopte parse-fouten
-                // in de "geslaagd"-bak en maakte de uitvalmeting onbetrouwbaar.
-                failed++;
-                aiTally.Add(AiCallOutcome.Unparseable);
-                continue;
-            }
-            // Geldig antwoord zonder predicaten is geslaagd werk, geen uitval.
-            aiTally.Add(parsed.Items.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
-            foreach (var p in parsed.Items)
-            {
-                var key = MechanicPredicateDedupe.Key(subject.Id, p.Predicate, p.ObjectToken);
-                if (existingKeys.Contains(key) || !seenThisSubject.Add(key))
-                {
-                    skipped++;
-                    continue;
+                    tally.HitDeadline();
+                    return;
                 }
-                toAdd.Add(new MechanicPredicateAssertion
-                {
-                    SubjectEntityId = subject.Id,
-                    Predicate = p.Predicate,
-                    ObjectToken = p.ObjectToken,
-                    Status = MechanicPredicateStatus.Candidate,
-                    CreatedByRunId = run.Id,
-                });
-            }
 
-            if (toAdd.Count > 0)
-            {
-                db.MechanicPredicates.AddRange(toAdd);
-                await db.SaveChangesAsync(ct);
-                mined += toAdd.Count;
+                var subject = subjects[index];
+                tally.Report(progress, subjects.Count);
+
+                await using var owned = dbFactory is null
+                    ? null
+                    : await dbFactory.CreateDbContextAsync(ct);
+                await MineSubjectAsync(
+                    subject, owned ?? db, run.Id, cards, objectHints, tally, ct);
             }
         }
 
-        run.Candidates = mined + skipped;
-        run.Verified = mined;
+        // Zonder factory hard terug naar één worker: parallel draaien op één gedeelde
+        // DbContext is geen optimalisatie maar corruptie.
+        var workers = dbFactory is null
+            ? 1
+            : Math.Clamp((settings ?? BreinMiningSettings.Default).Concurrency, 1, subjects.Count);
+        if (workers == 1)
+            await WorkerAsync();
+        else
+            await Task.WhenAll(Enumerable.Range(0, workers).Select(_ => WorkerAsync()));
+
+        run.Candidates = tally.Mined + tally.Skipped;
+        run.Verified = tally.Mined;
         run.CompletedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
 
         // Subjects = daadwerkelijk verwerkt (bij deadline-stop < subjects.Count);
         // CapHit ⇔ er blijft vers werk liggen: cap geraakt óf deadline afgekapt.
-        return new(processed, mined, skipped, failed, capHit || deadlineHit,
-            aiTally.Summary is { Length: > 0 } detail ? detail : null);
+        return new(tally.Processed, tally.Mined, tally.Skipped, tally.Failed,
+            capHit || tally.DeadlineHit, tally.FailureDetail);
+    }
+
+    /// <summary>Eén subject: bewijstekst → rb-ai → parse → kandidaat-predicaten
+    /// wegschrijven. Draait volledig op <paramref name="ctx"/> (eigen context per
+    /// subject in de parallelle stand) en raakt de gedeelde scoped context nooit
+    /// aan.</summary>
+    private async Task MineSubjectAsync(
+        CanonicalEntity subject, RbRulesDbContext ctx, string runId,
+        IReadOnlyList<CardEvidence> cards, IReadOnlyList<string> objectHints,
+        RunTally tally, CancellationToken ct)
+    {
+        var text = BuildEvidenceText(subject, cards);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            tally.Skip();
+            return;
+        }
+
+        var subjectRef = subject.Ref.Format();
+        var call = await ai.ExtractStructuredDetailedAsync(
+            "/extract/predicates",
+            new
+            {
+                system = MechanicPredicateExtraction.SystemPrompt,
+                text,
+                subjectRef,
+                subjectLabel = subject.CanonicalLabel,
+                predicates = MechanicPredicateKinds.All,
+                objectHints,
+            }, ct);
+
+        if (call.Raw is null)
+        {
+            // Degradatie: geen half feit — maar de oorzaak wordt geteld (#251).
+            tally.Fail(call.Outcome);
+            return;
+        }
+
+        // Bestaande dedupe-sleutels van dit subject (elke status telt: een eerder
+        // verworpen predicaat mag niet stil heropenen).
+        var existing = await ctx.MechanicPredicates.AsNoTracking()
+            .Where(p => p.SubjectEntityId == subject.Id)
+            .Select(p => new { p.Predicate, p.ObjectToken })
+            .ToListAsync(ct);
+        var existingKeys = existing
+            .Select(p => MechanicPredicateDedupe.Key(subject.Id, p.Predicate, p.ObjectToken))
+            .ToHashSet(StringComparer.Ordinal);
+
+        var toAdd = new List<MechanicPredicateAssertion>();
+        var seenThisSubject = new HashSet<string>(StringComparer.Ordinal);
+        var parsed = MechanicPredicateExtraction.ParseDetailed(call.Raw);
+        if (parsed.Malformed)
+        {
+            // HTTP 200 met een afgekapte/schema-vreemde body is UITVAL, geen leeg
+            // resultaat (#251-review): stil tot [] reduceren verstopte parse-fouten
+            // in de "geslaagd"-bak en maakte de uitvalmeting onbetrouwbaar.
+            tally.Fail(AiCallOutcome.Unparseable);
+            return;
+        }
+        // Geldig antwoord zonder predicaten is geslaagd werk, geen uitval.
+        tally.Ai(parsed.Items.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
+        foreach (var p in parsed.Items)
+        {
+            var key = MechanicPredicateDedupe.Key(subject.Id, p.Predicate, p.ObjectToken);
+            if (existingKeys.Contains(key) || !seenThisSubject.Add(key))
+            {
+                tally.Skip();
+                continue;
+            }
+            toAdd.Add(new MechanicPredicateAssertion
+            {
+                SubjectEntityId = subject.Id,
+                Predicate = p.Predicate,
+                ObjectToken = p.ObjectToken,
+                Status = MechanicPredicateStatus.Candidate,
+                CreatedByRunId = runId,
+            });
+        }
+
+        if (toAdd.Count > 0)
+        {
+            ctx.MechanicPredicates.AddRange(toAdd);
+            await ctx.SaveChangesAsync(ct);
+            tally.Mine(toAdd.Count);
+        }
+    }
+
+    /// <summary>De run-tellers, gedeeld door alle subject-workers (#279). Eén slot om
+    /// alle mutaties — optellen is microseconden náást een rb-ai-call van tientallen
+    /// seconden. De voortgangs-callback loopt door hetzelfde slot: die gaat naar de
+    /// job-status en is niet als thread-safe gedocumenteerd.</summary>
+    private sealed class RunTally
+    {
+        private readonly object _gate = new();
+        private readonly AiOutcomeTally _ai = new();   // uitval per oorzaak (#251)
+        private int _processed, _mined, _skipped, _failed;
+        private bool _deadlineHit;
+
+        public void Report(Action<string>? progress, int total)
+        {
+            lock (_gate)
+            {
+                _processed++;
+                progress?.Invoke($"predicaten extraheren via rb-ai: {_processed}/{total}");
+            }
+        }
+
+        public void Ai(AiCallOutcome outcome) { lock (_gate) _ai.Add(outcome); }
+
+        public void Fail(AiCallOutcome outcome)
+        {
+            lock (_gate) { _failed++; _ai.Add(outcome); }
+        }
+
+        public void Mine(int count) { lock (_gate) _mined += count; }
+        public void Skip() { lock (_gate) _skipped++; }
+        public void HitDeadline() { lock (_gate) _deadlineHit = true; }
+
+        public int Processed { get { lock (_gate) return _processed; } }
+        public int Mined { get { lock (_gate) return _mined; } }
+        public int Skipped { get { lock (_gate) return _skipped; } }
+        public int Failed { get { lock (_gate) return _failed; } }
+        public bool DeadlineHit { get { lock (_gate) return _deadlineHit; } }
+
+        public string? FailureDetail
+        {
+            get
+            {
+                lock (_gate) return _ai.Summary is { Length: > 0 } detail ? detail : null;
+            }
+        }
     }
 
     /// <summary>Bewijstekst voor één subject: de <see cref="CanonicalEntity.Definition"/>

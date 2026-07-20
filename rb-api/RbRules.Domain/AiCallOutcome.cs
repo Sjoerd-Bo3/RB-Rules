@@ -11,9 +11,20 @@ public enum AiCallOutcome
     /// uitval, zie <see cref="Empty"/>).</summary>
     Ok,
 
-    /// <summary>HTTP 429: rate-limit op het abonnement. Plausibel bij lange runs en
-    /// een van de twee gevallen waar wachten-en-opnieuw-proberen zin heeft.</summary>
+    /// <summary>HTTP 429 ZONDER <c>concurrency_limit</c>-code: rate-limit op het
+    /// abonnement. Plausibel bij lange runs en een van de gevallen waar wachten-en-
+    /// opnieuw-proberen zin heeft.</summary>
     RateLimited,
+
+    /// <summary>HTTP 429 mét <c>{"code":"concurrency_limit"}</c>: ONZE EIGEN
+    /// sidecar-cap wees de aanvraag af, niet Anthropic (#279). Het onderscheid is de
+    /// hele reden dat deze uitkomst bestaat: op één hoop met <see cref="RateLimited"/>
+    /// meet een parallelle mining-run zijn eigen semaphore als "het abonnement
+    /// throttlet" — precies de verkeerde conclusie, want de fix is dan de cap of het
+    /// aantal workers bijstellen (rb-ai <c>AI_MAX_CONCURRENCY</c> /
+    /// <c>BREIN_MINING_CONCURRENCY</c>), niet minder vragen stellen. Deelt wel het
+    /// backoff-pad: een slot komt vanzelf vrij.</summary>
+    ConcurrencyLimited,
 
     /// <summary>HTTP 503: rb-ai even vol of aan het opstarten. Deelt het backoff-pad
     /// met <see cref="RateLimited"/> — herstel-gedrag identiek — maar is een EIGEN
@@ -53,11 +64,12 @@ public sealed class AiOutcomeTally
 {
     private readonly Dictionary<AiCallOutcome, int> _counts = [];
 
-    /// <summary>Verdient deze uitkomst een backoff-herhaling? Rate-limit én
-    /// overbelasting delen dat pad (een piek mag geen uitval worden); de rest faalt bij
-    /// een directe herhaling vrijwel zeker opnieuw.</summary>
+    /// <summary>Verdient deze uitkomst een backoff-herhaling? Rate-limit,
+    /// overbelasting én een volle sidecar-cap delen dat pad (een piek mag geen uitval
+    /// worden); de rest faalt bij een directe herhaling vrijwel zeker opnieuw.</summary>
     public static bool IsRetryable(AiCallOutcome outcome) =>
-        outcome is AiCallOutcome.RateLimited or AiCallOutcome.Overloaded;
+        outcome is AiCallOutcome.RateLimited or AiCallOutcome.Overloaded
+            or AiCallOutcome.ConcurrencyLimited;
 
     public void Add(AiCallOutcome outcome) =>
         _counts[outcome] = _counts.GetValueOrDefault(outcome) + 1;
@@ -83,6 +95,7 @@ public sealed class AiOutcomeTally
     private static string Label(AiCallOutcome outcome) => outcome switch
     {
         AiCallOutcome.RateLimited => "429 rate-limit",
+        AiCallOutcome.ConcurrencyLimited => "429 AI-slots vol",
         AiCallOutcome.Overloaded => "503 overbelast",
         AiCallOutcome.Timeout => "timeout",
         AiCallOutcome.ServerError => "5xx",

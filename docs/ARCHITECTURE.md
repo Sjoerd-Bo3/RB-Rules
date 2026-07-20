@@ -955,8 +955,32 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   nooit hergebruik over vragen heen), met TTL, dode-sessie-degradatie naar
   koud en kill-switch `AI_WARM_POOL=0`.
 - `src/concurrency.ts` — globale semaphore op gelijktijdige SDK-sessies
-  (#155): `AI_MAX_CONCURRENCY` (default 3), agentic weegt 2, korte wachtrij
-  (30 s) en daarna een nette 429 die rb-api als bestaand degradatiepad ziet.
+  (#155): `AI_MAX_CONCURRENCY` (default **5** sinds #279), agentic weegt 2,
+  korte wachtrij (30 s) en daarna een nette 429 die rb-api als bestaand
+  degradatiepad ziet.
+
+  **Prioriteit (#279).** Sinds de brein-mining parallel draait deelt deze
+  semaphore twee soorten verkeer met heel verschillende urgentie: een bezoeker
+  op `/ask` en een batch-run die uren mag duren. Aanvragen dragen daarom een
+  `priority`: `/ask` (en het stream-/agentic-pad) is `interactive`, de
+  extractie-endpoints `/extract/*` zijn `background`. Twee regels beschermen de
+  bezoeker, samen:
+  1. **achtergrond-deelcap** — background-verkeer mag samen hoogstens
+     `AI_MAX_CONCURRENCY − AI_INTERACTIVE_RESERVE` permits bezetten (5 − 2 = 3).
+     Het verschil is een reserve die per constructie vrij blijft; de reserve is
+     2 en niet 1 omdat een agentic vraag 2 permits kost.
+  2. **strikte voorrang in de rij** — zolang er een interactieve wachter staat
+     wordt geen background-wachter toegelaten, en een interactieve aanvraag
+     haalt wachtend background-werk in. Binnen één prioriteit blijft het FIFO
+     met kop-blokkade.
+
+  De keerzijde is bewust gekozen: onder aanhoudend interactief verkeer kan
+  mining-werk lang wachten en uiteindelijk een 429 krijgen. Dat is de goede
+  kant om te falen — een overgeslagen kaart komt de volgende run terug (het
+  per-kaart-watermark bewaart de voortgang), een weggestuurde bezoeker niet.
+  `/health` (`capacity`) toont `backgroundMax` en `waitingBackground` zodat
+  zichtbaar is óf de mining wacht (goed) dan wel vragen wachten (fout).
+  De cap hangt vast aan het memory-plafond van `rb-v2-ai` (2500m, §7).
 - `src/brain-tools.ts` — de zes brein-tooldefinities + fetch-laag naar rb-api
   (`RB_API_URL`), met tool-call-cap.
 - `src/relations.ts` — afsplitsen van relatievoorstellen uit het agent-antwoord
@@ -1694,6 +1718,43 @@ nachtrun:
   dedupe-sleutel als hard slot. Een LLM-verdict promoveert hier NIETS: elk predicaat
   wacht op menselijke review (voedt de `HypothesisEngine` pas als `reviewed`).
 
+**Parallelle kaart-/subject-lus (#279).** De kosten van beide jobs zitten vrijwel
+volledig op één plek: ~40 s rb-ai per kaart. Sequentieel maakte dat van 40 kaarten een
+half uur en van een ongecapte nachtrun (~900 kaarten) tien uur, terwijl de sidecar
+meerdere sessies tegelijk aankan. De lus draait daarom op meerdere workers
+(`BreinMiningSettings.Concurrency`, env `BREIN_MINING_CONCURRENCY`, default **3**).
+Dat getal is geen vrije keuze maar het spiegelbeeld van rb-ai's achtergrond-deelcap
+(`AI_MAX_CONCURRENCY` 5 − `AI_INTERACTIVE_RESERVE` 2, §5.3): evenveel workers als
+achtergrond-permits betekent dat elke worker meteen een slot krijgt, er nooit een
+wachtrij ontstaat, en `/ask` per constructie slots overhoudt. Hoger zetten levert
+daarom geen doorvoer maar uitval ("429 AI-slots vol" in het run-detail).
+
+Drie randvoorwaarden maken het veilig:
+- **eigen `DbContext` per kaart/subject.** `DbContext` is niet thread-safe; workers die
+  er één delen corrumperen de change-tracker. Met de `IDbContextFactory` pakt elk item
+  een verse context (en eigen `EntityResolutionService`/`InteractionPromotionService`
+  dáárop), dus elk item is een eigen unit-of-work. **Zonder** factory (unit-tests op EF
+  InMemory) valt de lus terug op één worker en exact het oude sequentiële pad —
+  hetzelfde optionele-factory-patroon als de retrieval-kanalen van `AskService` (#152).
+- **de promotie-poort blijft geserialiseerd** (één schrijf-slot om
+  `InteractionPromotionService.PromoteAsync`). Twee verschillende focus-kaarten kunnen
+  dezelfde interactie voorstellen — mech↔mech is juist het doel, en elke kaart met
+  `[Deflect]` én `[Assault]` draagt hetzelfde paar — terwijl de poort lees-dan-schrijf
+  doet op een sleutel met een UNIEKE index (`AgentRef`, `PatientRef`, `Kind`).
+  Gelijktijdig zouden twee workers allebei "bestaat nog niet" concluderen en de tweede
+  op een unique-violation stuklopen. Serialiseren kost niets: het is milliseconden
+  DB-werk náást een 40 s-LLM-call — de winst zat nooit daar. De predicaat-mining heeft
+  dit slot NIET nodig: de dedupe-sleutel begint daar bij het subject, en elk subject
+  wordt door precies één worker opgepakt.
+- **volgorde-onafhankelijkheid** — het per-kaart-watermark (#273, nu per kaart
+  bewaard door de worker-context in plaats van aan het eind van de run) en de
+  dedupe-sleutels maken de uitkomst onafhankelijk van de afrondvolgorde.
+
+Regressietests: `BreinMiningParallelTests` toetst met een concurrency-probe dat er
+écht meerdere extracties tegelijk lopen (en zonder factory precies één), dat elke
+worker een eigen context krijgt, en dat drie kaarten die hetzelfde paar voorstellen
+één feit met drie provenance-rijen opleveren — geen duplicaten, geen verlies.
+
 Beide jobs zijn **bounded per run en idempotent** (de promotie-dedupe-sleutel resp.
 de predicaat-dedupe-sleutel + de reeds-gepredikeerd-filter), en **degraderen netjes**:
 rb-ai null → dat item wordt overgeslagen (Failed++), er wordt GEEN half feit
@@ -1762,6 +1823,24 @@ memory-limits, healthchecks en log-rotatie (10m×3). **Watchtower staat
 expliciet uit** op de v2-services (`com.centurylinklabs.watchtower.enable:
 false`) zodat er één updatemechanisme is (#45). Datavolumes als `/mnt/data`-
 binds voor Postgres, Neo4j en Ollama (het Ollama-mount-herstel is #101).
+
+**Memory-plafonds zijn plafonds, geen reserveringen.** De som van de caps ligt
+bewust boven de 7,7 GiB van de VM: geen enkele service zit normaal aan zijn cap,
+en de caps bestaan juist om een uitschieter te localiseren in plaats van de host
+mee te slepen. `rb-v2-ai` ging in **#279** van 1g naar **2500m** omdat de
+brein-mining sindsdien parallel draait: elke gelijktijdige SDK-sessie is een
+Claude-subprocess van orde-grootte 300-400 MiB RSS, dus `AI_MAX_CONCURRENCY=5`
+vraagt ~2 GiB náást node zelf (~300 MiB). Bij 1g paste dat niet en OOM-killde de
+container zichzelf precies wanneer het druk is. Gemeten vóór de wijziging: 4,2
+GiB vrij op de VM, rb-ai op 290 MiB — de ~1,7 GiB extra past met marge voor
+Ollama/Neo4j/Postgres. Cap en plafond horen bij elkaar: verhoog het één nooit
+zonder het ander.
+
+**Elke nieuwe env-vlag hoort óók in de compose-`environment:`** (#268-follow-up).
+Voor #279 gaat het om `AI_MAX_CONCURRENCY` + `AI_INTERACTIVE_RESERVE` (rb-ai) en
+`BREIN_MINING_CONCURRENCY` (rb-api), elk met een `${VAR:-default}` die het
+gedocumenteerde gedrag houdt. Verifieer na deploy met `docker exec rb-v2-ai
+printenv | grep AI_`.
 
 Migraties draaien bij opstart met korte retry (Program.cs) — na een VM-reboot
 kan rb-api eerder starten dan Postgres klaar is.
@@ -2113,10 +2192,14 @@ kan rb-api eerder starten dan Postgres klaar is.
 - **Capaciteit & latency van de AI-keten** (#154/#155) — de beschermings-
   stapel is gelaagd: per-IP/token-rate-limit (`llm`) → dagquota per account
   (`UserQuotaFilter`) → globale sessie-cap in rb-ai (`AI_MAX_CONCURRENCY`,
-  default 3; agentic weegt 2; wachtrij max 30 s, daarna 429 → bestaand
-  degradatiepad in `RbAiClient`) → de VM zelf (8 GB; een idle SDK-subprocess
-  kost orde-grootte honderden MB's RSS — exacte cijfers volgen uit productie-
-  metingen, niet uit deze PR). Latency: de /ask-paginalaad stuurt een
+  default 5 sinds #279; agentic weegt 2; wachtrij max 30 s, daarna 429 →
+  bestaand degradatiepad in `RbAiClient`) → de VM zelf (8 GB; een idle SDK-
+  subprocess kost orde-grootte honderden MB's RSS — exacte cijfers volgen uit
+  productie-metingen, niet uit deze PR). Sinds #279 heeft die cap een
+  **prioriteitslaag**: batch-werk (brein-mining via `/extract/*`) mag hoogstens
+  `AI_MAX_CONCURRENCY − AI_INTERACTIVE_RESERVE` permits bezetten en wordt in de
+  rij altijd ingehaald door `/ask`, zodat een nachtrun het interactieve verkeer
+  niet kan uithongeren (§5.3). Latency: de /ask-paginalaad stuurt een
   fire-and-forget prewarm-signaal (rb-web load → `/api/ask/prewarm` →
   rb-ai `/prewarm`) waarop de warme pool één cheap-sessie voorboot; de
   query-rewrite-call (statisch systeemprompt) claimt die en haalt zo de
