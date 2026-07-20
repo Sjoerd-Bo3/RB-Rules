@@ -19,10 +19,11 @@ public class ReifiedInteractionTests
     // ── Reïficatie-vorm-poort (OntologyValidationService, versla #3) ──────────
 
     [Fact]
-    public void ReifiedInteraction_KeywordCountersKeyword_WithWindow_IsValid()
+    public void ReifiedInteraction_MechanicCountersMechanic_WithWindow_IsValid()
     {
+        // Sinds #304 is de rol-range Card/Mechanic (de meting), niet Card/Keyword.
         var r = OntologyValidationService.ValidateReifiedInteraction(
-            EntityType.Keyword, EntityType.Keyword, RelationType.Counters,
+            EntityType.Mechanic, EntityType.Mechanic, RelationType.Counters,
             [new(EntityType.Window)]);
         Assert.True(r.IsValid);
     }
@@ -57,9 +58,11 @@ public class ReifiedInteractionTests
     [Fact]
     public void ReifiedInteraction_RoleOutOfRange_IsRejected()
     {
-        // Een Mechanic is geen geldige HAS_ROLE-filler (Card/Keyword).
+        // Een Keyword is sinds #304 geen geldige HAS_ROLE-filler meer: de
+        // gedeclareerde range volgt de meting (492 x Card, 274 x Mechanic, nul x
+        // Keyword). Mutatie-pin: range terug op Card/Keyword maakt dit rood.
         var r = OntologyValidationService.ValidateReifiedInteraction(
-            EntityType.Mechanic, EntityType.Keyword, RelationType.Counters);
+            EntityType.Keyword, EntityType.Mechanic, RelationType.Counters);
         Assert.False(r.IsValid);
         Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.RangeMismatch);
     }
@@ -346,9 +349,10 @@ public class ReifiedInteractionTests
     public void RelationTypeConstraint_AllowsCardCardCounters_RejectsBareStructural()
     {
         Assert.True(RelationTypeConstraint.Allows(EntityType.Card, "COUNTERS", EntityType.Card));
-        Assert.True(RelationTypeConstraint.Allows(EntityType.Keyword, "GRANTS", EntityType.Card));
+        Assert.True(RelationTypeConstraint.Allows(EntityType.Mechanic, "GRANTS", EntityType.Card));
         Assert.False(RelationTypeConstraint.Allows(EntityType.Card, "HAS_MECHANIC", EntityType.Mechanic));
-        Assert.False(RelationTypeConstraint.Allows(EntityType.Mechanic, "COUNTERS", EntityType.Card));
+        // Keyword viel tot #304 binnen de rol-range; de meting besliste anders.
+        Assert.False(RelationTypeConstraint.Allows(EntityType.Keyword, "COUNTERS", EntityType.Card));
     }
 
     // ── BrainRef round-trip ──────────────────────────────────────────────────
@@ -415,14 +419,16 @@ public class ReifiedInteractionTests
     }
 
     [Fact]
-    public async Task Service_KeywordPairNoSupport_IsCandidate_NoTombstone()
+    public async Task Service_MechanicPairNoSupport_IsCandidate_NoTombstone()
     {
         await using var db = NewDb();
         var runId = await SeedRunAsync(db);
         var svc = new InteractionPromotionService(db);
 
+        // Sinds #304 dragen mechanic:-refs het type Mechanic (zoals de projectie
+        // ze ook schrijft), en dat is een geldige rol.
         var r = await svc.PromoteAsync(Req(
-            agentType: EntityType.Keyword, patientType: EntityType.Keyword,
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
             agent: "mechanic:Deflect", patient: "mechanic:Assault"), runId);
 
         Assert.Equal(InteractionGateOutcome.Candidate, r.Outcome);
@@ -536,14 +542,14 @@ public class ReifiedInteractionTests
         var svc = new InteractionPromotionService(db);
 
         var rejected = await svc.PromoteAsync(
-            Req(agentType: EntityType.Keyword, patientType: EntityType.Keyword,
+            Req(agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
                 agent: "mechanic:Deflect", patient: "mechanic:Assault",
                 lexical: false, consensus: 0, verdict: false), runId);
         Assert.Equal(InteractionGateOutcome.Rejected, rejected.Outcome);
         Assert.False(await db.RejectionTombstones.AnyAsync());   // GEEN grafsteen
 
         var reopened = await svc.PromoteAsync(
-            Req(agentType: EntityType.Keyword, patientType: EntityType.Keyword,
+            Req(agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
                 agent: "mechanic:Deflect", patient: "mechanic:Assault",
                 lexical: true, verdict: true), runId);
         Assert.Equal(InteractionGateOutcome.Promoted, reopened.Outcome);
@@ -559,7 +565,7 @@ public class ReifiedInteractionTests
         var svc = new InteractionPromotionService(db);
 
         var rejected = await svc.PromoteAsync(
-            Req(agentType: EntityType.Mechanic, patientType: EntityType.Card,
+            Req(agentType: EntityType.Keyword, patientType: EntityType.Card,
                 agent: "mechanic:Deflect", patient: "card:b",
                 lexical: true, verdict: true), runId);
         Assert.Equal(InteractionGateOutcome.Rejected, rejected.Outcome);
@@ -601,7 +607,7 @@ public class ReifiedInteractionTests
         var svc = new InteractionPromotionService(db);
 
         var r = await svc.PromoteAsync(Req(
-            agentType: EntityType.Keyword, patientType: EntityType.Keyword,
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
             agent: "mechanic:Deflect", patient: "mechanic:Assault",
             lexical: false, consensus: 1, verdict: true), runId);
         Assert.Equal(InteractionGateOutcome.Candidate, r.Outcome);

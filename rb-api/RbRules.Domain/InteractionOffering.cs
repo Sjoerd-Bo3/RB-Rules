@@ -257,12 +257,17 @@ public static class InteractionOffering
         {
             new(focus.Ref, focus.Name, focus.Type, OfferedRefTier.Anchor),
         };
+        // Type is Mechanic, niet Keyword (#304): deze refs zijn mechanic:{label}
+        // en de projectie schrijft er :Mechanic-knopen voor — Keyword hier zou de
+        // gedeclareerde HAS_ROLE-range (Card/Mechanic) schenden en élke promotie
+        // op de schema-poort laten stranden. De miner beweerde jarenlang Keyword;
+        // de meting (492 × Card, 274 × Mechanic, nul × Keyword) besliste anders.
         candidates.AddRange(printed.Select(
             l => new OfferedRefCandidate(
-                BrainRef.Mechanic(l).Format(), l, EntityType.Keyword, OfferedRefTier.Printed)));
+                BrainRef.Mechanic(l).Format(), l, EntityType.Mechanic, OfferedRefTier.Printed)));
         candidates.AddRange(neighbours.Select(
             n => new OfferedRefCandidate(
-                BrainRef.Mechanic(n.Label).Format(), n.Label, EntityType.Keyword,
+                BrainRef.Mechanic(n.Label).Format(), n.Label, EntityType.Mechanic,
                 OfferedRefTier.Neighbour, n.Weight)));
         candidates.AddRange(partners.Select(
             p => new OfferedRefCandidate(p.Ref, p.Name, p.Type, OfferedRefTier.Context)));
@@ -333,11 +338,11 @@ public static class InteractionOffering
         var candidates = new List<OfferedRefCandidate>
         {
             new(BrainRef.Mechanic(subjectLabel).Format(), subjectLabel,
-                EntityType.Keyword, OfferedRefTier.Anchor),
+                EntityType.Mechanic, OfferedRefTier.Anchor),
         };
         candidates.AddRange(neighbours.Select(
             n => new OfferedRefCandidate(
-                BrainRef.Mechanic(n.Label).Format(), n.Label, EntityType.Keyword,
+                BrainRef.Mechanic(n.Label).Format(), n.Label, EntityType.Mechanic,
                 OfferedRefTier.Neighbour, n.Weight)));
 
         return new(

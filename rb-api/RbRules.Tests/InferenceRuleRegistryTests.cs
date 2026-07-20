@@ -52,6 +52,27 @@ public class InferenceRuleRegistryTests
     }
 
     [Fact]
+    public void GovernedByChains_Nr304DeclaratiesScheppenGeenNieuweKetens()
+    {
+        // #304 declareerde zeven projectie-edges (ABOUT, PART_OF, EXPLAINS,
+        // FROM_SET, HAS_TAG, HAS_ROLE, REQUIRES_CONDITION). Geen daarvan mag een
+        // nieuwe GOVERNED_BY-keten opleveren: zo'n keten zou per constructie nul
+        // rijen matchen (GOVERNED_BY wordt alleen vanaf :Interaction geschreven) —
+        // de stille #274-fout. De gevoeligste kandidaat was HAS_TAG: hing Tag als
+        // Concept-subklasse in de hiërarchie, dan ontstond hier
+        // HAS_TAG ∘ GOVERNED_BY vanzelf. Bewust uitgeschreven literals: de hele
+        // ketenverzameling ligt vast, niet alleen "bevat de mechanic-keten".
+        var chains = InferenceRuleRegistry.GovernedByChains()
+            .Select(c => string.Join("/", c.Select(r => r.EdgeName)))
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(
+            ["HAS_DOMAIN/GOVERNED_BY", "HAS_MECHANIC/GOVERNED_BY"],
+            chains);
+    }
+
+    [Fact]
     public void GovernedByChains_EindigenAltijdInGovernedByEnZijnMinstensTweeHops()
     {
         foreach (var chain in InferenceRuleRegistry.GovernedByChains())

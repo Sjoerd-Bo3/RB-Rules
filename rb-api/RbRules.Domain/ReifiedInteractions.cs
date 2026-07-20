@@ -14,7 +14,7 @@ namespace RbRules.Domain;
 /// <c>:Condition</c> + de gedenormaliseerde <c>RELATES_TO</c>-qualifier-cache) is
 /// idempotent herbouwbaar uit deze rij — de cache is NOOIT de bron.
 ///
-/// De rollen agent/patient zijn <see cref="BrainRef"/>'s naar een Card of Keyword
+/// De rollen agent/patient zijn <see cref="BrainRef"/>'s naar een Card of Mechanic (#304)
 /// (n-aire relatie met expliciete rol i.p.v. een richtingsloze binaire edge).
 /// <see cref="Kind"/> is de SCREAMING_SNAKE_CASE-edge-naam van een
 /// gereïficeerd-verplicht ontologie-relatietype (<see cref="RelationTraits.RequiresReification"/>).</summary>
@@ -23,11 +23,11 @@ public class Interaction
     public long Id { get; set; }
 
     /// <summary>HAS_ROLE {role:'agent'} — de handelende kant (BrainRef naar Card
-    /// of Keyword), bv. "mechanic:Deflect" of "card:ogn-011-298".</summary>
+    /// of Mechanic), bv. "mechanic:Deflect" of "card:ogn-011-298".</summary>
     public required string AgentRef { get; set; }
 
     /// <summary>HAS_ROLE {role:'patient'} — de ondergane kant (BrainRef naar Card
-    /// of Keyword).</summary>
+    /// of Mechanic).</summary>
     public required string PatientRef { get; set; }
 
     /// <summary>De gekwalificeerde relatie als canonieke edge-naam

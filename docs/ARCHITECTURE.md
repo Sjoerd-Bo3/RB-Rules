@@ -333,12 +333,23 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   (`MechanicMergeClause`/`DomainMergeClause`) in plaats van uit losse literals, en
   `OntologyProjectionAlignmentTests` pint schema, projectie, `BrainQuery.EdgeTypes`
   en de gegenereerde reasoner-Cypher op elkaar vast — de vier lopen niet meer stil
-  uiteen. `Keyword` blijft een klasse (HAS_ROLE-filler, `ERRATA_OF`-range,
-  canoniek entiteit-kind) en `INVOKES` de fijnere, vandaag niet-geprojecteerde brug
+  uiteen. `Keyword` blijft een klasse (`ERRATA_OF`-range, canoniek entiteit-kind)
+  en `INVOKES` de fijnere, vandaag niet-geprojecteerde brug
   Keyword→Mechanic; de gedrukte magnitude rijdt als edge-parameter mee. De
   hernoeming is structuurbrekend en bumpte `OntologyBaseline` naar **2.0.0**
   (major) — zonder datamigratie: de graaf droeg deze namen al en afgeleide edges
   zijn per definitie herbouwbaar (job `graph` → `reason`).
+  **Sinds #304/#296 (baseline 3.0.0, major, classifier-geverifieerd)** declareert
+  het register ook de zeven tot dan toe ongedeclareerde projectie-edges — `ABOUT`,
+  `PART_OF`, `EXPLAINS`, `FROM_SET` (de dode `INTRODUCED_IN`-declaratie hernoemd
+  naar de naam die de projectie schrijft, zelfde beslissing als #274), `HAS_TAG`
+  (met een nieuwe klasse `Tag`, bewust direct onder Thing — een tag draagt geen
+  regels, en Tag ⊑ Concept zou een dode `HAS_TAG ∘ GOVERNED_BY`-reasonerketen
+  genereren), `HAS_ROLE` en `REQUIRES_CONDITION` — én de gemeten `SUPERSEDES`-vorm
+  Erratum → Card (#296). De `HAS_ROLE`-range is de METING (Card/Mechanic, nooit
+  Keyword; 492/274/0 op de live graaf): `ValidateReifiedInteraction` leest de
+  rol-range sindsdien uit het register, en de projectie dwingt haar per
+  filler-soort af.
 - **`RbRules.Domain/Provenance.cs` + `ProvenanceAuditService` — provenance-
   ruggengraat (fase 0a, #233).** Versla faalmodus #4 (ontbrekende provenance)
   als schema-invariant, niet als discipline. Twee nieuwe entiteiten (Postgres,
@@ -401,7 +412,8 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   #226).** Versla faalmodus #3 (structuurverlies): een kale
   `(:Card)-[:COUNTERS]->(:Card)`-edge is verboden, elk COUNTERS/MODIFIES/GRANTS/
   REQUIRES-feit leeft als gereïficeerde **`Interaction`** (Postgres = SoT) met
-  rollen agent/patient (BrainRefs naar Card/Keyword), een `Kind` uit de
+  rollen agent/patient (BrainRefs naar Card/Mechanic, sinds #304 de gemeten
+  rol-range), een `Kind` uit de
   reïficatie-verplichte ontologie-relaties, een optionele `GovernedByRef` naar de
   RuleSection en een `Status` ∈ {candidate, verified, promoted, rejected,
   **model_hypothesized_unruled**}. Condities (window/status/cost) zijn losse,
@@ -1675,17 +1687,19 @@ brontrail tonen.
 **Projectie↔ontologie-guard (#289).** Élke edge die deze projectie én de
 brein-projectie (§6.5) schrijven staat geclassificeerd in
 `ProjectionEdgeCatalog` (Domain), in vier standen: `InSchema` (geregistreerde
-domeinrelatie — `HAS_DOMAIN`, `HAS_MECHANIC`, `GOVERNED_BY`, `SUPERSEDES`,
-`RELATES_TO`), `DomeinNogNietGedeclareerd` (hoort in de TBox, staat er nog niet
-— `ABOUT`, `PART_OF`, `EXPLAINS`, `FROM_SET`, `HAS_TAG`, `HAS_ROLE`,
-`REQUIRES_CONDITION`; erkende schuld, met reden én issue, opgelost in #304),
-`Provenance` (herkomsttrail, bewust buiten de TBox — `WAS_GENERATED_BY`,
-`DERIVED_FROM`, `SUPPORTED_BY`, `AFFECTS`) en `Infrastructuur` (onze eigen
-boekhouding — `MERGED_INTO`, `HAS_PREDICATE`, `PRECEDES`). Een lijst "bewust
-niet-ontologisch" is óók een beslissing; dat is precies waarom ze hier staat.
+domeinrelatie — sinds #304 twaalf stuks: `HAS_DOMAIN`, `HAS_MECHANIC`,
+`GOVERNED_BY`, `SUPERSEDES`, `RELATES_TO`, plus de zeven voorheen als schuld
+geboekte `ABOUT`, `PART_OF`, `EXPLAINS`, `FROM_SET`, `HAS_TAG`, `HAS_ROLE` en
+`REQUIRES_CONDITION`), `DomeinNogNietGedeclareerd` (hoort in de TBox, staat er
+nog niet — sinds #304 leeg; de stand blijft bestaan als vangnet voor een
+toekomstige achtste), `Provenance` (herkomsttrail, bewust buiten de TBox —
+`WAS_GENERATED_BY`, `DERIVED_FROM`, `SUPPORTED_BY`, `AFFECTS`) en
+`Infrastructuur` (onze eigen boekhouding — `MERGED_INTO`, `HAS_PREDICATE`,
+`PRECEDES`). Een lijst "bewust niet-ontologisch" is óók een beslissing; dat is
+precies waarom ze hier staat.
 Een `Issue`-referentie mag bij **elke** stand: `InSchema` zegt "de NAAM staat in
-het register", niet "er is niets aan de hand" — `SUPERSEDES` en `RELATES_TO`
-dragen daarom hun open defect #296 mee (zie §11).
+het register", niet "er is niets aan de hand" — `RELATES_TO` draagt daarom zijn
+open defect #317 mee (de label-loze match, afgesplitst uit #296; zie §11).
 
 `ProjectionOntologyGuardTests` houdt die catalogus eerlijk door beide projecties
 tegen een opnemende Neo4j-driver te draaien en de **uitgevoerde** Cypher te
@@ -1708,7 +1722,9 @@ De checks, alle verzameling-gebaseerd (volgorde is geen contract):
 - **G3** — de stand mag niet liegen over `OntologySchema`.
 - **G4a** — het corpus is rij-onafhankelijk (lege DB == gevulde DB), zodat een
   probe tegen een lege database het volledige Cypher-corpus levert.
-- **G4b** — het aantal statements per projectie ligt vastgepind (41 resp. 12).
+- **G4b** — het aantal statements per projectie ligt vastgepind (42 resp. 12;
+  41 → 42 in #304, toen het label-loze HAS_ROLE-statement in twee label-gebonden
+  statements werd gesplitst).
   Een statement dat achter een conditie belandt verdwijnt daarmee luidruchtig in
   plaats van stil; G4a ziet dat níet, want zo'n conditie is in beide DB-standen
   hetzelfde.
@@ -1747,7 +1763,7 @@ een schema-versiebump forceren.
 **Knooplabel-guard (#289 PR 2).** De catalogus hierboven toetst uitsluitend
 NAMEN, en een naam-guard ziet per constructie niet dat een edge de verkeerde
 KLASSEN verbindt. `ProjectionEdgeShapeCatalog` (Domain) registreert daarom de
-**28 knooplabel-vormen** waarin de twee projecties hun edges schrijven —
+**29 knooplabel-vormen** waarin de twee projecties hun edges schrijven —
 `(:Claim)-[:ABOUT]->(:Card)`, `(:Erratum)-[:SUPERSEDES]->(:Card)`,
 `()-[:RELATES_TO]->()`, … — en `ProjectionLabelCheck` houdt elke vorm
 subklasse-polymorf (`OntologySchema.IsA`) tegen de gedeclareerde domain/range.
@@ -1779,15 +1795,19 @@ ook al meet de live graaf bij `REQUIRES_CONDITION` óók `Concept` (de knoop is
 - **L3** — elke schending van de gedeclareerde domain/range is gedekt door een
   erkend, gedocumenteerd `KnownLabelDefect` mét issue-referentie.
 - **L4** — elk erkend defect bestaat nog écht. Dít onderscheidt een waiver van
-  een mute-knop: wordt #296 gerepareerd, of verandert het van vorm, dan gaat de
+  een mute-knop: wordt #317 gerepareerd, of verandert het van vorm, dan gaat de
   waiver rood met de opdracht hem op te ruimen. Zonder deze kant blijft een
   opgelost defect als open schuld geboekt staan én dekt de waiver vanaf dat
-  moment stil iets ánders af dan waarvoor hij is aangenomen.
+  moment stil iets ánders af dan waarvoor hij is aangenomen. Precies zo is de
+  `SUPERSEDES`-waiver bij #296 opgeruimd: de range werd op de meting gebracht en
+  L4 zou een achterblijvende waiver rood hebben gezet.
 - **L5/L0** — de vormen zijn rij-onafhankelijk, en de twee registers dekken
   elkaar (elke naam heeft een vorm, elke vorm een geclassificeerde naam).
 
-Vandaag dekken drie `KnownLabelDefect`s precies drie bevindingen af, alle drie
-#296: de `SUPERSEDES`-range en beide label-loze kanten van `RELATES_TO`.
+Vandaag dekken twee `KnownLabelDefect`s precies twee bevindingen af, beide
+#317: de label-loze kanten van `RELATES_TO`. De derde (de `SUPERSEDES`-range,
+#296) is opgelost door de declaratie op de gemeten werkelijkheid te brengen —
+Erratum → Card — waarna de waiver weg móest (L4).
 
 **Wat de knooplabel-guard niet ziet.** G5 (bron ⊆ uitgevoerd) is bewust NIET
 herhaald op vormen. Een heel bronbestand is geen statement: de aliassen van álle
@@ -1818,6 +1838,15 @@ elk read-only `ContradictionDetector`-patroon RETURNt treffers; die worden via
 `ToConflict` naar `ReasoningConflict`-rijen in Postgres vertaald — idempotent op de
 `patternId|subject|counter`-dedupe-sleutel, zodat een herhaalde run geen dubbele
 rijen maakt.
+
+De #304-declaraties (zeven nieuwe relaties + de klasse `Tag`) veranderen de
+gegenereerde regelset bewust NIET: `GovernedByChains` blijft exact
+`{HAS_DOMAIN, HAS_MECHANIC} ∘ GOVERNED_BY` (vastgepind met uitgeschreven
+literals in `InferenceRuleRegistryTests`). De gevoeligste kandidaat was
+`HAS_TAG`: had `Tag` als Concept-subklasse in de hiërarchie gehangen, dan was
+er vanzelf een `HAS_TAG ∘ GOVERNED_BY`-keten ontstaan die per constructie nul
+rijen matcht — de stille #274-fout, en de reden dat `Tag` direct onder Thing
+hangt.
 
 Neo4j-uitval is een verwacht pad: de graaf-stappen zijn best-effort
 (`Neo4jException`/driver-fout → de run doet niets en meldt "graph niet beschikbaar"),
@@ -1858,9 +1887,11 @@ tegen een gedeclareerde range `NormativeSource` — de naam klopt daar namelijk
 perfect. Een derde vraag blijft open en hoort NIET bij deze guards: of de
 KARDINALITEIT en de logische eigenschappen (functioneel, transitief, acyclisch)
 kloppen met wat de projectie bouwt. `SUPERSEDES` is bijvoorbeeld gedeclareerd
-als `0..1` én acyclisch; niets toetst dat vandaag op de echte graaf, want dat is
-een vraag over RIJEN en niet over Cypher-tekst — een runtime-probe tegen een
-opnemende driver kan haar per constructie niet beantwoorden.
+als `0..1` én acyclisch (sinds #296 zonder de transitive-trait: Erratum → Card
+kan per constructie nooit componeren); niets toetst die kardinaliteit vandaag op
+de echte graaf, want dat is een vraag over RIJEN en niet over Cypher-tekst — een
+runtime-probe tegen een opnemende driver kan haar per constructie niet
+beantwoorden.
 
 ### 6.5 De brein-projectie
 
@@ -2348,7 +2379,7 @@ nachtrun:
      buurt (focus + partners) i.p.v. alleen die van de focus-kaart, plus
      `RuleChunk`s die ≥2 aangeboden keyword-labels noemen als **bewijstekst**. Die
      regelsecties zijn nadrukkelijk GEEN offered ref: de HAS_ROLE-range is
-     Card/Keyword, een `RuleSection` kan geen agent/patient zijn. Zo kunnen
+     Card/Mechanic (#304), een `RuleSection` kan geen agent/patient zijn. Zo kunnen
      mech↔mech-paren überhaupt ontstaan én een officieel anker hebben.
   3. **de lexicale poort is verscherpt** — rollen moeten verschillende entiteiten
      zijn, en het bewijs moet een RELATIE uitdrukken: beide rollen verankerd in
@@ -3861,50 +3892,29 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   chains) bron-edges/class-anchor-labels die `GraphSyncService` nog niet
   materialiseert; die projectie-uitbreiding + een integratietest tegen een echte
   Neo4j is de openstaande follow-up (`ReasoningService`, `InferenceRuleRegistry`).
-- **Projectie-schuld t.o.v. de ontologie (#289 → #304).** Zeven geprojecteerde
-  edges horen inhoudelijk in de TBox maar staan er niet in: `ABOUT`, `PART_OF`,
-  `EXPLAINS`, `FROM_SET`, `HAS_TAG`, `HAS_ROLE`, `REQUIRES_CONDITION`. Sinds #289
-  is dat *geregistreerde* schuld (`ProjectionEdgeCatalog`, stand
-  `DomeinNogNietGedeclareerd`) in plaats van onopgemerkte drift — de guard laat ze
-  staan, maar niemand kan er nog een achtste bij zetten zonder het te merken. De
-  declaratie zelf is **#304** (bewust een eigen spoor: zou de schuld naar #289
-  wijzen, dan verloopt het adres zodra dat issue sluit). Twee scherpe punten:
-  (a) `HAS_ROLE` wordt door `OntologyValidationService.ValidateReifiedInteraction`
-  (`OntologyValidationService.cs:186-192`) al gevalideerd terwijl het geen
-  geregistreerd `RelationType` is — de poort beroept zich op iets wat het schema
-  niet kent, en bovendien op de VERKEERDE klasse: die validatie noemt `Keyword`
-  als rol-filler-type, terwijl de live graaf 492 × `Card` en 274 × `Mechanic`
-  telt en NUL × `Keyword`. De projectie matcht de filler label-loos, dus dat
-  liep nooit ergens tegenaan; wie #304 oppakt moet de declaratie op de METING
-  baseren, niet op wat de miner of deze documentatie beweerde (#270-les);
-  (b) `FROM_SET` is het spiegelbeeld van de #274-tweespalt: het register kent
-  `INTRODUCED_IN` (Card→Set, functioneel) terwijl de projectie `FROM_SET`
-  schrijft, dus de breuk loopt hier tussen een DODE declaratie en een levende
-  projectie. De knooplabel-vormen van alle zeven staan sinds #289 PR 2 in
-  `ProjectionEdgeShapeCatalog`, dus de declaratie hoeft niet opnieuw uitgezocht
-  te worden — ze staat er gemeten bij.
-- **Geregistreerde edges met een onjuiste of niet-afdwingbare declaratie (#296).**
-  Andere faalvorm dan hierboven, en een naam-guard vangt hem per constructie niet.
-  `SUPERSEDES` is gedeclareerd als `NormativeSource → NormativeSource` maar de
-  projectie schrijft `(:Erratum)-[:SUPERSEDES]->(:Card)`, en `Card` is geen
-  `NormativeSource`; `RELATES_TO` matcht label-loos op `ref`
-  (`MATCH (a {ref: …})`), waardoor de gedeclareerde domain/range niet afdwingbaar
-  ís. Beide staan als zodanig in `ProjectionEdgeCatalog` (stand `InSchema` mét
-  issue-referentie) zodat de catalogus het defect niet wegpoetst. De #270-les
-  geldt: meet eerst op de live graaf wat er werkelijk staat.
-  **Stand sinds #289 PR 2:** de knooplabel-guard (§6.3) betrapt beide gevallen nu
-  daadwerkelijk — ze zijn de drie `KnownLabelDefect`s die er zijn. De guard is
-  daarmee groen, maar het defect blijft geregistreerd én *afdwingbaar*
-  geregistreerd: L4 laat de erkenning rood gaan zodra ze niet meer klopt, dus een
-  reparatie kán niet stil zijn en de erkenning kan het defect niet overleven. Wat
-  nog OPEN is, is de inhoudelijke beslissing: `SUPERSEDES`-range verruimen naar
-  `Card` of de relatie splitsen (`ERRATA_OF` bestaat al als Erratum → Card, wat
-  `SUPERSEDES` in de huidige projectie dood zou maken), en bij `RELATES_TO` óf de
-  declaratie op de werkelijke breedte brengen óf per doelsoort een eigen statement
-  schrijven zoals `ABOUT` dat wél doet.
-- **`BrainQuery.EdgeTypes` blijft handwerk.** 7 van de 12 whitelist-entries staan
-  niet in de TBox, dus mechanisch afleiden uit `OntologySchema` zou ze stil uit de
-  brein-API en het LLM-vocabulaire laten vallen. Kan pas ná #304.
+- **`RELATES_TO` blijft label-loos en dus niet-afdwingbaar (#317, uit #296).**
+  De projectie matcht beide eindpunten op `ref` zonder label
+  (`MATCH (a {ref: …})`) omdat een `RELATES_TO` tussen élke twee knoopsoorten kan
+  lopen; de gedeclareerde domain/range `[Concept, Card]` is daarmee per
+  constructie niet afdwingbaar. De knooplabel-guard (§6.3) houdt dit zichtbaar
+  als twee `KnownLabelDefect`-waivers (L3/L4). De rest van #296 en heel #304 is
+  opgelost: de zeven voormalige `DomeinNogNietGedeclareerd`-edges zijn
+  gedeclareerd op de gemeten domain/range (baseline **3.0.0**, major), de dode
+  `INTRODUCED_IN`-declaratie is hernoemd naar `FROM_SET`, `SUPERSEDES` declareert
+  het gemeten `Erratum → Card`, en de drie plekken die `Keyword` als
+  HAS_ROLE-filler beweerden (validator, miner, deze documentatie) zijn op de
+  meting gebracht (492 × Card, 274 × Mechanic, nul × Keyword). Wat níet
+  meeverhuisde: de canonieke entiteit-laag registreert gedrukte keywords nog
+  steeds als kind `keyword` terwijl de projectie er `:Mechanic`-knopen van maakt —
+  de #274-kanttekening (a) in `OntologySchema`, ontwerpschuld van het samenvoegen
+  van die twee lagen, niet van deze declaratieronde.
+- **`BrainQuery.EdgeTypes` blijft handwerk.** Sinds #304 staan 10 van de 12
+  whitelist-entries in de TBox, maar `SUPPORTED_BY` en `AFFECTS` horen er bewust
+  niet in (Provenance-stand) — mechanisch afleiden uit `OntologySchema` zou die
+  twee stil uit de brein-API en het LLM-vocabulaire laten vallen, en omgekeerd
+  zou het niet-geprojecteerde TBox-relaties (INVOKES, HAS_STATUS) ten onrechte
+  aanbieden. De whitelist blijft dus een bewuste, met de hand bijgehouden
+  doorsnede.
 - **Openstaande architectuurrakende issues.** O.a. #122 (periodieke
   zelfverrijking in de scheduler), #121 (echte token-metering), #124/#125
   (reviewqueue-/misvattingen-laag), #127 (publieke databank), #15 (decks:

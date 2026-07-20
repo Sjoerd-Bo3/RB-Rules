@@ -59,6 +59,10 @@ public static class OntologySchema
         new(EntityType.Condition, [EntityType.Thing], "Gereïficeerde voorwaarde op een Interaction."),
         new(EntityType.Assertion, [EntityType.Thing], "Gereïficeerd feit-met-provenance (PROV-O)."),
         new(EntityType.Set, [EntityType.Thing], "Set / ontologie-versie-anker."),
+
+        // Bewust GEEN Concept-subklasse (#304): een tag (factie/tribe) is
+        // kaart-metadata zonder regelgedrag — zie de motivering bij EntityType.Tag.
+        new(EntityType.Tag, [EntityType.Thing], "Factie/tribe-etiket op een kaart (Noxus, Yordle…)."),
     ];
 
     /// <summary>Alle klassen, geïndexeerd op type.</summary>
@@ -133,9 +137,9 @@ public static class OntologySchema
         //     (Risico 2a: 'Assault 2' mag nooit een eigen entiteit worden).
         //
         // Keyword blijft een klasse: ERRATA_OF-range, canoniek entiteit-kind, en het
-        // rol-filler-type in ValidateReifiedInteraction. (De HAS_ROLE-edge zelf wordt
-        // wél geprojecteerd maar is géén geregistreerd RelationType — ook dat valt
-        // buiten deze ÉNE bron; zie de follow-up over projectie↔ontologie-drift.)
+        // INVOKES-domein. Sinds #304 is Keyword géén rol-filler-type meer: HAS_ROLE
+        // staat nu geregistreerd (hieronder) met de GEMETEN range Card/Mechanic —
+        // de live graaf telt 492 × Card en 274 × Mechanic als filler, nul × Keyword.
         // INVOKES (Keyword → Mechanic) is na deze wijziging DOOD: geen enkele relatie
         // bereikt Keyword nog vanaf Card, v2 schrijft nergens een (:Keyword)-knoop, en
         // dus kan INVOKES in geen enkele gegenereerde regel meer voorkomen. Het blijft
@@ -167,10 +171,19 @@ public static class OntologySchema
             MinCardinality: 1, MaxCardinality: 1,             // precies 1, functioneel
             Traits: RelationTraits.Functional, Parameters: []),
 
+        // Declareerde tot #296/#304 NormativeSource → NormativeSource — onwaar over
+        // de graaf die we bouwen: de projectie schrijft al jaren
+        // (:Erratum)-[:SUPERSEDES]->(:Card), gemeten op de live graaf, en dat is
+        // inhoudelijk juist (het erratum vervangt de GEDRUKTE kaarttekst). De
+        // declaratie volgt de meting (#270-les), niet andersom. Transitief is
+        // hier vervallen: Erratum → Card kan per constructie nooit componeren
+        // (geen Card is een Erratum), dus die trait was een belofte waar een
+        // toekomstige reasoner-regel op zou kunnen bouwen zonder dat er ooit een
+        // keten bestaat. Acyclisch blijft (triviaal waar over een bipartiete edge).
         new(RelationType.Supersedes, "SUPERSEDES",
-            Domain: [EntityType.NormativeSource], Range: [EntityType.NormativeSource],
-            MinCardinality: 0, MaxCardinality: 1,             // 0..1
-            Traits: RelationTraits.Transitive | RelationTraits.Acyclic, Parameters: []),
+            Domain: [EntityType.Erratum], Range: [EntityType.Card],
+            MinCardinality: 0, MaxCardinality: 1,             // 0..1, functioneel via max
+            Traits: RelationTraits.Acyclic, Parameters: []),
 
         new(RelationType.Corroborates, "CORROBORATES",
             Domain: [EntityType.Claim], Range: [EntityType.Claim, EntityType.NormativeSource],
@@ -182,11 +195,82 @@ public static class OntologySchema
             MinCardinality: 0, MaxCardinality: null,
             Traits: RelationTraits.Symmetric, Parameters: []),
 
-        new(RelationType.IntroducedIn, "INTRODUCED_IN",
-            Domain: [EntityType.Card, EntityType.Keyword, EntityType.Mechanic],
-            Range: [EntityType.Set],
+        // HEET FROM_SET (#304), niet INTRODUCED_IN: het spiegelbeeld van de
+        // #274-tweespalt, alleen liep de breuk hier tussen een DODE declaratie en
+        // een levende projectie. GraphSyncService schrijft (:Card)-[:FROM_SET]->(:Set)
+        // (gemeten: 963 rijen), BrainQuery.EdgeTypes, docs/ENGINE.md en docs/BRAIN.md
+        // zeggen allemaal FROM_SET; alleen dit register zei INTRODUCED_IN — en dan
+        // nog met een domein (Keyword/Mechanic) waarvoor nooit één edge is
+        // geschreven. De naam én het domein volgen de projectie; wil iemand ooit
+        // keyword→set-introducties vastleggen, dan is dat een NIEUWE, bewuste
+        // declaratie met een bijbehorende projectie — geen half-dode restpost hier.
+        new(RelationType.FromSet, "FROM_SET",
+            Domain: AnyCard, Range: [EntityType.Set],
             MinCardinality: 1, MaxCardinality: 1,             // precies 1, functioneel
             Traits: RelationTraits.Functional, Parameters: []),
+
+        // ── De zeven voorheen ongedeclareerde projectie-edges (#304) ─────────
+        // Domain/range zijn de METING op de live graaf (#270-les: bevraag de bron,
+        // geloof niet wat een mapper of de docs beweren), niet de bedoeling van
+        // ooit. Geen van deze zeven levert een nieuwe reasoner-keten op:
+        // InferenceRuleRegistry.GovernedByChains blijft exact
+        // {HAS_DOMAIN, HAS_MECHANIC} ∘ GOVERNED_BY — gecontroleerd, want een keten
+        // die per constructie nul rijen matcht is de stille #274-fout.
+
+        // Claim/Ruling → het onderwerp waarover zij iets beweren (gemeten: 77
+        // rijen over precies dit vierkant van 2×4 vormen). Min 0: een claim
+        // waarvan het onderwerp niet resolvet blijft een knoop zonder edge
+        // (bestaand, bewust projectie-gedrag).
+        new(RelationType.About, "ABOUT",
+            Domain: [EntityType.Claim, EntityType.Ruling],
+            Range: [EntityType.Card, EntityType.Mechanic, EntityType.RuleSection, EntityType.Concept],
+            MinCardinality: 0, MaxCardinality: null,
+            Traits: RelationTraits.None, Parameters: []),
+
+        // RuleSection → dichtstbijzijnde bestaande ouder-sectie binnen dezelfde
+        // bron (gemeten: 2139). Mereologie: transitief + acyclisch, en ten
+        // hoogste één DIRECTE ouder (0..1 — wortelsecties hebben er geen).
+        new(RelationType.PartOf, "PART_OF",
+            Domain: [EntityType.RuleSection], Range: [EntityType.RuleSection],
+            MinCardinality: 0, MaxCardinality: 1,
+            Traits: RelationTraits.Transitive | RelationTraits.Acyclic, Parameters: []),
+
+        // Concept (primer-doc) → de RuleSection(s) waarop het gebaseerd is
+        // (gemeten: 101). De kennispiramide-brug tussen afgeleide uitleg en
+        // officiële tekst.
+        new(RelationType.Explains, "EXPLAINS",
+            Domain: [EntityType.Concept], Range: [EntityType.RuleSection],
+            MinCardinality: 0, MaxCardinality: null,
+            Traits: RelationTraits.None, Parameters: []),
+
+        // Kaart → factie/tribe (gemeten: 982). Range Tag — zie de klasse-beslissing
+        // bij EntityType.Tag (direct onder Thing, geen Concept).
+        new(RelationType.HasTag, "HAS_TAG",
+            Domain: AnyCard, Range: [EntityType.Tag],
+            MinCardinality: 0, MaxCardinality: null,
+            Traits: RelationTraits.None, Parameters: []),
+
+        // Interaction → rol-filler, met de rol (agent|patient) als edge-parameter.
+        // Range is de METING: 492 × Card, 274 × Mechanic, nul × Keyword — de
+        // docs, de miner én ValidateReifiedInteraction beweerden alle drie
+        // Card/Keyword en zaten er alle drie naast (#304). De projectie dwingt
+        // deze range sinds #304 ook af (twee label-gebonden statements in
+        // GraphSyncService, zoals ABOUT dat per doelsoort doet): een range
+        // declareren die de projectie niet afdwingt is de #296-klasse fout.
+        // Min 2: elke Interaction draagt een agent- én een patient-rol.
+        new(RelationType.HasRole, "HAS_ROLE",
+            Domain: [EntityType.Interaction], Range: [EntityType.Card, EntityType.Mechanic],
+            MinCardinality: 2, MaxCardinality: null,
+            Traits: RelationTraits.None, Parameters: ["role"]),
+
+        // Interaction → gereïficeerde Condition (gemeten: 98; het statement dwingt
+        // :Interaction af — de live knoop draagt óók :Concept, maar de guard toetst
+        // wat de query garandeert). Niet verwarren met REQUIRES: dat is de
+        // gekwalificeerde (reïficatie-plichtige) relatie, een ander ding.
+        new(RelationType.RequiresCondition, "REQUIRES_CONDITION",
+            Domain: [EntityType.Interaction], Range: [EntityType.Condition],
+            MinCardinality: 0, MaxCardinality: null,
+            Traits: RelationTraits.None, Parameters: []),
 
         // Gekwalificeerde relaties: verboden als kale edge → altijd via Interaction.
         new(RelationType.Counters, "COUNTERS",

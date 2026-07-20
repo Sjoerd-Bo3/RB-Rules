@@ -156,10 +156,10 @@ public class OntologySchemaTests
     }
 
     [Fact]
-    public void ValidateTriple_IntroducedInTweede_SchendtFunctioneel()
+    public void ValidateTriple_FromSetTweede_SchendtFunctioneel()
     {
         var r = OntologyValidationService.ValidateTriple(
-            EntityType.Card, RelationType.IntroducedIn, EntityType.Set,
+            EntityType.Card, RelationType.FromSet, EntityType.Set,
             new TripleContext(ExistingOutgoingCount: 1));
 
         Assert.False(r.IsValid);
@@ -242,16 +242,109 @@ public class OntologySchemaTests
     [Fact]
     public void RelatieEigenschappen_TransitiefAcyclischSymmetrischFunctioneel()
     {
-        Assert.True(OntologySchema.Relations[RelationType.Supersedes].Traits
+        // SUPERSEDES is sinds #296 Erratum → Card en dus NIET meer transitief:
+        // geen Card is een Erratum, dus de relatie kan per constructie nooit
+        // componeren — een transitive-trait zou een belofte zijn waarop een
+        // toekomstige reasoner-regel bouwt zonder dat er ooit een keten bestaat.
+        Assert.False(OntologySchema.Relations[RelationType.Supersedes].Traits
             .HasFlag(RelationTraits.Transitive));
         Assert.True(OntologySchema.Relations[RelationType.Supersedes].Traits
             .HasFlag(RelationTraits.Acyclic));
+        Assert.True(OntologySchema.Relations[RelationType.Supersedes].IsFunctional);
+        // PART_OF (#304) draagt de mereologie-eigenschappen die SUPERSEDES verloor.
+        Assert.True(OntologySchema.Relations[RelationType.PartOf].Traits
+            .HasFlag(RelationTraits.Transitive | RelationTraits.Acyclic));
         Assert.True(OntologySchema.Relations[RelationType.SubclassOf].Traits
             .HasFlag(RelationTraits.Transitive | RelationTraits.Acyclic));
         Assert.True(OntologySchema.Relations[RelationType.Contradicts].Traits
             .HasFlag(RelationTraits.Symmetric));
         Assert.True(OntologySchema.Relations[RelationType.ErrataOf].IsFunctional);
-        Assert.True(OntologySchema.Relations[RelationType.IntroducedIn].IsFunctional);
+        Assert.True(OntologySchema.Relations[RelationType.FromSet].IsFunctional);
+    }
+
+    // ── #304/#296: de declaraties volgen de METING op de live graaf ──────────
+    // Bewust UITGESCHREVEN literals (geen vergelijking met de constante die ze
+    // bewaken — die schuift mee): een mutatie die een range terugzet op de oude,
+    // onjuiste waarde hoort hier rood te zijn.
+
+    [Fact]
+    public void Schema_HasRole_RangeIsGemetenCardMechanic_NooitKeyword()
+    {
+        var hasRole = OntologySchema.Relations[RelationType.HasRole];
+
+        Assert.Equal("HAS_ROLE", hasRole.EdgeName);
+        Assert.Equal([EntityType.Interaction], hasRole.Domain);
+        // De meting: 492 × Card, 274 × Mechanic, nul × Keyword. De docs, de miner
+        // en de validator beweerden alle drie Keyword — dat mag er nooit stil in terug.
+        Assert.Equal(2, hasRole.Range.Count);
+        Assert.Contains(EntityType.Card, hasRole.Range);
+        Assert.Contains(EntityType.Mechanic, hasRole.Range);
+        Assert.DoesNotContain(EntityType.Keyword, hasRole.Range);
+        Assert.Contains("role", hasRole.Parameters);
+    }
+
+    [Fact]
+    public void Schema_Supersedes_IsGemetenErratumNaarCard()
+    {
+        var supersedes = OntologySchema.Relations[RelationType.Supersedes];
+
+        Assert.Equal([EntityType.Erratum], supersedes.Domain);
+        Assert.Equal([EntityType.Card], supersedes.Range);
+        // De oude declaratie (NormativeSource → NormativeSource) was onwaar over
+        // de graaf die we bouwen (#296).
+        Assert.DoesNotContain(EntityType.NormativeSource, supersedes.Range);
+    }
+
+    [Fact]
+    public void Schema_FromSet_VervangtDeDodeIntroducedInDeclaratie()
+    {
+        var fromSet = OntologySchema.Relations[RelationType.FromSet];
+
+        Assert.Equal("FROM_SET", fromSet.EdgeName);
+        Assert.Equal([EntityType.Card], fromSet.Domain);   // gemeten: alleen kaarten
+        Assert.Equal([EntityType.Set], fromSet.Range);
+        // De oude naam mag niet als tweede ingang terugsluipen — één relatie, één
+        // naam (zelfde regel als HAS_KEYWORD/IN_DOMAIN in #274).
+        Assert.Null(OntologySchema.RelationByEdgeName("INTRODUCED_IN"));
+    }
+
+    [Fact]
+    public void Schema_OverigeNr304Relaties_DragenDeGemetenVormen()
+    {
+        var about = OntologySchema.Relations[RelationType.About];
+        Assert.Equal(0, about.MinCardinality);
+        Assert.Equal([EntityType.Claim, EntityType.Ruling], about.Domain);
+        Assert.Equal(
+            [EntityType.Card, EntityType.Mechanic, EntityType.RuleSection, EntityType.Concept],
+            about.Range);
+
+        var partOf = OntologySchema.Relations[RelationType.PartOf];
+        Assert.Equal([EntityType.RuleSection], partOf.Domain);
+        Assert.Equal([EntityType.RuleSection], partOf.Range);
+        Assert.Equal(1, partOf.MaxCardinality);            // hoogstens één directe ouder
+
+        var explains = OntologySchema.Relations[RelationType.Explains];
+        Assert.Equal([EntityType.Concept], explains.Domain);
+        Assert.Equal([EntityType.RuleSection], explains.Range);
+
+        var hasTag = OntologySchema.Relations[RelationType.HasTag];
+        Assert.Equal([EntityType.Card], hasTag.Domain);
+        Assert.Equal([EntityType.Tag], hasTag.Range);
+
+        var requiresCondition = OntologySchema.Relations[RelationType.RequiresCondition];
+        Assert.Equal([EntityType.Interaction], requiresCondition.Domain);
+        Assert.Equal([EntityType.Condition], requiresCondition.Range);
+    }
+
+    [Fact]
+    public void Schema_TagIsGeenConcept()
+    {
+        // De klasse-beslissing uit #304: een tag (factie/tribe) draagt geen regels,
+        // dus Tag hangt direct onder Thing. Tag ⊑ Concept zou bovendien een dode
+        // HAS_TAG ∘ GOVERNED_BY-reasonerketen genereren (zie de keten-test in
+        // InferenceRuleRegistryTests).
+        Assert.True(OntologySchema.IsA(EntityType.Tag, EntityType.Thing));
+        Assert.False(OntologySchema.IsA(EntityType.Tag, EntityType.Concept));
     }
 
     // ── String-poort (rauwe LLM-output) ──────────────────────────────────────

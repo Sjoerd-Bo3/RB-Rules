@@ -228,10 +228,12 @@ public class ProjectionLabelCheckTests
     [Fact]
     public void BuitenDeRange_IsEenSchending()
     {
-        // Precies #296: SUPERSEDES declareert NormativeSource → NormativeSource, maar
-        // de projectie hangt er een Card aan. Erratum ⊑ NormativeSource (dus de
-        // domain-kant is schoon), Card niet.
-        var findings = Check("SUPERSEDES", ["Erratum"], ["Card"]);
+        // De #304-meting als literal: een Keyword-filler op HAS_ROLE zou precies de
+        // bewering zijn die docs/miner/validator jarenlang deden en die de live
+        // graaf weerlegt (492 × Card, 274 × Mechanic, nul × Keyword). Zet iemand de
+        // gedeclareerde range terug op Card/Keyword, dan verschuift dit oordeel —
+        // en gaat de Interaction→Mechanic-conformiteitstest hieronder rood.
+        var findings = Check("HAS_ROLE", ["Interaction"], ["Keyword"]);
 
         var finding = Assert.Single(findings);
         Assert.Equal(EdgeEndpoint.To, finding.Side);
@@ -239,11 +241,44 @@ public class ProjectionLabelCheckTests
     }
 
     [Fact]
+    public void Supersedes_ErratumNaarCard_IsSindsNr296Conform()
+    {
+        // Tot #296 was dit DE bekende schending (range NormativeSource); sindsdien
+        // declareert het register de gemeten vorm. Mutatie-pin: zet de range terug
+        // op NormativeSource en hier verschijnt weer een Violates-bevinding — en
+        // L3 gaat rood omdat de bijbehorende waiver is opgeruimd.
+        Assert.Empty(Check("SUPERSEDES", ["Erratum"], ["Card"]));
+    }
+
+    [Fact]
+    public void HasRole_GemetenFillers_ZijnConform()
+    {
+        // De twee label-gebonden HAS_ROLE-statements (#304).
+        Assert.Empty(Check("HAS_ROLE", ["Interaction"], ["Card"]));
+        Assert.Empty(Check("HAS_ROLE", ["Interaction"], ["Mechanic"]));
+    }
+
+    [Fact]
+    public void HasTag_CardNaarTag_IsSindsNr304Conform() =>
+        Assert.Empty(Check("HAS_TAG", ["Card"], ["Tag"]));
+
+    [Fact]
     public void OnbekendLabel_VoldoetNooit()
     {
-        // "Tag" is geen EntityType. Het register is de ÉNE bron, dus een label dat daar
-        // niet in staat kan een gedeclareerde range niet vervullen — anders zou elke
-        // typefout in een label stil als "vast wel een subklasse" doorglippen.
+        // "Sticker" is geen EntityType. Het register is de ÉNE bron, dus een label
+        // dat daar niet in staat kan een gedeclareerde range niet vervullen — anders
+        // zou elke typefout in een label stil als "vast wel een subklasse" doorglippen.
+        // (Tot #304 stond hier "Tag"; dat is inmiddels een echte klasse en dekt dit
+        // pad dus niet meer.)
+        var finding = Assert.Single(Check("HAS_DOMAIN", ["Card"], ["Sticker"]));
+        Assert.Equal(ProjectionLabelVerdict.Violates, finding.Verdict);
+    }
+
+    [Fact]
+    public void BekendLabelBuitenDeRange_IsOokEenSchending()
+    {
+        // Tag is sinds #304 een geregistreerde klasse, maar geen Domain — een bekend
+        // label buiten de gedeclareerde range blijft een schending.
         var finding = Assert.Single(Check("HAS_DOMAIN", ["Card"], ["Tag"]));
         Assert.Equal(ProjectionLabelVerdict.Violates, finding.Verdict);
     }
@@ -277,8 +312,10 @@ public class ProjectionLabelCheckTests
 
     [Fact]
     public void NietGedeclareerdeEdge_LevertNiets() =>
-        // ABOUT/HAS_TAG/HAS_ROLE staan (nog) niet in OntologySchema — #304. Er is dan
-        // niets om tegen te toetsen; de vorm wordt wél geregistreerd, zodat de toets
-        // vanzelf gaat lopen zodra de relatie gedeclareerd is.
-        Assert.Empty(Check("HAS_TAG", ["Card"], ["Tag"]));
+        // De Provenance-tak (SUPPORTED_BY, AFFECTS, …) staat bewust buiten de TBox.
+        // Er is dan niets om tegen te toetsen; de vorm wordt wél geregistreerd,
+        // zodat de toets vanzelf gaat lopen zodra iemand zo'n relatie tóch
+        // declareert. (Tot #304 stond hier HAS_TAG; die is inmiddels gedeclareerd
+        // en dekt dit pad dus niet meer.)
+        Assert.Empty(Check("SUPPORTED_BY", ["Claim"], ["Source"]));
 }

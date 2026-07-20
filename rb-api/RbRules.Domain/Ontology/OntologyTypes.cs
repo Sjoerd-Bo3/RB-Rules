@@ -57,6 +57,14 @@ public enum EntityType
 
     // Versie-anker
     Set,
+
+    // Kaart-metadata: factie/tribe ("Noxus", "Yordle"). Bewust DIRECT onder
+    // Thing en niet onder Concept (#304): een tag draagt geen regels — GOVERNED_BY
+    // declareert over zijn Concept-domein "minstens 1 regelsectie", en dat is
+    // over tags onwaar. Bijkomend: Tag ⊑ Concept zou InferenceRuleRegistry een
+    // HAS_TAG ∘ GOVERNED_BY-keten laten genereren die per constructie nul rijen
+    // matcht (niemand schrijft GOVERNED_BY vanaf een :Tag) — de stille #274-fout.
+    Tag,
 }
 
 /// <summary>Logische eigenschappen van een relatietype, als vlaggen zodat de
@@ -95,13 +103,23 @@ public enum RelationType
     Supersedes,
     Corroborates,
     Contradicts,
-    IntroducedIn,
+    // HEETTE IntroducedIn (INTRODUCED_IN) tot #304: een DODE declaratie naast de
+    // levende FROM_SET-projectie — het spiegelbeeld van de #274-tweespalt. De
+    // naam volgt de projectie, niet andersom (zie OntologySchema).
+    FromSet,
     Counters,
     Modifies,
     Grants,
     Requires,
     InteractsWith,
     RelatesTo,
+    // ── Sinds #304 gedeclareerd (voorheen ProjectionEdgeStance.DomeinNogNietGedeclareerd) ──
+    About,
+    PartOf,
+    Explains,
+    HasTag,
+    HasRole,
+    RequiresCondition,
 }
 
 /// <summary>Eén klasse in de hiërarchie: haar directe superklassen
