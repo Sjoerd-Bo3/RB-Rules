@@ -889,7 +889,9 @@ de globale duur-vangrail).
   `lastEmbed`-veld in plaats van de 15 nieuwste logrijen — daar wordt een
   nachtelijke embed-fout vóór de ochtend uit weggedrukt door de rijen van de
   latere stappen. Alle jobs melden de uitval ook in hun eigen ketendetail, in
-  plaats van een omgevallen stap als geslaagd te tonen.
+  plaats van een omgevallen stap als geslaagd te tonen — de embed-job, beide
+  regel-index-jobs (`rules` en de incrementele `rules-index` uit #258) en de
+  set-release-keten.
   **Niet-geëmbedde items blijven staan** voor de volgende run (de pijplijn
   selecteert op ontbrekende embedding), en bij de regel-index wordt de hele
   bron overgeslagen in plaats van een complete index door een gatenkaas te

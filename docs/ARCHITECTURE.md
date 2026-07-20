@@ -2906,7 +2906,12 @@ vraagkant in plaats van aan het plafond:
    `SetReleaseService` was een échte regressie van #282 zelf: zijn `Step`-catch
    zette voorheen `FOUT — …` in het ketendetail, maar de pijplijn gooit niet
    meer, dus zonder `Summary` werd een omgevallen embed-stap als geslaagd
-   gemeld.
+   gemeld. Concreet vier aanroepplekken: `JobCatalog.EmbedAsync`,
+   `RulesAsync` (`Summarize(rebuilt: true)`), `RulesIndexAsync`
+   (`Summarize(incremental: true)` — de incrementele job uit #258) en
+   `SetReleaseService`. Komt er een nieuwe aanroeper bij, dan hoort die
+   `Summary`/`Summarize()` te gebruiken: een eigen string is precies hoe deze
+   bevinding er via een nieuwe deur weer in komt.
 7. **Begrenzen boven verhogen.** De cap van 2,5 GiB blijft: na #279 is er geen
    ruimte om te schuiven, en een hogere cap verplaatst de OOM alleen naar
    Postgres of Neo4j. Idle houdt Ollama ~69 MiB vast, dus de piek zit in het
