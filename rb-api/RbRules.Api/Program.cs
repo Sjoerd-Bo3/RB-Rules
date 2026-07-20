@@ -84,6 +84,9 @@ builder.Services.AddScoped<InteractionPromotionService>();
 // jobs (breinmine-interacties/-predicaten), bewust NIET in de "alles"-keten.
 builder.Services.AddScoped<BreinInteractionMiningService>();
 builder.Services.AddScoped<BreinPredicateMiningService>();
+// Steekproef-audit (#255): 1 op de N gepromoveerde interacties langs het sterkere
+// model (rb-ai task "hard"). Meting + provenance, nooit een tier-wijziging.
+builder.Services.AddScoped<BreinInteractionAuditService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
 // Beheerde instellingen (#254): de feature-vlaggen die vroeger alleen via de

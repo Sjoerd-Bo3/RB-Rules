@@ -241,7 +241,8 @@ public class BreinMiningResetServiceTests
         Assert.Equal("ok", log.Status);
         Assert.Equal("interacties", log.Ref);
         Assert.Contains("1 interacties", log.Detail);
-        Assert.Contains("1 interactie-assertions verwijderd", log.Detail);
+        Assert.Contains("1 interactie-assertions", log.Detail);
+        Assert.Contains("audit-oordelen verwijderd", log.Detail);
         Assert.Contains("BEHOUDEN", log.Detail);
     }
 

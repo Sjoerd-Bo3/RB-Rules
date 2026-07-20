@@ -123,6 +123,11 @@ public static class JobCatalog
             new("breinentiteiten", BreinRegisterEntitiesAsync),
             new("breinmine-interacties", BreinMineInteractionsAsync, BreinMineInteractionsUncappedAsync),
             new("breinmine-predicaten", BreinMinePredicatesAsync, BreinMinePredicatesUncappedAsync),
+            // Steekproef-audit (#255): 1 op de N gepromoveerde interacties langs een
+            // STERKER model (rb-ai task "hard"). Meet een échte precisie naast de
+            // zelfreferentiële poort-accept-ratio; het oordeel is een aparte
+            // audit-rij met eigen provenance en verandert nooit zelf een tier.
+            new("breinaudit-interacties", BreinAuditInteractionsAsync, BreinAuditInteractionsUncappedAsync),
             // Nachtrun (#245): de volledige ONGECAPTE keten in één job —
             // "alles bijwerken" (met ongecapte mechaniek-mining) → brein-interacties
             // → brein-predicaten → projectie → reason. Draait automatisch in het
@@ -432,6 +437,28 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<BreinPredicateMiningService>()
             .RunAsync(progress: report, ct: ct);
+        return new(r.Summary, Drained: !r.CapHit);
+    }
+
+    private static async Task<JobOutcome> BreinAuditInteractionsAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BreinInteractionAuditService>()
+            .RunAsync(progress: report, ct: ct);
+        // #190 vers-werk-semantiek: per-run gecapt; CapHit → nog steekproef-leden
+        // zonder oordeel. Gefaalde audits tellen niet als vers werk (geen watermark,
+        // maar een directe herhaling faalt vrijwel zeker opnieuw).
+        return new(r.Summary, Drained: !r.CapHit);
+    }
+
+    /// <summary>Ongecapte steekproef-audit (#255/#258): de hele steekproef binnen de
+    /// nachtrun-deadline i.p.v. de per-run cap.</summary>
+    private static async Task<JobOutcome> BreinAuditInteractionsUncappedAsync(
+        IServiceProvider sp, Action<string> report, DateTimeOffset? deadline, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BreinInteractionAuditService>().RunAsync(
+            maxAudits: Domain.NightlyWindow.UncappedItems, deadline: deadline,
+            progress: report, ct: ct);
         return new(r.Summary, Drained: !r.CapHit);
     }
 

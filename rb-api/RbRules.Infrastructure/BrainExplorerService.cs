@@ -58,7 +58,10 @@ public sealed record BrainCockpit(
     // /ask-retrieval (env-flag BREIN_RETRIEVAL_ENABLED, default uit)
     bool RetrievalEnabled,
     // Nachtrun (#245): laatste afronding van de volledige ongecapte keten (of null).
-    BrainJobRunItem? NightlyRun = null);
+    BrainJobRunItem? NightlyRun = null,
+    // Steekproef-audit (#255): aantal geveld oordelen + laatste audit-run.
+    int InteractionAudits = 0,
+    BrainJobRunItem? AuditRun = null);
 
 /// <summary>Eén canonieke entiteit in de verkenner: canoniek label + alias-lexicon
 /// + merge-status. <see cref="MergedIntoLabel"/> is het label van de overlevende
@@ -202,7 +205,7 @@ public class BrainExplorerService(RbRulesDbContext db)
         var brainJobs = new[]
         {
             "breinentiteiten", "breinmine-interacties", "breinmine-predicaten",
-            "breinprojectie", "reason", "nachtrun",
+            "breinaudit-interacties", "breinprojectie", "reason", "nachtrun",
         };
         // Greatest-n-per-group (nieuwste run per Ref) kan Npgsql niet server-side
         // vertalen — de kandidaatrijen vertaalbaar (Where+Select) ophalen en
@@ -236,7 +239,9 @@ public class BrainExplorerService(RbRulesDbContext db)
                 .CountAsync(c => c.Status == ReasoningConflictStatus.Open, ct),
             ReasonRun: lastByJob.GetValueOrDefault("reason"),
             RetrievalEnabled: retrievalEnabled,
-            NightlyRun: lastByJob.GetValueOrDefault("nachtrun"));
+            NightlyRun: lastByJob.GetValueOrDefault("nachtrun"),
+            InteractionAudits: await db.InteractionAudits.CountAsync(ct),
+            AuditRun: lastByJob.GetValueOrDefault("breinaudit-interacties"));
     }
 
     /// <summary>Canonieke entiteiten met alias-lexicon en merge-status, gepagineerd.
@@ -499,6 +504,10 @@ public class BrainExplorerService(RbRulesDbContext db)
     public async Task<BrainObservability> ObservabilityAsync(CancellationToken ct = default)
     {
         var runs = await db.MiningRuns.AsNoTracking().ToListAsync(ct);
+        // Steekproef-audit (#255): de gemeten precisie komt uit de audit-rijen zelf
+        // (model + promptversie op de rij), niet uit run-tellers — de meting mag niet
+        // meebewegen met hoe een run zijn tellers invult.
+        var audits = await db.InteractionAudits.AsNoTracking().ToListAsync(ct);
 
         // Canonieke drift per kind (Live/Candidate/Canonical/Tombstone/Singleton).
         var entityRows = await db.CanonicalEntities.AsNoTracking()
@@ -522,7 +531,13 @@ public class BrainExplorerService(RbRulesDbContext db)
         var canonicalDrift = CanonicalDriftSnapshot.Build(byKind, duplicationDebt, DateTimeOffset.UtcNow);
 
         var report = ObservabilityReport.Build(
-            DateTimeOffset.UtcNow, canonicalDrift: canonicalDrift, miningRuns: runs);
+            DateTimeOffset.UtcNow, canonicalDrift: canonicalDrift,
+            // Audit-runs horen NIET in de mining-precisie-tabel: hun tellers zijn
+            // oordelen over andermans feiten, geen poort-uitslagen — als rij tussen
+            // de mining-soorten zou de meting zich als accept-ratio vermommen,
+            // precies de verwarring die #255 opheft.
+            miningRuns: runs.Where(r => r.Kind != FactKinds.InteractionAudit),
+            interactionAudits: audits);
 
         var interactionTiers = (await db.Interactions.AsNoTracking()
                 .GroupBy(i => i.Status)

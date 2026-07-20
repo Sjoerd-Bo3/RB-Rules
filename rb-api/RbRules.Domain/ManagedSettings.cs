@@ -8,6 +8,12 @@ public static class SettingKeys
     /// <summary>Brein-GraphRAG-retrieval in /ask (was <c>BREIN_RETRIEVAL_ENABLED</c>).</summary>
     public const string BreinRetrievalEnabled = "brein.retrieval.enabled";
 
+    /// <summary>Steekproefdichtheid van de interactie-audit (#255): 1 op de N
+    /// gepromoveerde interacties gaat langs het sterkere model. Beheerd (#254) en
+    /// géén env-only vlag: de dichtheid is precies het soort knop dat Sjoerd wil
+    /// kunnen bijstellen zonder deploy.</summary>
+    public const string BreinAuditSampleN = "brein.audit.sample_n";
+
     /// <summary>Noodrem op de AUTOMATISCHE nachtrun (was <c>NIGHTLY_ENABLED</c>).
     /// Handmatig starten via de beheer-knop blijft altijd werken.</summary>
     public const string NightlyEnabled = "nightly.enabled";
@@ -25,6 +31,9 @@ public enum SettingKind
     Bool,
     Hour,
     TimeZone,
+    /// <summary>Klein positief geheel getal (1 t/m 100) — bv. de
+    /// audit-steekproefdichtheid "1 op de N" (#255).</summary>
+    Count,
 }
 
 /// <summary>Eén beheerbare instelling: wat hij heet, wat hij betekent en waar hij in
@@ -60,6 +69,11 @@ public static class ManagedSettingsCatalog
             "Brein-retrieval in /ask",
             "Gebruikt de brein-graaf (GraphRAG) in /ask-antwoorden. Uit = /ask draait "
             + "exact zoals zonder brein: geen extra latency, geen gedragswijziging."),
+        new(SettingKeys.BreinAuditSampleN, SettingKind.Count, "brein",
+            "Steekproef-audit: 1 op N",
+            "Welk deel van de gepromoveerde interacties het sterkere model beoordeelt "
+            + "(1 = alles, 10 = een tiende). De audit meet alleen — hij promoveert of "
+            + "degradeert nooit zelf."),
         new(SettingKeys.NightlyEnabled, SettingKind.Bool, "nachtrun",
             "Automatische nachtrun",
             "Mag de scheduler de nachtrun zelf starten binnen het venster? Uit = de "
@@ -98,6 +112,9 @@ public static class ManagedSettingsCatalog
                 ? SettingParse.Success(v)
                 : SettingParse.Fail($"'{v}' is op deze host geen bekende tijdzone "
                     + "(IANA-vorm, bv. Europe/Amsterdam)."),
+            SettingKind.Count => int.TryParse(v, out var n) && n is >= 1 and <= 100
+                ? SettingParse.Success(n.ToString())
+                : SettingParse.Fail($"'{v}' is geen aantal (1 t/m 100)."),
             _ => SettingParse.Fail($"Onbekend waardetype voor '{key}'."),
         };
     }

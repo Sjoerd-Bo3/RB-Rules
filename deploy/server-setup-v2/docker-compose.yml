@@ -93,6 +93,13 @@ services:
       # uitval (zichtbaar als "429 AI-slots vol" in het run-detail); lager laat
       # slots onbenut. Bijstellen doe je aan beide kanten tegelijk.
       BREIN_MINING_CONCURRENCY: ${BREIN_MINING_CONCURRENCY:-3}
+      # Steekproefdichtheid van de interactie-audit (#255): 1 op de N gepromoveerde
+      # interacties langs het sterkere model. Dit is alleen de BOOTSTRAP-default —
+      # de knop zelf is beheerd (setting-tabel, brein.audit.sample_n) en wint
+      # altijd van deze env (#254). Staat hier tóch expliciet vanwege de
+      # NIGHTLY_ENABLED-les hierboven: een variabele die alleen in de VM-.env
+      # staat bereikt de container nooit.
+      BREIN_AUDIT_SAMPLE_N: ${BREIN_AUDIT_SAMPLE_N:-10}
       # Embed-batchgrootte (#282). MOETEN hier staan — zelfde les als NIGHTLY_ENABLED
       # hierboven. Verifieer na deploy met:
       #   docker exec rb-v2-api printenv | grep EMBED_

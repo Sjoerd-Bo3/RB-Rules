@@ -58,6 +58,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<InteractionCondition> InteractionConditions => Set<InteractionCondition>();
     public DbSet<RejectionTombstone> RejectionTombstones => Set<RejectionTombstone>();
     public DbSet<InteractionDecision> InteractionDecisions => Set<InteractionDecision>();
+    public DbSet<InteractionAudit> InteractionAudits => Set<InteractionAudit>();
     // Getypeerde mechanic-predicaten (fase 5, #229): het structurele signaal voor
     // de abductieve hypothese-motor.
     public DbSet<MechanicPredicateAssertion> MechanicPredicates => Set<MechanicPredicateAssertion>();
@@ -526,6 +527,21 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.ToTable("interaction_decision");
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.InteractionId);
+        });
+
+        // Steekproef-audit (#255): het oordeel van een sterker model over een
+        // gepromoveerde interactie, als aparte meting met eigen provenance. Bewust
+        // GEEN FK-cascade naar interaction: het oordeel is een audit-spoor en hoort
+        // een eventuele opruiming van het feit te overleven.
+        b.Entity<InteractionAudit>(e =>
+        {
+            e.ToTable("interaction_audit");
+            e.HasKey(x => x.Id);
+            // Het watermark-pad: "heeft deze interactie al een oordeel op deze
+            // promptversie?" — de query van de 1-op-N-selectie.
+            e.HasIndex(x => new { x.InteractionId, x.PromptVersion });
+            e.HasIndex(x => x.AuditedAt);
+            e.Property(x => x.RunId).HasMaxLength(Domain.Ulid.Length);
         });
 
         // Getypeerde mechanic-predicaten (fase 5, #229, §5): het structurele signaal

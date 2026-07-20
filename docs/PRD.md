@@ -966,7 +966,8 @@ de globale duur-vangrail).
   event vanuit meerdere bronnen melden), **Kaart-pad** (cards → embed → mine →
   graph), **Kennis-pad** (claims → clarify → relations → relationtriage →
   primer → graph) en het nieuwe **Brein-pad** (breinentiteiten →
-  breinmine-interacties → breinmine-predicaten → breinprojectie → reason).
+  breinmine-interacties → breinmine-predicaten → breinaudit-interacties #255 →
+  breinprojectie → reason).
   #258 verschoof daarbij vier dingen: `rules`/`bans` ontbraken in het
   Ingest-pad (ze stonden alleen in "Alles bijwerken") en zijn toegevoegd als
   `rules-index` — de incrementele variant, want de bestaande `rules`-knop
@@ -1369,7 +1370,12 @@ de globale duur-vangrail).
   maakt: een **overzicht** met tegels per brein-tabel (assertions, canonieke
   entiteiten, interacties, conflicts, mining-runs, eval-baselines,
   answertraces) en observability-rollups (mining-precisie, canonieke drift &
-  duplicatie-schuld, interactie-tiers, conflict-kanalen); een **entiteiten**-
+  duplicatie-schuld, interactie-tiers, conflict-kanalen — en sinds #255 de
+  **gemeten audit-precisie** náást de poort-accept-ratio: per (model ×
+  promptversie) n, bevestigd, onjuist en niet-gedragen uit de
+  steekproef-audit, expliciet gelabeld "steekproef door {model}, n={aantal}"
+  en met de kanttekening dat de mining-"precisie" de accept-ratio van onze
+  eigen poort is); een **entiteiten**-
   verkenner (canoniek label + alias-lexicon + merge-status, filterbaar op
   kind/status); een **interacties**-verkenner (gereïficeerde interacties met
   condities, tier-badge en de doorklikbare provenance-keten
@@ -1390,7 +1396,11 @@ de globale duur-vangrail).
   operationele **pipeline-cockpit** die per stap toont wát er live staat en de
   jobs triggerbaar maakt (voorheen waren de vier brein-jobs API-only): **stap 1
   — Extractie** (`breinmine-interacties` + `breinmine-predicaten`: X interacties
-  / Y mechanic-predicaten gemined, per job een trigger-knop), **stap 2 —
+  / Y mechanic-predicaten gemined, per job een trigger-knop; sinds #255 ook de
+  **steekproef-audit** `breinaudit-interacties` — Z audit-oordelen, met eronder
+  de beheerde steekproefdichtheid "1 op N" (`brein.audit.sample_n`, direct
+  effect zonder herstart) — een negatief oordeel degradeert nooit zelf maar
+  landt als open conflict in de reviewqueue), **stap 2 —
   Projectie** (`breinprojectie` → Neo4j: canonieke-entiteiten-teller + status,
   trigger-knop), **stap 3 — Reasoner** (`reason` → afgeleide edges + conflicts: X
   conflicts / Y open, trigger-knop), en de **/ask-retrieval**-flag (AAN/UIT, met
@@ -1404,7 +1414,9 @@ de globale duur-vangrail).
   flag-status) · *actie* `POST ?/job` (start via `POST /api/admin/jobs/{name}`).
 - **Beheerde feature-vlaggen** (#254) — de vlaggen die alleen via de VM-`.env` +
   een herstart te zetten waren, staan nu als schakelaars in **beheer → Brein**:
-  `/ask`-retrieval aan/uit, en onder de nachtrun-kaart de noodrem
+  `/ask`-retrieval aan/uit, de audit-steekproefdichtheid (#255,
+  `brein.audit.sample_n`: 1 op de N, 1–100, default 10), en onder de
+  nachtrun-kaart de noodrem
   (Pauzeren/Hervatten) plus het nachtvenster (start-uur, eind-uur, tijdzone).
   Een wijziging werkt **direct** — rb-api leest de waarde op het gebruiksmoment,
   dus geen SSH, geen redeploy, geen herstart. De omgeving blijft de startwaarde:
@@ -1683,6 +1695,15 @@ openstaande PR.
   vastgestelde extractie, waardoor de verbeterde extractie precies die kaarten
   overslaat en de verbetering niet meetbaar is. Twee expliciete scopes
   (alleen interacties, of ook entiteiten/predicaten voor #250).
+- **#255** Steekproef-audit door een sterker model — *in-flight*, zie
+  §4.5. De getoonde "precisie ≈ 0,91" is de accept-ratio van onze eigen
+  promotie-poort (zelfreferentieel); de nieuwe job `breinaudit-interacties`
+  laat 1 op de N gepromoveerde interacties door rb-ai's task "hard" beoordelen
+  (gesloten oordeel: correct + gedragen door het bewijs) en toont de gemeten
+  precisie in de observability náást de poort-ratio. Het oordeel draagt eigen
+  provenance en verandert nooit zelf een tier — een negatief oordeel landt in
+  de reviewqueue. De bredere modelkeuze-per-mining-taak uit het issue blijft
+  open; de audit gebruikt bewust de bestaande cheap/hard-taak-typering.
 - **#266** `/primer` in het Nederlands weergeven, met de Engelse opslag
   canoniek — *in-flight*, zie §4.4. Live regressie sinds #187/#197: de
   vertaling gebeurt bij de generatie en gaat door de bestaande
@@ -1728,6 +1749,11 @@ openstaande PR.
   consistentie-check), gerangschikt op score en op snelheid, met een
   sweep-historie zodat modelkeuzes voor rb-ai (cheap/hard/agentic) op cijfers
   te onderbouwen zijn in plaats van op aanname.
+- **Gemeten mining-precisie** (`/api/admin/brein/observability`, #255): het
+  aandeel gepromoveerde interacties dat een onafhankelijke steekproef door een
+  sterker model als "correct én gedragen door het bewijs" beoordeelt —
+  expliciet naast (en los van) de accept-ratio van de eigen promotie-poort,
+  die alleen meet hoe vaak de poort zichzelf gelijk geeft.
 
 **Zinnige volgende metrieken**
 - **Dekking**: aandeel `/ask`-antwoorden met een "Zeker/Redelijk zeker"-label

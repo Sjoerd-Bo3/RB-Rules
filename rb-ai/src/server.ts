@@ -13,6 +13,12 @@ import {
   type AiFailure,
 } from "./failure.js";
 import {
+  AUDIT_TOOL_ADDENDUM,
+  auditToolDescription,
+  buildAuditToolShape,
+  parseInteractionAuditRequest,
+} from "./audit.js";
+import {
   buildInteractionToolShape,
   buildPredicateToolShape,
   INTERACTION_TOOL_ADDENDUM,
@@ -36,6 +42,7 @@ const LOGGED_PATHS = new Set([
   "/ask/stream",
   "/extract/interactions",
   "/extract/predicates",
+  "/audit/interaction",
 ]);
 
 /** De request-body als JSON én de GROOTTE ervan in bytes (#281). De grootte is
@@ -337,6 +344,43 @@ const server = createServer(async (req, res) => {
         if (outcome.items === null) return sendExtractFailure(outcome);
         shape = { ...shape, items: outcome.items.length };
         return sendExtractSuccess(outcome, { predicates: outcome.items });
+      } catch (e) {
+        if (e instanceof ConcurrencyLimitError)
+          return send(
+            429,
+            { error: e.message, code: e.code },
+            { reason: "concurrency_limit", detail: e.message },
+          );
+        throw e;
+      }
+    }
+
+    if (req.method === "POST" && req.url === "/audit/interaction") {
+      // Steekproef-audit (#255): een STERKER model (task "hard") velt een gesloten,
+      // tool-forced oordeel over één gepromoveerde interactie — correct? gedragen
+      // door het bewijs? Zelfde semaphore/timeout/failure-discipline als de
+      // extract-endpoints (extractWithTool: achtergrond-prioriteit, harde timeout,
+      // result-bericht + api_retry gelezen); rb-api legt het oordeel vast als
+      // audit-regel met eigen provenance en verandert er nooit zelf een tier mee.
+      const body = await readJson(req);
+      const parsed = parseInteractionAuditRequest(body.value);
+      if (!parsed.ok) return send(400, { error: parsed.error });
+      shape = { bytes: body.bytes, task: "hard" };
+      try {
+        const outcome = await extractWithTool({
+          toolName: "emit_audit_verdict",
+          description: auditToolDescription(),
+          schema: buildAuditToolShape(),
+          resultKey: "verdicts",
+          system: parsed.request.system,
+          addendum: AUDIT_TOOL_ADDENDUM,
+          text: parsed.request.text,
+          signal: abort.signal,
+          task: "hard",
+        });
+        if (outcome.items === null) return sendExtractFailure(outcome);
+        shape = { ...shape, items: outcome.items.length };
+        return sendExtractSuccess(outcome, { verdicts: outcome.items });
       } catch (e) {
         if (e instanceof ConcurrencyLimitError)
           return send(

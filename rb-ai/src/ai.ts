@@ -325,6 +325,12 @@ export async function extractWithTool(opts: {
   addendum: string;
   text: string;
   signal?: AbortSignal;
+  /** Modelkeuze via de bestaande taak-typering (#255): default "cheap" — het
+   * bestaande gedrag van de bulk-extractie. De steekproef-audit zet "hard"
+   * (MODEL.hard): een sterker model dat de cheap-output beoordeelt is de hele
+   * pointe van de audit, en de bestaande Task→model-mapping is er al — géén
+   * nieuw model-config-mechanisme. */
+  task?: Task;
   /** Test-seam (#281-review): de SDK-aanroep zelf. Productie laat dit weg en
    * krijgt `query`; een test levert een eigen berichtenstroom en kan zo de
    * faal- en timeout-paden ECHT doorlopen. Zonder deze naad viel er over dit
@@ -336,6 +342,7 @@ export async function extractWithTool(opts: {
 }): Promise<ExtractOutcome> {
   const {
     toolName, description, schema, resultKey, system, addendum, text, signal,
+    task = "cheap",
     runQuery = query as unknown as QueryRunner,
   } = opts;
   const serverName = "extract";
@@ -414,7 +421,7 @@ export async function extractWithTool(opts: {
       controller.abort();
     }, EXTRACT_TIMEOUT_MS);
     const options: Options = {
-      model: MODEL.cheap,
+      model: MODEL[task],
       maxTurns: EXTRACT_MAX_TURNS,
       tools: [],
       mcpServers: { [serverName]: extractServer },

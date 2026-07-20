@@ -26,6 +26,8 @@
 		reasonRun: JobRun | null;
 		retrievalEnabled: boolean;
 		nightlyRun: JobRun | null;
+		interactionAudits: number;
+		auditRun: JobRun | null;
 	}
 	const cockpit = $derived(data.cockpit as Cockpit | null);
 
@@ -98,6 +100,16 @@
 						n: cockpit.mechanicPredicates,
 						unit: 'predicaten',
 						run: cockpit.minePredicatesRun
+					},
+					// Steekproef-audit (#255): 1 op de N gepromoveerde interacties langs een
+					// sterker model. Meting + provenance; het oordeel verandert nooit zelf
+					// een tier — een negatief oordeel landt in de conflicts-reviewqueue.
+					{
+						name: 'breinaudit-interacties',
+						label: 'Steekproef-audit (sterker model)',
+						n: cockpit.interactionAudits,
+						unit: 'audit-oordelen',
+						run: cockpit.auditRun
 					}
 				]
 			: []
@@ -140,6 +152,7 @@
 	const settingOf = (key: string) => settings.find((s) => s.key === key) ?? null;
 
 	const retrievalSetting = $derived(settingOf('brein.retrieval.enabled'));
+	const auditSampleSetting = $derived(settingOf('brein.audit.sample_n'));
 	const nightlySetting = $derived(settingOf('nightly.enabled'));
 	// Het venster in het formulier: uit de effectieve waarden, met een terugval op
 	// de bestaande defaults zolang de instellingen-lijst er nog niet is.
@@ -179,6 +192,7 @@
 		breinentiteiten: 'Canonieke entiteiten registreren',
 		'breinmine-interacties': 'Interacties minen',
 		'breinmine-predicaten': 'Mechanic-predicaten minen',
+		'breinaudit-interacties': 'Steekproef-audit (sterker model)',
 		breinprojectie: 'Projectie naar Neo4j',
 		reason: 'Reasoner',
 		nachtrun: 'Volledige nachtrun'
@@ -226,6 +240,17 @@
 		key: string;
 		count: number;
 	}
+	// Gemeten precisie uit de steekproef-audit (#255) — los van de accept-ratio
+	// van onze eigen promotie-poort hierboven.
+	interface AuditPrecisionRow {
+		model: string;
+		promptVersion: string;
+		audited: number;
+		sound: number;
+		incorrect: number;
+		unsupported: number;
+		precision: number;
+	}
 	interface Observability {
 		report: {
 			takenAt: string;
@@ -233,6 +258,7 @@
 			canonicalDrift: CanonicalDrift | null;
 			miningPrecision: MiningPrecisionRow[];
 			communityHealth: unknown | null;
+			auditPrecision: AuditPrecisionRow[];
 		};
 		interactionTiers: TierCount[];
 		conflictChannels: TierCount[];
@@ -360,6 +386,33 @@
 							</div>
 						{/each}
 					</div>
+					{#if auditSampleSetting}
+						<!-- Steekproefdichtheid (#255, beheerd via #254): 1 op de N gepromoveerde
+						     interacties gaat langs het sterkere model. Direct effect, geen herstart. -->
+						<form
+							class="auditdensity"
+							method="POST"
+							action="?/setting"
+							use:enhance={() => async ({ update }) => {
+								await update();
+								await invalidateAll();
+							}}
+						>
+							<label>
+								<span>Steekproefdichtheid: 1 op</span>
+								<input type="hidden" name="key" value="brein.audit.sample_n" />
+								<input
+									name="value"
+									type="number"
+									min="1"
+									max="100"
+									value={auditSampleSetting.effective}
+								/>
+							</label>
+							<button class="cta">Opslaan</button>
+							<span class="run-meta">{settingMeta(auditSampleSetting)}</span>
+						</form>
+					{/if}
 				</div>
 			</div>
 
@@ -665,6 +718,52 @@
 		{:else}
 			<p class="empty">Nog geen afgeronde mining-runs.</p>
 		{/if}
+		<p class="muted small">
+			Let op: de kolom &ldquo;Precisie&rdquo; hierboven is de accept-ratio van onze eigen
+			promotie-poort (geverifieerd &divide; beoordeeld) &mdash; zelfreferentieel. De gemeten
+			precisie hieronder komt uit een onafhankelijke steekproef.
+		</p>
+
+		<h3>Gemeten precisie (steekproef-audit)</h3>
+		{#if obs.report.auditPrecision.length}
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>Steekproef</th>
+							<th class="num">n</th>
+							<th class="num">Bevestigd</th>
+							<th class="num">Onjuist</th>
+							<th class="num">Niet gedragen</th>
+							<th class="num">Gemeten precisie</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each obs.report.auditPrecision as r (r.model + r.promptVersion)}
+							<tr>
+								<td>steekproef door {r.model}, n={r.audited}
+									<span class="muted">({r.promptVersion})</span></td>
+								<td class="num tnum">{r.audited}</td>
+								<td class="num tnum">{r.sound}</td>
+								<td class="num tnum">{r.incorrect}</td>
+								<td class="num tnum">{r.unsupported}</td>
+								<td class="num tnum">{pct(r.precision)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			<p class="muted small">
+				Bevestigd = correct &eacute;n gedragen door het bewijs. Een betwiste interactie
+				verandert nooit vanzelf van tier &mdash; ze staat als open conflict in de
+				<a href="/admin/brein/conflicts">reviewqueue</a>.
+			</p>
+		{:else}
+			<p class="empty">
+				Nog geen audit-oordelen &mdash; draai de job &ldquo;Steekproef-audit&rdquo; in de
+				pipeline hierboven.
+			</p>
+		{/if}
 
 		<h3>Canonieke drift &amp; duplicatie-schuld</h3>
 		{#if obs.report.canonicalDrift && obs.report.canonicalDrift.byKind.length}
@@ -916,6 +1015,33 @@
 	.jobrow form {
 		margin: 0;
 		flex: none;
+	}
+	/* Steekproefdichtheid-knop (#255) onder de audit-jobrij. */
+	.auditdensity {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		margin: 10px 0 0;
+	}
+	.auditdensity label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 0.82rem;
+		color: var(--text);
+	}
+	.auditdensity input[type='number'] {
+		width: 78px;
+		padding: 7px 9px;
+		font-size: 16px; /* iOS zoomt op form-controls < 16px */
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md, 8px);
+		background: var(--surface-deep);
+		color: var(--text);
+	}
+	.auditdensity .run-meta {
+		flex-basis: 100%;
 	}
 	.nightly {
 		display: flex;

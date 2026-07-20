@@ -49,6 +49,22 @@ public class JobPathOrderTests
     }
 
     [Fact]
+    public void BreinPad_AuditeertPasNaDeInteractieMining()
+    {
+        // #255: de steekproef-audit trekt zijn pool uit de GEPROMOVEERDE
+        // interacties. Stond hij vóór de mining, dan auditeert elke keten de
+        // vorige run en blijft een verse promotie een nacht ongezien.
+        foreach (var path in new[] { JobPaths.Find("brein")!, JobPaths.Nightly })
+        {
+            var steps = Steps(path).ToList();
+            Assert.Contains("breinaudit-interacties", steps);
+            Assert.True(
+                steps.IndexOf("breinmine-interacties") < steps.IndexOf("breinaudit-interacties"),
+                $"keten '{path.Name}': audit hoort ná de interactie-mining");
+        }
+    }
+
+    [Fact]
     public void BreinPad_RegistreertEntiteitenVoorDePredicaatMining()
     {
         // #250: de predicaat-mining resolveert alleen tegen de canonieke
@@ -154,7 +170,11 @@ public class JobPathOrderTests
         var uncapped = JobPaths.Nightly.Steps.Where(s => s.Uncapped).Select(s => s.JobName).ToList();
 
         Assert.Equal(
-            new[] { "mine", "breinmine-interacties", "breinmine-predicaten" }.Order(),
+            new[]
+            {
+                "mine", "breinmine-interacties", "breinmine-predicaten",
+                "breinaudit-interacties",
+            }.Order(),
             uncapped.Order());
         Assert.All(JobPaths.Nightly.Steps, s => Assert.False(s.Uncapped && s.Drain));
     }

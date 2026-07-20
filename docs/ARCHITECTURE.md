@@ -607,13 +607,19 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   automatische her-generatie erna, expliciete admin-actie),
   `BreinMiningResetService` (#263, jobs "breinreset-interacties" en
   "breinreset-volledig" — de SMALLE tegenhanger: zet alleen de brein-mining-laag
-  terug (`interaction`, `interaction_condition`, `interaction_decision` en de
+  terug (`interaction`, `interaction_condition`, `interaction_decision`, sinds
+  #255 ook `interaction_audit`, en de
   `assertion`-rijen met `FactKind = interaction`, oftewel het mined-watermark;
   in de brede scope ook `mechanic_predicate`, `canonical_entity`,
   `merge_candidate`, `merge_decision`), licht de poort-grafstenen i.p.v. ze te
   verwijderen, en BEHOUDT de `mining_run`-historie als provenance-baseline;
   raakt nooit claims/primer/correcties/relaties/bron-tabellen of de oude
   `card_interaction`-laag),
+  `BreinInteractionAuditService` (#255, job "breinaudit-interacties" — de
+  steekproef-audit door een sterker model, zie §6.7: schrijft
+  `interaction_audit`-rijen + een `mining_run` soort `interaction_audit`, en
+  bij een negatief oordeel een reviewqueue-`reasoning_conflict`; verandert
+  nooit zelf een tier),
   `SetReleaseService`, `DeckIngestService` (#15, robots-compliant
   Piltover Archive-ingest), `BenchmarkService` (judge-benchmark-job, draait
   op `AskService` met `AskOptions.Benchmark = true`, #158; sinds #174 ook
@@ -763,8 +769,9 @@ mogelijk zonder gedragsverlies:
   samengestelde ketens zetten het; de handmatige paden houden stop-bij-fout.
   Afbreken via beheer (#253) stopt ook een best-effort keten.
 - `PathStep.Uncapped` + `JobDefinition.RunUncapped` — de per-run cap eraf, de
-  pad-deadline erin. Alleen de drie dure miners (`mine`,
-  `breinmine-interacties`, `breinmine-predicaten`) hebben zo'n variant;
+  pad-deadline erin. Alleen de vier dure LLM-jobs (`mine`,
+  `breinmine-interacties`, `breinmine-predicaten`, `breinaudit-interacties`
+  #255) hebben zo'n variant;
   `JobPathOrderTests` dwingt af dat een `Uncapped`-stap er ook echt één heeft
   (anders zou de nachtrun stil op de gecapte run terugvallen) en dat
   `Uncapped` en `Drain` elkaar uitsluiten.
@@ -774,7 +781,8 @@ Ingest (`scan` → `rules-index` → `bans` → `classify` → `consolidatechang
 Kaart (`cards` → `embed` → `mine`·drain → `graph`), Kennis (`claims` →
 `clarify` → `relations` → `relationtriage`, alle drain, → `primer` → `graph`)
 en Brein (`breinentiteiten` → `breinmine-interacties`·drain →
-`breinmine-predicaten`·drain → `breinprojectie` → `reason`). Zie PRD §4.5.
+`breinmine-predicaten`·drain → `breinaudit-interacties`·drain #255 →
+`breinprojectie` → `reason`). Zie PRD §4.5.
 Vier wijzigingen die #258 daarbij doorvoerde:
 
 - `rules` en `bans` ontbraken in het Ingest-pad (ze stonden alleen in `all`) —
@@ -1047,7 +1055,9 @@ endpoint/service/flow, leest bestaande tabellen (geen migratie). De cockpit-
 trigger-knoppen zelf starten via het bestaande `POST /api/admin/jobs/{name}`
 (JobRunner-gate: één job tegelijk, 409 als er al een draait) — de vier
 brein-jobs (`breinmine-interacties`, `breinmine-predicaten`, `breinprojectie`,
-`reason`) waren voorheen API-only.
+`reason`) waren voorheen API-only. Sinds #255 toont stap 1 ook de
+steekproef-audit (`breinaudit-interacties`: aantal audit-oordelen + laatste run
++ trigger-knop) en de beheerde steekproefdichtheid (`brein.audit.sample_n`).
 
 **Beheerde instellingen (#254, `SettingsAdminEndpoints` →
 `ManagedSettingsService`).** `GET /api/admin/settings` geeft per sleutel uit
@@ -1059,7 +1069,9 @@ start en eind moeten samen beoordeeld worden — los toegepast zou "0–11 wordt
 12–18" op de tussenstap stranden (12 ≥ 11). Alles-of-niets: faalt één waarde de
 validatie, dan wordt er niets geschreven en komt er een 400 mét uitleg terug (nooit
 een stilzwijgend genegeerde schakelaar). Ontsloten sleutels:
-`brein.retrieval.enabled` (was `BREIN_RETRIEVAL_ENABLED`), `nightly.enabled` (was
+`brein.retrieval.enabled` (was `BREIN_RETRIEVAL_ENABLED`), `brein.audit.sample_n`
+(#255, steekproefdichtheid van de interactie-audit; env-default
+`BREIN_AUDIT_SAMPLE_N`, 10), `nightly.enabled` (was
 `NIGHTLY_ENABLED`), `nightly.start_hour`, `nightly.end_hour`, `nightly.timezone`.
 Elke geslaagde wijziging landt als auditregel in `run_log`
 (Kind="setting", Ref=sleutel, Detail = "label: oud → nieuw · door wie").
@@ -1068,8 +1080,9 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
 
 - `src/server.ts` — minimale `node:http`-server met `/health` (incl.
   capaciteits- en pooltellers), `/ask`, `/ask/stream` (NDJSON-streaming),
-  `/prewarm` (#154, altijd direct 202) en de tool-forced brein-extractie
-  `/extract/interactions` + `/extract/predicates` (#226, zie §6.6); koppelt de
+  `/prewarm` (#154, altijd direct 202), de tool-forced brein-extractie
+  `/extract/interactions` + `/extract/predicates` (#226, zie §6.6) en de
+  steekproef-audit `/audit/interaction` (#255, task "hard" — zie §6.7); koppelt de
   client-verbinding aan een `AbortController` zodat een weggelopen client de
   Claude-call afbreekt, en vertaalt de capaciteitsgrens (#155) naar een 429 met
   machine-leesbare code.
@@ -1338,6 +1351,10 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
   (sleutel/waarde + `updated_at`/`updated_by`, migratie `ManagedSettings254`).
   Bewust een tabel die normaal **leeg** is: elke rij is een override op de
   env-/codewaarde, dus geen rij = het bestaande gedrag (§8, ADR-18).
+  Sinds #255 `interaction_audit` — het steekproef-oordeel van het sterkere
+  model per gepromoveerde interactie (correct/gedragen/motivering + model,
+  promptversie en datum als rij-provenance; migratie `InteractionAudit255`) —
+  puur meting, nooit een tier-bron (§6.7).
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
@@ -1547,7 +1564,8 @@ VM-`.env`) de job `nachtrun`: de volledige ONGECAPTE kennis-keten in één
 JobRunner-slot. Sinds #258 is dat een PAD (`JobPaths.Nightly`, door `PathRunner`)
 in plaats van een met de hand geschreven keten: het Ingest- en Kaart-pad met
 ongecapte mechaniek-mining, gevolgd door het Brein-pad (`breinentiteiten` #250 →
-`breinmine-interacties` → `breinmine-predicaten` → `breinprojectie` → `reason`)
+`breinmine-interacties` → `breinmine-predicaten` → `breinaudit-interacties` #255 →
+`breinprojectie` → `reason`)
 met ongecapte miners. De job zelf doet nog maar één ding — de deadline bepalen en
 aan het pad meegeven; de volgorde staat in `JobPaths`. Winst: een
 `run_log`-regel per stap (Kind=`nachtrun`, Ref=stapnaam), zodat na een nacht
@@ -2453,6 +2471,24 @@ nachtrun:
   is de expliciete `breinreset-interacties`. Wie hier ooit een echte stale-conditie van
   wil maken, hangt hem aan een `PromptVersion`-vergelijking in de focus-selectie —
   hetzelfde patroon als `Source.StripVersion` in `IngestService`.
+- `breinaudit-interacties` (`BreinInteractionAuditService`, #255). De
+  steekproef-audit door een STERKER model: 1 op de N gepromoveerde interacties
+  (deterministisch `Id % N == 0`; N beheerd via `brein.audit.sample_n`, #254,
+  gelezen op het gebruiksmoment) gaat met bewering + bewijs (rolteksten,
+  GOVERNED_BY-sectie, DERIVED_FROM-bron, co-occurrence-secties uit het officiële
+  corpus) naar rb-ai's `/audit/interaction` (task "hard" → `MODEL.hard` — de
+  bestaande taak-typering, geen nieuw model-mechanisme). Het gesloten oordeel
+  (`correct`/`supported_by_evidence`/`motivation`, precies één verdict; zod- én
+  .NET-parser als dubbele muur) landt als `interaction_audit`-rij met EIGEN
+  provenance (model + promptversie + datum) plus een `mining_run` van soort
+  `interaction_audit`. **De harde regel uit het issue: het oordeel verandert
+  nooit zelfstandig een tier** — de service raakt `interaction`-rijen, tombstones
+  en beslissings-memo's per constructie niet aan; een negatief oordeel wordt
+  zichtbaar als `ReasoningConflict` (`audit-disputes-interaction` →
+  reviewqueue-kanaal), waar de beheerder beslist. De audit-rij is het watermark
+  (per promptversie — een prompt-bump heropent de pool); een GEFAALDE audit
+  krijgt er geen en komt de volgende run terug (#249-les). Zie §6.7 voor het
+  waarom en de meting.
 - `breinmine-predicaten` (`BreinPredicateMiningService`). Per canonieke
   mechanic/keyword-entiteit (het subject IS al geresolveerd) haalt getypeerde
   predicaten (`triggers_on`/`prevents`/`grants`/`requires_target` + object-token)
@@ -2523,6 +2559,68 @@ vergelijkingsbasis, poort-grafstenen worden gelicht en niet gewist, en niets
 buiten de mining-laag wordt aangeraakt. Bewust destructief-met-bevestiging,
 nooit in een pad of de nachtrun; na de reset draait de beheerder de jobs
 hierboven zelf opnieuw en daarna `graph` + `breinprojectie`.
+
+### 6.7 De steekproef-audit door een sterker model (#255)
+
+**Waarom.** De observability toonde `precisie ≈ 0,91` voor
+`interaction / claude-sonnet-4-6` — maar dat getal is de accept-ratio van onze
+eigen promotie-poort (`verified ÷ (verified + rejected)` over de
+`mining_run`-tellers). Dat is zelfreferentieel: een pijplijn die tautologieën
+promoveert scoort er uitstekend op (#249 bewees dat met 69% herkauwde
+kaart↔eigen-keyword-"feiten"). De vraag "klopt dit feit?" kan alleen een
+oordeel beantwoorden dat ONAFHANKELIJK van de poort tot stand komt. Vandaar een
+steekproef-audit door een sterker model, en een **gemeten precisie die náást de
+poort-accept-ratio staat** — expliciet gelabeld ("steekproef door {model},
+n={aantal}"), zodat het verschil tussen de twee getallen zichtbaar is in plaats
+van weggemiddeld.
+
+**De flow.** `breinaudit-interacties` (zie de job-beschrijving in §5) selecteert
+deterministisch 1 op de N gepromoveerde interacties (`Id % N == 0`; N is de
+beheerde instelling `brein.audit.sample_n`, default 10), componeert per
+interactie de bewering (rollen + kind + condities, in de brontaal) en het bewijs
+(rolteksten/definities, de GOVERNED_BY-sectie, de DERIVED_FROM-bron uit de
+provenance-Assertion, en officiële secties waarin beide rollen samen voorkomen —
+dezelfde bewijsbron die de lexicale poort van de mining zag), en POST dat naar
+rb-ai's `/audit/interaction`. Dat endpoint draait `extractWithTool` met
+`task: "hard"` (`MODEL.hard` — de bestaande taak-typering; de bulk-extractie
+blijft op `MODEL.cheap`) en dezelfde semaphore-/timeout-/faaldiscipline als de
+extract-endpoints: achtergrond-prioriteit (de `/ask`-reserve blijft vrij), harde
+timeout → 504 + `extract_timeout`, result-bericht + `api_retry` gelezen,
+stderr-staart via de bestaande poorten. Het oordeel is een geforceerde
+`emit_audit_verdict`-call met een gesloten schema: precies één verdict met
+`correct` (klopt de bewering?), `supported_by_evidence` (draagt het aangeboden
+bewijs haar?) en `motivation` (Engels, #187). De zod-poort weigert alles
+daarbuiten; `InteractionAuditExtraction.ParseDetailed` (Domain) rekent het als
+tweede muur deterministisch na — nul of twee verdicts, een string waar een
+boolean hoort: Malformed, telt als uitval.
+
+**De harde regel** (issue #255, rode draad #236): het oordeel wordt vastgelegd
+als `interaction_audit`-rij met eigen provenance (model + promptversie + datum,
+plus een `mining_run` van soort `interaction_audit`) en **verandert nooit
+zelfstandig een tier**. De service raakt `interaction`-rijen, tombstones en
+beslissings-memo's per constructie niet aan; een negatief oordeel ("onjuist" of
+"niet gedragen") wordt zichtbaar gemaakt als `ReasoningConflict`
+(`audit-disputes-interaction`, gerouteerd naar het reviewqueue-kanaal,
+idempotent op de dedupe-sleutel) — de beheerder beslist. Regressietests leggen
+dit als gedrag vast: een stil degraderende audit maakt
+`BreinInteractionAuditServiceTests` rood.
+
+**Watermark en levenscyclus.** De audit-rij zelf is het watermark, per
+promptversie: een interactie met een oordeel op de huidige
+`interaction-audit-v1` komt niet terug vóór de pool rond is; een prompt-bump
+maakt bestaande oordelen "niet recent" en heropent de pool (zelfde
+stale-conditie als her-mining, §3.5). Een GEFAALDE audit (rb-ai-uitval,
+onleesbaar oordeel) schrijft géén rij en komt de volgende run terug — de
+#249-les. De brein-reset (§hierboven) verwijdert de oordelen samen met de
+interactie-laag; de audit-runs blijven als provenance-baseline staan.
+
+**Observability.** De gemeten precisie komt uit de audit-rijen zelf
+(`ObservabilityRollups.AuditPrecision`, per model × promptversie: n, bevestigd,
+onjuist, niet-gedragen, precisie = bevestigd ÷ n), niet uit run-tellers — en de
+audit-runs zijn juist UITGESLOTEN van de mining-precisie-tabel, anders zou de
+meting zich daar alsnog als accept-ratio vermommen. beheer → Brein toont beide
+tabellen onder elkaar, met de expliciete kanttekening dat de bovenste
+zelfreferentieel is.
 
 ---
 
@@ -2932,7 +3030,11 @@ kan rb-api eerder starten dan Postgres klaar is.
   grafstenen met actor "admin" blijven ongemoeid, dat is mensenwerk;
   (c) in de brede scope gaan `merge_decision`/`merge_candidate` mee omdat hun
   FK's naar `canonical_entity` op `Restrict` staan — dat verlies is expliciet
-  gemaakt in de bevestigingstekst, de telling en het run_log, niet stilzwijgend.
+  gemaakt in de bevestigingstekst, de telling en het run_log, niet stilzwijgend;
+  (d) sinds #255 gaan ook de `interaction_audit`-rijen mee (beide scopes): een
+  oordeel over een verwijderd feit zou de gemeten precisie voor eeuwig kleuren
+  en na her-mining als vals watermark werken — de audit-`mining_run`s blijven
+  staan, zelfde keuze (a).
   Het watermark zelf is geïsoleerd in één private methode
   (`ClearWatermarkAsync`) — en dat uitbreidpunt is inmiddels twee keer gebruikt:
   sinds #249 staat er óók een expliciet veld op `card` en sinds #286 op
@@ -3805,6 +3907,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | `model_hypothesized_unruled` | Cold-start-trust-tier: emergente card×card-hypothese zonder officiële/community-steun — geparkeerd, niet weggegooid |
 | RejectionTombstone | Grafsteen op een verworpen interactie die stil-heropenen blokkeert; opheffen is een expliciete beheerdersactie (herstelpad) |
 | Brein-mining / tool-forced extractie | De handmatige jobs `breinmine-interacties`/`breinmine-predicaten` (#226, §6.6): rb-ai levert via een geforceerde tool-call (`emit_interactions`/`emit_mechanic_predicates`) ontologie-begrensde kandidaten die door de fase-2-poort resp. als review-kandidaat landen; degradatie = null (geen half feit) |
+| Steekproef-audit door een sterker model | `breinaudit-interacties` (#255, §6.7): 1 op de N gepromoveerde interacties langs rb-ai's `/audit/interaction` (task "hard", `emit_audit_verdict`); het oordeel is een `interaction_audit`-rij met eigen provenance en verandert nooit zelf een tier — negatief oordeel → reviewqueue-conflict; de gemeten precisie staat in de observability náást de poort-accept-ratio |
 | Reasoner / redeneer-laag | Neo4j-native inferentie-run (fase 3, #227): leidt edges af (isa-closure, property-chain, symmetrie, subproperty-collapse) en detecteert tegenspraken — één engine, Cypher, geen Datalog |
 | Afgeleide edge | Een door de reasoner gematerialiseerde edge (`derived=true`+`derivedByRule`+provenance); nooit bron van waarheid, elke run herberekend |
 | `ReasoningConflict` | Postgres-rij voor een door de reasoner gedetecteerde tegenspraak (claim↔officieel, botsende rulings, disjointness), gerouteerd naar misvattingen/reviewqueue/escalatie |
