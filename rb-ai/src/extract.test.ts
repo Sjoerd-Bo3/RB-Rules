@@ -190,6 +190,18 @@ describe("enforceInteractionVocabulary — de deterministische narekening (#312)
     assert.equal(r.rejected, 1);
   });
 
+  it("weigert een on_kind buiten de aangeboden assen: conditie weg, item blijft", () => {
+    // Review-gat (#312): deze poortregel was onbewaakt — haal de
+    // conditionKinds-check uit checkCondition en alles bleef groen.
+    const r = enforceInteractionVocabulary(
+      [{ ...geldig, conditions: [{ on_kind: "TIME", window: "Showdown" }] }],
+      baseInteractionReq,
+    );
+    assert.equal(r.rejected, 0, "het item zelf is geldig");
+    assert.equal(r.rejectedConditions, 1);
+    assert.equal(r.accepted[0]?.conditions, undefined);
+  });
+
   it("weigert een window buiten het lexicon: conditie weg, item blijft (muur-semantiek)", () => {
     const r = enforceInteractionVocabulary(
       [{ ...geldig, conditions: [{ on_kind: "WINDOW", window: "Midnight" }] }],

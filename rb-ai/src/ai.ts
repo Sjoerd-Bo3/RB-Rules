@@ -319,9 +319,10 @@ export function decideExtractOutcome(input: {
  * warme sessie voorbetaalt (subprocess-spawn + MCP-registratie, meetbaar als
  * query()→system/init en auth-onafhankelijk) is 0,41-0,46 s lokaal (mediaan
  * 0,43 s over 10 runs, M-serie); geëxtrapoleerd naar de VM-CPU is dat orde
- * 1-2,5 s op een mediane run van ~81 s — terwijl één extra idle warme sessie
- * 300-400 MiB RSS vasthoudt op de VM waar de OOM-killer al llama-server schoot
- * (#282/#293). De generieke tool-vorm is de eigenlijke winst: het request-prefix
+ * 1-2,5 s tegen een gemiddelde kaart-generatie van 147-163 s (validatieruns;
+ * het plafond staat via de VM-env inmiddels op 240 s) — terwijl één extra idle
+ * warme sessie 300-400 MiB RSS vasthoudt op de VM waar de OOM-killer al
+ * llama-server schoot (#282/#293). De generieke tool-vorm is de eigenlijke winst: het request-prefix
  * (tools + system) is nu byte-stabiel over een mining-run, dus prompt-cache-baar,
  * én de blokkade voor een latere warme aansluiting is weg. Sluit die pas aan
  * wanneer een PRODUCTIE-meting van de boot-kost (≥ enkele seconden) het

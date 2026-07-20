@@ -1966,8 +1966,12 @@ aansluiting niet. De boot-kost die een warme sessie voorbetaalt
 (subprocess-spawn + MCP-registratie) is auth-onafhankelijk te meten als
 `query()` → `system/init` (het init-bericht komt vóór elke API-call): 0,41-0,46 s
 over 10 runs (mediaan 0,43 s, M-serie-Mac; de VM-CPU is grofweg 3-6× trager, dus
-orde 1-2,5 s daar). Tegen een mediane extractie van ~81 s en een timeout die
-inmiddels op 180 s staat is dat 1-3% wandklok — terwijl één extra idle warme
+orde 1-2,5 s daar). Tegen de gemeten generatietijden is dat 1-3% wandklok: de
+gemiddelde kaart-generatie bleek in de validatieruns 147-163 s, en het
+timeout-plafond is langs die meetketen opgehoogd van 90 s (55-86% uitval) via
+180 s (nog 30% uitval) naar **240 000 ms** (`AI_EXTRACT_TIMEOUT_MS` op de VM;
+de code-default blijft 90 s als conservatieve bootstrap). Hoe hoger dat plafond,
+hoe kleiner het aandeel van de boot-kost — terwijl één extra idle warme
 sessie 300-400 MiB RSS vasthoudt op de 8 GB-VM waar de OOM-killer al eerder
 `llama-server` schoot (#282/#293), en de pool-slot (1) bij parallelle mining
 (#279, 3 background-workers) hooguit één op de drie aanroepen warm zou bedienen.

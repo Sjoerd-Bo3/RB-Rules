@@ -30,6 +30,19 @@ import {
 import { splitRelationProposals } from "./relations.js";
 import { parseAskRequest } from "./validate.js";
 
+/** Test-seam (#312-review): de SDK-gedreven extractie als vervangbaar veld.
+ *
+ * Waarom dit bestaat: de vocabulaire-narekening (`enforce*Vocabulary`) is puur
+ * en uitputtend getest, maar tot deze seam draaide geen enkele test de
+ * BEDRADING — vervang de narekening op de call-site door een pass-through en
+ * alles bleef groen. Dat is de #292-klasse: een gedragstest op de poort ziet
+ * per definitie niet dat de call-site hem overslaat. In het enum-tijdperk kón
+ * dat niet (`buildInteractionToolShape(parsed.request)` bestond niet zonder
+ * request); sinds de vaste tool-vorm hangt de gesloten-vraag-regel aan één
+ * regel in dit bestand, en die regel hoort bewaakt. server.test.ts stubt dit
+ * veld en draait de échte handler — zie daar voor de twee richtingen. */
+export const deps = { extractWithTool };
+
 const PORT = Number(process.env.PORT ?? 8090);
 
 /** Endpoints die één ai_call-regel per aanroep verdienen (#281). `/health` en
@@ -62,7 +75,7 @@ async function readJson(
   }
 }
 
-const server = createServer(async (req, res) => {
+export const server = createServer(async (req, res) => {
   const startedAt = Date.now();
   const path = (req.url ?? "").split("?")[0];
 
@@ -301,7 +314,7 @@ const server = createServer(async (req, res) => {
       // dat de vraag "vallen juist de grote aanbiedingen om?" direct toetsbaar.
       shape = { bytes: body.bytes, refs: parsed.request.refs.length };
       try {
-        const outcome = await extractWithTool({
+        const outcome = await deps.extractWithTool({
           toolName: "emit_interactions",
           // Vaste tool-vorm (#312): description en schema zijn constanten; het
           // vocabulaire reist als prompt-invoer mee en wordt hieronder
@@ -352,7 +365,7 @@ const server = createServer(async (req, res) => {
       if (!parsed.ok) return send(400, { error: parsed.error });
       shape = { bytes: body.bytes };
       try {
-        const outcome = await extractWithTool({
+        const outcome = await deps.extractWithTool({
           toolName: "emit_mechanic_predicates",
           // Vaste tool-vorm (#312), zelfde snit als /extract/interactions:
           // subject + predicatenlijst als prompt-invoer, narekening hieronder.
@@ -400,7 +413,7 @@ const server = createServer(async (req, res) => {
       const extraction = buildAuditExtraction(parsed.request, abort.signal);
       shape = { bytes: body.bytes, task: extraction.task };
       try {
-        const outcome = await extractWithTool(extraction);
+        const outcome = await deps.extractWithTool(extraction);
         if (outcome.items === null) return sendExtractFailure(outcome);
         shape = { ...shape, items: outcome.items.length };
         return sendExtractSuccess(outcome, { verdicts: outcome.items });
