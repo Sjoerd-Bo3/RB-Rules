@@ -1064,6 +1064,21 @@ de globale duur-vangrail).
   (welke kaart(en) en waarom), met een prominente "Bekijk op Piltover
   Archive"-deeplink en attributietekst — wij spiegelen hun werk, geen eigen
   deckbuilder. *Route* `/decks/[id]` · *endpoint* `/api/decks/{id}`.
+  **Visueel deckoverzicht** (#256): per sectie een grid van kaarttegels met
+  de kaartafbeelding en het aantal als badge (`×8`), in de kaartverhouding
+  744/1039 — het grid wrapt vanzelf (~3 tegels op 390px, ~7 op desktop) en
+  alle afbeeldingen zijn `loading="lazy"`, zodat een deck van 64 kaarten de
+  pagina niet vertraagt. Een niet-gekoppelde kaart krijgt een
+  placeholder-tegel met de PA-kaartcode en de notitie "niet in onze
+  databank", in dezelfde afmeting en zonder link — onbekend is data, geen
+  gat en geen fout. De sectiekop toont het totale aantal kaarten (de som van
+  de aantallen, niet het aantal regels); bewust géén "40/40"-noemer, want
+  deckbouw-limieten staan nergens in onze data en zouden dus een verzonnen
+  regel zijn. Een **lijst/grid-schakelaar** houdt de compacte tekstlijst
+  beschikbaar om snel te scannen; het grid is de standaard en de keuze wordt
+  in `localStorage` bewaard (`rb-deck-view`, `$lib/deckView.ts`). De server
+  rendert altijd het grid — de bewaarde keuze komt pas in de browser binnen,
+  wat een hydration-mismatch voorkomt.
 
 ---
 
