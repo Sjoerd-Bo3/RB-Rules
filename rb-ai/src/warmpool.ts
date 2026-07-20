@@ -26,7 +26,7 @@
 // volgen uit productiemetingen) alleen rond echte activiteit — relevant op
 // de 8GB-VM. Kill-switch: `AI_WARM_POOL=0`.
 
-import { describeThrown, logEvent } from "./failure.js";
+import { describeThrown, logEvent, type StderrTail } from "./failure.js";
 
 /** Sessie-opties die bij de SDK-boot vastliggen en dus de claim-sleutel zijn. */
 export interface WarmSignature {
@@ -48,6 +48,15 @@ export interface WarmBootHandle {
   push(message: unknown): void;
   endInput(): void;
   kill(): void;
+  /** De stderr-ringbuffer van DIT subprocess (#300). Hij wordt bij de boot
+   * aangelegd en reist met de sessie mee, want de pool draagt sessies over
+   * tijd: een globale buffer zou de uitvoer van een sessie die nu boot mengen
+   * met die van een gelijktijdige koude call. Omdat één sessie precies één
+   * call bedient (de ontwerpgrens bovenaan dit bestand), is deze staart
+   * eenduidig van de claimende aanroep — inclusief wat er tijdens de boot in
+   * kwam, en dát is juist de uitvoer die verklaart waaróm een claim dood
+   * bleek. Wordt de sessie nooit geclaimd, dan sterft de staart met haar. */
+  stderr: StderrTail;
 }
 
 /** Een geclaimde warme sessie: push het bericht en consumeer de berichten
@@ -57,6 +66,8 @@ export interface ClaimedWarmSession {
   messages(): AsyncGenerator<unknown, void>;
   /** Voor de abort-koppeling (#103-les): client weg ⇒ sessie hard afbreken. */
   kill(): void;
+  /** De staart van déze sessie (#300) — zie {@link WarmBootHandle.stderr}. */
+  stderr: StderrTail;
 }
 
 export interface WarmPoolConfig {
@@ -315,6 +326,9 @@ export class WarmPool {
       },
       kill: () => slot.handle.kill(),
       messages: () => this.drain(slot),
+      // De staart van DEZE sessie gaat mee naar de claimende aanroep (#300);
+      // een sessie die hier nooit uitkomt neemt haar uitvoer mee het graf in.
+      stderr: slot.handle.stderr,
     };
   }
 

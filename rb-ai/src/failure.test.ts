@@ -14,8 +14,10 @@ import {
   retryNote,
   safeDetail,
   StderrTail,
+  stderrDigestLine,
   withRetries,
   withStderr,
+  withStderrDigest,
 } from "./failure.js";
 
 /** Vang wat `logCall` naar stdout schrijft, zodat een test de ECHTE logregel
@@ -756,4 +758,188 @@ test("de stdout-scan kijkt door commentaar en strings heen, en ziet omzeilingen"
   ]) {
     assert.equal(heeftTreffer(vorm), true, `omzeiling niet gezien: ${vorm}`);
   }
+});
+
+// ── De stderr-staart op een pad MÉT gebruikersinvoer (#300) ────────────────
+//
+// Dezelfde ringbuffer, twee leesvormen. `tail()` (extract) geeft alles;
+// `digest()` (/ask) geeft alleen de regels uit een gesloten machine-vocabulaire
+// plus maten. De motivering om het prompt-residu te aanvaarden was nooit
+// "stderr is ongevaarlijk" maar "op dit endpoint is de invoer publieke
+// Riot-tekst"; op /ask is de invoer de vraag van een bezoeker en valt dezelfde
+// afweging andersom uit.
+
+test("digest: machine-regels komen mee, de rest wordt geteld en niet geciteerd", () => {
+  const stderr = new StderrTail();
+  stderr.append("bezig met opstarten\n");
+  stderr.append("Claude Code process exited with code 137\n");
+  stderr.append("iets anders onbegrijpelijks\n");
+
+  const d = stderr.digest();
+  assert.deepEqual(d.machine, ["Claude Code process exited with code 137"]);
+  assert.equal(d.withheld, 2, "de twee niet-herkende regels horen geteld te worden");
+  assert.ok(d.bytes > 0);
+});
+
+test("digest: de bytes-telling overleeft de ringbuffer (maat ≠ inhoud)", () => {
+  // Klein limiet zodat er gegarandeerd inhoud uit de buffer schuift. De MAAT
+  // moet dan nog steeds het TOTAAL melden — anders lijkt een subprocess dat
+  // 40 kB uitbraakte even spraakzaam als een dat één regel zei.
+  const stderr = new StderrTail(20);
+  stderr.append("a".repeat(100));
+  stderr.append("b".repeat(100));
+  assert.equal(stderr.digest().bytes, 200);
+});
+
+test("digest: geen uitvoer ⇒ geen regel, en de uitval blijft ongewijzigd", () => {
+  const stderr = new StderrTail();
+  const failure = { reason: "spawn" as const, detail: "oorspronkelijk" };
+  assert.equal(stderrDigestLine(stderr), "");
+  assert.deepEqual(withStderrDigest(failure, stderr), failure);
+});
+
+test("digest: hoogstens drie regels, en een lange regel wordt gekapt", () => {
+  const stderr = new StderrTail(8000);
+  for (let i = 0; i < 6; i++) stderr.append(`Claude Code process exited with code ${i}\n`);
+  stderr.append(`FATAL ERROR ${"x".repeat(500)}\n`);
+  const d = stderr.digest();
+  assert.equal(d.machine.length, 3, "de cap op het aantal gemelde regels moet gelden");
+  assert.equal(d.withheld, 4, "wat boven de cap valt telt als niet-gemeld");
+  for (const line of d.machine) assert.ok(line.length <= 160, `regel te lang: ${line.length}`);
+});
+
+test("/ask-staart: de vraag van de bezoeker overleeft NIET, de machineregel WEL", () => {
+  // De kern van #300 én van de #292-les in één assert-paar. Een test die
+  // alleen "de vraag staat er niet in" toetst, zou ook slagen als de hele
+  // staart weggegooid werd — dan bewijst hij niets over de diagnostiek. Dus
+  // beide richtingen, altijd.
+  const vraag = "mag Yasuo blokkeren als mijn buurman Sjoerd hem exhaust";
+  const stderr = new StderrTail();
+  stderr.append(`[debug] prompt: ${vraag}\n`);
+  stderr.append("Claude Code process terminated by signal SIGKILL\n");
+
+  const { detail } = withStderrDigest({ reason: "spawn", detail: "run omgevallen" }, stderr);
+
+  assert.ok(detail.includes("SIGKILL"), `machine-diagnostiek weg: ${detail}`);
+  assert.ok(detail.includes("run omgevallen"), `oorspronkelijke reden weg: ${detail}`);
+  for (const woord of ["Yasuo", "Sjoerd", "blokkeren", "buurman", "exhaust"]) {
+    assert.equal(
+      detail.toLowerCase().includes(woord.toLowerCase()),
+      false,
+      `"${woord}" uit de vraag van de bezoeker staat in de toelichting: ${detail}`,
+    );
+  }
+  // …maar het FEIT dat er meer was, blijft zichtbaar: stil weglaten zou de
+  // beheerder laten denken dat het subprocess niets zei (#282-les).
+  assert.match(detail, /niet gemeld/);
+});
+
+test("/ask-staart: een secret in een machineregel wordt geredacteerd, de rest overleeft", () => {
+  // #295-review: een redactietest die alleen "het secret is weg" toetst is
+  // vacuüm zodra de renderer de inhoud sowieso vernietigt. Dus ook hier de
+  // tweede assert — de niet-geheime helft van dezelfde regel moet er staan.
+  const token = "sk-ant-api03-DIT_IS_GEHEIM_1234567890";
+  const stderr = new StderrTail();
+  stderr.append(`Failed to spawn Claude Code process: auth=${token} ENOENT\n`);
+
+  const { detail } = withStderrDigest({ reason: "spawn", detail: "start mislukt" }, stderr);
+
+  assert.equal(detail.includes(token), false, `token gelekt: ${detail}`);
+  assert.ok(detail.includes("Failed to spawn"), `diagnostiek vernietigd i.p.v. geredacteerd: ${detail}`);
+  assert.ok(detail.includes("ENOENT"), detail);
+});
+
+test("het extract-pad houdt de VOLLEDIGE staart — de twee vormen zijn niet inwisselbaar", () => {
+  // Regressiegrens: wie dit ooit "opruimt" tot één vorm moet expliciet kiezen
+  // welke kant op. De volledige staart is op /extract bewust aanvaard
+  // (publieke Riot-kaarttekst, ARCHITECTURE §6.6); hem daar vervangen door de
+  // digest kost diagnostiek zonder iets te winnen.
+  const stderr = new StderrTail();
+  stderr.append("Aegis of the Legion — kaarttekst die niemand geheim hoeft te houden\n");
+
+  assert.match(withStderr({ reason: "spawn", detail: "x" }, stderr).detail, /Aegis of the Legion/);
+  assert.equal(
+    withStderrDigest({ reason: "spawn", detail: "x" }, stderr).detail.includes("Aegis"),
+    false,
+    "de /ask-vorm hoort juist NIET te citeren",
+  );
+});
+
+test("digest: natuurlijke vragen die een machine-woord bevatten LEKKEN niet (#300-review)", () => {
+  // Finding 1: het passthrough-vocabulaire hergebruikte AUTH_PATTERNS +
+  // `\bKilled\b` — gewone woorden die een speler tikt. Gemeten lekten 6 van 8
+  // natuurlijke vragen hun hele regel. De passthrough matcht nu op tokens die
+  // geen natuurlijke taal zijn (errno/signalen) of op aan `^` verankerde
+  // machine-prefixen, dus zo'n vraag-echo hoort geteld te worden, niet geciteerd.
+  const vragen = [
+    "If my unit is Killed during combat, does its ability still trigger?",
+    "Is the Forbidden Idol banned in the current format?",
+    "Why is my token invalid when I attach it to a champion?",
+    "Does a 401 error mean my deck is unauthorized in the event?",
+    "Is attacking forbidden while my unit is exhausted?",
+    "What happens when a process exits — does the chain resolve?",
+  ];
+  for (const vraag of vragen) {
+    const stderr = new StderrTail();
+    stderr.append(`${vraag}\n`);
+    const d = stderr.digest();
+    assert.deepEqual(
+      d.machine,
+      [],
+      `natuurlijke vraag doorgelaten als machine-regel: ${JSON.stringify(d.machine)}`,
+    );
+    assert.equal(d.withheld, 1, `vraag niet geteld: ${vraag}`);
+  }
+});
+
+test("digest: echte machine-regels gaan WÉL door (tegenproef bij #300-review)", () => {
+  // De keerzijde van de test hierboven: het verankeren mag de echte
+  // diagnostiek niet wegfilteren. Anders "beschermt" de digest door niets meer
+  // te melden — dan verklaart hij geen enkele crash.
+  const regels = [
+    "Failed to spawn Claude Code process: ENOENT",
+    "Claude Code process exited with code 137",
+    "Claude Code process terminated by signal SIGKILL",
+    "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+    "TypeError: Cannot read properties of undefined",
+    "Killed",
+    "read ECONNRESET",
+  ];
+  for (const regel of regels) {
+    const stderr = new StderrTail();
+    stderr.append(`${regel}\n`);
+    assert.equal(stderr.digest().machine.length, 1, `machine-regel weggefilterd: ${regel}`);
+  }
+});
+
+test("digest: machine[] is ZELF geredacteerd, vóór het afkappen (#281-regel)", () => {
+  // `digest()` is publiek en `machine[]` kan rechtstreeks gelezen worden (niet
+  // alleen via stderrDigestLine's slot-redactie). Een secret dat in een
+  // doorgelaten machine-regel meelift mag daar dus al uit zijn — en de redactie
+  // hoort VÓÓR de 160-teken-kap te gebeuren, anders snijdt de kap een token
+  // doormidden en glipt het restant langs de patronen. De machine-prefix blijft.
+  const token = "sk-ant-api03-DIGEST_MACHINE_GEHEIM_0123456789";
+  const stderr = new StderrTail(4000);
+  stderr.append(`Failed to spawn Claude Code process: token=${token}\n`);
+  const [line] = stderr.digest().machine;
+  assert.ok(line, "de machine-regel is er niet");
+  assert.equal(line.includes(token), false, `token onveilig in machine[]: ${line}`);
+  assert.ok(line.includes("Failed to spawn"), `diagnostiek vernietigd: ${line}`);
+});
+
+test("stderrDigestLine redacteert zelf — een derde afnemer erft de poort", () => {
+  // Beide huidige afnemers redacteren al (withStderrDigest via safeDetail,
+  // logEvent via de poort). Deze test bewaakt de functie zélf, want ze geeft
+  // per definitie ongecontroleerde subprocess-uitvoer terug en "de aanroeper
+  // doet het wel" is precies de aanname die #292 duur maakte.
+  const token = "sk-ant-api03-DERDE_AFNEMER_GEHEIM_0123456789";
+  const stderr = new StderrTail();
+  stderr.append(`Failed to spawn Claude Code process: token=${token} ENOMEM\n`);
+
+  const line = stderrDigestLine(stderr);
+  assert.equal(line.includes(token), false, `token gelekt: ${line}`);
+  // En weer: de niet-geheime helft moet overleven, anders bewijst de assert
+  // hierboven alleen dat er iets vernietigd is (#295-review).
+  assert.ok(line.includes("Failed to spawn"), line);
+  assert.ok(line.includes("ENOMEM"), line);
 });

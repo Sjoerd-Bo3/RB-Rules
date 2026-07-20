@@ -459,12 +459,95 @@ export function extractFailureResponse(outcome: {
     : { status: 500, error: "extractie mislukt", failure };
 }
 
+/** Regels in een stderr-staart die aantoonbaar over de MACHINE gaan (#300).
+ *
+ * Dit is een GESLOTEN vocabulaire, en dat is de hele reden dat het bestaat.
+ * `StderrTail` vangt een ongecontroleerde stroom: wat het Claude-subprocess
+ * print komt erin, en er is geen structuur die "diagnostiek" van "toevallig
+ * meegeëchode invoer" scheidt. Op het extract-pad is dat residu aanvaard omdat
+ * de invoer daar publieke Riot-kaarttekst is; op /ask is de invoer de VRAAG VAN
+ * EEN BEZOEKER, en dan gaat de afweging de andere kant op (zie
+ * {@link withStderrDigest}).
+ *
+ * De oplossing is dezelfde als bij de brein-stappen in #292: niet "beter
+ * redacteren" — `safeDetail` haalt secrets weg, geen gebruikersinvoer — maar de
+ * inhoud NIET meegeven. Alleen regels die op dit lijstje matchen worden
+ * doorgelaten (bij een match reist de hele regel mee); de rest wordt geteld,
+ * niet geciteerd.
+ *
+ * BEWUST NIET `SPAWN_PATTERNS` + `AUTH_PATTERNS` hergebruikt (#300-review). Die
+ * zijn gebouwd als CLASSIFIERS: gegeven een tekst waarvan al vaststaat dat het
+ * een machinefout is, wélke knop is het — daar is "matcht ergens" precies goed.
+ * Hier is de rol omgekeerd: een POORT die van een WILLEKEURIGE regel beslist of
+ * hij door mag, en dan is "matcht ergens" juist gevaarlijk. `forbidden`, `401`,
+ * `Killed`, `token invalid` zijn gewone woorden die een speler in zijn vraag
+ * tikt ("Is the **Forbidden** Idol banned", "if my unit is **Killed** in
+ * combat") — hergebruik lekte 6 van 8 natuurlijke vragen als hele regel. Zelfde
+ * verwarring als de tie-break-les van #206: een predicaat dat in de ene rol
+ * klopt, klopt niet vanzelf in de andere.
+ *
+ * Daarom twee soorten patroon, elk met zijn eigen veiligheidsargument:
+ *  - TOKENS die in geen enkele natuurlijke Riftbound-vraag voorkomen (errno,
+ *    signalen, `heap out of memory`) — die mogen overal in de regel matchen;
+ *  - PREFIXEN van echte machine-regels, verankerd aan regel-START (`^`), zodat
+ *    een vraag die zo'n woord ergens in het midden bevat niet per ongeluk zijn
+ *    hele regel doorlaat.
+ *
+ * Auth staat er bewust NIET meer in: een 401/403 wordt al geclassificeerd uit
+ * het `result`-bericht en de `RetryTracker` (`api_error_status`), niet uit
+ * stderr — we verliezen dus geen diagnose door het uit de passthrough te halen,
+ * en we winnen dat `forbidden`/`401` geen willekeurige vraagregel meer
+ * doorlaten. Uitbreiden mag, maar alleen met een token dat geen natuurlijke
+ * taal is, of een aan `^` verankerde prefix van een echte SDK-/node-/kernel-
+ * regel — nooit met een los woord dat "meestal wel een foutmelding is". */
+const MACHINE_STDERR_PATTERNS = [
+  // Tokens/frasen die geen natuurlijke Riftbound-vraag zijn — veilig overal in
+  // de regel. `process exited with code N` en `process terminated by signal`
+  // zijn de letterlijke SDK-vormen (`getProcessExitError` in `sdk.mjs`), dus de
+  // "Claude Code process …"-regels vallen hieronder zonder aparte prefix.
+  /\b(ENOMEM|ENOENT|EPIPE|EAGAIN|EACCES|EMFILE|ENFILE|ETIMEDOUT|ECONNRESET|ECONNREFUSED)\b/,
+  /\bSIG(KILL|SEGV|TERM|ABRT|BUS|FPE)\b/,
+  /heap out of memory/i,
+  /\bprocess exited with code \d+/,
+  /\bprocess terminated by signal\b/,
+  // Prefixen van echte machine-regels — verankerd aan regel-START, zodat alleen
+  // een regel die ZO BEGINT doorgaat, niet een vraag die het woord ergens bevat.
+  /^Failed to spawn\b/,
+  /^[A-Z][A-Za-z]*Error:/, // Error:, TypeError:, RangeError: …
+  /^FATAL ERROR\b/,
+  /^Cannot find module\b/,
+  /^Killed$/, // de bash-OOM-killer print exact deze regel, in z'n eentje
+];
+
+/** Hoeveel machine-regels er hooguit uit een staart gemeld worden, en hoe lang
+ * zo'n regel mag zijn. Samen ruim onder {@link MAX_DETAIL}, zodat de rest van de
+ * toelichting (de reden, de SDK-retries) niet achter de stderr wegvalt. */
+const MAX_MACHINE_LINES = 3;
+const MAX_MACHINE_LINE_LENGTH = 160;
+
+/** Wat een stderr-staart over de machine zegt, zonder wat er verder in staat. */
+export interface StderrDigest {
+  /** Totaal aantal bytes dat het subprocess naar stderr schreef — inclusief wat
+   * inmiddels uit de ringbuffer geschoven is. Een MAAT, geen inhoud, en op
+   * zichzelf al een signaal: een subprocess dat 40 kB uitbraakt en dan omvalt
+   * vertelt iets anders dan een dat zwijgend verdwijnt. */
+  bytes: number;
+  /** De regels die op {@link MACHINE_STDERR_PATTERNS} matchen, afgekapt. */
+  machine: string[];
+  /** Aantal regels dat NIET gemeld wordt (niet herkend, of boven de cap).
+   * Zonder deze telling valt "het subprocess zei niets" niet te onderscheiden
+   * van "het zei van alles, maar niets wat wij mogen citeren". */
+  withheld: number;
+}
+
 /** Ringbuffer voor de stderr van het Claude-subprocess (#281).
  *
  * De Agent SDK biedt een `stderr`-callback op `Options`; die gebruikten we
  * niet, dus alles wat het subprocess over zijn eigen ellende te melden had
  * verdween. Dat is precies de informatie die ontbrak toen 22 aanroepen faalden
- * zonder één logregel.
+ * zonder één logregel. Let op dat de callback niet alleen een AFNEMER is maar
+ * een SCHAKELAAR: de SDK spawnt met `stdio:[…,…, options.stderr ? "pipe" :
+ * "ignore"]`, dus zonder de optie wordt de stroom niet eens opgevangen (#300).
  *
  * Waarom een buffer en geen directe doorvoer naar stdout: op een geslaagde run
  * is die uitvoer ruis (voortgang, waarschuwingen) die de logs onbruikbaar zou
@@ -472,31 +555,121 @@ export function extractFailureResponse(outcome: {
  * LAATSTE `limit` tekens vast en gooien ze pas naar buiten als de aanroep
  * daadwerkelijk mislukt — dan is de staart van stderr meestal precies de
  * oorzaak. Redactie gebeurt bij het uitlezen: het subprocess kan een
- * auth-header of tokenfragment naar stderr schrijven. */
+ * auth-header of tokenfragment naar stderr schrijven.
+ *
+ * ÉÉN BUFFER, TWEE LEESVORMEN. {@link tail} geeft de volledige staart en is
+ * bedoeld voor paden waar de invoer publiek is; {@link digest} geeft alleen de
+ * machine-diagnostiek plus maten, voor paden met gebruikersinvoer. De keuze
+ * hoort bij het PAD, niet bij de buffer — vandaar dat de ruwe buffer privé
+ * blijft en er geen accessor voor is. */
 export class StderrTail {
   private buffer = "";
+  private bytes = 0;
 
   constructor(private readonly limit = 2000) {}
 
   append(chunk: string): void {
+    // Vóór het afkappen tellen: de MAAT moet blijven kloppen ook als de inhoud
+    // allang uit de ringbuffer geschoven is.
+    this.bytes += Buffer.byteLength(chunk, "utf8");
     this.buffer += chunk;
     if (this.buffer.length > this.limit) {
       this.buffer = this.buffer.slice(this.buffer.length - this.limit);
     }
   }
 
-  /** De ge-redacte staart, of een lege string als het subprocess niets zei. */
+  /** De VOLLEDIGE ge-redacte staart, of een lege string als het subprocess
+   * niets zei. Alleen voor paden waar de invoer publiek is (de extractie-
+   * endpoints, zie {@link withStderr}). */
   tail(): string {
     return safeDetail(this.buffer);
   }
+
+  /** Alleen wat over de machine gaat, plus maten (#300). Voor paden waar er
+   * gebruikersinvoer in het spel is. */
+  digest(): StderrDigest {
+    const machine: string[] = [];
+    let withheld = 0;
+    for (const raw of this.buffer.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (
+        machine.length < MAX_MACHINE_LINES &&
+        MACHINE_STDERR_PATTERNS.some((p) => p.test(line))
+      )
+        // Redacteren VÓÓR het afkappen (#281-regel, ook hier): een `slice` die
+        // een secret doormidden snijdt laat een fragment achter dat te kort is
+        // voor de patronen en alsnog lekt. `redactSecrets` matcht op de patroon-
+        // grens (`\b`), niet op de regel-startankers hierboven, dus dit
+        // verandert de PASSTHROUGH-beslissing niet — die is al gevallen op de
+        // ongeredacteerde regel — alleen wat er van de doorgelaten regel
+        // overblijft.
+        machine.push(redactSecrets(line).slice(0, MAX_MACHINE_LINE_LENGTH));
+      else withheld += 1;
+    }
+    return { bytes: this.bytes, machine, withheld };
+  }
 }
 
-/** Plak de stderr-staart achter een detail-tekst, als er iets te melden valt.
- * Eén plek, zodat elk faalpad dezelfde vorm oplevert. */
+/** Plak de VOLLEDIGE stderr-staart achter een detail-tekst, als er iets te
+ * melden valt. Eén plek, zodat elk faalpad dezelfde vorm oplevert.
+ *
+ * ALLEEN VOOR DE EXTRACTIE-ENDPOINTS. Het residu (prompt-inhoud kan meeliften)
+ * is daar aanvaard omdat de invoer publieke Riot-kaarttekst is — die afweging
+ * staat in ARCHITECTURE §6.6 en geldt niet voor /ask; gebruik daar
+ * {@link withStderrDigest}. */
 export function withStderr(failure: AiFailure, stderr: StderrTail): AiFailure {
   const tail = stderr.tail();
   if (!tail) return failure;
   return { reason: failure.reason, detail: safeDetail(`${failure.detail} | stderr: ${tail}`) };
+}
+
+/** De stderr-samenvatting als tekst, of "" als het subprocess niets schreef.
+ *
+ * Eén rendering voor de twee afnemers (de faal-toelichting en de
+ * warmpool-fallback-logregel), zodat de vorm niet uiteen kan lopen — en zodat
+ * de regel "wat mag er uit stderr naar buiten" op ÉÉN plek staat in plaats van
+ * per aanroeper opnieuw.
+ *
+ * Redacteert ZELF, en niet omdat de huidige aanroepers dat niet doen (beide
+ * wel: `withStderrDigest` via `safeDetail`, `logEvent` via de poort). Maar dit
+ * is een functie die per definitie ONGECONTROLEERDE subprocess-uitvoer
+ * teruggeeft, en dan is "de aanroeper redacteert wel" precies het soort aanname
+ * dat #292 duur maakte. Wie hier een derde afnemer aan hangt, krijgt de
+ * redactie gratis mee. */
+export function stderrDigestLine(stderr: StderrTail): string {
+  const d = stderr.digest();
+  if (d.bytes === 0) return "";
+  const parts = [`stderr ${d.bytes}B`];
+  if (d.machine.length > 0) parts.push(d.machine.join(" // "));
+  if (d.withheld > 0) parts.push(`${d.withheld} regel(s) niet gemeld`);
+  return safeDetail(parts.join(", "));
+}
+
+/** Plak de MACHINE-diagnostiek uit stderr achter een detail-tekst (#300).
+ *
+ * HET VERSCHIL MET {@link withStderr} IS DE INVOER, NIET HET KANAAL. Beide
+ * lezen dezelfde ringbuffer van hetzelfde subprocess. Maar de motivering om het
+ * prompt-residu te aanvaarden was nooit "stderr is ongevaarlijk" — ze was "op
+ * dit endpoint is de invoer publieke Riot-tekst, dus de schade is nihil en het
+ * diagnostisch nut groot" (ARCHITECTURE §6.6). Op /ask is de invoer de vraag
+ * van een bezoeker, dus dezelfde afweging valt andersom uit: die vraag hoort in
+ * `ask_trace` achter de admin-poort, niet in `docker logs rb-v2-ai`.
+ *
+ * Vandaar de gesloten vraag in plaats van de volledige staart: de regels die
+ * aantoonbaar van de machine komen (spawn, OOM, auth, node-crash) gaan mee, de
+ * rest wordt geteld. Dat dekt precies het scenario waarvoor #300 bestaat — een
+ * omgevallen subprocess laat juist die regels achter — zonder een kanaal open
+ * te zetten waar willekeurige tekst doorheen kan.
+ *
+ * Wat dit NIET is: een garantie. Een echode vraagregel die toevallig op een
+ * machine-patroon matcht komt er nog steeds door. Het verschil is dat het
+ * lekoppervlak van "de hele staart" naar "regels uit een gesloten lijst"
+ * gaat — een bound, geen belofte. */
+export function withStderrDigest(failure: AiFailure, stderr: StderrTail): AiFailure {
+  const line = stderrDigestLine(stderr);
+  if (!line) return failure;
+  return { reason: failure.reason, detail: safeDetail(`${failure.detail} | ${line}`) };
 }
 
 /** Render één logwaarde tot tekst die {@link safeDetail} kan redacteren.

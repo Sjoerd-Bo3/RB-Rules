@@ -19,8 +19,10 @@ import {
   resultFailure,
   RetryTracker,
   StderrTail,
+  stderrDigestLine,
   withRetries,
   withStderr,
+  withStderrDigest,
   type AiFailure,
 } from "./failure.js";
 import { RELATIONS_MARKER } from "./relations.js";
@@ -190,6 +192,20 @@ const EXTRACT_TIMEOUT_MS = (() => {
  * prompt + options erin, een berichtenstroom eruit. */
 export type QueryRunner = (arg: {
   prompt: string;
+  options: Options;
+}) => AsyncIterable<unknown>;
+
+/** Dezelfde naad voor het /ask-pad (#300), met de bredere prompt-vorm die
+ * {@link askClaude} gebruikt: een kale string, of een streaming-input-iterator
+ * zodra er afbeeldingen meegaan.
+ *
+ * Waarom askClaude er nu ook een krijgt: zonder naad valt over het /ask-faalpad
+ * alleen te toetsen DAT de juiste tekens in de broncode staan, en zo'n bron-grep
+ * vangt zijn eigen bug niet — dat is de les die #281 hier al duur betaalde. Met
+ * de naad kan een test een subprocess simuleren dat naar stderr schrijft en dan
+ * omvalt, en toetsen wat er daadwerkelijk in de uitval-toelichting terechtkomt. */
+export type AskQueryRunner = (arg: {
+  prompt: string | AsyncIterable<unknown>;
   options: Options;
 }) => AsyncIterable<unknown>;
 
@@ -499,8 +515,25 @@ export function buildQueryOptions(input: {
    * door de aanroeper — geen aparte validatie hier); zonder override
    * ongewijzigd gedrag (MODEL[task]). */
   model?: string;
+  /** Afnemer van de stderr van het Claude-subprocess (#300).
+   *
+   * VERPLICHT, EN DAT IS DE FIX. Deze optie is bij de SDK geen afnemer maar een
+   * SCHAKELAAR: `stdio:["pipe","pipe", options.stderr ? "pipe" : "ignore"]`.
+   * Zonder haar wordt de stroom niet doorgegeven-maar-genegeerd, ze wordt
+   * WEGGEGOOID bij de spawn. `extractWithTool` zette de optie wel en
+   * `buildQueryOptions` niet, dus de faaldiagnostiek van #281 was compleet op
+   * het extract-pad en half op /ask — inclusief het agentic pad.
+   *
+   * Bewust een verplichte parameter in plaats van een optionele met een
+   * bron-grep-test erop: zo is het de TYPECHECKER die elke nieuwe call-site
+   * dwingt een staart te leveren. Een poort die je kunt vergeten is geen poort
+   * (#292), en een structurele test op de aanroepvorm heeft altijd omzeilingen
+   * (#295-review). Hier kan het per constructie niet fout gaan. */
+  stderr: (data: string) => void;
 }): Options {
-  const { task, systemPrompt, includePartialMessages, controller, onBrainStep, model } = input;
+  const {
+    task, systemPrompt, includePartialMessages, controller, onBrainStep, model, stderr,
+  } = input;
   const research = task === "research";
   const agentic = task === "agentic";
   return {
@@ -532,30 +565,49 @@ export function buildQueryOptions(input: {
     // Streaming (#31): partial messages alleen aanzetten als er een
     // delta-afnemer is — anders blijft het berichtenverkeer zoals het was.
     ...(includePartialMessages ? { includePartialMessages: true } : {}),
+    stderr,
   };
 }
 
 /** De warme-boot-opties zijn per constructie het koude cheap-pad met
  * dezelfde signatuur — apart benoemd zodat de contract-test elke toekomstige
- * special-casing van het warme pad ziet. */
-export function warmBootOptions(sig: WarmSignature, controller: AbortController): Options {
+ * special-casing van het warme pad ziet.
+ *
+ * `stderr` komt van buiten omdat elke sessie een EIGEN staart hoort te hebben
+ * (#300): het warm/koud-contract van #154 gaat over de opties waarmee het
+ * subprocess gespawnd en de API-call gedaan wordt, en die blijven byte-gelijk —
+ * de callback is, net als `abortController`, per sessie uniek en per definitie
+ * geen onderdeel van die gelijkheid. Zou hij dat wél zijn, dan zouden warm en
+ * koud in dezelfde buffer schrijven en was elke staart bij een gelijktijdige
+ * call onbruikbaar. */
+export function warmBootOptions(
+  sig: WarmSignature,
+  controller: AbortController,
+  stderr: (data: string) => void,
+): Options {
   return buildQueryOptions({
     task: "cheap",
     systemPrompt: sig.systemPrompt,
     includePartialMessages: sig.includePartialMessages,
     controller,
+    stderr,
   });
 }
 
 function bootWarmCheapSession(sig: WarmSignature): WarmBootHandle {
   const controller = new AbortController();
   const input = pushableInput<ReturnType<typeof buildUserMessage>>();
+  // Eigen staart per warme sessie (#300), aangelegd vóór de spawn zodat ook
+  // wat het subprocess tijdens de boot al roept erin belandt — precies de
+  // uitvoer die verklaart waarom een claim later dood blijkt.
+  const stderr = new StderrTail();
   const q = query({
     prompt: input.iterable as Parameters<typeof query>[0]["prompt"],
-    options: warmBootOptions(sig, controller),
+    options: warmBootOptions(sig, controller, (data: string) => stderr.append(data)),
   });
   return {
     messages: q,
+    stderr,
     push: (m) => input.push(m as ReturnType<typeof buildUserMessage>),
     endInput: () => input.end(),
     kill: () => {
@@ -654,6 +706,36 @@ export async function collectAnswer(
   };
 }
 
+/** De afloop van één uitgelezen /ask-run: gedeeld door het koude pad én de
+ * warme claim (#300).
+ *
+ * WAAROM DIT GEDEELD MOET ZIJN. Het koude pad hád deze poort al — `if
+ * (res.failure && !res.answer) throw new AiRunError(...)` — en de warme claim
+ * niet: die deed `if (progress.sawOutput) return res` en gaf een mislukte run
+ * dus terug als een 200 met een leeg antwoord. Exact dezelfde run leverde koud
+ * een AiRunError met reden op en warm niets. Dat is dezelfde soort stilte als
+ * #281 zelf: niet een verkeerde melding, maar géén melding, langs precies het
+ * pad dat een gedragstest op het andere pad niet ziet. Eén functie voor beide
+ * uitgangen maakt die drift per constructie onmogelijk (zelfde reden als
+ * {@link decideExtractOutcome} op het extract-pad).
+ *
+ * De stderr-staart komt van de aanroeper omdat alléén die weet WELKE sessie
+ * deze run draaide — zie de attributie-regel in {@link askClaude}. */
+function finishAskRun(
+  res: AskAnswer,
+  stderr: StderrTail,
+  retries: RetryTracker,
+): AskAnswer {
+  if (!res.failure) return res;
+  const failure = withStderrDigest(withRetries(res.failure, retries), stderr);
+  // Mislukte run ZONDER antwoord (#281): de SDK gooit hier niet, dus dit
+  // eindigde voorheen als een 200 met een leeg antwoord — rb-api degradeerde
+  // dan wel correct naar null, maar de reden was nergens te zien. Met een
+  // antwoord erbij is de run bruikbaar en telt de fout niet als uitval.
+  if (!res.answer) throw new AiRunError(failure);
+  return { ...res, failure };
+}
+
 /** Stuur één prompt (optioneel met afbeeldingen) naar Claude.
  *
  * Met `onDelta` (#31, streaming) levert de Agent SDK naast de gewone
@@ -688,8 +770,26 @@ export async function askClaude(opts: {
    * gezet door een benchmarkrun (rb-api's AskOptions.Model reist hier
    * ongewijzigd doorheen). Undefined = het bestaande gedrag (MODEL[task]). */
   model?: string;
+  /** Test-seam (#300): de SDK-aanroep van het KOUDE pad. Productie laat dit weg
+   * en krijgt `query`; zie {@link AskQueryRunner}. */
+  runQuery?: AskQueryRunner;
+  /** Test-seam (#300): de warme pool. Productie laat dit weg en krijgt de
+   * module-singleton {@link warmPool}.
+   *
+   * Waarom deze naad er nu is: het warme pad kon tot dusver alleen met een echt
+   * SDK-subprocess doorlopen worden, dus geen enkele test kwam er ooit — en
+   * precies daar zat het gat dat deze PR opruimt (een warme claim die met een
+   * fout-result eindigde gaf een leeg antwoord terug waar het koude pad een
+   * AiRunError gooide). Een gedragstest kan per definitie niet zien dat er een
+   * TWEEDE pad bestaat dat ze nooit aanroept (#292); met deze naad roept ze het
+   * wél aan. */
+  pool?: WarmPool;
 }): Promise<AskAnswer> {
-  const { prompt, system, task = "cheap", images = [], onDelta, onBrainStep, signal, model } = opts;
+  const {
+    prompt, system, task = "cheap", images = [], onDelta, onBrainStep, signal, model,
+    runQuery = query as unknown as AskQueryRunner,
+    pool = warmPool,
+  } = opts;
   const research = task === "research";
   const agentic = task === "agentic";
 
@@ -727,6 +827,19 @@ export async function askClaude(opts: {
   // een /ask-timeout die in werkelijkheid een aanhoudende API-fout was ook hier
   // als zodanig in de log belandt.
   const retries = new RetryTracker();
+  // Stderr van het subprocess (#300). De KOUDE sessie krijgt deze buffer; een
+  // warme claim brengt zijn eigen mee (aangelegd bij zijn boot).
+  const coldStderr = new StderrTail();
+  /** Welke staart de uitval van DEZE aanroep verklaart.
+   *
+   * ATTRIBUTIE IS HIER HET HELE PUNT, en fout toewijzen is erger dan geen
+   * staart: dan diagnosticeer je met stelligheid de verkeerde sessie. De regel
+   * is simpel omdat de ontwerpgrens van de pool simpel is (één sessie = één
+   * call): de staart van de sessie die de run daadwerkelijk draaide, en niets
+   * anders. Valt een warme claim dood terug op koud, dan wordt dit veld
+   * expliciet teruggezet — de warme regels horen bij de warme sessie en zijn
+   * daar al gemeld, en de koude herstart is een ándere sessie. */
+  let failureStderr = coldStderr;
   let release: (() => void) | undefined;
   let unhookWarmAbort: (() => void) | undefined;
   const progress: CollectProgress = { sawOutput: false };
@@ -741,11 +854,14 @@ export async function askClaude(opts: {
       priority: "interactive",
     });
 
-    if (task === "cheap" && !model && warmPool.isEnabled()) {
+    if (task === "cheap" && !model && pool.isEnabled()) {
       const sig: WarmSignature = { systemPrompt, includePartialMessages };
-      warmPool.observe(sig);
-      const claimed = controller.signal.aborted ? null : warmPool.claim(sig);
+      pool.observe(sig);
+      const claimed = controller.signal.aborted ? null : pool.claim(sig);
       if (claimed) {
+        // Vanaf hier draait de WARME sessie; haar staart verklaart wat er
+        // misgaat tot het moment dat we eventueel koud herstarten.
+        failureStderr = claimed.stderr;
         const killWarm = () => claimed.kill();
         controller.signal.addEventListener("abort", killWarm, { once: true });
         unhookWarmAbort = () =>
@@ -753,10 +869,16 @@ export async function askClaude(opts: {
         try {
           claimed.send(buildUserMessage(prompt, images));
           const res = await collectAnswer(claimed.messages(), onDelta, progress, retries);
-          if (progress.sawOutput) return res;
+          if (progress.sawOutput) return finishAskRun(res, claimed.stderr, retries);
           // Sessie eindigde zonder één output-bericht: subprocess was dood
           // bij de claim — er is geen API-call gedaan, dus koud is veilig.
-          logEvent("warmpool_fallback", { stage: "dood bij claim" });
+          // Wát het subprocess nog geroepen heeft vóór het omviel staat in zijn
+          // eigen staart, en hoort HIER gemeld te worden (#300): dit is het
+          // enige moment waarop die uitvoer nog aan de juiste sessie hangt.
+          logEvent("warmpool_fallback", {
+            stage: "dood bij claim",
+            stderr: stderrDigestLine(claimed.stderr) || undefined,
+          });
         } catch (e) {
           if (progress.sawOutput || controller.signal.aborted || timedOut) throw e;
           // Door dezelfde poort als elk ander faalpad sinds #281 (#292): een
@@ -770,10 +892,15 @@ export async function askClaude(opts: {
             stage: "faalde vóór output",
             reason: failure.reason,
             detail: failure.detail,
+            stderr: stderrDigestLine(claimed.stderr) || undefined,
           });
         }
-        warmPool.noteDeadClaim();
+        pool.noteDeadClaim();
         progress.sawOutput = false;
+        // De warme sessie is op en haar uitvoer is hierboven gemeld. Wat nu
+        // volgt is een VERSE sessie; die mag nooit verklaard worden met de
+        // regels van de dode (zie `failureStderr`).
+        failureStderr = coldStderr;
       }
     }
 
@@ -784,40 +911,48 @@ export async function askClaude(opts: {
       controller,
       onBrainStep,
       model,
+      stderr: (data: string) => coldStderr.append(data),
     });
     const arg = {
       prompt: images.length > 0 ? userMessage(prompt, images) : prompt,
       options,
     };
-    const res = await collectAnswer(
-      query(arg as Parameters<typeof query>[0]),
-      onDelta,
-      progress,
-      retries,
-    );
-    // Mislukte run ZONDER antwoord (#281): de SDK gooit hier niet, dus dit
-    // eindigde voorheen als een 200 met een leeg antwoord — rb-api degradeerde
-    // dan wel correct naar null, maar de reden was nergens te zien. Met een
-    // antwoord erbij is de run bruikbaar en telt de fout niet.
-    if (res.failure && !res.answer) throw new AiRunError(withRetries(res.failure, retries));
-    return res;
+    const res = await collectAnswer(runQuery(arg), onDelta, progress, retries);
+    return finishAskRun(res, coldStderr, retries);
   } catch (e) {
     // Capaciteitsgrens (#155) onvertaald doorgeven: server.ts maakt er een
     // 429 met machine-leesbare reden van.
     if (e instanceof ConcurrencyLimitError) throw e;
+    // AL geclassificeerd door `finishAskRun` (#300-review): niet opnieuw door
+    // `describeThrown` halen. Dat zou de reden HERclassificeren op de tekst van
+    // de al-gebouwde melding — `max_turns`/`permission_denied` werden zo
+    // `unknown` (`describeThrown` kent geen AiRunError-special-case, alleen
+    // `failureOf` doet dat), of toevallig `spawn` omdat "exited with code 137"
+    // uit de stderr-staart in de message stond. Plus: de stderr-digest werd een
+    // TWEEDE keer aangeplakt en er kwam een `AiRunError:`-prefix als ruis bij.
+    // De reason is precies de knop die de beheerder afleest — dit is #281
+    // opnieuw. De enige AiRunError die hier aankomt komt uit `finishAskRun`;
+    // `collectAnswer`/de warme claim gooien rauwe fouten.
+    if (e instanceof AiRunError) throw e;
     // Timeout en client-abort herkenbaar maken voor de aanroeper (run_log);
     // overige fouten ongewijzigd doorgeven — server.ts vertaalt ze naar een
     // nette 500 of een error-frame.
     if (timedOut && timeoutMs) {
-      throw new AiRunError(withRetries(
-        {
-          reason: "timeout",
-          detail: `${task}-call afgebroken na ${timeoutMs / 1000}s (harde timeout)`,
-        },
-        retries,
+      throw new AiRunError(withStderrDigest(
+        withRetries(
+          {
+            reason: "timeout",
+            detail: `${task}-call afgebroken na ${timeoutMs / 1000}s (harde timeout)`,
+          },
+          retries,
+        ),
+        failureStderr,
       ));
     }
     if (controller.signal.aborted) {
+      // Bewust ZONDER stderr-staart: de client liep weg, er is niets aan de
+      // machine te diagnosticeren, en dit is het pad dat het vaakst vuurt —
+      // diagnostiek die niets verklaart is hier alleen ruis en lekoppervlak.
       throw new AiRunError({
         reason: "aborted",
         detail: "aanroep afgebroken: client heeft de verbinding gesloten",
@@ -825,8 +960,11 @@ export async function askClaude(opts: {
     }
     // Overige fouten geclassificeerd doorgeven (#281): de melding blijft
     // leesbaar (AiRunError.message = "reden: detail") en server.ts kan de reden
-    // eruit lezen in plaats van hem uit een string te moeten raden.
-    throw new AiRunError(withRetries(describeThrown(e), retries));
+    // eruit lezen in plaats van hem uit een string te moeten raden. De staart
+    // van de sessie die dit veroorzaakte gaat mee (#300) — dit is het pad waar
+    // een omgevallen subprocess uitkomt, en juist daar was `reason: spawn`
+    // voorheen alles wat er stond.
+    throw new AiRunError(withStderrDigest(withRetries(describeThrown(e), retries), failureStderr));
   } finally {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
