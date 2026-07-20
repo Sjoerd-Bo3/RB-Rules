@@ -253,13 +253,21 @@ a { color: inherit; }
 	align-items: center;
 	justify-content: center;
 	position: relative;
-	vertical-align: -2px;
+	/* Meeschalen met de tekstregel, dus uitlijnen in em en niet in px. */
+	vertical-align: -0.22em;
 	margin: 0 1px;
 }
+/* Riot tekent deze glyphs op een 24x24-raster; onder ~14px slibt het witte
+   binnenwerk dicht (rune_rainbow met zijn gradiënten het eerst) en zijn de
+   runes alleen nog aan kleur te onderscheiden. Vandaar meeschalen met de
+   tekst op 1.15em, met een ondergrens zodat ze ook in kleine metatekst
+   leesbaar blijven. */
 .tok-glyph {
 	display: block;
-	width: 16px;
-	height: 16px;
+	width: 1.15em;
+	height: 1.15em;
+	min-width: 14px;
+	min-height: 14px;
 }
 /* Verborgen zolang het glyph laadt; de inline `onerror` op de <img>
    (rbtokens.ts) zet tok-glyph-error zodra /glyphs/{token}.svg ontbreekt, en
