@@ -1232,7 +1232,8 @@ Nachtrun (#245): naast de interval-schedules hierboven start `ScanScheduler`
 sinds #245 binnen een KLOK-venster (default 00:00–11:00 lokaal, Europe/Amsterdam;
 env-overschrijfbaar via `NIGHTLY_START_HOUR`/`NIGHTLY_END_HOUR`/`NIGHTLY_TZ` in de
 VM-`.env`) de job `nachtrun`: de volledige ONGECAPTE kennis-keten in één
-JobRunner-slot — `all` (met ongecapte mechaniek-mining) → `breinmine-interacties`
+JobRunner-slot — `all` (met ongecapte mechaniek-mining) → `breinentiteiten` (#250)
+→ `breinmine-interacties`
 → `breinmine-predicaten` → `breinprojectie` → `reason`. De mining-services krijgen
 een optionele `deadline` (het venster-einde) en stoppen daar netjes; hun watermark
 bewaart de voortgang, dus de resterende backlog volgt de volgende nacht. De
@@ -1245,6 +1246,16 @@ gecapt (`DefaultMaxFocusCards`/`DefaultMaxSubjects` = 40 in de mining-services) 
 `nachtrun` is de enige ongecapte route, ook handmatig te starten (beheer → Brein →
 "Volledige nachtrun"); handmatig buiten het venster draait zonder deadline
 (volledige drain).
+
+**Noodrem `NIGHTLY_ENABLED`** (#249/#251): met `NIGHTLY_ENABLED=false` in de
+VM-`.env` start `ScanScheduler` de nachtrun niet meer automatisch — bedoeld om de
+nachtelijke keten te pauzeren zolang de extractie nog niet deugt, zonder code te
+wijzigen of te deployen. De vlag zit bewust in `TryStartNightlyAsync`, niet in de
+`JobCatalog`: **handmatig starten via de beheer-knop blijft altijd werken**. Default
+is AAN, en alleen een expliciete uit-waarde (`false`/`0`/`no`/`off`,
+hoofdletterongevoelig) schakelt uit — een typfout in de `.env` mag de keten niet
+stilletjes stilleggen. Een ongeldig VENSTER laat de pauze-keuze intact
+(`NightlyRunSettings.FromEnvironment`, getest).
 
 ### 6.3 De graph-sync
 

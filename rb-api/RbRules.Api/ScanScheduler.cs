@@ -301,11 +301,17 @@ public class ScanScheduler(
     /// Anders dan de interval-schedules hierboven is dit klok-gebaseerd. De
     /// single-job-gate (<see cref="JobRunner.TryStart"/>) voorkomt dubbelstart; een
     /// lopende run houdt het slot vast tot de deadline, dus een tweede tick binnen
-    /// het venster start niets (TryStart=false, geen fout).</summary>
+    /// het venster start niets (TryStart=false, geen fout).
+    ///
+    /// Met <c>NIGHTLY_ENABLED=false</c> start de scheduler de nachtrun niet — de
+    /// noodrem om de nachtelijke keten te pauzeren zolang de extractie nog niet
+    /// deugt (#249/#251). Handmatig starten via de beheer-knop blijft werken: de
+    /// vlag zit hier, niet in de JobCatalog.</summary>
     private async Task TryStartNightlyAsync(IServiceProvider sp, CancellationToken ct)
     {
         try
         {
+            if (!nightly.Enabled) return;
             var tz = NightlyWindow.ResolveTimeZone(nightly.TimeZoneId);
             var now = DateTimeOffset.UtcNow;
             if (!NightlyWindow.InWindow(now, tz, nightly.StartHour, nightly.EndHour)) return;
