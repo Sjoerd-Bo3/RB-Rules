@@ -134,6 +134,19 @@ met quota en rate-limiting.
   boilerplate). Met de bump rebaselinet elke bron stil bij de eerstvolgende
   scan (`Source.StripVersion`-vergelijking in `IngestService`), zonder
   Change en zonder her-mine-kosten.
+- **State die een client-side navigatie moet overleven hoort niet in
+  component-`$state`** (#248) — een SvelteKit-component unmount bij navigatie,
+  en neemt een lopende `fetch`/`ReadableStream` mee het graf in (op `/ask` was
+  je zo je antwoord én je lopende search kwijt). Zulke state hoort in een
+  module-level runes-store (`$lib/*.svelte.ts`), met drie randvoorwaarden:
+  (a) module-state is tijdens **SSR gedeeld tussen alle bezoekers** — schrijf
+  er dus nooit tijdens het renderen in, alleen vanuit browser-acties;
+  (b) de store draait door buiten zijn eigen route, dus **absolute paden**
+  (`/ask?/ask`, nooit `?/ask`) en geen `$app/navigation`-import — laat de
+  pagina zulke route-gebonden dingen als haakje ophangen zolang zij leeft;
+  (c) bij een reload breekt de browser de stream af en loopt je catch nog één
+  keer — die zou "verbinding weg" over de "onderbroken door herladen"-
+  momentopname schrijven, dus vanaf `pagehide` niets meer persisteren.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`
