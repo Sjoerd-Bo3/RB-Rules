@@ -143,6 +143,10 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.HasKey(x => x.RiftboundId);
             e.HasIndex(x => x.Name);
             e.HasIndex(x => x.SetId);
+            e.Property(x => x.InteractionsMinedByRunId).HasMaxLength(Domain.Ulid.Length);
+            // De focus-selectie van de interactie-mining vraagt precies naar de
+            // nog-niet-verwerkte kaarten (#249-review).
+            e.HasIndex(x => x.InteractionsMinedAt);
             e.Property(x => x.Embedding).HasColumnType(vectorType);
             // ANN-index voor semantisch kaartzoeken (S1).
             e.HasIndex(x => x.Embedding)
