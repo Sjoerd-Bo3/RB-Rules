@@ -1,5 +1,7 @@
-// Faaldiagnostiek voor rb-ai (#281). PUUR (geen Agent SDK, geen IO behalve één
-// console.log in `logCall`) zodat het volledig unit-testbaar is.
+// Faaldiagnostiek voor rb-ai (#281). PUUR (geen Agent SDK, geen IO behalve de
+// ene `console.log` in `logEvent`) zodat het volledig unit-testbaar is. Sinds
+// #292 is die ene regel ook letterlijk de enige stdout-schrijver van de hele
+// sidecar — zie {@link logEvent}.
 //
 // AANLEIDING. Een mining-run over 40 kaarten meldde `22 rb-ai-uitval (5xx×22)`
 // terwijl `docker logs rb-v2-ai` precies ÉÉN regel bevatte: de opstartregel.
@@ -485,6 +487,38 @@ export function withStderr(failure: AiFailure, stderr: StderrTail): AiFailure {
   return { reason: failure.reason, detail: safeDetail(`${failure.detail} | stderr: ${tail}`) };
 }
 
+/** DE ENIGE PLEK IN rb-ai DIE NAAR STDOUT SCHRIJFT (#292).
+ *
+ * Waarom die regel zo absoluut is: #281 zette hier een redactie-poort neer,
+ * maar twee oudere `console.log`'s in `ai.ts` liepen er gewoon omheen — de
+ * agentic tool-argumenten (in de praktijk de VRAAGTEKST van de gebruiker) en
+ * een rauwe `String(e)` uit het warmpool-faalpad. Een poort die je kunt
+ * omzeilen is geen poort. Sinds #292 gaat élke logregel van de sidecar hier
+ * doorheen, en {@link logCall} is er zelf ook gewoon een aanroeper van.
+ *
+ * Wat de poort garandeert:
+ *  - elke waarde die geen `number`/`boolean` is, gaat door {@link safeDetail} —
+ *    ook een object, want `JSON.stringify` op een meegegeven object zou de
+ *    redactie anders stilletjes overslaan;
+ *  - `undefined`/`null` velden vallen weg (geen ruis, en `0` blijft staan);
+ *  - precies één parseerbare JSON-regel per aanroep.
+ *
+ * Wat de poort NIET garandeert (#292, expliciet): redactie is geen privacy.
+ * `safeDetail` haalt SECRETS eruit, niet gebruikersinvoer — een vraagtekst
+ * overleeft de poort ongeschonden. Inhoud die niet in de containerlog hoort,
+ * geef je hier dus simpelweg niet mee; log de MAAT (bytes/aantallen). */
+export function logEvent(evt: string, fields: Record<string, unknown> = {}): void {
+  const line: Record<string, unknown> = { evt };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null) continue;
+    line[key] =
+      typeof value === "number" || typeof value === "boolean"
+        ? value
+        : safeDetail(typeof value === "string" ? value : String(value));
+  }
+  console.log(JSON.stringify(line));
+}
+
 /** Eén regel per rb-ai-aanroep, als JSON zodat hij te grepp'en en te tellen is
  * (`docker logs rb-v2-ai | grep ai_call`).
  *
@@ -522,18 +556,18 @@ export function logCall(entry: {
   /** Taaktype van een /ask-call (cheap/hard/research/agentic). */
   task?: string;
 }): void {
-  const line = {
-    evt: "ai_call",
+  logEvent("ai_call", {
     endpoint: entry.endpoint,
     ms: Math.round(entry.ms),
     status: entry.status,
     outcome: entry.outcome,
-    ...(entry.task ? { task: entry.task } : {}),
-    ...(entry.bytes !== undefined ? { bytes: entry.bytes } : {}),
-    ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
-    ...(entry.items !== undefined ? { items: entry.items } : {}),
-    ...(entry.reason ? { reason: entry.reason } : {}),
-    ...(entry.detail ? { detail: safeDetail(entry.detail) } : {}),
-  };
-  console.log(JSON.stringify(line));
+    task: entry.task,
+    bytes: entry.bytes,
+    refs: entry.refs,
+    items: entry.items,
+    reason: entry.reason,
+    // Lege toelichting weglaten in plaats van als "" loggen: `logEvent` filtert
+    // alleen undefined/null, want daar is `0` een betekenisvolle waarde.
+    detail: entry.detail || undefined,
+  });
 }

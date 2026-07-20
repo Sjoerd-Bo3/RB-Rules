@@ -26,6 +26,8 @@
 // volgen uit productiemetingen) alleen rond echte activiteit — relevant op
 // de 8GB-VM. Kill-switch: `AI_WARM_POOL=0`.
 
+import { describeThrown, logEvent } from "./failure.js";
+
 /** Sessie-opties die bij de SDK-boot vastliggen en dus de claim-sleutel zijn. */
 export interface WarmSignature {
   systemPrompt?: string;
@@ -147,7 +149,12 @@ export class WarmPool {
 
   constructor(private readonly config: WarmPoolConfig) {
     this.maxSignatures = config.maxSignatures ?? 8;
-    this.log = config.log ?? ((line) => console.log(line));
+    // Default-sink door de redactie-poort (#292): deze klasse logt onder meer
+    // een boot-fout, en dat is dezelfde soort rauwe SDK-tekst die #281 uit de
+    // containerlog wilde houden. Een geïnjecteerde sink (tests) omzeilt de
+    // poort per definitie — daarom wordt de tekst hieronder óók bij de bron al
+    // geclassificeerd en geredacteerd.
+    this.log = config.log ?? ((line) => logEvent("warmpool", { detail: line }));
   }
 
   isEnabled(): boolean {
@@ -217,7 +224,7 @@ export class WarmPool {
       handle = this.config.boot(sig);
     } catch (e) {
       this.bootFailures += 1;
-      this.log(`[warmpool] voorverwarmen mislukt: ${String(e).slice(0, 200)}`);
+      this.log(`[warmpool] voorverwarmen mislukt: ${describeThrown(e).detail}`);
       return false;
     }
     const slot: Slot = {

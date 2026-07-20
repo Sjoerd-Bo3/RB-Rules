@@ -8,6 +8,7 @@ import {
   extractFailureResponse,
   failureOf,
   logCall,
+  logEvent,
   safeDetail,
   type AiFailure,
 } from "./failure.js";
@@ -367,5 +368,8 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`rb-ai luistert op :${PORT}`);
+  // Ook de opstartregel door de poort (#292), zodat élke regel in
+  // `docker logs rb-v2-ai` dezelfde parseerbare JSON-vorm heeft en er geen
+  // tweede stdout-pad bestaat dat de redactie kan missen.
+  logEvent("startup", { port: PORT });
 });
