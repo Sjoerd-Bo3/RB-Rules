@@ -77,11 +77,13 @@ public sealed record ProjectionEdge(
 /// <c>OntologySnapshot.Capture</c>: twee artefacten met twee levenscycli. De
 /// ontologie-vingerafdruk beschrijft het SCHEMA; deze catalogus beschrijft wat de
 /// PROJECTIE doet. Ze horen apart te kunnen bewegen — anders zou het opruimen van
-/// projectie-schuld een schema-versiebump forceren. En de catalogus toetst
+/// projectie-schuld een schema-versiebump forceren. En deze catalogus toetst
 /// uitsluitend NAMEN: of een geprojecteerde edge ook domain/range-conform is
 /// (<c>(:Erratum)-[:SUPERSEDES]->(:Card)</c> voldoet bijvoorbeeld níet aan de
-/// gedeclareerde range <c>NormativeSource</c>) is een aparte vraag met een eigen
-/// guard — zie #289 PR 2.</summary>
+/// gedeclareerde range <c>NormativeSource</c>) is een aparte vraag, met sinds
+/// #289 PR 2 een eigen register en eigen guard: zie
+/// <see cref="ProjectionEdgeShapeCatalog"/>. Die twee horen bij elkaar — élke
+/// naam hier heeft daar minstens één knooplabel-vorm, en omgekeerd (check L0).</summary>
 public static class ProjectionEdgeCatalog
 {
     /// <summary>Het spoor waar de erkende domeinschuld wordt opgelost. Bewust NIET
