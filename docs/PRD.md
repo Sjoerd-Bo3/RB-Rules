@@ -712,6 +712,24 @@ de globale duur-vangrail).
   zones, scoren, keyword-gedrag) gedistilleerd uit de regels, met draft →
   approve in beheer; altijd als achtergrondblok mee in `/ask` en read-only op
   de site. *Route* `/primer` · *endpoint* `/api/knowledge`.
+  **Nederlandse weergave (#266)** — de primer wordt canoniek in het Engels
+  opgeslagen (#187, hierboven), maar `/primer` is een bezoekerspagina op een
+  Nederlandse site en toont dus Nederlands, met de Engelse speltermen
+  onvertaald (Runes, Battlefields, showdown, Might, Bonus Damage, …). De
+  vertaling gebeurt **bij de generatie**, niet bij de weergave: ze zit in
+  `knowledge_doc.body_nl` naast de canonieke Engelse `body`, en gaat daarmee
+  door dezelfde draft/approve-poort — de beheerder keurt exact de tekst goed
+  die de bezoeker leest, en ziet beide versies naast elkaar (bewerkbaar).
+  Her-generatie vervangt beide teksten samen en zet de status terug op draft,
+  zodat er geen tweede waarheid kan ontstaan. Een vertaling die een spelterm
+  vernederlandst of een §-verwijzing laat vallen wordt door een
+  glossarium-waarborg afgekeurd; dan (en bij AI-uitval) toont de pagina de
+  canonieke Engelse tekst met een expliciete melding erbij — nooit een leeg
+  vak. De conceptnamen zijn handgeschreven Nederlandse titels bij
+  `PrimerTopics` (geen LLM, dus geen drift); een door de beheerder aangepaste
+  titel wint. Retrieval, embedding en `/ask`-context blijven onveranderd op de
+  Engelse tekst. Geen vertaallaag over officiële regel- of kaartteksten — daar
+  zou vertalen interpretatierisico introduceren (#189).
 - **Claims-pipeline** — community-interpretatie als geparafraseerde claims met
   bron-trust, corroboratie (aantal onafhankelijke bronnen) en een officiële
   toets; geaccepteerde claims doen mee als eigen "Community-consensus"-kanaal in
@@ -766,6 +784,10 @@ de globale duur-vangrail).
   geen vertaalstap; UI en `/ask`-antwoorden blijven Nederlands. Een
   wipe-en-regenereer-job (`regenerateknowledge`, zie §4.5) gooit de bestaande
   Nederlandse afgeleide laag schoon weg i.p.v. in-place te vertalen.
+  Uitzondering sinds #266: de primer krijgt bij de generatie een Nederlandse
+  wéérgave naast de canonieke Engelse tekst, omdat `/primer` de enige plek is
+  waar afgeleide kennis rechtstreeks als leespagina bij de bezoeker komt (zie
+  Game-primer hierboven). De opslag blijft leidend Engels.
 - **Graph-verkenner** — interactieve kaart↔mechaniek↔regel-visualisatie.
   *Route* `/graph` · *endpoint* `/api/graph/neighbors`.
   **Hover-preview en knoop-detail (#252)** — hoveren over een knoop toont een
@@ -1134,7 +1156,10 @@ de globale duur-vangrail).
   sweep-historie (verloop van modelkwaliteit/-snelheid over tijd). *Route*
   `/admin/overview/benchmark?sweep=…` · *endpoints*
   `/api/admin/jobs/benchmarksweep`, `/api/admin/overview/benchmark`.
-- **Primer- & correctie-beheer** — drafts goedkeuren/intrekken; correcties
+- **Primer- & correctie-beheer** — drafts goedkeuren/intrekken, met sinds #266
+  de Nederlandse weergave én de canonieke Engelse tekst naast elkaar in de
+  reviewrij en beide bewerkbaar in het overzicht (leeg opslaan wist de
+  Nederlandse tekst, waarna `/primer` het Engels toont); correcties
   verifiëren/afwijzen, met bron-naam+link, een opmerkingsveld en een
   "opnieuw evalueren"-actie die de opmerking bewaart en de hybride poort
   her-toetst (#184). *Endpoints* `/api/admin/knowledge/*`,
@@ -1415,6 +1440,12 @@ openstaande PR.
   vastgestelde extractie, waardoor de verbeterde extractie precies die kaarten
   overslaat en de verbetering niet meetbaar is. Twee expliciete scopes
   (alleen interacties, of ook entiteiten/predicaten voor #250).
+- **#266** `/primer` in het Nederlands weergeven, met de Engelse opslag
+  canoniek — *in-flight*, zie §4.4. Live regressie sinds #187/#197: de
+  vertaling gebeurt bij de generatie en gaat door de bestaande
+  draft/approve-poort. Afgesplitst van **#189** (de bredere taalafweging),
+  waar de conclusie blijft: geen vertaallaag over officiële regel- of
+  kaartteksten.
 
 ---
 
@@ -1482,7 +1513,10 @@ openstaande PR.
   gebruikersbeheer, rollen, social login e.d. zijn geen doel; huidige accounts
   dienen quota/kosteninzicht, niet een sociaal platform.
 - **Meertaligheid** — de UI is Nederlands (Engelse speltermen onvertaald); een
-  meertalige site is geen doel.
+  meertalige site is geen doel. De Nederlandse primer-weergave naast de
+  canonieke Engelse opslag (#266) is géén taalwissel-functie: er is één
+  bezoekerstaal, en de Engelse tekst blijft alleen zichtbaar als eerlijke
+  terugval wanneer de vertaling ontbreekt.
 - **Publieke brein-API** — de brein-koppelvlakken zijn compose-intern; extern
   ontsluiten (auth, quota) is een apart, later besluit.
 - **Write-tools voor de AI-agent** — het brein is read-only voor AI; kennis

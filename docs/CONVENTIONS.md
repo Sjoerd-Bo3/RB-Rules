@@ -94,7 +94,15 @@ Endpoint-regels:
   zelf. **UI en /ask-antwoorden blijven Nederlands** — dat scheidt
   `AskService.BasePrompt` af, dat blijft ongewijzigd.
   (`ClarificationMiner`/`ClarificationMiningService` volgen hetzelfde patroon,
-  #185.) Een bestaande Nederlandse afgeleide laag wordt niet in-place vertaald
+  #185.) **Weergave is iets anders dan opslag** (#266): waar afgeleide kennis
+  rechtstreeks als leespagina bij de bezoeker komt — vooralsnog alleen
+  `/primer` — komt er bij de generatie een Nederlandse weergave naast de
+  canonieke Engelse tekst (`knowledge_doc.body_nl`), die door dezelfde
+  draft/approve-poort gaat. Nooit vertalen bij het renderen (dat omzeilt de
+  review-poort), nooit over officiële regel- of kaartteksten (#189), en altijd
+  met een glossarium-waarborg die speltermen en §-verwijzingen onvertaald
+  houdt (`PrimerTranslation`, ADR-17); faalt die, dan toont de pagina het
+  Engels. Een bestaande Nederlandse afgeleide laag wordt niet in-place vertaald
   maar weggegooid en schoon herbouwd — zie `KnowledgeRegenerationService`
   (expliciete, destructieve admin-actie, nooit automatisch; raakt nooit de
   bron-/mensenwerk-tabellen). Uitzondering (bewust, buiten deze ronde): de

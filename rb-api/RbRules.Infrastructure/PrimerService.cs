@@ -1,16 +1,22 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Pgvector.EntityFrameworkCore;
 using RbRules.Domain;
 
 namespace RbRules.Infrastructure;
 
-public record PrimerResult(int Written, int Skipped, int Failed);
+/// <summary><paramref name="Untranslated"/> (#266): geschreven docs zonder
+/// bruikbare Nederlandse weergave (AI-uitval of een vertaling die de
+/// speltermen-waarborg niet haalde) — die tonen op /primer het Engels.</summary>
+public record PrimerResult(int Written, int Skipped, int Failed, int Untranslated = 0);
 
 /// <summary>Kennislaag 1 (docs/KNOWLEDGE.md): destilleert per concept een
 /// primer-doc uit de regelindex — samenhangend spelbegrip mét §-verwijzingen.
 /// Nieuwe/gewijzigde docs zijn draft; de beheerder keurt ze in /admin, pas
 /// daarna doen ze mee in de /ask-context.</summary>
-public class PrimerService(RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai)
+public class PrimerService(
+    RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai,
+    ILogger<PrimerService> logger)
 {
     private const int ChunksPerTopic = 10;
 
@@ -18,6 +24,9 @@ public class PrimerService(RbRulesDbContext db, EmbeddingService embeddings, RbA
     // opgeslagen, dicht bij de officiële bewoording (docs/CONVENTIONS.md). De
     // UI en /ask-antwoorden blijven Nederlands — dat scheidt AskService.
     // BasePrompt af, deze primer-tekst is context, geen eindantwoord.
+    // #266: /primer is óók UI, dus krijgt elk doc er een Nederlandse
+    // weergavetekst bij (PrimerTranslation). Die is puur presentatie: de
+    // Engelse body hieronder blijft canoniek en is wat embedt en retrievet.
     private const string SystemPrompt = """
         You write a concise game-understanding document for Riftbound TCG
         players, based on the official rule sections provided. Requirements:
@@ -38,6 +47,7 @@ public class PrimerService(RbRulesDbContext db, EmbeddingService embeddings, RbA
         var written = 0;
         var skipped = 0;
         var failed = 0;
+        var untranslated = 0;
         var n = 0;
         foreach (var topic in PrimerTopics.All)
         {
@@ -68,30 +78,50 @@ public class PrimerService(RbRulesDbContext db, EmbeddingService embeddings, RbA
                 SystemPrompt, ct: ct);
             if (string.IsNullOrWhiteSpace(body)) { failed++; continue; }
 
+            // Nederlandse weergave (#266) meteen bij de generatie, zodat ze
+            // onderdeel is van de draft die de beheerder goedkeurt.
+            progress?.Invoke($"primer {n}/{PrimerTopics.All.Count}: {topic.Title} — vertalen");
+            var bodyNl = await TranslateAsync(body, ct);
+            if (bodyNl is null) untranslated++;
+
             var refs = string.Join(", ", chunks.Select(c => c.SectionCode));
+            // Embedding blijft op de canonieke Engelse tekst — de Nederlandse
+            // weergave doet niet mee in retrieval of /ask-context.
             var docEmbedding = await embeddings.EmbedOneAsync($"{topic.Title}\n{body}", ct);
-            if (existing is null)
+            var doc = existing;
+            if (doc is null)
             {
-                db.KnowledgeDocs.Add(new KnowledgeDoc
+                doc = new KnowledgeDoc
                 {
-                    Kind = "primer", Topic = topic.Key, Title = topic.Title,
-                    Body = body.Trim(), SectionRefs = refs, Status = "draft",
-                    Embedding = docEmbedding, EmbeddingModel = EmbeddingConfig.Model,
-                });
+                    Kind = "primer", Topic = topic.Key, Title = topic.Title, Body = body,
+                };
+                db.KnowledgeDocs.Add(doc);
             }
-            else
-            {
-                existing.Title = topic.Title;
-                existing.Body = body.Trim();
-                existing.SectionRefs = refs;
-                existing.Status = "draft"; // her-generatie vraagt opnieuw om review
-                existing.Embedding = docEmbedding;
-                existing.EmbeddingModel = EmbeddingConfig.Model;
-                existing.UpdatedAt = DateTimeOffset.UtcNow;
-            }
+            PrimerDraft.Apply(doc, topic.Title, body, bodyNl, refs, DateTimeOffset.UtcNow);
+            doc.Embedding = docEmbedding;
+            doc.EmbeddingModel = EmbeddingConfig.Model;
             await db.SaveChangesAsync(ct);
             written++;
         }
-        return new(written, skipped, failed);
+        return new(written, skipped, failed, untranslated);
+    }
+
+    /// <summary>Vertaalt één primer-body naar het Nederlands, mét de
+    /// speltermen-waarborg (#266): een vertaling die een Riftbound-spelterm
+    /// vernederlandst of een §-verwijzing laat vallen, wordt weggegooid
+    /// (null) — de pagina toont dan de canonieke Engelse tekst. Liever het
+    /// Engels dan een "slagveld" naast een §-citaat. AI-uitval is hetzelfde
+    /// pad: null, geen crash.</summary>
+    public async Task<string?> TranslateAsync(string body, CancellationToken ct = default)
+    {
+        var dutch = await ai.AskAsync(body, PrimerTranslation.SystemPrompt, ct: ct);
+        if (string.IsNullOrWhiteSpace(dutch)) return null;
+
+        var leaks = PrimerTranslation.Leaks(body, dutch);
+        if (leaks.Count == 0) return dutch.Trim();
+        logger.LogWarning(
+            "Primer-vertaling afgekeurd, niet behouden in de vertaling: {Leaks}",
+            string.Join(", ", leaks));
+        return null;
     }
 }

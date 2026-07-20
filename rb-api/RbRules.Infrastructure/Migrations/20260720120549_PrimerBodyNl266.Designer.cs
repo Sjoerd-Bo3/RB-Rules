@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260720120549_PrimerBodyNl266")]
+    partial class PrimerBodyNl266
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -721,15 +724,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("image_width");
 
-                    b.Property<DateTimeOffset?>("InteractionsMinedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("interactions_mined_at");
-
-                    b.Property<string>("InteractionsMinedByRunId")
-                        .HasMaxLength(26)
-                        .HasColumnType("character varying(26)")
-                        .HasColumnName("interactions_mined_by_run_id");
-
                     b.PrimitiveCollection<string[]>("Mechanics")
                         .HasColumnType("text[]")
                         .HasColumnName("mechanics");
@@ -804,9 +798,6 @@ namespace RbRules.Infrastructure.Migrations
 
                     NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Embedding"), "hnsw");
                     NpgsqlIndexBuilderExtensions.HasOperators(b.HasIndex("Embedding"), new[] { "vector_cosine_ops" });
-
-                    b.HasIndex("InteractionsMinedAt")
-                        .HasDatabaseName("ix_card_interactions_mined_at");
 
                     b.HasIndex("Name")
                         .HasDatabaseName("ix_card_name");
@@ -2961,34 +2952,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_run_log_created_at");
 
                     b.ToTable("run_log", (string)null);
-                });
-
-            modelBuilder.Entity("RbRules.Domain.Setting", b =>
-                {
-                    b.Property<string>("Key")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("key");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.Property<string>("UpdatedBy")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("updated_by");
-
-                    b.Property<string>("Value")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("value");
-
-                    b.HasKey("Key")
-                        .HasName("pk_setting");
-
-                    b.ToTable("setting", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.SimilarityExplanation", b =>

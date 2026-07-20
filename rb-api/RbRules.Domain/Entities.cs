@@ -454,6 +454,12 @@ public class KnowledgeDoc : IEmbeddable
     public required string Topic { get; set; }          // PrimerTopics.Key
     public required string Title { get; set; }
     public required string Body { get; set; }
+    /// <summary>Nederlandse weergavetekst (#266) van <see cref="Body"/>. De
+    /// Engelse body blijft canoniek — retrieval, embedding en /ask-context
+    /// gebruiken uitsluitend die; dit veld bestaat alleen om de bezoeker een
+    /// Nederlandse pagina te tonen. Null = nog geen (bruikbare) vertaling: de
+    /// UI toont dan het Engels, nooit een leeg vak.</summary>
+    public string? BodyNl { get; set; }
     /// <summary>§-codes waarop het doc gebaseerd is, komma-gescheiden.</summary>
     public string? SectionRefs { get; set; }
     public string Status { get; set; } = "draft";       // draft | approved

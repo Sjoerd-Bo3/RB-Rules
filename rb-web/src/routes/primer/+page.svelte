@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { useShell } from '$lib/shell.svelte';
+	import { isEnglishFallback, primerBody, primerTitle } from '$lib/primerText';
 
 	let { data } = $props();
 	const shell = useShell();
@@ -25,7 +26,7 @@
 {#snippet rail()}
 	<nav class="rail-nav">
 		{#each data.docs as d (d.id)}
-			<a href="#{d.topic}">{d.title}</a>
+			<a href="#{d.topic}">{primerTitle(d)}</a>
 		{/each}
 	</nav>
 {/snippet}
@@ -35,7 +36,8 @@
 	<p class="subtitle">
 		De flow van het spel, gedistilleerd uit de officiële regels en door de beheerder
 		goedgekeurd. De regels zelf blijven normatief — elke alinea verwijst naar de §-secties
-		waarop hij is gebaseerd.
+		waarop hij is gebaseerd. Speltermen blijven Engels, zoals ze op de kaarten en in de
+		officiële regels staan.
 	</p>
 
 	{#if data.apiDown}
@@ -45,8 +47,13 @@
 	{:else}
 		{#each data.docs as d (d.id)}
 			<section id={d.topic} class="doc panel">
-				<h2>{d.title}</h2>
-				<p class="body">{d.body}</p>
+				<h2>{primerTitle(d)}</h2>
+				<p class="body">{primerBody(d)}</p>
+				{#if isEnglishFallback(d)}
+					<!-- Eerlijke degradatie (#266): liever de canonieke Engelse tekst
+					     mét uitleg dan een leeg vak of een ongereviewde vertaling. -->
+					<p class="meta">Nog geen Nederlandse weergave — dit is de canonieke Engelse tekst.</p>
+				{/if}
 				{#if refs(d.sectionRefs).length}
 					<p class="refs meta">
 						Gebaseerd op:

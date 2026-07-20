@@ -221,7 +221,11 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   #144), `CardPresentation` (#270 — lokale terugval voor de presentatievelden:
   afmetingen uit de Sanity-URL, zelf samengestelde alt-tekst, hexkleur-
   validatie), `CardMerge` (#270 — de voorrangsregel van de kaart-upsert op
-  één plek, zie ADR-15), `SetCoverage` (dekking per set, #145), `ClaimMining`,
+  één plek, zie ADR-15), `PrimerTranslation` + `PrimerDraft` (#266, ADR-19 —
+  het speltermen-glossarium dat zowel de vertaalprompt vult als de lek-controle
+  achteraf voedt, plus het ene schrijfpad dat de Engelse body en de Nederlandse
+  weergave altijd samen vervangt en terugzet naar draft),
+  `SetCoverage` (dekking per set, #145), `ClaimMining`,
   `RelationMining`, `RelationTriage` (prompt + tolerante parser voor de
   relatie-triage, #199 v1), `AgenticGate`, `SourceSeed`, `SourceFeedSeed` (#167),
   `RiotCardMapper`, `HubDiscovery`, `RiotNewsFeed` (bron-feed-parser, #167),
@@ -2095,6 +2099,34 @@ kan rb-api eerder starten dan Postgres klaar is.
   `breinmine-interacties` (brede scope: eerst `breinentiteiten`) en daarna
   `graph` + `breinprojectie` — Neo4j is een projectie en loopt tot dat moment
   achter op Postgres.
+- **Nederlandse wéérgave van de primer** (#266, ADR-19) — de enige plek waar
+  afgeleide kennis rechtstreeks als leespagina bij de bezoeker komt
+  (`/primer`) kreeg door #187/#197 een volledig Engelse pagina op een
+  Nederlandse site. Opgelost met een weergavelaag, niet met een tweede bron:
+  `PrimerService` vertaalt de zojuist gegenereerde body in dezelfde run naar
+  het Nederlands (`PrimerTranslation.SystemPrompt`) en schrijft die in
+  `knowledge_doc.body_nl` naast de canonieke Engelse `body`. Drie
+  eigenschappen dragen het ontwerp:
+  (a) **vertalen bij generatie, niet bij weergave** — de NL-tekst is onderdeel
+  van de draft en passeert dus dezelfde review-poort; vertalen bij het
+  renderen zou ongeziene LLM-tekst aan bezoekers tonen en de poort omzeilen;
+  (b) **speltermen-waarborg** — `PrimerTranslation` houdt één glossarium dat
+  zowel de prompt vult als de controle achteraf voedt (`Leaks`): een spelterm
+  die in de Engelse bron staat en niet in de vertaling terugkomt, of een
+  weggevallen §-verwijzing, keurt de vertaling af (Engelse kant
+  hoofdlettergevoelig, zodat het hulpwerkwoord "might" niet de spelterm
+  "Might" opeist; Nederlandse kant ongevoelig, zodat "je unit wordt ready"
+  meetelt). Afgekeurd of rb-ai weg ⇒ `body_nl` blijft null en de pagina toont
+  de canonieke Engelse tekst mét melding — degradatie, geen leeg vak;
+  (c) **één schrijfpad** — `PrimerDraft.Apply` (Domain, puur) vervangt Engelse
+  body en NL-weergave altijd samen en zet de status terug op draft, en wist
+  een oude NL-tekst wanneer er geen nieuwe vertaling is; twee waarheden kunnen
+  zo niet ontstaan. Retrieval, embedding, graph-projectie en `/ask`-context
+  raken `body_nl` niet aan — de Engelse tekst blijft leidend. Conceptnamen
+  komen uit handgeschreven `PrimerTopic.TitleNl`-waarden (geen LLM, geen
+  drift); `PrimerTopics.DutchTitle` geeft null zodra de beheerder de titel zelf
+  heeft aangepast, zodat zijn correctie wint. Officiële regel- en kaartteksten
+  worden bewust NIET vertaald (#189): daar zijn we regelbron.
 - **Sanitize vóór `{@html}`** — tekst wordt ge-escaped vóór markdown-parse/
   icoon-injectie; link-URL's zijn gewhitelist (`rb-web/src/lib/markdown.ts`,
   `rbtokens.ts`, `docs/CONVENTIONS.md`).
@@ -2453,6 +2485,38 @@ energieschijf verliest zijn rand op licht), dus `app.css` corrigeert per thema
 in plaats van de assets zelf te bewerken. Ze schalen mee met de tekstregel
 (1.15em, ondergrens 14px): onder ~14px slibt het binnenwerk dicht.
 
+### ADR-19 — Primer vertalen bij generatie, niet bij weergave (#266)
+
+**Context.** Sinds #187/#197 staat afgeleide kennis canoniek in het Engels —
+terecht, dicht bij de officiële bewoording. Voor `/primer`, de enige plek waar
+die kennis ongefilterd als leespagina bij de bezoeker komt, leverde dat een
+volledig Engelse pagina op een Nederlandse site op (#197 noteerde het als
+tijdelijk; het werd permanent). Vertalen kan op twee momenten: bij het
+renderen, of bij de generatie.
+
+**Beslissing.** Bij de **generatie**, in `PrimerService`, opgeslagen als
+`knowledge_doc.body_nl` naast de canonieke Engelse `body`. Doorslaggevend is de
+review-poort: de primer heeft niet voor niets draft → approve, en een vertaling
+die pas bij het renderen ontstaat, komt ongezien bij de bezoeker en omzeilt
+precies de kwaliteitsborging die daar staat. Nu is de Nederlandse tekst
+onderdeel van de draft die goedgekeurd wordt — de beheerder keurt exact af wat
+de bezoeker leest, en kan hem corrigeren. Bijkomend: één LLM-call per
+her-generatie in plaats van per paginaweergave, en geen vertaling in het
+render-pad dat moet blijven werken als rb-ai weg is.
+
+**Gevolg.** Twee tekstvelden voor één doc, dus twee-waarheden-risico — ondervangen
+door één schrijfpad (`PrimerDraft.Apply`, puur in Domain): beide velden worden
+altijd samen vervangen, de status gaat terug naar draft, en zonder nieuwe
+vertaling wordt de oude NL-tekst gewist in plaats van naast een nieuwe Engelse
+body te blijven staan. De speltermen-waarborg (`PrimerTranslation`) deelt één
+glossarium tussen prompt en controle achteraf; faalt de controle of rb-ai, dan
+blijft `body_nl` null en toont `/primer` de Engelse tekst met een melding.
+`body_nl` blijft buiten embedding, retrieval, graph en `/ask`-context — het is
+presentatie, geen kennis. Officiële regel- en kaartteksten blijven onvertaald
+(#189): daar zou een vertaallaag interpretatierisico introduceren.
+`PrimerTranslation`, `PrimerDraft`, `PrimerService.TranslateAsync`,
+`PrimerTranslationTests`, `PrimerServiceTranslationTests`, `$lib/primerText.ts`.
+
 ---
 
 ### ADR-17 — Het LLM krijgt alleen wat deterministisch onbeslisbaar is (#211, #249)
@@ -2557,6 +2621,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Q10 | Regressie in domeinlogica | Elke productie-bug krijgt eerst een regressietest; CI is de poort (test-gate vóór publish) | `docs/CONVENTIONS.md`, `RbRules.Tests/`, `v2-ci.yml` |
 | Q11 | Eén parallel retrieval-kanaal van `/ask` gooit (bv. de misvattingen-query faalt) | Dat kanaal levert leeg + een marker in de trace (`kanaal-uitval: ...`); de overige kanalen en het antwoord blijven ongemoeid, nooit een 500. Sequentieel (zonder factory) vs. parallel (met factory) leveren byte-voor-byte dezelfde prompt | `AskService` (#152), `AskServiceParallelRetrievalTests` |
 | Q12 | rb-ai onbereikbaar tijdens de mechaniek-mining | De gebrackete mechanieken worden tóch geschreven (deterministisch, ADR-17), inclusief magnitude-familie; de kaart blijft in de wachtrij omdat `Triggers` null blijft en wordt de volgende run afgemaakt — nooit een half feit dat als "gemined" telt | `MechanicMiningService` (#211), `MechanicMiningServiceTests` |
+| Q13 | Vertaalstap van de primer valt uit of vernederlandst een spelterm (Runes, Battlefields, showdown, Might, …) of laat een §-verwijzing vallen | De vertaling wordt niet opgeslagen (`body_nl` blijft null); `/primer` toont de canonieke Engelse tekst met een expliciete melding erbij, nooit een leeg vak en nooit een half-vernederlandste tekst. Het doc blijft draft tot de beheerder het goedkeurt | `PrimerTranslation.Leaks`, `PrimerService.TranslateAsync` (#266, ADR-19), `PrimerTranslationTests`, `PrimerServiceTranslationTests`, `primerText.test.ts` |
 
 ---
 
@@ -2605,7 +2670,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Core / Tournament Rules | De twee normatieve regel-PDF's (laag 0) |
 | Ban / Erratum | Verboden kaart / officiële tekstcorrectie op een kaart |
 | Ruling | Scheidsrechter-oordeel; geverifieerde rulings zijn gezaghebbend (laag 0b) |
-| Primer | Gegenereerde spelbegrip-concepten (laag 1), review door beheerder |
+| Primer | Gegenereerde spelbegrip-concepten (laag 1), review door beheerder; canoniek Engels opgeslagen met een Nederlandse weergave (`body_nl`) die bij de generatie ontstaat en door dezelfde review-poort gaat (#266) |
 | Claim | Geparafraseerde community-bewering met corroboratie en trust (laag 2) |
 | Kennispiramide | Voorrangsvolgorde officieel > rulings > primer > community > meta |
 | BrainRef | Canonieke tekstuele identiteit (`card:…`, `section:…`) over pgvector + Neo4j + API |

@@ -311,6 +311,8 @@
 
 	interface KnowledgeDoc {
 		id: number; kind: string; topic: string; title: string; body: string;
+		/** Nederlandse weergave (#266) — de tekst die de bezoeker op /primer ziet. */
+		bodyNl: string | null;
 		sectionRefs: string | null; status: string; updatedAt: string;
 	}
 	const knowledge = $derived((data.knowledge ?? []) as KnowledgeDoc[]);
@@ -936,6 +938,15 @@
 							<p class="t"><strong>{k.title}</strong> <span class="badge warn-b">Draft</span></p>
 							<details>
 								<summary class="meta">Lees de gegenereerde tekst (gebaseerd op {k.sectionRefs || 'regels'})</summary>
+								<!-- #266: de Nederlandse weergave staat vóóraan — dat is de
+								     tekst die de bezoeker straks op /primer leest, en dus
+								     precies waar deze poort over gaat. -->
+								{#if k.bodyNl}
+									<p class="primer-body">{k.bodyNl}</p>
+									<p class="meta">Canonieke Engelse tekst (voedt elke ruling):</p>
+								{:else}
+									<p class="meta">Geen Nederlandse weergave — /primer toont voor dit concept het Engels.</p>
+								{/if}
 								<p class="primer-body">{k.body}</p>
 							</details>
 						</div>

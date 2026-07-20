@@ -456,7 +456,7 @@ public static class AdminEndpoints
                 .OrderBy(k => k.Topic)
                 .Select(k => new
                 {
-                    k.Id, k.Kind, k.Topic, k.Title, k.Body,
+                    k.Id, k.Kind, k.Topic, k.Title, k.Body, k.BodyNl,
                     k.SectionRefs, k.Status, k.UpdatedAt,
                 })
                 .ToListAsync());
@@ -510,6 +510,12 @@ public static class AdminEndpoints
                        || (!string.IsNullOrEmpty(body) && body != doc.Body);
             if (!string.IsNullOrEmpty(title)) doc.Title = title;
             if (!string.IsNullOrEmpty(body)) doc.Body = body;
+            // #266: de Nederlandse weergave is de tekst die de bezoeker ziet,
+            // dus de reviewer kan haar hier corrigeren. Niet meegestuurd =
+            // ongemoeid; leeg meegestuurd = wissen, waarna /primer het Engels
+            // toont. Geen her-embed: de embedding hoort bij de Engelse body.
+            if (patch.BodyNl is not null)
+                doc.BodyNl = string.IsNullOrWhiteSpace(patch.BodyNl) ? null : patch.BodyNl.Trim();
             if (changed)
             {
                 try
@@ -534,7 +540,7 @@ public static class AdminEndpoints
             await db.SaveChangesAsync();
             return Results.Ok(new
             {
-                doc.Id, doc.Kind, doc.Topic, doc.Title, doc.Body,
+                doc.Id, doc.Kind, doc.Topic, doc.Title, doc.Body, doc.BodyNl,
                 doc.SectionRefs, doc.Status, doc.UpdatedAt,
                 Embedded = doc.Embedding != null,
             });

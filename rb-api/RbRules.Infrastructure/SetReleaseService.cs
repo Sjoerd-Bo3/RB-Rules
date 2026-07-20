@@ -112,7 +112,8 @@ public class SetReleaseService(
             // beslist de beheerder via de kandidatenqueue en her-generatie.
             var r = await primer.GenerateAsync(
                 progress: p => progress?.Invoke($"6/6 · primer — {p}"), ct: ct);
-            return $"{r.Written} drafts, {r.Skipped} goedgekeurd gelaten, {r.Failed} mislukt";
+            return $"{r.Written} drafts, {r.Skipped} goedgekeurd gelaten, {r.Failed} mislukt, "
+                + $"{r.Untranslated} zonder NL-weergave";
         });
 
         var detail = string.Join(" · ", results);

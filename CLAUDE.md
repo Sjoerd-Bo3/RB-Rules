@@ -58,7 +58,13 @@ met quota en rate-limiting.
 1. **Nederlands** antwoorden; Engelse speltermen onvertaald. Geldt voor UI en
    /ask-antwoorden — **afgeleide/gesynthetiseerde kennis (claims, primer,
    relatie-uitleg) wordt sinds #187 in de brontaal (Engels) opgeslagen**, dicht
-   bij de officiële bewoording (docs/CONVENTIONS.md).
+   bij de officiële bewoording (docs/CONVENTIONS.md). **Opslag ≠ weergave**
+   (#266, ADR-17): komt zulke kennis rechtstreeks als leespagina bij de
+   bezoeker (nu alleen /primer), dan krijgt ze bij de GENERATIE een
+   Nederlandse weergave naast de Engelse tekst — door dezelfde
+   draft/approve-poort, met een glossarium-waarborg voor de speltermen, en
+   nooit als vertaalstap bij het renderen. Officiële regel- en kaartteksten
+   worden nooit vertaald (#189).
 2. **Geen emoji's in de UI** — serieus, strak design via de tokens in
    app.css. Status = kleur + tekst.
 3. **Nieuwe wensen tussendoor → eerst een GitHub-issue**, niet direct
