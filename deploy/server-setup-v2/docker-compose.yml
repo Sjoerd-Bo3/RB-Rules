@@ -106,12 +106,28 @@ services:
       #
       # Vandaar twee grenzen. EMBED_BATCH_SIZE (16 → 8) knijpt het aantal; de
       # regel-secties zijn met tot 2400 tekens per stuk de zware kant, dus
-      # EMBED_BATCH_CHARS (~8000) is wat de worst case echt afknijpt — vóór #282 kon
-      # één verzoek 16×2400 ≈ 38k tekens bevatten. Verhogen = de OOM terughalen;
-      # verhoog dan eerst de cap hieronder, en alleen als er op de VM ruimte is
-      # (Postgres 1g + Neo4j 1,5g + Ollama 2,5g + rb-ai 2,44g + api 1,5g op 8 GB).
+      # EMBED_BATCH_CHARS is wat de worst case echt afknijpt — vóór #282 kon
+      # één verzoek 16×2400 ≈ 38k tekens bevatten.
+      #
+      # 8000 → 6000 (#293). #282 koos 8000 op gevoel, en dat bleek EXACT de klip:
+      # meetreeks tegen deze Ollama (POST /api/embed, bge-m3) gaf
+      #   500 / 2400 / 3908 / 4500 / 5000 / 6000 / 7000 tekens → HTTP 200
+      #   8000 tekens                                         → HTTP 400, 3 van 3
+      #   20000 tekens                                        → HTTP 400
+      # met foutbody `do embedding request: … EOF` = het llama-server-kindproces
+      # sterft. Bevestigd met de OOM-teller: `dmesg | grep -c llama-server` ging
+      # tijdens die reeks van 10 naar 30. De 400 en de OOM-kill zijn hetzelfde
+      # gebeuren. 7000 is de klifrand zelf, dus 6000 = ~15% marge eronder.
+      #
+      # Verhogen = de OOM terughalen; verhoog dan eerst de cap hieronder, en alleen
+      # als er op de VM ruimte is (Postgres 1g + Neo4j 1,5g + Ollama 2,5g +
+      # rb-ai 2,44g + api 1,5g op 8 GB). Let op: rb-api weigert een EMBED_BATCH_CHARS
+      # boven de gemeten veilige grens (EmbeddingSettings.MeasuredSafeMaxBatchChars,
+      # 7000) en valt dan mét een waarschuwing terug op de default — verhogen is dus
+      # een codewijziging naast deze compose-wijziging, precies omdat de twee bij
+      # elkaar horen. Omlaag bijstellen kan hier gewoon.
       EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-8}
-      EMBED_BATCH_CHARS: ${EMBED_BATCH_CHARS:-8000}
+      EMBED_BATCH_CHARS: ${EMBED_BATCH_CHARS:-6000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -291,6 +307,11 @@ services:
           # 2,5 GiB ruim niet nodig. Een verhoging hier zonder eerst te meten schuift
           # de OOM alleen door naar Postgres of Neo4j — en dan kiest de HOST-killer,
           # die niet weet wie de veroorzaker is.
+          #
+          # #293 heeft die vraagkant nu wél gemeten: bij deze cap ligt de klip tussen
+          # 7000 en 8000 tekens per verzoek. Verzet je deze waarde, dan verschuift die
+          # klip mee en is de meetreeks bij EMBED_BATCH_CHARS hierboven verlopen —
+          # opnieuw meten vóór je daar iets op baseert.
           memory: 2560m
     networks: [internal]
 

@@ -6,7 +6,13 @@ namespace RbRules.Infrastructure;
 /// <summary>Uitslag per bron. <paramref name="FailureSummary"/> gevuld = deze bron is
 /// NIET geïndexeerd omdat de embed-stap faalde; <paramref name="Chunks"/> is dan 0 en
 /// de bestaande regelindex van die bron staat er onveranderd (#282).</summary>
-public record RuleIndexResult(string SourceId, int Chunks, string FailureSummary = "")
+/// <param name="Capped">Chunks waarvan alléén de embed-invoer is ingekort omdat de
+/// chunk boven het tekenbudget uitkwam (#293). De opgeslagen <c>RuleChunk.Text</c>
+/// blijft volledig — de bezoeker ziet dus nooit een afgekapte regeltekst; het is de
+/// vector die op de eerste N tekens gebaseerd is. Hoort desondanks in de melding:
+/// stil invoerverlies is precies wat #282/#284 wegnamen.</param>
+public record RuleIndexResult(
+    string SourceId, int Chunks, string FailureSummary = "", int Capped = 0)
 {
     public bool Failed => FailureSummary.Length > 0;
 }
@@ -29,10 +35,16 @@ public static class RuleIndexResults
         var scope = incremental ? " nieuwe/gewijzigde bronnen" : " bronnen";
         var head = $"{ok.Sum(r => r.Chunks)} sectie-chunks over {ok.Count}{scope}"
             + (rebuilt ? " (herbouwd)" : "");
-        return failed.Count == 0
-            ? head
-            : head + $" · {failed.Count} bron(nen) overgeslagen — "
+        if (failed.Count > 0)
+            head += $" · {failed.Count} bron(nen) overgeslagen — "
                 + string.Join("; ", failed.Select(f => $"{f.SourceId}: {f.FailureSummary}"));
+        // Afkappen is geen fout maar wel invoerverlies, dus het staat er altijd bij
+        // (#293) — óók in een verder geslaagde run.
+        var capped = results.Sum(r => r.Capped);
+        return capped == 0
+            ? head
+            : head + $" · {capped} chunk(s) te lang voor het embed-budget, "
+                + "alleen de embed-invoer afgekapt (opgeslagen tekst blijft volledig)";
     }
 }
 
@@ -97,16 +109,36 @@ public class RuleChunkPipeline(
             // hier knijpt het tekenbudget van EmbeddingSettings (#282). Let op: 2400
             // is een streefwaarde, geen harde grens — SplitLong knipt op zinsgrens en
             // laat één zin die zelf langer is heel (een punteloze tabeldump kan dus
-            // boven het tekenbudget uitkomen). EmbedBatching geeft zo'n uitschieter
-            // een eigen verzoek in plaats van hem weg te laten.
-            var texts = chunks.Select(c => c.Text).ToList();
+            // boven het tekenbudget uitkomen; Card Errata zit in de praktijk al op
+            // 3908 tekens). EmbedBatching gaf zo'n uitschieter een eigen verzoek in
+            // plaats van hem weg te laten — maar dat alléén redt hem niet als de chunk
+            // zélf boven de klip ligt (#293), en met de alles-of-niets-regel hieronder
+            // zou die ene chunk de hele regelindex van deze bron permanent blokkeren.
+            // Dus kappen we de embed-INVOER op het budget. c.Text blijft ongemoeid: de
+            // opgeslagen en getoonde regeltekst is volledig, alleen de vector kijkt
+            // naar de eerste N tekens.
+            var capped = EmbedBatching.CapItems(
+                [.. chunks.Select(c => c.Text)], _settings.BatchChars);
+            var texts = capped.Texts;
             var tally = new EmbedOutcomeTally();
             foreach (var range in EmbedBatching.Split(texts, _settings.BatchSize, _settings.BatchChars))
             {
                 var (offset, count) = range.GetOffsetAndLength(chunks.Count);
-                var result = await embeddings.TryEmbedAsync([.. texts.GetRange(offset, count)], ct);
-                tally.Add(result.Outcome, count);
+                var result = await embeddings.TryEmbedAsync(
+                    [.. texts.Skip(offset).Take(count)], ct);
+                tally.Add(result.Outcome, count, result.Error);
                 if (!result.Ok) break; // deze bron is verloren; niet de volgende
+                // LET OP bij het uitbreiden van deze lus: `texts` is de (mogelijk
+                // GEKAPTE) embed-invoer en `chunks` zijn de te PERSISTEREN entiteiten.
+                // Alleen de vector mag hier overgezet worden — een `chunks[i].Text =
+                // texts[i]` zou de afkapping de database in schrijven en daarmee de
+                // regels-browser (§-permalinks) een half afgebroken regeltekst tonen.
+                // Die invariant is aan deze kant NIET door een test afgedekt: EF
+                // InMemory kent geen ExecuteDeleteAsync, dus het geslaagde swap-pad
+                // hieronder is in RuleChunkPipelineTests niet te draaien. De
+                // kaart-pijplijn bewaakt hetzelfde patroon wél
+                // (EmbedOutcomeTests.Embed_KaartBovenHetBudget…), dus lees die test
+                // als de bedoeling en houd deze lus daarmee in de pas.
                 for (var k = 0; k < count; k++)
                 {
                     chunks[offset + k].Embedding = result.Vectors![k];
@@ -121,7 +153,7 @@ public class RuleChunkPipeline(
                 // oude index laten staan en het melden. De chunks zijn nooit aan de
                 // context toegevoegd, dus er valt niets terug te draaien — ze
                 // verdwijnen met de lus-iteratie.
-                results.Add(new(src.Id, 0, tally.Summary));
+                results.Add(new(src.Id, 0, tally.Summary, capped.CappedCount));
                 continue;
             }
 
@@ -132,7 +164,7 @@ public class RuleChunkPipeline(
                 await db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
             }
-            results.Add(new(src.Id, chunks.Count));
+            results.Add(new(src.Id, chunks.Count, Capped: capped.CappedCount));
         }
 
         // Niets gedaan = geen nieuws (alle bronnen al geïndexeerd, de normale tick).

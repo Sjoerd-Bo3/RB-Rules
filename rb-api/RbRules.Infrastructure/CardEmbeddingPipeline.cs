@@ -17,9 +17,14 @@ namespace RbRules.Infrastructure;
 /// <param name="Remaining">Kaarten die niet eens geprobeerd zijn doordat de run
 /// afbrak. Los van <paramref name="Failed"/>: dát zijn kaarten die het wél
 /// probeerden.</param>
+/// <param name="Capped">Kaartteksten die vóór het embedden zijn ingekort omdat ze op
+/// zichzelf boven het tekenbudget uitkwamen (#293). Hoort in de melding: afkappen is
+/// verlies van invoer, en stil verlies is precies wat #282/#284 wegnamen.</param>
+/// <param name="CappedAt">Op hoeveel tekens er gekapt is — het budget van dat moment,
+/// zodat de melding klopt ook als <c>EMBED_BATCH_CHARS</c> afwijkt van de default.</param>
 public record EmbedRunResult(
     int Embedded, int Skipped, int Failed = 0, string FailureSummary = "",
-    bool Aborted = false, int Remaining = 0)
+    bool Aborted = false, int Remaining = 0, int Capped = 0, int CappedAt = 0)
 {
     public bool HasFailures => Failed > 0 || FailureSummary.Length > 0;
 
@@ -27,10 +32,12 @@ public record EmbedRunResult(
     /// mislukte stap is precies wat #282 opheft. ÉLKE aanroeper hoort deze string te
     /// gebruiken (#282-review): een eigen samenvatting bouwen liet de uitval weer
     /// wegvallen, waardoor jobs een omgevallen stap als geslaagd meldden.</summary>
-    public string Summary => HasFailures
-        ? $"{Embedded} geembed, {Skipped} al actueel, {Failed} mislukt ({FailureSummary})"
-            + (Aborted ? $", afgebroken — {Remaining} niet geprobeerd" : "")
-        : $"{Embedded} geembed, {Skipped} al actueel";
+    public string Summary =>
+        (HasFailures
+            ? $"{Embedded} geembed, {Skipped} al actueel, {Failed} mislukt ({FailureSummary})"
+                + (Aborted ? $", afgebroken — {Remaining} niet geprobeerd" : "")
+            : $"{Embedded} geembed, {Skipped} al actueel")
+        + (Capped > 0 ? $" · {Capped} kaarttekst(en) afgekapt op {CappedAt} tekens" : "");
 }
 
 /// <summary>S1-fundament F2: embed kaarten in batches. Idempotent — alleen
@@ -76,7 +83,14 @@ public class CardEmbeddingPipeline(
             .ToListAsync(ct);
         var skipped = total - todo.Count;
 
-        var texts = todo.Select(CardText.Compose).ToList();
+        // Kap eerst de uitschieters (#293): een kaarttekst die op zichzelf boven het
+        // tekenbudget uitkomt zou als solo-verzoek alsnog llama-server omver duwen, en
+        // omdat een kaart zonder embedding elke run opnieuw aan de beurt komt is dat
+        // een OOM-kill per run. Het budget is óók de itemgrens, dus élk verzoek blijft
+        // binnen het gemeten veilige bereik.
+        var capped = EmbedBatching.CapItems(
+            [.. todo.Select(CardText.Compose)], _settings.BatchChars);
+        var texts = capped.Texts;
         var batches = EmbedBatching.Split(texts, _settings.BatchSize, _settings.BatchChars);
         var tally = new EmbedOutcomeTally();
         var embedded = 0;
@@ -92,8 +106,9 @@ public class CardEmbeddingPipeline(
                 progress?.Invoke(
                     $"embeddings berekenen: kaart {offset + 1}–{offset + count} van {todo.Count}");
 
-                var result = await embeddings.TryEmbedAsync([.. texts.GetRange(offset, count)], ct);
-                tally.Add(result.Outcome, count);
+                var result = await embeddings.TryEmbedAsync(
+                    [.. texts.Skip(offset).Take(count)], ct);
+                tally.Add(result.Outcome, count, result.Error);
                 attempted += count;
                 if (!result.Ok)
                 {
@@ -125,21 +140,26 @@ public class CardEmbeddingPipeline(
             // annulering faalden verdienen hun regel. Zelfde les als JobRunner's
             // "bewust zonder token"-afronding — daarom CancellationToken.None. Daarna
             // gewoon doorgooien; JobRunner zet de run op 'cancelled'.
-            var partial = Result(embedded, skipped, tally, aborted: false, todo.Count - attempted);
+            var partial = Result(
+                embedded, skipped, tally, aborted: false, todo.Count - attempted,
+                capped.CappedCount);
             if (partial.HasFailures) await LogRunAsync(partial, CancellationToken.None);
             throw;
         }
 
-        var run = Result(embedded, skipped, tally, aborted, todo.Count - attempted);
+        var run = Result(
+            embedded, skipped, tally, aborted, todo.Count - attempted, capped.CappedCount);
         // Niets te doen én niets misgegaan = geen nieuws; anders zou de scheduler-tick
         // elk uur een lege regel schrijven.
         if (todo.Count > 0 || run.HasFailures) await LogRunAsync(run, ct);
         return run;
     }
 
-    private static EmbedRunResult Result(
-        int embedded, int skipped, EmbedOutcomeTally tally, bool aborted, int remaining) =>
-        new(embedded, skipped, tally.TextsLost, tally.Summary, aborted, remaining);
+    private EmbedRunResult Result(
+        int embedded, int skipped, EmbedOutcomeTally tally, bool aborted, int remaining,
+        int capped) =>
+        new(embedded, skipped, tally.TextsLost, tally.Summary, aborted, remaining,
+            capped, capped > 0 ? _settings.BatchChars : 0);
 
     /// <summary>Elke run mét werk landt in run_log — welke aanroeper de pijplijn ook
     /// startte (beheer-knop, job, scheduler-tick).

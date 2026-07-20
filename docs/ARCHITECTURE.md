@@ -2325,11 +2325,13 @@ Neo4j — waarna de *host*-killer kiest, die niet weet wie de veroorzaker is.
 De ingreep zit dus aan de vraagkant: idle houdt Ollama ~69 MiB vast, dus de piek
 zit volledig in het verzoek, waar llama.cpp de activaties van alle sequenties in
 één batch tegelijk vasthoudt. `EMBED_BATCH_SIZE` ging van 16 naar **8** en
-daarnaast staat er een tekenbudget `EMBED_BATCH_CHARS` (~**8000**), want een
+daarnaast staat er een tekenbudget `EMBED_BATCH_CHARS` (**6000**), want een
 telling alleen zegt niets over de kosten: 8 regel-secties (tot 2400 tekens,
 `RuleSectionParser.MaxSectionLength`) is een heel ander verzoek dan 8
 kaartteksten (~300 tekens). Vóór #282 kon één verzoek 16×2400 ≈ 38k tekens
-bevatten. Zie ADR-20.
+bevatten. Dat tekenbudget stond tot **#293** op 8000 — gemeten precies de waarde
+waarop `llama-server` omvalt (7000 → 200, 8000 → 400 in 3 van de 3 pogingen), dus
+de begrenzing stond op de klip in plaats van eronder. Zie ADR-20.
 
 **Elke nieuwe env-vlag hoort óók in de compose-`environment:`** (#268-follow-up).
 Voor #279 gaat het om `AI_MAX_CONCURRENCY` + `AI_INTERACTIVE_RESERVE` (rb-ai) en
@@ -3202,9 +3204,12 @@ vraagkant in plaats van aan het plafond:
 
 1. **Oorzaak als data.** `EmbeddingService.TryEmbedAsync` geeft een
    `EmbedCallOutcome` terug (`ServerError` = runner-kill, `Transport` =
-   container weg, `Timeout`, `ClientError` = model niet gepulld, `Incomplete`,
-   `DimensionMismatch`) met een `EmbedOutcomeTally` die per oorzaak telt én
-   bijhoudt hoeveel teksten er bleven liggen. Gelijk herstelgedrag ≠ gelijke
+   container weg, `Timeout`, `ClientError` = backend overleden onder
+   geheugendruk of, minder waarschijnlijk, model niet gepulld — zie de
+   #293-correctie hieronder, `Incomplete`, `DimensionMismatch`) met een
+   `EmbedOutcomeTally` die per oorzaak telt, de ruwe foutbody van de eerste
+   aanroep per oorzaak meeneemt én bijhoudt hoeveel teksten er bleven liggen.
+   Gelijk herstelgedrag ≠ gelijke
    oorzaak: een runner-kill vraagt een kleinere batch, een 404 vraagt een pull.
    `EmbedAsync`/`EmbedOneAsync` blijven gooien — de interactieve paden (/ask,
    regels-/kaart-zoek) degraderen al netjes naar alleen-FTS en dat contract
@@ -3257,7 +3262,8 @@ vraagkant in plaats van aan het plafond:
    ruimte om te schuiven, en een hogere cap verplaatst de OOM alleen naar
    Postgres of Neo4j. Idle houdt Ollama ~69 MiB vast, dus de piek zit in het
    verzoek. `EMBED_BATCH_SIZE` 16 → **8**, plus een tekenbudget
-   `EMBED_BATCH_CHARS` (~**8000**) omdat een telling niets zegt over de kosten:
+   `EMBED_BATCH_CHARS` (**6000** sinds #293, zie hieronder; #282 zette hem op
+   8000) omdat een telling niets zegt over de kosten:
    8 regel-secties (tot 2400 tekens) is een heel ander verzoek dan 8
    kaartteksten (~300 tekens). Beide staan als `${VAR:-default}` in de
    compose-`environment:` van rb-api — env-only is hier bewust, want dit is een
@@ -3277,6 +3283,39 @@ streefwaarde, geen harde grens: `SplitLong` knipt op zinsgrens en laat één zin
 zelf langer is heel, dus een punteloze tabeldump kan boven het budget uitkomen.
 `EmbedBatching` geeft zo'n uitschieter een eigen verzoek in plaats van hem weg te
 laten — input verdwijnt nooit, ook niet als hij niet past.
+
+**Correctie #293 — de begrenzing stond op de klip.** De 8000 uit #282 was een
+schatting, en meting op productie wees uit dat het exact de omvalwaarde is.
+Meetreeks tegen `rb-v2-ollama` (`POST /api/embed`, bge-m3): 500 / 2400 / 3908 /
+4500 / 5000 / 6000 / 7000 tekens → HTTP 200; **8000 tekens → HTTP 400, 3 van de 3
+pogingen**; 20000 → 400. Foutbody `do embedding request: … EOF` = het
+`llama-server`-kindproces sterft; `dmesg | grep -c llama-server` liep tijdens de
+reeks van 10 naar 30, dus elke 400 is één OOM-kill. De klip ligt deterministisch
+tussen 7000 en 8000. Drie ingrepen:
+
+1. **Default 8000 → 6000**, in `EmbeddingSettings` én in de compose-`environment:`.
+   Niet 7000: dat is de klifrand zelf, en de exacte grens schuift mee met wat
+   Postgres/Neo4j/rb-ai op dat moment van de 8 GB-VM claimen. De meetwaarden staan
+   als `MeasuredSafeMaxBatchChars` (7000) en `MeasuredFailingBatchChars` (8000) in
+   de code, met een regressietest die rood wordt zodra de default erboven komt.
+   Het env-plafond is nu diezelfde meetwaarde in plaats van een ruime 100000:
+   boven de klip is de knop geen experimenteerruimte maar een gegarandeerde
+   OOM-kill, en verhogen hoort samen te gaan met de `memory:`-cap van Ollama.
+2. **De 4xx-hint klopte niet.** "4xx (model niet gepulld?)" stuurde de beheerder de
+   verkeerde kant op — het model stónd er (`bge-m3:latest`, 1,2 GB). Het label is nu
+   `4xx (backend overleden? te grote invoer?)` en `EmbeddingService` leest de ruwe
+   foutbody uit, die `EmbedOutcomeTally` één keer per oorzaak meeneemt in het
+   run-detail. Ollama's eigen woorden zijn het bewijs; onze duiding is hypothese.
+3. **Een harde kap op de itemlengte** (`EmbedBatching.CapItems`, vóór `Split`). Een
+   uitschieter een eigen verzoek geven redt hem niet als hij zélf boven de klip ligt.
+   Kappen is hier beter dan overslaan, want overslaan is in beide pijplijnen
+   permanent: de regel-index is alles-of-niets per bron (één te lange chunk zou de
+   hele bron blijvend blokkeren) en de kaart-pijplijn pakt kaarten zonder embedding
+   elke run opnieuw op — dus elke run dezelfde OOM-kill. Er wordt nooit stil gekapt:
+   `EmbedRunResult.Capped`/`CappedAt` en `RuleIndexResult.Capped` staan in de
+   run-melding. Alleen de embed-INVOER wordt gekort; `RuleChunk.Text` en de getoonde
+   kaarttekst blijven volledig. Bijeffect: mét `CapItems` ervóór is élke batch
+   gegarandeerd ≤ het budget, wat de "ongeveer" uit `Split` opheft.
 
 ---
 
@@ -3299,7 +3338,10 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Q11 | Eén parallel retrieval-kanaal van `/ask` gooit (bv. de misvattingen-query faalt) | Dat kanaal levert leeg + een marker in de trace (`kanaal-uitval: ...`); de overige kanalen en het antwoord blijven ongemoeid, nooit een 500. Sequentieel (zonder factory) vs. parallel (met factory) leveren byte-voor-byte dezelfde prompt | `AskService` (#152), `AskServiceParallelRetrievalTests` |
 | Q12 | rb-ai onbereikbaar tijdens de mechaniek-mining | De gebrackete mechanieken worden tóch geschreven (deterministisch, ADR-17), inclusief magnitude-familie; de kaart blijft in de wachtrij omdat `Triggers` null blijft en wordt de volgende run afgemaakt — nooit een half feit dat als "gemined" telt | `MechanicMiningService` (#211), `MechanicMiningServiceTests` |
 | Q13 | Vertaalstap van de primer valt uit of vernederlandst een spelterm (Runes, Battlefields, showdown, Might, …) of laat een §-verwijzing vallen | De vertaling wordt niet opgeslagen (`body_nl` blijft null); `/primer` toont de canonieke Engelse tekst met een expliciete melding erbij, nooit een leeg vak en nooit een half-vernederlandste tekst. Het doc blijft draft tot de beheerder het goedkeurt | `PrimerTranslation.Leaks`, `PrimerService.TranslateAsync` (#266, ADR-19), `PrimerTranslationTests`, `PrimerServiceTranslationTests`, `primerText.test.ts` |
-| Q14 | Ollama valt om (OOM-kill van `llama-server`) tijdens een embed-run | De gefaalde batch wordt overgeslagen, de run gaat door en meldt achteraf per oorzaak hoeveel kaarten/chunks bleven liggen — in het resultaat én als `run_log`-regel (kind `embed`, status `error`), ongeacht welke aanroeper de pijplijn startte. De betrokken kaarten houden `Embedding == null` en komen de volgende run weer aan de beurt; bij de regel-index blijft de bestaande index van die bron staan i.p.v. half vervangen te worden | `EmbedCallOutcome`, `CardEmbeddingPipeline`, `RuleChunkPipeline` (#282, ADR-20), `EmbedOutcomeTests` |
+| Q14 | Ollama valt om (OOM-kill van `llama-server`) tijdens een embed-run | De gefaalde batch wordt overgeslagen, de run gaat door en meldt achteraf per oorzaak hoeveel kaarten/chunks bleven liggen — in het resultaat én als `run_log`-regel (kind `embed`, status `error`), ongeacht welke aanroeper de pijplijn startte, mét Ollama's ruwe foutbody. De betrokken kaarten houden `Embedding == null` en komen de volgende run weer aan de beurt; bij de regel-index blijft de bestaande index van die bron staan i.p.v. half vervangen te worden | `EmbedCallOutcome`, `CardEmbeddingPipeline`, `RuleChunkPipeline` (#282, ADR-20; #293), `EmbedOutcomeTests` |
+| Q14b | Eén kaarttekst of regel-chunk komt op zichzelf boven het embed-tekenbudget uit | De embed-invoer wordt gekapt op het budget, zodat élk verzoek binnen het gemeten veilige bereik blijft en de tekst niet elke run opnieuw een OOM-kill uitlokt. Het aantal gekapte teksten en de kaplengte staan in de run-melding — nooit stil | `EmbedBatching.CapItems`, `EmbedRunResult.Capped`, `RuleIndexResult.Capped` (#293), `EmbedOutcomeTests` (kaartkant, incl. de kap op de wire), `RuleChunkPipelineTests` (regelkant, kap op de wire) |
+| Q14b′ | De opgeslagen tekst blijft volledig bij een gekapte embed-invoer | Alleen de embed-invoer wordt gekort; `RuleChunk.Text` en de kaarttekst blijven onaangeraakt, zodat de regels-browser en het kaartdetail nooit een half afgebroken tekst tonen. **Dekking is asymmetrisch:** aan kaartkant is dit door een test afgedwongen (`Embed_KaartBovenHetBudget…` controleert `TextPlain` ná de run); aan regelkant is het alleen door een code-comment bewaakt, omdat EF InMemory geen `ExecuteDeleteAsync` kent en het geslaagde swap-pad daar dus niet te draaien is. Aan kaartkant is de invoer bovendien een pure projectie (`CardText.Compose`), aan regelkant liggen `chunks` en `texts` als broertjes in dezelfde lus — dáár zit het reële regressierisico | `EmbedOutcomeTests` (kaartkant), `RuleChunkPipeline` (comment bij de embed-lus) (#293) |
+| Q14c | Iemand zet `EMBED_BATCH_CHARS` boven de gemeten veilige grens | De waarde wordt geweigerd en de pijplijn draait op de veilige default; het plafond is de meetwaarde `MeasuredSafeMaxBatchChars`, geen ruime bovengrens. De terugval wordt gemeld via de `warn`-callback, die bij opstart in een `ILogger`-regel landt — dus in `docker logs rb-v2-api`, **niet** in beheer. Dat is dezelfde zwakke zichtbaarheid die CLAUDE.md elders veroordeelt; de uitkomst is hier goedaardig (de veilige waarde wint hoe dan ook), maar noem dit geen alarm | `EmbeddingSettings.FromEnvironment` (#293), `EmbedOutcomeTests` |
 
 ---
 

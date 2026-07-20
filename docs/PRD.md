@@ -899,11 +899,22 @@ de globale duur-vangrail).
   batches stopt de run en meldt dat, zodat een dode Ollama de beheer- en
   schedulerlus niet urenlang bezet houdt. Het gebruik is begrensd in plaats van
   het plafond verhoogd: `EMBED_BATCH_SIZE` (16 → 8) en een tekenbudget
-  `EMBED_BATCH_CHARS` (~8000), omdat de piek in het verzoek zit en
+  `EMBED_BATCH_CHARS` (6000), omdat de piek in het verzoek zit en
   regel-secties (streefgrens 2400 tekens) veel zwaarder zijn dan kaartteksten.
   Model en dimensie blijven ongewijzigd — een kleinere batch is geen ander
-  model. *Route* `/admin` (paneel "Embeddings onvolledig" + logtabel) ·
-  *endpoint* `/api/admin/status` (`lastEmbed`).
+  model. **Dat tekenbudget stond tot #293 op 8000, en dat bleek gemeten precies
+  de omvalwaarde** (7000 tekens → HTTP 200, 8000 → HTTP 400 in 3 van de 3
+  pogingen, met een OOM-kill van `llama-server` per poging): de begrenzing stond
+  op de klip in plaats van eronder, waardoor de card-errata-bron elke run
+  oversloeg. Sindsdien 6000, met de meetwaarden en een regressietest in de code,
+  een env-plafond op de gemeten veilige grens, en een **harde kap op de
+  itemlengte** — een enkele chunk of kaarttekst boven het budget wordt op het
+  budget gekapt in plaats van als solo-verzoek de OOM uit te lokken. Die kap
+  geldt alleen voor de embed-invoer (de opgeslagen en getoonde tekst blijft
+  volledig) en wordt altijd gemeld, nooit stil. De 4xx-melding noemt niet langer
+  "model niet gepulld?" als eerste hypothese maar de OOM-hypothese, mét Ollama's
+  ruwe foutbody erbij. *Route* `/admin` (paneel "Embeddings onvolledig" +
+  logtabel) · *endpoint* `/api/admin/status` (`lastEmbed`).
 - **Lopende job afbreken** (#253) — naast de "Nu bezig"-voortgangsbalk staat
   een **Afbreken**-knop (met bevestiging) die de lopende job of het lopende
   pad coöperatief stopt; binnen enkele seconden is `running` weer leeg en kan
@@ -1579,6 +1590,11 @@ openstaande PR.
   blijft staan voor de volgende run, en het gebruik is begrensd
   (`EMBED_BATCH_SIZE`/`EMBED_BATCH_CHARS`) in plaats van het plafond verhoogd —
   daar is op de 8 GB-VM na #279 geen ruimte meer voor.
+- **#293** Het tekenbudget uit #282 stond op 8000 — gemeten exact de waarde
+  waarop `llama-server` omvalt — *in-flight*, zie §4.5. Default naar 6000 met
+  marge onder de gemeten klip, env-plafond op de meetwaarde, misleidende
+  "model niet gepulld?"-hint vervangen door de OOM-hypothese + de ruwe foutbody,
+  en een harde (gemelde) kap op de lengte van één embed-item.
 - **#292** Twee logregels in rb-ai omzeilden de redactie-poort — *in-flight*,
   zie §4.5. De agentic tool-log schreef de vraagtekst van de bezoeker naar de
   containerlog en het warmpool-faalpad een rauwe SDK-fout. Beide lopen nu door

@@ -34,11 +34,38 @@ public sealed record EmbeddingSettings(
     /// draaien in de achtergrond, terwijl een OOM-kill de hele stap wegvaagt.</summary>
     public const int DefaultBatchSize = 8;
 
-    /// <summary>~8000 tekens: ruim drie maximale regel-secties (2400) of ruwweg
-    /// twintig kaartteksten. Zo raakt de kaart-pijplijn in de praktijk alleen
-    /// <see cref="BatchSize"/> en knijpt het budget precies de zware regel-batches af,
-    /// die vóór #282 tot 16×2400 ≈ 38k tekens in één verzoek konden proppen.</summary>
-    public const int DefaultBatchChars = 8000;
+    /// <summary>Het hoogste aantal tekens dat op productie GEMETEN nog een HTTP 200
+    /// gaf (#293). Meetreeks tegen <c>rb-v2-ollama</c> (<c>POST /api/embed</c>, bge-m3):
+    /// 500 / 2400 / 3908 / 4500 / 5000 / 6000 / 7000 → 200; 8000 → 400 in 3 van de 3
+    /// pogingen; 20000 → 400. De klip ligt dus deterministisch tussen 7000 en 8000.
+    /// Dit is een MEETWAARDE, geen ontwerpkeuze: hij hoort alleen te verschuiven als
+    /// er opnieuw gemeten is (en dan samen met de <c>memory:</c>-cap van de
+    /// ollama-service in de compose-file, die de klip veroorzaakt).</summary>
+    public const int MeasuredSafeMaxBatchChars = 7000;
+
+    /// <summary>De laagst gemeten waarde die STUKGING (#293) — 8000 tekens gaf 3 van de
+    /// 3 keer een 400, met foutbody <c>do embedding request: … EOF</c>: het
+    /// <c>llama-server</c>-kindproces sterft. Bevestigd met de OOM-teller
+    /// (<c>dmesg | grep -c llama-server</c> ging tijdens de meetreeks van 10 naar 30 —
+    /// elke mislukte aanroep is één OOM-kill). Staat hier zodat de regressietest kan
+    /// aantonen dat de default er niet alleen ónder ligt, maar er met marge onder.</summary>
+    public const int MeasuredFailingBatchChars = 8000;
+
+    /// <summary>6000 tekens. Was 8000 tot #293 — en dat bleek exact de waarde waarop
+    /// llama-server omvalt (zie <see cref="MeasuredFailingBatchChars"/>): de begrenzing
+    /// die #282 introduceerde stond precies op de klip in plaats van eronder, dus de
+    /// card-errata-bron viel elke run om.
+    ///
+    /// WAAROM 6000 EN NIET 7000: 7000 is de hoogste waarde die het gehaald heeft, dus
+    /// dat is de klifrand zelf en geen veilige plek — de exacte grens ligt ergens in
+    /// (7000, 8000] en verschuift met wat Postgres/Neo4j/rb-ai op dat moment van de
+    /// 8 GB-VM claimen. 6000 houdt ~15% marge onder de laatste geslaagde meting en
+    /// blijft ruim boven de zwaarste chunk die we in de praktijk zien (Card Errata,
+    /// 3908 tekens), dus het kost geen extra verzoeken waar het pijn doet.
+    ///
+    /// Doorvoer is hier het goedkope goed: bge-m3-verzoeken zijn kort, de pijplijnen
+    /// draaien in de achtergrond, en een OOM-kill wist een hele bron.</summary>
+    public const int DefaultBatchChars = 6000;
 
     /// <summary>Na 3 opeenvolgende gefaalde batches ligt Ollama eruit, niet één batch.
     /// Doorgaan kost dan alleen tijd: bij een timeout is dat 5 minuten per batch, en
@@ -53,15 +80,21 @@ public sealed record EmbeddingSettings(
     /// <summary><c>EMBED_BATCH_SIZE</c> / <c>EMBED_BATCH_CHARS</c>. Onzin of een
     /// ontbrekende waarde valt terug op de default: een typfout in de <c>.env</c> mag
     /// de embed-pijplijn niet stilletjes op 1 tekst per verzoek zetten (traag) of
-    /// ontgrendelen (OOM). De clamps zijn ruim genoeg om te kunnen experimenteren en
-    /// strak genoeg om een 0 of een 100000 te weren.</summary>
+    /// ontgrendelen (OOM).
+    ///
+    /// Het plafond van <c>EMBED_BATCH_CHARS</c> is sinds #293 de MEETWAARDE
+    /// <see cref="MeasuredSafeMaxBatchChars"/> en niet meer een ruime 100000: boven de
+    /// klip is de knop geen experimenteerruimte maar een garantie op een OOM-kill, en
+    /// hem hoger zetten heeft alleen zin ná het verhogen van de <c>memory:</c>-cap van
+    /// <c>rb-v2-ollama</c> — wat sowieso een compose-wijziging is, dus dan mag deze
+    /// constante meeverhuizen. Omláág bijstellen (de noodrem) kan gewoon via de env.</summary>
     /// <param name="warn">Krijgt een regel per genegeerde waarde. In een PR over
     /// stille degradatie mag een `EMBED_BATCH_SIZE=100` niet zonder één woord op 8
     /// terugvallen — dan denk je dat je iets hebt bijgesteld terwijl er niets
     /// veranderde (dezelfde klasse fout als de NIGHTLY_ENABLED-noodrem, #268).</param>
     public static EmbeddingSettings FromEnvironment(Action<string>? warn = null) => new(
         Parse("EMBED_BATCH_SIZE", DefaultBatchSize, 1, 64, warn),
-        Parse("EMBED_BATCH_CHARS", DefaultBatchChars, 500, 100_000, warn),
+        Parse("EMBED_BATCH_CHARS", DefaultBatchChars, 500, MeasuredSafeMaxBatchChars, warn),
         DefaultMaxConsecutiveFailures);
 
     private static int Parse(
