@@ -35,8 +35,13 @@ export async function adminApi<T>(path: string, init: RequestInit = {}): Promise
 	});
 	if (!res.ok) {
 		const body = await res.json().catch(() => null);
+		// rb-api antwoordt op fouten óf met {error}, óf (Results.Problem) met
+		// {title, detail}. Beide vormen dragen de uitleg die beheer moet zien —
+		// zonder de detail-tak verdwijnt bv. "start moet vóór eind liggen" achter
+		// een kale statuscode (#254).
+		const problem = body as { error?: string; detail?: string } | null;
 		throw new AdminApiError(
-			(body as { error?: string } | null)?.error ?? `rb-api ${res.status}: ${path}`,
+			problem?.error ?? problem?.detail ?? `rb-api ${res.status}: ${path}`,
 			res.status
 		);
 	}

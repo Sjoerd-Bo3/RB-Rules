@@ -186,6 +186,12 @@ met quota en rate-limiting.
   noodrem te hebben. Voeg elke nieuwe vlag toe aan
   `deploy/server-setup-v2/docker-compose.yml` met een `${VAR:-default}` die het
   bestaande gedrag houdt, en verifieer met `printenv` op de VM.
+  **Beter nog (#254): maak er geen env-only vlag van.** Een schakelaar die
+  Sjoerd moet kunnen omzetten hoort in de beheerde instellingen-laag
+  (`ManagedSettingsCatalog` + `ManagedSettingsService`, tabel `setting`): env
+  blijft de bootstrap-default, de DB-override wint, en lezen gebeurt op het
+  gebruiksmoment zodat een toggle direct werkt. Env-only is nog prima voor
+  secrets en infra-adressen — niet voor gedrag dat je wilt kunnen bijsturen.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`

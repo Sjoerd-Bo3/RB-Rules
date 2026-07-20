@@ -12,7 +12,7 @@ namespace RbRules.Api;
 /// FAQ-/clarificatie-concept-extractie nachtelijk (#177), als gewone
 /// JobRunner-jobs op het run_log-grootboek.</summary>
 public class ScanScheduler(
-    IServiceScopeFactory scopeFactory, JobRunner jobs, NightlyRunSettings nightly,
+    IServiceScopeFactory scopeFactory, JobRunner jobs, ManagedSettingsService settings,
     ILogger<ScanScheduler> logger)
     : BackgroundService
 {
@@ -303,14 +303,18 @@ public class ScanScheduler(
     /// lopende run houdt het slot vast tot de deadline, dus een tweede tick binnen
     /// het venster start niets (TryStart=false, geen fout).
     ///
-    /// Met <c>NIGHTLY_ENABLED=false</c> start de scheduler de nachtrun niet — de
-    /// noodrem om de nachtelijke keten te pauzeren zolang de extractie nog niet
-    /// deugt (#249/#251). Handmatig starten via de beheer-knop blijft werken: de
-    /// vlag zit hier, niet in de JobCatalog.</summary>
+    /// Staat de noodrem UIT (beheer → nachtrun, of <c>NIGHTLY_ENABLED=false</c> als
+    /// bootstrap-default), dan start de scheduler de nachtrun niet — de rem om de
+    /// nachtelijke keten te pauzeren zolang de extractie nog niet deugt (#249/#251).
+    /// Handmatig starten via de beheer-knop blijft werken: de vlag zit hier, niet in
+    /// de JobCatalog. Sinds #254 wordt de instelling PER TICK gelezen (beheerde
+    /// instelling, uurlijks — dus verwaarloosbaar), zodat de rem meteen pakt zonder
+    /// herstart of redeploy.</summary>
     private async Task TryStartNightlyAsync(IServiceProvider sp, CancellationToken ct)
     {
         try
         {
+            var nightly = await settings.NightlyAsync(ct);
             if (!nightly.Enabled) return;
             var tz = NightlyWindow.ResolveTimeZone(nightly.TimeZoneId);
             var now = DateTimeOffset.UtcNow;

@@ -1,5 +1,4 @@
 using RbRules.Infrastructure;
-using RbRules.Infrastructure.GraphRag;
 
 namespace RbRules.Api.Endpoints;
 
@@ -22,11 +21,12 @@ public static class BrainAdminEndpoints
 
         // ── Cockpit: operationele pipeline-status (per-stap-tellingen,
         //    laatste-run per brein-job, /ask-retrieval-flag). READ-ONLY; de
-        //    flag komt uit de BreinRetrievalSettings-singleton (env, default
-        //    uit), niet uit de DB — hij is een env-schakelaar, geen knop.
+        //    flag komt sinds #254 uit de beheerde instellingen (DB-override op
+        //    de env-default) en is dus een échte knop — zie /api/admin/settings.
         brein.MapGet("/cockpit", async (
-                BrainExplorerService svc, BreinRetrievalSettings retrieval, CancellationToken ct) =>
-            Results.Ok(await svc.CockpitAsync(retrieval.Enabled, ct)));
+                BrainExplorerService svc, ManagedSettingsService settings, CancellationToken ct) =>
+            Results.Ok(await svc.CockpitAsync(
+                (await settings.BreinRetrievalAsync(ct)).Enabled, ct)));
 
         // ── Entiteiten: canoniek + alt-labels + merge-status ───────────
         brein.MapGet("/entities", async (

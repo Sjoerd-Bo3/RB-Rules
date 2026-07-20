@@ -372,11 +372,27 @@ public class RuleChunk : IEmbeddable
 public class RunLog
 {
     public long Id { get; set; }
-    public required string Kind { get; set; }           // scan|cards|embed|conflicts|graph
+    public required string Kind { get; set; }           // scan|cards|embed|conflicts|graph|setting
     public string? Ref { get; set; }
     public required string Status { get; set; }         // ok|changed|new|unchanged|error|info
     public string? Detail { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Beheerde instelling (#254): één override op een instelling die tot nu toe
+/// alleen via de VM-omgeving te zetten was. ONTBREKEN is de normale toestand — zonder
+/// rij geldt de bestaande env-/codewaarde, dus een lege tabel = exact het huidige
+/// gedrag. <see cref="Key"/> komt uit <see cref="ManagedSettingsCatalog"/> en
+/// <see cref="Value"/> is de genormaliseerde opslagvorm ("true"/"false", "22",
+/// "Europe/Amsterdam"). <see cref="UpdatedBy"/> is de beheerder-identiteit; de admin
+/// deelt één wachtwoord, dus in de praktijk "beheer" — het spoor met de oude en
+/// nieuwe waarde staat in <c>run_log</c> (Kind="setting").</summary>
+public class Setting
+{
+    public required string Key { get; set; }
+    public required string Value { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public string? UpdatedBy { get; set; }
 }
 
 /// <summary>Gecachete LLM-uitleg waarom twee kaarten op elkaar lijken (#30).

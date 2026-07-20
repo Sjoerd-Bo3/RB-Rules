@@ -104,3 +104,14 @@ public record RelationBulkDecideRequest(
 /// <see cref="RbRules.Infrastructure.DeckCodeService.DecodeAsync"/>, geen
 /// NRE-500.</summary>
 public record DeckDecodeRequest(string? Code, string? Format);
+
+/// <summary>Eén te zetten instelling (#254): een sleutel uit
+/// <see cref="RbRules.Domain.ManagedSettingsCatalog"/>. <see cref="Value"/> leeg/null
+/// = terug naar de env-/codewaarde (override weg).</summary>
+public record SettingPatch(string? Key, string? Value);
+
+/// <summary>Beheerde instellingen zetten (#254). Een LIJST omdat het nachtvenster een
+/// paar is: start en eind moeten samen beoordeeld worden, anders strandt een geldige
+/// eindtoestand op de tussentoestand. <see cref="Actor"/> is wie het zette; beheer
+/// deelt één wachtwoord, dus in de praktijk "beheer".</summary>
+public record SettingsPatch(IReadOnlyList<SettingPatch>? Changes, string? Actor);

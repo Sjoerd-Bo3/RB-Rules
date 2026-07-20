@@ -307,12 +307,15 @@ public class AskService(
         // Brein-GraphRAG-verrijking (#228) — ALLEEN achter de default-uit flag. Start
         // hem hier, naast de AI-onafhankelijke lees-kanalen, zodat hij (indien aan)
         // met de bestaande retrieval overlapt i.p.v. serieel latency toe te voegen.
-        // Flag uit óf geen service (de meeste paden) ⇒ deze tak wordt overgeslagen:
-        // geen brein-call, geen extra latency, exact het bestaande /ask-gedrag. Een
+        // Flag uit óf geen service (de meeste paden) ⇒ deze tak levert null: geen
+        // brein-call, geen extra latency, exact het bestaande /ask-gedrag. De
+        // flag-poort zit sinds #254 IN EnrichAsync (beheerde instelling, op het
+        // gebruiksmoment gelezen) zodat een toggle in beheer direct werkt zonder
+        // herstart — de poort blijft vóór elke orchestrator-aanroep staan. Een
         // benchmarkrun (#158) blijft eveneens buiten schot (isolatie). EnrichAsync
         // slikt zelf elke niet-annulering-fout (null terug), dus dit kan /ask nooit
         // laten falen.
-        var breinTask = _brein is { Enabled: true } && !options.Benchmark
+        var breinTask = _brein is not null && !options.Benchmark
             ? _brein.EnrichAsync(question, type, ct)
             : Task.FromResult<BreinEnrichment?>(null);
 

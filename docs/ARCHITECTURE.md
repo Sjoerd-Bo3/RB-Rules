@@ -631,7 +631,8 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   aanroepen. Endpoints per feature als extension-methods:
   `CardEndpoints`, `DeckEndpoints`, `RuleEndpoints`, `KnowledgeEndpoints`,
   `BrainEndpoints`, `AskEndpoints`, `AuthEndpoints`, `FeedEndpoints`,
-  `PushEndpoints`, `AdminEndpoints`. Achtergrondwerk via `JobRunner` +
+  `PushEndpoints`, `AdminEndpoints`, `BrainAdminEndpoints`,
+  `SettingsAdminEndpoints` (#254). Achtergrondwerk via `JobRunner` +
   `JobCatalog`/`JobPaths` + `ScanScheduler`; contracten in `ApiContracts.cs`;
   admin achter `AdminAuthFilter`, gebruikersquota via `UserQuotaFilter`.
 
@@ -904,13 +905,29 @@ graph-jobs draaien — nette lege staat), en `/brein/cockpit` (brein-jobs-ui: de
 operationele pipeline-status — per-stap-tellingen (interacties + mechanic-
 predicaten, canonieke entiteiten, conflicts/open) + de laatste-run per brein-job
 (uit `RunLog` Kind="job", Ref=jobnaam — greatest-n-per-group in-memory, niet
-server-side) + de `/ask`-retrieval-flag (`BreinRetrievalSettings.Enabled`, uit de
-env-singleton, niet de DB)). Puur additief: raakt geen bestaande
+server-side) + de `/ask`-retrieval-flag (sinds #254 uit
+`ManagedSettingsService.BreinRetrievalAsync`, dus DB-override op de env-default —
+zie hieronder)). Puur additief: raakt geen bestaande
 endpoint/service/flow, leest bestaande tabellen (geen migratie). De cockpit-
 trigger-knoppen zelf starten via het bestaande `POST /api/admin/jobs/{name}`
 (JobRunner-gate: één job tegelijk, 409 als er al een draait) — de vier
 brein-jobs (`breinmine-interacties`, `breinmine-predicaten`, `breinprojectie`,
 `reason`) waren voorheen API-only.
+
+**Beheerde instellingen (#254, `SettingsAdminEndpoints` →
+`ManagedSettingsService`).** `GET /api/admin/settings` geeft per sleutel uit
+`ManagedSettingsCatalog` (Domain) de effectieve waarde, de env-/codedefault, of er
+overheen is geschreven en wanneer/door wie. `POST /api/admin/settings` zet één of
+meer sleutels; een lege waarde wist de override (terug naar de env-default). De
+body is bewust een **lijst** (`SettingsPatch`): het nachtvenster is een paar, dus
+start en eind moeten samen beoordeeld worden — los toegepast zou "0–11 wordt
+12–18" op de tussenstap stranden (12 ≥ 11). Alles-of-niets: faalt één waarde de
+validatie, dan wordt er niets geschreven en komt er een 400 mét uitleg terug (nooit
+een stilzwijgend genegeerde schakelaar). Ontsloten sleutels:
+`brein.retrieval.enabled` (was `BREIN_RETRIEVAL_ENABLED`), `nightly.enabled` (was
+`NIGHTLY_ENABLED`), `nightly.start_hour`, `nightly.end_hour`, `nightly.timezone`.
+Elke geslaagde wijziging landt als auditregel in `run_log`
+(Kind="setting", Ref=sleutel, Detail = "label: oud → nieuw · door wie").
 
 ### rb-ai — belangrijkste modules
 
@@ -967,7 +984,15 @@ Het Brein-overzicht draagt bovenaan de **operationele cockpit** (brein-jobs-ui):
 de server-load proxyt óók `/api/admin/brein/cockpit`, en een `job`-action (zelfde
 patroon/409-afhandeling als de `job`-action op `/admin`) triggert de vier
 brein-jobs via `POST /api/admin/jobs/{name}`; de knop-disabled/"Bezig"-staat komt
-uit de bestaande `/admin/status`-poll).
+uit de bestaande `/admin/status`-poll). Sinds #254 draagt dezelfde pagina de
+**schakelaars** voor de beheerde vlaggen: de server-load haalt ook
+`/api/admin/settings` op en een `setting`-action postet één of meer key/value-
+paren (`formData.getAll`, zodat het nachtvenster als geheel gaat). Concreet: het
+`/ask-retrieval`-blok kreeg een echte aan/uit-knop in plaats van de oude hint "zet
+`BREIN_RETRIEVAL_ENABLED=true` op de VM", en onder de nachtrun-kaart staan de
+noodrem (Pauzeren/Hervatten) en het venster (start/eind/tijdzone). Status is
+kleur + tekst (`AAN`/`UIT`/`GEPAUZEERD`), met eronder de herkomst-regel
+"beheerd Xu geleden door … · standaard …".
 Een globale **`+error.svelte`** (#219) rendert binnen
 de shell: bij 404 een "zoekende" poro + terug-links naar `/` en `/ask`, bij
 elke andere status een generieke variant (kop = `status + boodschap`). De
@@ -1128,7 +1153,10 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
   (semver-historie + structuur-vingerafdruk per toegepaste migratie),
   `schema_proposal` (de `:Proposed`-staging-reviewqueue) en `lifecycle_event` (het
   geconsolideerde, herstelbare tombstone-/deprecatie-/staleness-log) — migratie
-  `Governance230`.
+  `Governance230`. Sinds #254 `setting` — de beheerde instellingen-laag
+  (sleutel/waarde + `updated_at`/`updated_by`, migratie `ManagedSettings254`).
+  Bewust een tabel die normaal **leeg** is: elke rij is een override op de
+  env-/codewaarde, dus geen rij = het bestaande gedrag (§8, ADR-18).
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
@@ -1350,15 +1378,21 @@ gecapt (`DefaultMaxFocusCards`/`DefaultMaxSubjects` = 40 in de mining-services) 
 "Volledige nachtrun"); handmatig buiten het venster draait zonder deadline
 (volledige drain).
 
-**Noodrem `NIGHTLY_ENABLED`** (#249/#251): met `NIGHTLY_ENABLED=false` in de
-VM-`.env` start `ScanScheduler` de nachtrun niet meer automatisch — bedoeld om de
-nachtelijke keten te pauzeren zolang de extractie nog niet deugt, zonder code te
-wijzigen of te deployen. De vlag zit bewust in `TryStartNightlyAsync`, niet in de
-`JobCatalog`: **handmatig starten via de beheer-knop blijft altijd werken**. Default
-is AAN, en alleen een expliciete uit-waarde (`false`/`0`/`no`/`off`,
-hoofdletterongevoelig) schakelt uit — een typfout in de `.env` mag de keten niet
-stilletjes stilleggen. Een ongeldig VENSTER laat de pauze-keuze intact
-(`NightlyRunSettings.FromEnvironment`, getest).
+**Noodrem + venster, sinds #254 vanuit beheer** (#249/#251/#254): de noodrem en het
+venster zijn beheerde instellingen (`nightly.enabled`, `nightly.start_hour`,
+`nightly.end_hour`, `nightly.timezone`) die `ScanScheduler` en `JobCatalog` **per
+gebruiksmoment** ophalen bij `ManagedSettingsService` — beheer → Brein →
+"Automatische nachtrun"/"Nachtvenster" pakt dus meteen, zonder SSH, `.env`-
+aanpassing of herstart. De env-variabelen (`NIGHTLY_ENABLED`,
+`NIGHTLY_START_HOUR`, `NIGHTLY_END_HOUR`, `NIGHTLY_TZ`) blijven de
+**bootstrap-default**: zonder rij in `setting` geldt exact het oude gedrag. De vlag
+zit bewust in `TryStartNightlyAsync`, niet in de `JobCatalog`: **handmatig starten
+via de beheer-knop blijft altijd werken**. Default is AAN, en alleen een expliciete
+uit-waarde (`false`/`0`/`no`/`off`, hoofdletterongevoelig) schakelt uit — een
+typfout in de `.env` mag de keten niet stilletjes stilleggen. Een ongeldig VENSTER
+laat de pauze-keuze intact (`NightlyRunSettings.FromEnvironment`/`WithOverrides`,
+getest); via beheer wordt zo'n venster juist **geweigerd mét uitleg** in plaats van
+stil terug te vallen, want een knop die niets doet is erger dan een foutmelding.
 
 > **Valkuil, duur betaald.** De noodrem werkte in productie NIET tot de
 > follow-up van #268: `NIGHTLY_ENABLED` stond wel in de `.env` maar niet onder
@@ -1869,8 +1903,12 @@ kan rb-api eerder starten dan Postgres klaar is.
 - **Brein-GraphRAG-retrieval in `/ask`** (fase ask-retrieval, #228 —
   `BreinRetrievalService`, `BreinContextFormatter`, `BreinRetrievalGate`,
   `RbRules.Infrastructure/GraphRag/*`). De `RetrievalOrchestrator` is bedraad in
-  de bestaande `AskService.AskCoreAsync` **achter een DEFAULT-UIT feature-flag**
-  (`BREIN_RETRIEVAL_ENABLED`, `BreinRetrievalSettings.FromEnvironment`). Flag UIT
+  de bestaande `AskService.AskCoreAsync` **achter een DEFAULT-UIT feature-flag**.
+  Sinds #254 is dat een **beheerde** vlag (`brein.retrieval.enabled`, beheer →
+  Brein → /ask-retrieval), met `BREIN_RETRIEVAL_ENABLED` /
+  `BreinRetrievalSettings.FromEnvironment` als bootstrap-default; de poort leest
+  hem op het gebruiksmoment (`ManagedSettingsService`, cache-hit) zodat de knop
+  zonder herstart werkt. Flag UIT
   (de default, en de meeste constructors geven de service niet eens mee) ⇒ `/ask`
   draait EXACT zoals voorheen: géén brein-call, géén extra latency, géén
   gedragswijziging — de poort schakelt de hele laag uit vóórdat er ook maar één
@@ -2455,6 +2493,49 @@ en dat is precies het halve feit dat we niet willen. De admin-tegel
 "Geanalyseerd" telt daarom óók op `Triggers`, en `MiningResult.LlmAdded` maakt
 meetbaar hoeveel het LLM-pad nog oplevert — blijft dat structureel nul, dan
 mag het pad weg.
+
+---
+
+### ADR-18 — Feature-vlaggen beheerd in de DB, env als bootstrap-default (#254)
+
+**Context.** `BREIN_RETRIEVAL_ENABLED` en `NIGHTLY_ENABLED` waren singletons die
+één keer bij startup uit de omgeving lazen. Omzetten vroeg dus SSH naar de VM, een
+`.env`-aanpassing én een herstart — Sjoerd kon er niet zelf bij, en de cockpit zei
+letterlijk "zet `BREIN_RETRIEVAL_ENABLED=true` op de VM". Erger: de
+`NIGHTLY_ENABLED`-noodrem bereikte de container nooit omdat de variabele wel in de
+`.env` stond maar niet in de compose-`environment:` (#268-follow-up). We dáchten
+een noodrem te hebben.
+
+**Beslissing.** Een `setting`-tabel (sleutel/waarde + `updated_at`/`updated_by`)
+met `ManagedSettingsService` als enige leespoort, en drie harde regels:
+
+1. **Env blijft de bootstrap-default.** Elke rij is een *override*; geen rij =
+   de bestaande env-/codewaarde. De tabel is normaal leeg, dus zonder ingreep
+   verandert er niets — een regressietest legt dat vast (record-gelijkheid over
+   álle velden, niet alleen de vlag).
+2. **Lezen op het gebruiksmoment**, niet bij startup: `ScanScheduler` (per
+   uurtick), `JobCatalog.RunNightlyAsync` (per run) en `BreinRetrievalService`
+   (per /ask) vragen de waarde op wanneer ze hem nodig hebben. De oude singletons
+   zijn uit DI verwijderd zodat niemand per ongeluk een bevroren snapshot injecteert.
+3. **Elke wijziging laat een spoor na** in `run_log` (Kind="setting", oud → nieuw,
+   door wie) — een schakelaar mag geen onzichtbare state opleveren (rode draad #236).
+
+Het hete pad betaalt daar niet voor: de service houdt een in-memory snapshot van de
+(piepkleine) tabel en schrijft er zelf doorheen, dus een toggle is binnen hetzelfde
+proces meteen zichtbaar. De TTL (20s) is puur een vangnet voor waarden die búiten de
+service in de DB belanden (handmatige SQL, ooit een tweede instantie); in de
+normale gang van zaken kost een lezing nul I/O.
+
+**Gevolg.** Postgres-uitval bevriest de vlaggen op de laatst bekende waarden (koude
+start: de env-defaults) in plaats van `/ask` of de scheduler om te trekken — fouten
+zijn data. Schrijven gaat per set en alles-of-niets, omdat het nachtvenster een paar
+is: start en eind los toepassen zou een geldige eindtoestand op de tussenstap laten
+stranden. Waarden worden genormaliseerd opgeslagen ("true"/"false"), zodat de twee
+bestaande env-parsers — die onderling nét andere woorden accepteren — het over een
+opgeslagen waarde altijd eens zijn. `ManagedSettingsCatalog` (Domain) is de enige
+bron van beheerbare sleutels: een onbekende sleutel wordt geweigerd, zodat de tabel
+geen vergaarbak van losse strings wordt. `ManagedSettingsService`,
+`ManagedSettings.cs`, `ManagedSettingsTests`, `SettingsAdminEndpoints`.
 
 ---
 

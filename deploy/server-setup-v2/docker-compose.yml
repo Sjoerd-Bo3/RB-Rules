@@ -63,8 +63,12 @@ services:
       # alléén bereikte de container nooit — de "noodrem" uit ea567ad deed in
       # productie niets (printenv gaf niets). De defaults spiegelen
       # NightlyRunSettings, zodat een ontbrekende .env-waarde het huidige gedrag
-      # houdt: nachtrun AAN, venster 00:00–11:00 Europe/Amsterdam. Uitzetten blijft
-      # een bewuste handeling (NIGHTLY_ENABLED=false in .env + compose up -d);
+      # houdt: nachtrun AAN, venster 00:00–11:00 Europe/Amsterdam.
+      #
+      # Sinds #254 zijn dit BOOTSTRAP-DEFAULTS: de noodrem en het venster zijn
+      # schakelaars in beheer → Brein (setting-tabel, gelezen op het
+      # gebruiksmoment). Zolang daar niets is omgezet gelden deze waarden
+      # onveranderd. Uitzetten hoeft dus geen .env + compose up -d meer;
       # handmatig starten via beheer werkt hoe dan ook.
       NIGHTLY_ENABLED: ${NIGHTLY_ENABLED:-true}
       NIGHTLY_START_HOUR: ${NIGHTLY_START_HOUR:-0}
