@@ -245,50 +245,79 @@ a { color: inherit; }
 	to { transform: rotate(360deg); }
 }
 
-/* Kaarttekst-iconen (:rb_…:-tokens uit Riot-teksten) */
+/* Kaarttekst-iconen (:rb_…:-tokens uit Riot-teksten, #257): Riots eigen
+   glyphs (rb-web/static/glyphs/, zie scripts/fetch-glyphs.sh) i.p.v.
+   zelfgetekende vormen — wij tekenen hier niets meer zelf. */
 .tok {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	vertical-align: -2px;
+	position: relative;
+	/* Meeschalen met de tekstregel, dus uitlijnen in em en niet in px. */
+	vertical-align: -0.22em;
 	margin: 0 1px;
 }
-.tok-energy {
-	width: 17px;
-	height: 17px;
+/* Riot tekent deze glyphs op een 24x24-raster; onder ~14px slibt het witte
+   binnenwerk dicht (rune_rainbow met zijn gradiënten het eerst) en zijn de
+   runes alleen nog aan kleur te onderscheiden. Vandaar meeschalen met de
+   tekst op 1.15em, met een ondergrens zodat ze ook in kleine metatekst
+   leesbaar blijven. */
+.tok-glyph {
+	display: block;
+	width: 1.15em;
+	height: 1.15em;
+	min-width: 14px;
+	min-height: 14px;
+}
+/* Verborgen zolang het glyph laadt; de inline `onerror` op de <img>
+   (rbtokens.ts) zet tok-glyph-error zodra /glyphs/{token}.svg ontbreekt, en
+   deze regel toont dan de tokentekst zelf ("3", "might", …) i.p.v. een leeg
+   gat of een gebroken-afbeelding-icoon. */
+.tok-fallback { display: none; }
+.tok-glyph.tok-glyph-error { display: none; }
+.tok-glyph.tok-glyph-error ~ .tok-fallback { display: inline; }
+
+/* might.svg en exhaust.svg zijn getekend als fill="white" (voor Riots eigen
+   donkere UI) en verdwijnen op ons lichte thema — omgekeerd op donker. */
+.tok-glyph-might,
+.tok-glyph-exhaust {
+	filter: invert(1);
+}
+/* energy_*.svg is een witte schijf met een donkerblauw cijfer die de volle
+   24×24-viewBox vult; op een licht oppervlak verdwijnt de schijfrand, dus
+   een dunne omtrek erbij. Op donker heeft de witte schijf al genoeg
+   contrast, dus geen ring. */
+.tok-glyph-energy {
 	border-radius: 50%;
-	background: var(--surface-deep);
-	border: 1.5px solid var(--accent);
-	color: var(--accent);
-	font-size: 11px;
-	font-weight: 700;
-	font-style: normal;
-	line-height: 1;
+	box-shadow: 0 0 0 1px var(--border-strong);
 }
-.tok-svg { width: 15px; height: 15px; }
-.tok-might path { fill: #e5766a; }
-.tok-exhaust path { fill: var(--muted); }
-.tok-rune {
-	width: 11px;
-	height: 11px;
-	border-radius: 3px;
-	transform: rotate(45deg);
-	border: 1px solid rgba(0, 0, 0, 0.45);
-	margin: 0 3px;
+/* rune_*.svg zijn zelf al gekleurde schijven (rainbow: een gradient) — die
+   werken ongewijzigd in beide thema's, dus geen filter/ring hier. */
+
+@media (prefers-color-scheme: dark) {
+	.tok-glyph-might,
+	.tok-glyph-exhaust {
+		filter: none;
+	}
+	.tok-glyph-energy {
+		box-shadow: none;
+	}
 }
-/* Domein-runen in kaarttekst (:rb_fury: …) delen nu de canonieke domein-
-   tokens (#214) — één plek voor elke domeinkleur, gelijk aan de randstreep
-   en chips op de ChangeCard. */
-.tok-rune-fury { background: var(--dom-fury); }
-.tok-rune-calm { background: var(--dom-calm); }
-.tok-rune-mind { background: var(--dom-mind); }
-.tok-rune-body { background: var(--dom-body); }
-.tok-rune-order { background: var(--dom-order); }
-.tok-rune-chaos { background: var(--dom-chaos); }
-.tok-rune-rainbow {
-	background: conic-gradient(
-		var(--dom-fury), var(--dom-order), var(--dom-calm),
-		var(--dom-mind), var(--dom-chaos), var(--dom-fury));
+/* Expliciete data-theme wint altijd, in beide richtingen — zelfde patroon
+   als de ontwerptokens hierboven (regels ~59-100). */
+:root[data-theme='dark'] .tok-glyph-might,
+:root[data-theme='dark'] .tok-glyph-exhaust {
+	filter: none;
+}
+:root[data-theme='dark'] .tok-glyph-energy {
+	box-shadow: none;
+}
+:root[data-theme='light'] .tok-glyph-might,
+:root[data-theme='light'] .tok-glyph-exhaust {
+	filter: invert(1);
+}
+:root[data-theme='light'] .tok-glyph-energy {
+	box-shadow: 0 0 0 1px var(--border-strong);
 }
 
 /* Markdown-weergave (rulings) */

@@ -20,6 +20,11 @@ export interface DeckCardRow {
 	canonicalRiftboundId: string | null;
 	cardName: string | null;
 	imageUrl: string | null;
+	/** Presentatie per kaart (#269/#270): battlefields zijn liggend. */
+	imageWidth: number | null;
+	imageHeight: number | null;
+	imageAltText: string | null;
+	imageColorPrimary: string | null;
 }
 
 export interface DeckSection {

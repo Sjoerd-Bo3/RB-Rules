@@ -19,12 +19,17 @@ public static class RiftcodexCardMapper
         var rid = c["riftbound_id"]?.GetValue<string>() ?? c["id"]?.GetValue<string>();
         if (rid is null) return null;
         rid = RiftboundIds.Normalize(rid);
+        var name = c["name"]?.GetValue<string>() ?? rid;
+        var type = c["classification"]?["type"]?.GetValue<string>();
+        var supertype = c["classification"]?["supertype"]?.GetValue<string>();
+        var textPlain = c["text"]?["plain"]?.GetValue<string>();
+        var imageUrl = c["media"]?["image_url"]?.GetValue<string>();
         return new Card
         {
             RiftboundId = rid,
-            Name = c["name"]?.GetValue<string>() ?? rid,
-            Type = c["classification"]?["type"]?.GetValue<string>(),
-            Supertype = c["classification"]?["supertype"]?.GetValue<string>(),
+            Name = name,
+            Type = type,
+            Supertype = supertype,
             Rarity = c["classification"]?["rarity"]?.GetValue<string>(),
             Domains = c["classification"]?["domain"] is JsonArray d
                 ? [.. d.Select(x => x?.GetValue<string>()).OfType<string>()]
@@ -35,11 +40,39 @@ public static class RiftcodexCardMapper
             SetId = (c["set"]?["set_id"]?.GetValue<string>() ?? fallbackSetId).ToUpperInvariant(),
             SetLabel = c["set"]?["label"]?.GetValue<string>(),
             CollectorNumber = c["collector_number"]?.GetValue<int?>(),
-            TextPlain = c["text"]?["plain"]?.GetValue<string>(),
-            ImageUrl = c["media"]?["image_url"]?.GetValue<string>(),
+            TextPlain = textPlain,
+            ImageUrl = imageUrl,
             Tags = c["tags"] is JsonArray t
                 ? [.. t.Select(x => x?.GetValue<string>()).OfType<string>()]
                 : [],
+
+            // Presentatievelden (#270). Nagetrokken tegen de live API: riftcodex
+            // levert media.artist, media.accessibility_text en de "new"-vlag wél
+            // — anders dan de aanname in #270. Kleuren, mightBonus, effect en
+            // publicCode heeft hij niet; die blijven leeg tot Riot ze levert.
+            Illustrator = c["media"]?["artist"]?.GetValue<string>(),
+            // Riftcodex wijst naar dezelfde Sanity-CDN als Riot, dus de maat
+            // staat in de bestandsnaam ("…-744x1039.png"). orientation
+            // ("landscape"/"portrait") is de terugval als de URL zwijgt.
+            ImageWidth = SizeOf(imageUrl, c["orientation"]?.GetValue<string>()).Width,
+            ImageHeight = SizeOf(imageUrl, c["orientation"]?.GetValue<string>()).Height,
+            ImageAltText = c["media"]?["accessibility_text"]?.GetValue<string>()
+                ?? CardPresentation.ComposeAltText(name, supertype, type, textPlain),
+            Flags = c["new"]?.GetValue<bool>() == true ? ["New"] : [],
+        };
+    }
+
+    /// <summary>Afmetingen voor een riftcodex-kaart: uit de URL, anders uit
+    /// hun orientation-veld op de standaardmaat van een Riftbound-kaart.
+    /// Zonder allebei blijft het leeg — dan valt de UI terug op staand.</summary>
+    private static (int? Width, int? Height) SizeOf(string? imageUrl, string? orientation)
+    {
+        if (CardPresentation.SizeFromUrl(imageUrl) is { } size) return (size.Width, size.Height);
+        return orientation?.ToLowerInvariant() switch
+        {
+            "landscape" => (CardPresentation.DefaultHeight, CardPresentation.DefaultWidth),
+            "portrait" => (CardPresentation.DefaultWidth, CardPresentation.DefaultHeight),
+            _ => (null, null),
         };
     }
 

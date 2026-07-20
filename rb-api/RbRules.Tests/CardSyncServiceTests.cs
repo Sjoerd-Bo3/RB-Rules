@@ -116,6 +116,107 @@ public class CardSyncServiceTests
         Assert.Contains("aanvulling overgeslagen", log.Detail);
     }
 
+    // ---- voorrangsregel op de presentatievelden (#270) --------------------
+
+    /// <summary>Riot-battlefield met alle presentatievelden, in de echte
+    /// gallery-vorm (liggend, 1039x744).</summary>
+    private const string RiotBattlefieldJson = """
+        {
+          "id": "unl-205-219",
+          "collectorNumber": 205,
+          "name": "Abandoned Hall",
+          "publicCode": "UNL-205/219",
+          "set": {"label": "Card Set", "value": {"id": "UNL", "label": "Unleashed"}},
+          "cardType": {"label": "Card Type", "type": [{"id": "battlefield", "label": "Battlefield"}]},
+          "domain": {"label": "Domain", "values": [{"id": "colorless", "label": "Colorless"}]},
+          "cardImage": {
+            "type": "image",
+            "url": "https://example.com/hall-1039x744.png",
+            "accessibilityText": "Riftbound Battlefield: Abandoned Hall. Officiële alt-tekst.",
+            "dimensions": {"width": 1039, "height": 744, "aspectRatio": 1.3965},
+            "colors": {"primary": "#222C44", "secondary": "#DCEBF9"}
+          },
+          "orientation": "landscape",
+          "illustrator": {"label": "Artist", "values": [{"id": "envar", "label": "Envar Studio"}]},
+          "flags": [{"id": "new", "label": "New"}]
+        }
+        """;
+
+    [Fact]
+    public async Task Sync_BattlefieldBehoudtLiggendeAfmetingen()
+    {
+        // Regressie #269: battlefields (66 van de 1178) werden als portret
+        // bijgesneden omdat de maat nooit gesynchroniseerd werd.
+        using var db = NewDb();
+        var (service, handler) = Service(db);
+        RouteRiot(handler, RiotBattlefieldJson);
+        RouteRiftcodexSets(handler);
+
+        await WithCardSourceAsync("riot", () => service.SyncAsync());
+
+        var card = await db.Cards.FindAsync("unl-205-219");
+        Assert.Equal((1039, 744), (card!.ImageWidth, card.ImageHeight));
+        Assert.True(CardPresentation.IsLandscape(card.ImageWidth, card.ImageHeight));
+        Assert.Equal("UNL-205/219", card.PublicCode);
+        Assert.Equal("Envar Studio", card.Illustrator);
+        Assert.Equal(["New"], card.Flags);
+        Assert.Equal("#222c44", card.ImageColorPrimary);
+        Assert.Equal("Riftbound Battlefield: Abandoned Hall. Officiële alt-tekst.",
+            card.ImageAltText);
+    }
+
+    [Fact]
+    public async Task Sync_RiotOverschrijftEenEerderAangevuldVeld()
+    {
+        // Voorrangsregel (#270): zodra Riot een waarde levert, wint die van de
+        // aanvulling — zonder per-veld-herkomstadministratie.
+        using var db = NewDb();
+        var seeded = SeedCard("unl-205-219", "Abandoned Hall");
+        seeded.Illustrator = "Aanvulling Studio";
+        seeded.ImageAltText = "Zelf samengestelde alt-tekst.";
+        seeded.ImageWidth = 744;
+        seeded.ImageHeight = 1039;
+        db.Cards.Add(seeded);
+        await db.SaveChangesAsync();
+
+        var (service, handler) = Service(db);
+        RouteRiot(handler, RiotBattlefieldJson);
+        RouteRiftcodexSets(handler);
+
+        await WithCardSourceAsync("riot", () => service.SyncAsync());
+
+        var card = await db.Cards.FindAsync("unl-205-219");
+        Assert.Equal("Envar Studio", card!.Illustrator);
+        Assert.Equal("Riftbound Battlefield: Abandoned Hall. Officiële alt-tekst.",
+            card.ImageAltText);
+        Assert.Equal((1039, 744), (card.ImageWidth, card.ImageHeight));
+    }
+
+    [Fact]
+    public async Task Sync_AanvullingVultAlleenGatenEnRaaktRiotVeldenNiet()
+    {
+        // De andere helft van de voorrangsregel: de aanvul-pass mag een door
+        // Riot gevuld veld nooit aanraken, en vult alleen wat leeg is.
+        using var db = NewDb();
+        var (service, handler) = Service(db);
+        RouteRiot(handler, RiotCardJson("ogn-001-298", "Darius, Trifarian"));
+        RouteRiftcodexSets(handler, ("OGN", "Origins"));
+        RouteRiftcodexCards(handler, "OGN",
+            // Riftcodex kent supertype (Riot niet) én een eigen artist.
+            RiftcodexCardJson("ogn-001-298", "Darius - Trifarian"));
+
+        await WithCardSourceAsync(null, () => service.SyncAsync());
+
+        var card = await db.Cards.FindAsync("ogn-001-298");
+        // Gat gevuld: de gallery kent geen supertype.
+        Assert.Equal("Champion", card!.Supertype);
+        Assert.Equal("Shawn Tan", card.Illustrator);
+        // Door Riot gevuld: onaangeraakt gebleven.
+        Assert.Equal("Darius, Trifarian", card.Name);
+        Assert.Equal("Common", card.Rarity);
+        Assert.Equal("Overwhelm.", card.TextPlain);
+    }
+
     // ---- regressie #150: aanvul-pass raakt herstelde namen niet meer aan ---
 
     [Fact]
@@ -313,10 +414,12 @@ public class CardSyncServiceTests
           "name": "{{{name}}}",
           "collector_number": 7,
           "attributes": {"energy": 2, "might": 3},
-          "classification": {"type": "Unit", "rarity": "{{{rarity}}}", "domain": ["Fury"]},
+          "classification": {"type": "Unit", "supertype": "Champion", "rarity": "{{{rarity}}}", "domain": ["Fury"]},
           "text": {"plain": "{{{text}}}", "rich": "<p>{{{text}}}</p>"},
           "set": {"set_id": "{{{setId}}}", "label": "{{{setLabel}}}"},
-          "media": {"image_url": "https://example.com/kaart.png"}
+          "media": {"image_url": "https://example.com/kaart.png", "artist": "Shawn Tan"},
+          "orientation": "portrait",
+          "new": false
         }
         """;
 

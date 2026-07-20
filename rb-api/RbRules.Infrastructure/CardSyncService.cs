@@ -304,6 +304,14 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         Mechanics = c.Mechanics, Triggers = c.Triggers, Effects = c.Effects,
         Embedding = c.Embedding, EmbeddingModel = c.EmbeddingModel,
         VariantOf = c.VariantOf, UpdatedAt = c.UpdatedAt,
+        // Presentatievelden (#270) horen bij dezelfde kaart en moeten dus
+        // meeverhuizen — anders raakt een id-reparatie ze stil kwijt.
+        PublicCode = c.PublicCode, Illustrator = c.Illustrator,
+        MightBonus = c.MightBonus, EffectPlain = c.EffectPlain, Flags = c.Flags,
+        ImageWidth = c.ImageWidth, ImageHeight = c.ImageHeight,
+        ImageColorPrimary = c.ImageColorPrimary,
+        ImageColorSecondary = c.ImageColorSecondary,
+        ImageAltText = c.ImageAltText,
     };
 
     /// <summary>Groepeert printings van dezelfde kaart: één canonieke kaart,
@@ -378,9 +386,6 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
                 {
                     var card = RiftcodexCardMapper.MapCard(c, setId);
                     if (card is null) continue;
-                    // Aanvullend (#150): een kaart die de leidende Riot-pass
-                    // al kent blijft volledig onaangeraakt.
-                    if (supplementOnly && existing.ContainsKey(card.RiftboundId)) continue;
                     // Een bestaande naam wint altijd (ook échte Riot-
                     // streepjesnamen zoals de OGS-starters — anders
                     // flip-flopt de naam per bronwissel); riftcodex vult
@@ -389,8 +394,17 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
                     card.Name = RiftcodexCardMapper.ResolveName(
                         existing.TryGetValue(card.RiftboundId, out var have) ? have.Name : null,
                         card.Name, knownCommaNames);
-                    await UpsertCardAsync(card, existing, ct);
-                    total++;
+                    // Aanvullend (#150/#270): nieuwe kaarten (JDG-promo's) komen
+                    // erbij en lege velden van bestaande kaarten worden gevuld
+                    // — gevulde Riot-velden blijven gegarandeerd onaangeraakt
+                    // (CardMerge). Is riftcodex de énige bron (Riot plat), dan
+                    // is hij leidend en schrijft hij wél door; anders zou de
+                    // kaartenset bevriezen zolang Riot uit staat.
+                    var added = await UpsertCardAsync(card, existing, !supplementOnly, ct);
+                    // Aanvullend telt alleen échte extra kaarten ("141
+                    // aanvullend via riftcodex"); als enige bron telt elke
+                    // verwerkte kaart mee.
+                    if (added || !supplementOnly) total++;
                 }
                 if (items.Count < 100) break;
             }
@@ -415,7 +429,8 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         var setIds = new HashSet<string>();
         foreach (var card in cards)
         {
-            await UpsertCardAsync(card, existing, ct);
+            // De officiële gallery is leidend: onvoorwaardelijk schrijven.
+            await UpsertCardAsync(card, existing, leading: true, ct);
             if (card.SetId is not null) setIds.Add(card.SetId);
         }
         // De Riot-gallery levert geen setnamen of releasedatums bij de
@@ -425,49 +440,42 @@ public class CardSyncService(RbRulesDbContext db, HttpClient http)
         return new(setIds.Count, cards.Count, "riot");
     }
 
-    private async Task UpsertCardAsync(
-        Card card, Dictionary<string, Card> known, CancellationToken ct)
+    /// <summary>Idempotente upsert. <paramref name="leading"/> bepaalt de
+    /// voorrang (zie <see cref="CardMerge"/>): de leidende bron schrijft
+    /// onvoorwaardelijk, een aanvullende vult alleen lege velden.
+    /// Geeft terug of de kaart NIEUW was — dat is wat "X aanvullend via
+    /// riftcodex" telt; een gevuld gat is geen extra kaart.</summary>
+    private async Task<bool> UpsertCardAsync(
+        Card card, Dictionary<string, Card> known, bool leading, CancellationToken ct)
     {
         if (!known.TryGetValue(card.RiftboundId, out var existing))
         {
             db.Cards.Add(card);
             known[card.RiftboundId] = card;
-            return;
+            return true;
         }
-        var nameChanged = existing.Name != card.Name;
-        var textChanged = existing.TextPlain != card.TextPlain;
-        existing.Name = card.Name;
-        existing.Type = card.Type;
-        existing.Supertype = card.Supertype;
-        existing.Rarity = card.Rarity;
-        existing.Domains = card.Domains;
-        existing.Energy = card.Energy;
-        existing.Might = card.Might;
-        existing.Power = card.Power;
-        existing.SetId = card.SetId;
-        existing.SetLabel = card.SetLabel;
-        existing.CollectorNumber = card.CollectorNumber;
+        var changes = CardMerge.Apply(existing, card, leading);
         // Naam- óf tekstwijziging invalideert de embedding — beide zitten in
         // de embeddingtekst (CardText.Compose); zo pakt de embed-pijplijn een
         // door Riot herstelde naam ("Darius - Trifarian" → "Darius, Trifarian",
         // #150) automatisch op. Alleen bij échte wijziging — geen churn.
-        if (nameChanged || textChanged)
+        if (changes.NameChanged || changes.TextChanged)
         {
             existing.Embedding = null;
             existing.EmbeddingModel = null;
         }
         // Tekstwijziging (errata!) maakt ook de gecachete gelijkenis-uitleg
         // over deze kaart achterhaald.
-        if (textChanged)
+        if (changes.TextChanged)
         {
             await db.SimilarityExplanations
                 .Where(e => e.CardAId == card.RiftboundId || e.CardBId == card.RiftboundId)
                 .ExecuteDeleteAsync(ct);
         }
-        existing.TextPlain = card.TextPlain;
-        existing.ImageUrl = card.ImageUrl;
-        existing.Tags = card.Tags;
-        existing.UpdatedAt = DateTimeOffset.UtcNow;
+        // UpdatedAt is "wanneer veranderde deze kaart", niet "wanneer draaide
+        // de sync" — anders lijkt na elke run de hele set gewijzigd.
+        if (changes.Any) existing.UpdatedAt = DateTimeOffset.UtcNow;
+        return false;
     }
 
     /// <summary>Riftcodex levert published_on als ISO-datetime

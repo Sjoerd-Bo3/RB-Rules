@@ -123,4 +123,83 @@ public class RiftcodexCardMapperTests
             && c.Name == "Annie - Stubborn");
         Assert.DoesNotContain(cards, c => c.RiftboundId.Contains('*'));
     }
+
+    // ---- presentatievelden (#270) -----------------------------------------
+
+    [Fact]
+    public void MapCard_NeemtDePresentatievelenOverDieRiftcodexWelHeeft()
+    {
+        // Nagetrokken tegen de live API (en deze snapshot): anders dan de
+        // aanname in #270 levert riftcodex artist, accessibility_text en de
+        // "new"-vlag wél. Dat dekt de ~141 kaarten die alléén via riftcodex
+        // binnenkomen (JDG-promo's).
+        var card = Map("sfd-227*-221");
+        Assert.Equal("Shawn Tan", card.Illustrator);
+        Assert.Equal(
+            "Riftbound Unit: Ahri, Inquisitive. When I attack or defend, give an enemy " +
+            "unit here -2 [S] this turn, to a minimum of 1 [S].",
+            card.ImageAltText);
+        Assert.Empty(card.Flags);
+    }
+
+    [Fact]
+    public void MapCard_LeidtAfmetingenUitDeImageUrlAf()
+    {
+        // Riftcodex wijst naar dezelfde Sanity-CDN, dus de maat staat in de
+        // bestandsnaam — daarmee klopt de tegelverhouding ook voor kaarten
+        // die Riot niet levert (#269).
+        var card = Map("sfd-227*-221");
+        Assert.Equal(744, card.ImageWidth);
+        Assert.Equal(1039, card.ImageHeight);
+        Assert.False(CardPresentation.IsLandscape(card.ImageWidth, card.ImageHeight));
+    }
+
+    [Fact]
+    public void MapCard_ValtTerugOpOrientationAlsDeUrlGeenMaatDraagt()
+    {
+        var raw = (JsonObject)JsonNode.Parse("""
+            {
+              "riftbound_id": "jdg-001-024",
+              "name": "Judge Promo",
+              "classification": {"type": "Battlefield"},
+              "media": {"image_url": "https://example.com/promo.png"},
+              "orientation": "landscape"
+            }
+            """)!;
+        var card = RiftcodexCardMapper.MapCard(raw, "JDG")!;
+        Assert.True(CardPresentation.IsLandscape(card.ImageWidth, card.ImageHeight));
+    }
+
+    [Fact]
+    public void MapCard_SteltAltTekstZelfSamenAlsRiftcodexErGeenHeeft()
+    {
+        // Afgeleid, uitsluitend voor alt= — nooit als officiële kaarttekst.
+        var raw = (JsonObject)JsonNode.Parse("""
+            {
+              "riftbound_id": "jdg-002-024",
+              "name": "Judge Promo",
+              "classification": {"type": "Unit", "supertype": "Champion"},
+              "text": {"plain": "Deal 1 :rb_might: damage."},
+              "media": {"image_url": "https://example.com/promo-744x1039.png"},
+              "new": true
+            }
+            """)!;
+        var card = RiftcodexCardMapper.MapCard(raw, "JDG")!;
+        Assert.Equal("Riftbound Champion Unit: Judge Promo. Deal 1 [might] damage.",
+            card.ImageAltText);
+        Assert.Equal(["New"], card.Flags);
+    }
+
+    [Fact]
+    public void MapCard_LaatWatRiftcodexNietHeeftLeeg()
+    {
+        // Kleuren, mightBonus, effect en publicCode kent hun API niet —
+        // die blijven leeg tot Riot ze levert (voorrangsregel #270).
+        var card = Map("sfd-227*-221");
+        Assert.Null(card.ImageColorPrimary);
+        Assert.Null(card.ImageColorSecondary);
+        Assert.Null(card.MightBonus);
+        Assert.Null(card.EffectPlain);
+        Assert.Null(card.PublicCode);
+    }
 }

@@ -37,6 +37,21 @@ export interface CardDetail {
 		collectorNumber: number | null;
 		imageUrl: string | null;
 	}[];
+	/** Presentatievelden uit de bron (#270). imageAltText hoort UITSLUITEND
+	 *  in een `alt=`: hij kan lokaal afgeleid zijn en is dus geen officiële
+	 *  kaarttekst. */
+	presentation: {
+		publicCode: string | null;
+		illustrator: string | null;
+		mightBonus: number | null;
+		effectPlain: string | null;
+		flags: string[];
+		imageWidth: number | null;
+		imageHeight: number | null;
+		imageColorPrimary: string | null;
+		imageColorSecondary: string | null;
+		imageAltText: string | null;
+	};
 }
 
 /** Bevestiging (#206): een secundaire change (andere bron, zelfde
@@ -121,6 +136,10 @@ export interface AskCard {
 	mechanics: string[] | null;
 	imageUrl: string | null;
 	banned: boolean;
+	/** Presentatie (#269/#270): verhouding en alt-tekst per kaart. */
+	imageWidth: number | null;
+	imageHeight: number | null;
+	imageAltText: string | null;
 	/** Set-legaliteit (#68): label voor kaarten uit een nog niet verschenen set. */
 	setName: string | null;
 	legalFrom: string | null;

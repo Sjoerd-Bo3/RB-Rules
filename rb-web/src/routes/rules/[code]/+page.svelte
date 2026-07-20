@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ChangeCard from '$lib/ChangeCard.svelte';
+	import RbText from '$lib/RbText.svelte';
 	import { useShell } from '$lib/shell.svelte';
 
 	let { data } = $props();
@@ -93,14 +94,14 @@
 			{#each s.parents as par (par.code)}
 				<p class="parent">
 					<a href="/rules/{encodeURIComponent(par.code)}?source={s.sourceId}">§ {par.code}</a>
-					{par.text}
+					<RbText text={par.text} />
 				</p>
 			{/each}
 		</div>
 	{/if}
 
 	<article class="card">
-		<p class="text">{s.text}</p>
+		<p class="text"><RbText text={s.text} /></p>
 	</article>
 
 	<div class="actions">
@@ -157,7 +158,7 @@
 			<h2>Community-inzichten over deze regel</h2>
 			{#each data.dossier.claims as cl (cl.id)}
 				<div class="box">
-					<p class="statement">{cl.statement}</p>
+					<p class="statement"><RbText text={cl.statement} /></p>
 					<p class="meta small">{cl.trustLabel}</p>
 				</div>
 			{/each}

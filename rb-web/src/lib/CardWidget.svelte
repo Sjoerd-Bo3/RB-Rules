@@ -1,5 +1,6 @@
 <script lang="ts">
 	import RbText from '$lib/RbText.svelte';
+	import { cardAlt, cardAspect } from '$lib/cardImage';
 
 	interface CardLike {
 		riftboundId: string;
@@ -17,6 +18,11 @@
 		setName?: string | null;
 		legalFrom?: string | null;
 		legality?: 'legal' | 'upcoming' | 'announced';
+		// Presentatie (#269/#270): verhouding en alt-tekst per kaart —
+		// battlefields zijn liggend.
+		imageWidth?: number | null;
+		imageHeight?: number | null;
+		imageAltText?: string | null;
 	}
 
 	let { name, cards }: { name: string; cards: CardLike[] } = $props();
@@ -29,7 +35,14 @@
 
 {#if card}
 	<a class="card-widget" href="/cards/{card.riftboundId}">
-		{#if card.imageUrl}<img src={card.imageUrl} alt={card.name} loading="lazy" />{/if}
+		{#if card.imageUrl}
+			<img
+				src={card.imageUrl}
+				alt={cardAlt(card)}
+				loading="lazy"
+				style="aspect-ratio: {cardAspect(card)}"
+			/>
+		{/if}
 		<span class="body">
 			<span class="name">
 				{card.name}
@@ -60,7 +73,11 @@
 		color: inherit; text-decoration: none;
 	}
 	.card-widget:hover { border-color: var(--border-strong); }
-	img { width: 74px; border-radius: 6px; border: 1px solid var(--border); flex-shrink: 0; }
+	img {
+		width: 74px; border-radius: 6px; border: 1px solid var(--border); flex-shrink: 0;
+		/* Hoogte volgt de verhouding van de kaart zelf (#269). */
+		height: auto; object-fit: contain;
+	}
 	.body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 	.name { font-weight: 700; }
 	.ban {

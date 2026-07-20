@@ -33,5 +33,17 @@ public static class CardQueries
             Effects = c.Effects,
             VariantOf = c.VariantOf,
             UpdatedAt = c.UpdatedAt,
+            // Presentatievelden (#270) horen bij de kaartfeiten; ze zijn klein
+            // en de kaartpagina toont ze allemaal.
+            PublicCode = c.PublicCode,
+            Illustrator = c.Illustrator,
+            MightBonus = c.MightBonus,
+            EffectPlain = c.EffectPlain,
+            Flags = c.Flags,
+            ImageWidth = c.ImageWidth,
+            ImageHeight = c.ImageHeight,
+            ImageColorPrimary = c.ImageColorPrimary,
+            ImageColorSecondary = c.ImageColorSecondary,
+            ImageAltText = c.ImageAltText,
         });
 }

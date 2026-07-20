@@ -539,9 +539,15 @@ de globale duur-vangrail).
   (canonical-flip). Alleen canonieke printings gaan de graph in.
 - **Bronvolgorde kaart-sync** — de officiële Riot-gallery is leidend
   (onvoorwaardelijke upsert, ook voor namen en kaartvelden) en riftcodex
-  vult daarna alleen aan — extra kaarten (JDG-promo's) en set-metadata,
-  bestaande kaarten blijven onaangeraakt; `CARD_SOURCE=riot|riftcodex`
-  blijven expliciete overrides en het job-detail telt per bron (#150).
+  vult daarna alleen aan — extra kaarten (JDG-promo's) en set-metadata;
+  `CARD_SOURCE=riot|riftcodex` blijven expliciete overrides en het job-detail
+  telt per bron (#150). Sinds #270 staat die voorrang expliciet in
+  `CardMerge`: leidend schrijft onvoorwaardelijk (ook leeg — ontbreekt een
+  veld in Riots payload, dan hééft de kaart het niet), aanvullend vult
+  **alleen lege velden** en raakt gevulde nooit aan. Daardoor mag de
+  aanvul-pass ook gaten dichten op kaarten die Riot al kent (Riot levert geen
+  `supertype`) zonder Riot-data te kunnen beschadigen. Valt Riot uit, dan is
+  riftcodex leidend — anders zou de kaartenset bevriezen zolang Riot plat ligt.
 - **Bronvorm-normalisatie (riftcodex)** — de kaart-sync normaliseert
   riftcodex-vormen bij binnenkomst naar de Riot-gallery-vorm: ster-id's
   ("sfd-239\*-221" → "sfd-239-star-221") en streepjes-namen ("Soraka -
@@ -551,8 +557,30 @@ de globale duur-vangrail).
   ontstane dubbelen samen op (set, collector-nummer, variant-suffix) en
   hangt alle verwijzingen (bans, errata, interacties, rulings, relaties,
   claims, variant-verwijzingen) mee om; run_log meldt hoeveel (#144).
-- **Kaarttekst-icoontokens** — tokens als `:rb_energy_1:` renderen als échte
-  iconen (`$lib/rbtokens.ts`), veilig ge-escaped vóór injectie.
+- **Kaarttekst-icoontokens** — tokens als `:rb_energy_1:` renderen als **Riots
+  eigen glyphs** (#257): de 22 officiële icoon-SVG's staan gevendord in
+  `rb-web/static/glyphs/` (opgehaald met `scripts/fetch-glyphs.sh`) in plaats
+  van zelfgetekende vormen. Injectie loopt via `$lib/rbtokens.ts`, veilig
+  ge-escaped vóór injectie en achter een allowlist — een onbekend token blijft
+  letterlijk staan in plaats van een gebroken afbeelding te worden, en als een
+  glyph niet laadt verschijnt de tokentekst zelf. Ze schalen mee met hun
+  tekstregel (ondergrens 14px, omdat het binnenwerk daaronder dichtslibt) en
+  `app.css` corrigeert per thema dat Riot ze voor een donkere UI tekent.
+- **Presentatievelden uit de bron** *(#269/#270)* — de kaart-sync bewaart nu
+  ook wat Riot bij elke kaart meelevert: afmetingen, dominante kleuren,
+  `accessibilityText`, illustrator, `mightBonus`, het losse `effect`-blok,
+  markers (`New`) en de publieke kaartcode. Zichtbaar effect: **battlefields
+  renderen liggend** in het deckgrid en de kaartlijst in plaats van
+  bijgesneden te worden (66 van de 1178 kaarten zijn liggend, en er zitten er
+  drie in elk deck), elke kaartafbeelding draagt een echte alt-tekst, de
+  dominante kaartkleur dient als laadkleur, en de kaartpagina toont de
+  illustrator als krediet, de might-bonus, het Effect-blok, de kaartcode en de
+  "Nieuw"-markering. Voor kaarten die alléén via riftcodex binnenkomen leidt
+  `CardPresentation` af wat af te leiden valt (de maat staat in de
+  afbeeldings-URL; de alt-tekst stellen we samen uit naam, type en kaarttekst).
+  Harde grens: zo'n samengestelde alt-tekst hoort uitsluitend in een `alt=` —
+  hij wordt nooit als Riots officiële kaarttekst getoond en gaat nooit de
+  kennisbank of een LLM-prompt in. Afgeleid is niet officieel.
 
 ### 4.3 De vraagbaak (`/ask`)
 
@@ -1168,8 +1196,10 @@ de globale duur-vangrail).
   Archive"-deeplink en attributietekst — wij spiegelen hun werk, geen eigen
   deckbuilder. *Route* `/decks/[id]` · *endpoint* `/api/decks/{id}`.
   **Visueel deckoverzicht** (#256): per sectie een grid van kaarttegels met
-  de kaartafbeelding en het aantal als badge (`×8`), in de kaartverhouding
-  744/1039 — het grid wrapt vanzelf (~3 tegels op 390px, ~7 op desktop) en
+  de kaartafbeelding en het aantal als badge (`×8`), elk in de verhouding van
+  díé kaart — sinds #269 uit de gesynchroniseerde afmetingen, zodat de
+  liggende battlefields (drie per deck) niet meer als portret bijgesneden
+  worden — het grid wrapt vanzelf (~3 tegels op 390px, ~7 op desktop) en
   alle afbeeldingen zijn `loading="lazy"`, zodat een deck van 64 kaarten de
   pagina niet vertraagt. Een niet-gekoppelde kaart krijgt een
   placeholder-tegel met de PA-kaartcode en de notitie "niet in onze
