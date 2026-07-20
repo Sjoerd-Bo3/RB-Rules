@@ -330,6 +330,23 @@ public class AskService(
                     .Select(b => $"- {b.Name} ({b.Kind})")
                     .ToListAsync(ct), ct);
 
+        // 0e. Deck-meta (kennislaag 3, #267): het deck-gebruikssignaal van het
+        // kaartdossier (aandeel recente decks, gemiddeld aantal exemplaren,
+        // top-co-occurrence) als expliciet gelabeld laag-3-blok. De poort
+        // (DeckMetaRetrieval.ShouldRetrieve, Domain) bewaakt de hotpath: het
+        // kanaal start uitsluitend bij een kaart-/lijstvraag mét herkende
+        // kaartnaam — beide gegevens zijn er op dit punt al voor de router,
+        // dus de poort zelf kost géén query, en elke andere vraag (m.n. een
+        // regelvraag zonder kaarten) doet géén enkele deck-query. Het kanaal
+        // is rewrite-onafhankelijk en draait, net als de banlijst, alvast
+        // onder de rewrite-call.
+        var deckMetaTask = DeckMetaRetrieval.ShouldRetrieve(type, mentionsCard)
+            ? await StartDbChannelAsync(
+                "deck-meta", (Block: "", Refs: new List<string>()),
+                ctx => DeckMetaChannelAsync(ctx, qLower, ct), ct)
+            : Task.FromResult(new ChannelResult<(string Block, List<string> Refs)>(
+                ("", []), null));
+
         // Token-teller per vraag (#121): opgeteld over álle rb-ai-calls die
         // deze vraag kost (rewrite + antwoord; bij agentic de hele run).
         // Blijft null zolang geen enkele call usage teruggaf (oude rb-ai,
@@ -461,6 +478,7 @@ public class AskService(
         var rulingsResult = await rulingsTask;
         var claimsResult = await claimsTask;
         var misconceptionResult = await misconceptionsTask;
+        var deckMetaResult = await deckMetaTask;
 
         // Degradatie-markers (#152) in vaste kanaalvolgorde — de reden staat
         // in de logs, de trace toont wélke kanalen leeg bleven.
@@ -480,6 +498,7 @@ public class AskService(
         NoteFailure(cardContextResult.Failure);
         NoteFailure(claimsResult.Failure);
         NoteFailure(misconceptionResult.Failure);
+        NoteFailure(deckMetaResult.Failure);
 
         // 3. RRF-fusie (gedeelde Domain-helper, #44), met bron-bias per
         // vraagtype: toernooivragen tillen Tournament Rules-chunks op,
@@ -587,9 +606,12 @@ public class AskService(
         var (claimsBlock, claimTraceRefs, askClaims) = claimsResult.Value;
         var (misconceptionBlock, misconceptionRefs, askMisconceptions) =
             misconceptionResult.Value;
+        var (deckMetaBlock, deckMetaRefs) = deckMetaResult.Value;
         // Trace: zelfde kennislagen-veld als de claims, herkenbaar aan het
-        // "misvatting:"-prefix — bewust geen eigen kolom/migratie.
+        // "misvatting:"- resp. "deckmeta:"-prefix — bewust geen eigen
+        // kolom/migratie.
         claimTraceRefs.AddRange(misconceptionRefs);
+        claimTraceRefs.AddRange(deckMetaRefs);
 
         // Alle retrieval-kanalen (incl. citatie-hydratie) zijn nu klaar (#152).
         retrievalMs = sw.ElapsedMilliseconds - retrievalStart;
@@ -674,7 +696,8 @@ public class AskService(
 
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
         // Blok-volgorde = de kennispiramide van #51: officieel (fragmenten,
-        // rulings, kaartfeiten, banlijst) > primer > community-interpretatie >
+        // rulings, kaartfeiten, banlijst) > primer (laag 1) > community-
+        // interpretatie (laag 2) > deck-meta (laag 3, #267 — de zwakste laag) >
         // misvattingen (#125, negatieve kennis — onderaan, kleurt nooit het oordeel).
         // Brein-verrijking innen (zie waar breinTask start). Flag uit ⇒ null ⇒ leeg
         // blok ⇒ de prompt is byte-voor-byte de bestaande. Een client-abort (OCE met
@@ -684,7 +707,7 @@ public class AskService(
         var breinBlock = breinEnrichment?.PromptBlock ?? "";
 
         var prompt =
-            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{misconceptionBlock}{breinBlock}{historyBlock}\n\n{questionLabel}: {question}";
+            $"Context-fragmenten:\n{context}{rulingBlock}{cardBlock}{banBlock}{primerBlock}{claimsBlock}{deckMetaBlock}{misconceptionBlock}{breinBlock}{historyBlock}\n\n{questionLabel}: {question}";
         var system = $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}";
         var task = images is { Count: > 0 } ? "hard" : "cheap";
 
@@ -1260,6 +1283,44 @@ public class AskService(
                     .Select(s => new AskMisconceptionSource(s.Name, s.Url, s.QuoteExcerpt))])));
         }
         return (block, refs, items);
+    }
+
+    /// <summary>Deck-meta-kanaal (kennislaag 3, #267): het deck-gebruiks-
+    /// signaal van het kaartdossier (DeckPopularityQuery — aandeel recente
+    /// decks, gemiddeld aantal exemplaren, top-co-occurrence) voor de kaarten
+    /// die letterlijk in de vraag genoemd worden, als expliciet gelabeld
+    /// laag-3-blok (DeckMetaRetrieval, Domain). Bij meerdere matchende namen
+    /// wint de langste (meest specifieke) naam — "Jinx, Loose Cannon" boven
+    /// het substring-geraakte "Jinx" (zelfde motivatie als AgenticGate).
+    /// Kaarten zonder enig deck-signaal leveren geen regel; zonder regels
+    /// geen blok. Virtual als test-seam: de regressietest van #267 bewijst
+    /// hiermee dat een niet-relevante vraag dit kanaal — en dus de
+    /// deck-query's — nooit raakt.</summary>
+    protected virtual async Task<(string Block, List<string> Refs)> DeckMetaChannelAsync(
+        RbRulesDbContext ctx, string qLower, CancellationToken ct)
+    {
+        var namedCards = await CardsNamedIn(ctx, qLower)
+            .OrderByDescending(c => c.Name.Length)
+            .ThenBy(c => c.RiftboundId)
+            .Take(DeckMetaRetrieval.MaxCards)
+            .Select(c => new { c.RiftboundId, c.Name })
+            .ToListAsync(ct);
+
+        var items = new List<RetrievedDeckMeta>();
+        var refs = new List<string>();
+        foreach (var card in namedCards)
+        {
+            // CardsNamedIn filtert al op VariantOf == null, dus RiftboundId
+            // ís de canonieke groeps-id die de deck-rijen dragen.
+            var pop = await DeckPopularityQuery.ForCanonicalAsync(ctx, card.RiftboundId, ct);
+            if (pop.DeckCount == 0) continue; // geen signaal → geen regel
+            items.Add(new RetrievedDeckMeta(
+                card.Name, pop.DeckCount, pop.RecentDeckCount, pop.Percentage,
+                pop.AverageCopiesWhenPlayed, pop.ThinData,
+                [.. pop.TopCoPlayed.Select(x => new DeckMetaCoPlay(x.Name, x.DeckCount))]));
+            refs.Add($"deckmeta:card:{card.Name}");
+        }
+        return (DeckMetaRetrieval.PromptBlock(items), refs);
     }
 
     /// <summary>Full-text-kanaal (Engels — de bronnen zijn Engels; de rewrite

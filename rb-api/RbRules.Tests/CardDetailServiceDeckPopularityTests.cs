@@ -9,7 +9,7 @@ namespace RbRules.Tests;
 /// <summary>Deck-gebruikssignaal (#15 golf 1 spoor B): het aandeel van de
 /// recente Piltover Archive-decks dat een kaart speelt, met eerlijke
 /// dunne/lege staat onder de drempel en een vaste poolgrootte i.p.v. een
-/// kalendervenster (zie CardDetailService.DeckPopularityAsync).</summary>
+/// kalendervenster (zie DeckPopularityQuery.ForCanonicalAsync).</summary>
 public class CardDetailServiceDeckPopularityTests
 {
     private const string CardId = "ogn-011-298";
@@ -194,7 +194,7 @@ public class CardDetailServiceDeckPopularityTests
         var baseline = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
         // RecentDeckWindow (500) verse decks zónder de kaart...
-        var freshDecks = Enumerable.Range(0, CardDetailService.RecentDeckWindow)
+        var freshDecks = Enumerable.Range(0, DeckPopularityQuery.RecentDeckWindow)
             .Select(i => new Deck
             {
                 PaId = $"vers-{i}", SourceUrl = $"https://piltoverarchive.com/decks/view/vers-{i}",
@@ -219,7 +219,7 @@ public class CardDetailServiceDeckPopularityTests
 
         var pop = (await Service(db).DossierAsync(CardId))!.DeckPopularity;
 
-        Assert.Equal(CardDetailService.RecentDeckWindow, pop.RecentDeckCount);
+        Assert.Equal(DeckPopularityQuery.RecentDeckWindow, pop.RecentDeckCount);
         Assert.Equal(0, pop.DeckCount); // de enige drager van de kaart viel buiten de pool
     }
 
