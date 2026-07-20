@@ -1,17 +1,31 @@
 <script lang="ts">
-	import { applyAction, deserialize, enhance } from '$app/forms';
+	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
+	import { untrack } from 'svelte';
 	import RbText from '$lib/RbText.svelte';
 	import AnswerView from '$lib/AnswerView.svelte';
 	import AskHistoryPanel from '$lib/AskHistoryPanel.svelte';
 	import { citationEssence, splitSettled } from '$lib/answerFormat';
-	import { quotaMessage } from '$lib/quota';
 	import { APPROACH_OPTIONS, approachNotice, type Approach } from '$lib/approach';
+	import { askSession } from '$lib/askSession.svelte';
+	import type { StoredAnswer } from '$lib/askPersist';
+	import type { AskTurn } from '$lib/types';
 
 	let { data, form } = $props();
-	let busy = $state(false);
-	let phase = $state(0);
+
+	// Vraag, antwoord en de lopende stream leven in de sessie-store (#248),
+	// niet in deze component: bij client-side navigatie unmount de component
+	// en brak vroeger de fetch/ReadableStream af — antwoord kwijt. Deze pagina
+	// leest en rendert alleen; het haakje hieronder ververst de duurstatistiek
+	// zodra er een antwoord landt (alleen zolang je hier staat).
+	$effect(() => {
+		untrack(() => askSession.restore());
+		askSession.onAnswered = () => void invalidateAll();
+		return () => {
+			askSession.onAnswered = null;
+		};
+	});
 
 	// Aanpak-keuze (#153, alleen ingelogd): Auto laat de bestaande gate
 	// beslissen, Snel forceert de single-pass, Grondig de brein-agent —
@@ -36,9 +50,6 @@
 			? `${base}. Het dagtegoed voor Grondig is vandaag op.`
 			: `${base}.`;
 	});
-	// Terugmelding van de server (#153): de keuze werd niet gehonoreerd —
-	// bij quota-op de eerlijke "automatisch beantwoord"-melding.
-	const answerNotice = $derived(approachNotice(form?.approachReason));
 
 	// Echte duurstatistiek (mediaan/p90 van de laatste vragen) i.p.v. schatting.
 	const stats = $derived(data.stats);
@@ -54,48 +65,53 @@
 			? `Meestal ±${Math.round(stats.medianMs / 1000)}s, uitschieters tot ~${Math.round((stats.p90Ms ?? stats.medianMs) / 1000)}s — gemeten over de laatste ${stats.count} ${stats.count === 1 ? 'vraag' : 'vragen'}.${phaseText}`
 			: 'Eerste metingen lopen nog — dit kan even duren.'
 	);
-	let question = $state('');
 	// Prefill vanuit de globale zoekbalk / dashboard-hero (#214): /ask?q=…
 	// vult de vraag in (niet auto-versturen — de bezoeker houdt de controle).
 	$effect(() => {
 		const q = page.url.searchParams.get('q')?.trim();
-		if (q) question = q;
+		if (q) askSession.draft = q;
 	});
 	let correcting = $state(false);
 	let followUp = $state('');
 	// Ruling vastleggen vanuit dit gesprek (#166) — alleen ingelogd/admin.
 	let rulingOpen = $state(false);
 
-	// Historie voor de volgende doorvraag: eerdere rondes + de huidige.
-	const nextHistory = $derived(
-		JSON.stringify([
-			...((form?.history as { question: string; answer: string }[] | undefined) ?? []),
-			...(form?.question && form?.answer ? [{ question: form.question, answer: form.answer }] : [])
-		].slice(-3))
+	// Zonder JS post het formulier gewoon door en komt het antwoord als
+	// ActionData terug — dan is `form` de bron. Met JS vult de sessie-store
+	// zichzelf en wint die: alleen dát antwoord overleeft navigatie (#248).
+	const formAnswer = $derived.by<StoredAnswer | null>(() =>
+		form?.answer
+			? {
+					question: form.question ?? '',
+					history: form.history ?? [],
+					answer: form.answer,
+					citations: form.citations ?? [],
+					cards: form.cards ?? [],
+					claims: form.claims ?? null,
+					misconceptions: form.misconceptions ?? null,
+					questionType: form.questionType ?? null,
+					approachReason: form.approachReason ?? null,
+					interrupted: null
+				}
+			: null
 	);
+	const current = $derived(askSession.answer ?? formAnswer);
+	const hasAnswer = $derived(Boolean(current?.answer));
+	const live = $derived(askSession.live);
+	const busy = $derived(askSession.busy);
+	// Fouten uit de vraagbaak zelf komen uit de store; `form.error` blijft over
+	// voor feedback/ruling (en voor de vraag zonder JS).
+	const errorText = $derived(askSession.error ?? form?.error ?? null);
+	// Terugmelding van de server (#153): de keuze werd niet gehonoreerd —
+	// bij quota-op de eerlijke "automatisch beantwoord"-melding.
+	const answerNotice = $derived(approachNotice(current?.approachReason));
 
-	// Voorlezen (#31): antwoord zonder markdown/widget-markers.
-	let speaking = $state(false);
-	function toggleSpeech() {
-		if (speaking) {
-			speechSynthesis.cancel();
-			speaking = false;
-			return;
-		}
-		const plain = (form?.answer ?? '')
-			.replace(/\[\[(rule|card):[^\]]+\]\]/g, '')
-			.replace(/[#*_`>|-]/g, ' ')
-			.replace(/\[(\d+)\]/g, '')
-			.replace(/\s+/g, ' ')
-			.trim();
-		if (!plain) return;
-		const u = new SpeechSynthesisUtterance(plain);
-		u.lang = 'nl-NL';
-		u.onend = () => (speaking = false);
-		u.onerror = () => (speaking = false);
-		speechSynthesis.speak(u);
-		speaking = true;
-	}
+	// Historie voor de volgende doorvraag: eerdere rondes + de huidige.
+	const nextTurns = $derived.by<AskTurn[]>(() => {
+		if (!current?.answer) return [];
+		return [...current.history, { question: current.question, answer: current.answer }].slice(-3);
+	});
+	const nextHistory = $derived(JSON.stringify(nextTurns));
 
 	// Board-state-foto: client verkleint naar max 1600px JPEG vóór upload.
 	let photoInput = $state<HTMLInputElement | null>(null);
@@ -126,6 +142,16 @@
 		photoPreview = null;
 	}
 
+	// De foto-keuze hoort bij dít formulier, niet bij de sessie: opruimen zodra
+	// de vraag klaar is (of mislukte). Navigeer je ertussenuit, dan verdwijnt
+	// de preview met de component mee — de foto zit dan al in de request.
+	let wasBusy = false;
+	$effect(() => {
+		const now = askSession.busy;
+		if (wasBusy && !now) clearPhoto();
+		wasBusy = now;
+	});
+
 	const EXAMPLES = [
 		'Wanneer mag ik een unit moven, en wat telt niet als move?',
 		'Wat doet Deflect tegen een spell die meerdere targets kiest?',
@@ -133,18 +159,26 @@
 		'Wat gebeurt er met een Hidden unit die getarget wordt?'
 	];
 
-	// Fase-tekst tijdens het wachten; tempo geschaald op de echte mediaan.
+	// Fase-tekst tijdens het wachten; tempo geschaald op de echte mediaan. De
+	// fase volgt uit de starttijd in de store, niet uit een component-timer:
+	// kom je halverwege terug op de pagina, dan klopt de fase nog steeds.
 	const PHASES = [
 		'Vraag insturen',
 		'Relevante regelsecties zoeken (semantisch + full-text)',
 		'Antwoord formuleren met §-citaten',
 		'Bijna klaar — antwoord controleren'
 	];
+	let tick = $state(Date.now());
 	$effect(() => {
-		if (!busy) { phase = 0; return; }
-		const interval = Math.max(2000, Math.round((stats.medianMs ?? 24_000) / PHASES.length));
-		const t = setInterval(() => { if (phase < PHASES.length - 1) phase += 1; }, interval);
+		if (!busy) return;
+		tick = Date.now();
+		const t = setInterval(() => (tick = Date.now()), 1000);
 		return () => clearInterval(t);
+	});
+	const phase = $derived.by(() => {
+		if (!busy || !askSession.startedAt) return 0;
+		const step = Math.max(2000, Math.round((stats.medianMs ?? 24_000) / PHASES.length));
+		return Math.min(PHASES.length - 1, Math.floor((tick - askSession.startedAt) / step));
 	});
 
 	interface HistItem { q: string; at: number; }
@@ -159,294 +193,12 @@
 		localStorage.setItem('rb-ask-history', JSON.stringify(history));
 	}
 
-	const hasAnswer = $derived(Boolean(form?.answer));
-
-	// ── Streaming (#31) ────────────────────────────────────────────────
-	// Het antwoord komt via /ask/stream (NDJSON-proxy naar rb-api) woord
-	// voor woord binnen. `live` is de groeiende tussenstand; het slotframe
-	// wordt via applyAction het gewone `form`-resultaat, zodat voorlezen,
-	// feedback en doorvragen ongewijzigd op het eindantwoord werken.
-	interface Turn {
-		question: string;
-		answer: string;
-	}
-	interface LiveAsk {
-		question: string;
-		history: Turn[];
-		questionType: string | null;
-		citations: unknown[];
-		answer: string;
-		/** #153: terugval-reden uit het meta-frame — de melding hoort niet
-		 *  te wachten op het slotframe (agentic heeft een lange stille fase). */
-		approachReason: string | null;
-	}
-	let live = $state<LiveAsk | null>(null);
-	let liveError = $state<string | null>(null);
-	// Brak de verbinding ná response-start maar vóór het eerste frame, dan
-	// kán rb-api al aan de (betaalde) LLM-call begonnen zijn: geen stille
-	// automatische herkansing, maar een expliciete "Opnieuw proberen"-knop.
-	let retryPending = $state<{ fd: FormData; clearQuestion: boolean } | null>(null);
-	// Afronding voor screenreaders: het groeiende antwoord zelf is bewust
-	// géén live-region (elke delta zou opnieuw voorgelezen worden).
-	let announce = $state('');
-	// Markdown/widget-parsing is pas zinvol op afgeronde regels: alleen het
-	// deel t/m de laatste newline gaat door AnswerView, de staart als kale
-	// tekst. Het slotframe her-rendert daarna het volledige antwoord.
+	// Streaming (#31): het antwoord komt via /ask/stream (NDJSON-proxy naar
+	// rb-api) woord voor woord binnen. Markdown/widget-parsing is pas zinvol op
+	// afgeronde regels: alleen het deel t/m de laatste newline gaat door
+	// AnswerView, de staart als kale tekst.
 	const liveParts = $derived(live ? splitSettled(live.answer) : { settled: '', tail: '' });
 	const liveNotice = $derived(approachNotice(live?.approachReason));
-
-	const canStream = () =>
-		typeof ReadableStream === 'function' && typeof TextDecoder === 'function';
-
-	async function blobToBase64(blob: Blob): Promise<string> {
-		const bytes = new Uint8Array(await blob.arrayBuffer());
-		let bin = '';
-		for (let i = 0; i < bytes.length; i += 0x8000)
-			bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-		return btoa(bin);
-	}
-
-	/** Vangnet: de bestaande niet-streamende form action, handmatig
-	 *  aangeroepen. Automatisch alléén als de stream-fetch faalde vóór er
-	 *  response-headers waren of met een nette foutstatus antwoordde — rb-api
-	 *  is dan (vrijwel zeker) nooit aan een antwoord begonnen. Brak een
-	 *  gestárte response af, dan loopt dit uitsluitend via de expliciete
-	 *  "Opnieuw proberen"-knop (retryPending) om stille dubbele LLM-kosten
-	 *  te vermijden. */
-	async function fallbackAsk(formData: FormData, clearQuestion: boolean) {
-		try {
-			const res = await fetch('?/ask', {
-				method: 'POST',
-				headers: { 'x-sveltekit-action': 'true' },
-				body: formData
-			});
-			const result = deserialize(await res.text());
-			if (result.type === 'success') {
-				// Zelfde afronding als de oude update()-flow: formulier leeg en
-				// duurstatistiek ("Meestal ±Xs") vers.
-				if (clearQuestion) question = '';
-				await invalidateAll();
-			}
-			await applyAction(result);
-			announce = result.type === 'success' ? 'Antwoord compleet.' : 'Antwoord mislukt.';
-		} catch (e) {
-			await applyAction({
-				type: 'failure',
-				status: 500,
-				data: { error: `Vraag mislukt (${e instanceof Error ? e.message : e})` }
-			});
-		}
-	}
-
-	/** De expliciete herkansing na een afgebroken maar wél gestarte stream —
-	 *  via de niet-streamende route, zodat het antwoord in één keer landt. */
-	async function retryAsk() {
-		const pending = retryPending;
-		if (!pending || busy) return;
-		retryPending = null;
-		busy = true;
-		try {
-			await fallbackAsk(pending.fd, pending.clearQuestion);
-		} finally {
-			busy = false;
-		}
-	}
-
-	async function streamAsk(
-		q: string,
-		turns: Turn[],
-		photo: Blob | null,
-		formData: FormData,
-		clearQuestion: boolean
-	) {
-		busy = true;
-		liveError = null;
-		live = null;
-		retryPending = null;
-		announce = '';
-		// Expliciet error-frame van rb-api (fout ná de 200) — apart van een
-		// verbindingsbreuk, zodat de catch een echte fout als fout toont en
-		// alleen een breuk de retry-knop geeft (#103/#107). Of er "al iets"
-		// binnenkwam meet de afhandeling niet meer op frames (het meta-frame
-		// komt vóór de lange agentic-wachtfase, #107) maar op antwoordtekst.
-		let serverError: string | null = null;
-		try {
-			const images = photo
-				? // mediaType uit het bestand zelf: downscale() kan het originele
-					// File (PNG/WebP) teruggeven — een vast 'image/jpeg'-label laat
-					// de Anthropic-API de mismatch weigeren (review-fix).
-					[{ mediaType: photo.type || 'image/jpeg', data: await blobToBase64(photo) }]
-				: undefined;
-			let res: Response;
-			try {
-				res = await fetch('/ask/stream', {
-					method: 'POST',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({
-						question: q,
-						history: turns.length ? turns : undefined,
-						images,
-						// #153: keuze reist mee; de server honoreert alleen ingelogd.
-						approach: account ? approach : undefined
-					})
-				});
-			} catch {
-				// Geen response-headers gezien: veilige automatische terugval.
-				await fallbackAsk(formData, clearQuestion);
-				return;
-			}
-			const gate = quotaMessage(res.status);
-			if (gate) {
-				// Rate-limit/quota/sessiepoort (#42): terugvallen raakt exact
-				// dezelfde poort — gewoon melden, met dezelfde tekst als de
-				// niet-streamende route.
-				await applyAction({
-					type: 'failure',
-					status: res.status,
-					data: { error: gate, question: q, history: turns }
-				});
-				return;
-			}
-			if (!res.ok || !res.body) {
-				// Nette foutstatus vóór het streamen. De proxy markeert met
-				// retry:true dat rb-api al aan het werk kán zijn (verbinding brak
-				// i.p.v. geweigerd) — dan expliciete knop, geen stille terugval.
-				let retry = false;
-				try {
-					retry = Boolean(((await res.json()) as { retry?: boolean }).retry);
-				} catch {
-					// geen JSON-body — behandel als veilige terugval
-				}
-				if (retry) {
-					retryPending = { fd: formData, clearQuestion };
-					announce = 'Antwoord mislukt.';
-					return;
-				}
-				await fallbackAsk(formData, clearQuestion);
-				return;
-			}
-
-			live = {
-				question: q,
-				history: turns,
-				questionType: null,
-				citations: [],
-				answer: '',
-				approachReason: null
-			};
-			const reader = res.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = '';
-			let finalData: Record<string, unknown> | null = null;
-			for (;;) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				buffer += decoder.decode(value, { stream: true });
-				let nl: number;
-				while ((nl = buffer.indexOf('\n')) >= 0) {
-					const line = buffer.slice(0, nl).trim();
-					buffer = buffer.slice(nl + 1);
-					if (!line) continue;
-					let frame: {
-						type?: string;
-						text?: string;
-						questionType?: string;
-						citations?: unknown[];
-						approachReason?: string | null;
-						result?: Record<string, unknown>;
-						error?: string;
-					};
-					try {
-						frame = JSON.parse(line);
-					} catch {
-						continue; // half frame door een weggevallen verbinding
-					}
-					if (frame.type === 'meta' && live) {
-						// Citaties zijn vóór het antwoord al bekend: daarmee kunnen
-						// [[rule:…]]-widgets tijdens het streamen al renderen.
-						live = {
-							...live,
-							questionType: frame.questionType ?? null,
-							citations: frame.citations ?? [],
-							approachReason: frame.approachReason ?? null
-						};
-					} else if (frame.type === 'delta' && live && typeof frame.text === 'string') {
-						live = { ...live, answer: live.answer + frame.text };
-					} else if (frame.type === 'final') {
-						finalData = frame.result ?? null;
-					} else if (frame.type === 'error') {
-						serverError = String(frame.error ?? 'stream-fout');
-						throw new Error(serverError);
-					}
-				}
-			}
-			if (finalData) {
-				if (finalData.ok === false && live?.answer) {
-					// AI viel halverwege uit: het deelantwoord dat er al staat is
-					// meer waard dan de kale uitvalmelding in het slotframe —
-					// behouden + melden, net als bij een weggevallen verbinding.
-					liveError = 'De AI viel halverwege uit — dit antwoord is mogelijk onvolledig.';
-					announce = 'Antwoord onderbroken.';
-				} else {
-					// Slotframe = het volledige AskResult: her-render via het gewone
-					// form-pad (incl. citaties, kaarten, claims, feedback, doorvragen).
-					// Zelfde afronding als de oude update()-flow: formulier leeg en
-					// duurstatistiek vers (review-fix).
-					if (clearQuestion) question = '';
-					await invalidateAll();
-					await applyAction({
-						type: 'success',
-						status: 200,
-						data: { question: q, history: turns, hadPhoto: Boolean(photo), ...finalData }
-					});
-					live = null;
-					announce = 'Antwoord compleet.';
-				}
-			} else if (!live?.answer) {
-				// Gebroken vóór de eerste antwoordtekst: rb-api kan al aan de
-				// LLM-call begonnen zijn — expliciete knop, geen stille dubbele
-				// kosten (review-fix). Niet op sawFrame toetsen: het meta-frame
-				// komt vóór het antwoord al binnen, en bij agentic (#107) zit
-				// daar een lange stille wachtfase achter — een breuk dáár hoort
-				// dezelfde herkansing te krijgen als een breuk vóór elk frame.
-				live = null;
-				retryPending = { fd: formData, clearQuestion };
-				announce = 'Antwoord mislukt.';
-			} else {
-				// Midden in het antwoord gebroken: partial behouden (fail-paden
-				// laten het antwoord niet verdwijnen), geen dure herkansing.
-				liveError = 'De verbinding viel weg — dit antwoord is mogelijk onvolledig.';
-				announce = 'Antwoord onderbroken.';
-			}
-		} catch (e) {
-			if (live?.answer) {
-				liveError = 'De verbinding viel weg — dit antwoord is mogelijk onvolledig.';
-				announce = 'Antwoord onderbroken.';
-			} else if (serverError) {
-				// Expliciete fout van rb-api (error-frame): eerlijk als fout
-				// tonen — dit is geen verbindingskwestie die een retry oplost.
-				live = null;
-				await applyAction({
-					type: 'failure',
-					status: 500,
-					data: {
-						error: `Vraag mislukt (${e instanceof Error ? e.message : e})`,
-						question: q,
-						history: turns
-					}
-				});
-			} else {
-				// Verbindingsbreuk zonder antwoordtekst — ook mét al gezien
-				// meta-frame (agentic-wachtfase, #107): expliciete herkansing.
-				live = null;
-				retryPending = { fd: formData, clearQuestion };
-				announce = 'Antwoord mislukt.';
-			}
-		} finally {
-			busy = false;
-			clearPhoto();
-		}
-	}
 
 	// Community-consensus (#51): alleen http(s)-bronlinks renderen als link.
 	const isHttp = (url: string) => /^https?:\/\//.test(url);
@@ -477,7 +229,7 @@
 
 	<div class="examples">
 		{#each EXAMPLES as ex (ex)}
-			<button type="button" class="chip" onclick={() => (question = ex)}>{ex}</button>
+			<button type="button" class="chip" onclick={() => (askSession.draft = ex)}>{ex}</button>
 		{/each}
 	</div>
 
@@ -490,31 +242,28 @@
 		action="?/ask"
 		enctype="multipart/form-data"
 		use:enhance={async ({ formData, cancel }) => {
+			// Met JS voert de sessie-store de vraag uit (#248) — die overleeft
+			// navigatie, de form-submit niet. Zonder JS draait dit blok niet en
+			// doet de action zelf het werk.
+			cancel();
 			// Guard meteen dicht (review-fix): tijdens 'await downscale' mag een
 			// tweede klik geen tweede (betaalde) request kunnen starten.
-			if (busy) {
-				cancel();
+			if (askSession.busy) return;
+			const q = String(formData.get('question') ?? '').trim();
+			if (!q) {
+				askSession.error = 'Stel eerst een vraag.';
 				return;
 			}
-			busy = true;
-			const q = String(formData.get('question') ?? '').trim();
-			if (q) remember(q);
+			remember(q);
 			const f = photoInput?.files?.[0];
 			const photo = f ? await downscale(f) : null;
-			if (photo) formData.set('photo', photo, 'board.jpg');
-			else formData.delete('photo');
-			// Streaming (#31) waar de browser het kan; anders loopt de
-			// bestaande niet-streamende action gewoon door.
-			if (q && canStream()) {
-				cancel();
-				void streamAsk(q, [], photo, formData, true);
-				return;
-			}
-			return async ({ update }) => {
-				busy = false;
-				clearPhoto();
-				await update();
-			};
+			askSession.ask({
+				question: q,
+				turns: [],
+				photo,
+				approach: account ? approach : undefined,
+				clearQuestion: true
+			});
 		}}
 		class="panel form"
 	>
@@ -522,7 +271,7 @@
 			name="question"
 			rows="3"
 			placeholder="Beschrijf de situatie of stel je regelvraag…"
-			bind:value={question}
+			bind:value={askSession.draft}
 		></textarea>
 		{#if account}
 			<!-- Aanpak-keuze (#153, alleen ingelogd): compacte segment-keuze;
@@ -581,18 +330,21 @@
 				<p class="phase">{PHASES[phase]}</p>
 				<p class="meta">{waitText}</p>
 				{#if liveNotice}<p class="approach-notice">{liveNotice}</p>{/if}
+				<!-- De vraag loopt door als je wegnavigeert (#248) — dus moet je
+				     hem ook expliciet kunnen stoppen. -->
+				<button type="button" class="fb stop" onclick={() => askSession.stop()}>Stoppen</button>
 			</div>
 		</div>
 	{/if}
 
-	{#if form?.error && !live}<p class="warn">{form.error}</p>{/if}
+	{#if errorText && !live}<p class="warn">{errorText}</p>{/if}
 
 	<!-- Screenreader-status (review-fix): alleen de afronding wordt
 	     aangekondigd; het groeiende antwoord zelf is géén live-region, anders
 	     wordt bij elke delta het hele antwoord opnieuw voorgelezen. -->
-	<p class="visually-hidden" role="status">{announce}</p>
+	<p class="visually-hidden" role="status">{askSession.announce}</p>
 
-	{#if retryPending && !busy}
+	{#if askSession.retry && !busy}
 		<div class="panel waiting">
 			<div>
 				<p class="phase">De verbinding brak voordat het antwoord binnenkwam.</p>
@@ -600,7 +352,7 @@
 					Mogelijk was er al een antwoord onderweg; daarom proberen we niet automatisch
 					opnieuw.
 				</p>
-				<button type="button" class="retry" onclick={retryAsk}>Opnieuw proberen</button>
+				<button type="button" class="retry" onclick={() => askSession.retryAsk()}>Opnieuw proberen</button>
 			</div>
 		</div>
 	{/if}
@@ -609,34 +361,42 @@
 		<!-- Streaming (#31): het antwoord groeit woord voor woord. Afgeronde
 		     regels gaan door de gewone AnswerView (widgets werken al via de
 		     meta-citaties); de staart is kale tekst met een cursor. -->
-		<article class="panel answer-panel" aria-busy={!liveError}>
+		<article class="panel answer-panel" aria-busy="true">
 			<p class="asked meta">
 				{#if live.questionType}<span class="qtype">{TYPE_LABELS[live.questionType] ?? live.questionType}</span>{/if}
 				Vraag: {live.question}
+				<button type="button" class="fb speech" onclick={() => askSession.stop()}>Stoppen</button>
 			</p>
 			{#if liveNotice}<p class="approach-notice">{liveNotice}</p>{/if}
 			<AnswerView answer={liveParts.settled} citations={live.citations} cards={[]} />
-			<p class="md-tail">{liveParts.tail}{#if !liveError}<span class="cursor"></span>{/if}</p>
-			{#if liveError}<p class="warn">{liveError}</p>{/if}
+			<p class="md-tail">{liveParts.tail}<span class="cursor"></span></p>
 		</article>
 	{/if}
 
-	{#if hasAnswer && !busy && !live}
+	{#if current && !busy && !live}
 		<article class="panel answer-panel">
-			{#if form?.question}
+			{#if current.question}
 				<p class="asked meta">
-					{#if form?.questionType}<span class="qtype">{TYPE_LABELS[form.questionType] ?? form.questionType}</span>{/if}
-					Vraag: {form.question}
-					<button type="button" class="fb speech" onclick={toggleSpeech}>
-						{speaking ? 'Stop voorlezen' : 'Lees voor'}
+					{#if current.questionType}<span class="qtype">{TYPE_LABELS[current.questionType] ?? current.questionType}</span>{/if}
+					Vraag: {current.question}
+					<button type="button" class="fb speech" onclick={() => askSession.toggleSpeech()}>
+						{askSession.speaking ? 'Stop voorlezen' : 'Lees voor'}
 					</button>
+					<!-- Het antwoord blijft staan tot je een nieuwe vraag stelt (#248),
+					     dus hoort er een manier te zijn om het weg te halen. -->
+					<button type="button" class="fb speech" onclick={() => askSession.clear()}>Wissen</button>
 				</p>
 			{/if}
 			{#if answerNotice}<p class="approach-notice">{answerNotice}</p>{/if}
-			<AnswerView answer={form?.answer ?? ''} citations={form?.citations ?? []} cards={form?.cards ?? []} />
-			{#if form?.citations?.length}
+			{#if current.interrupted}
+				<!-- Onvolledig antwoord (#248): verbinding weg, zelf gestopt, of door
+				     een reload afgebroken — eerlijk gelabeld, niet stil als compleet. -->
+				<p class="warn">{current.interrupted}</p>
+			{/if}
+			<AnswerView answer={current.answer} citations={current.citations} cards={current.cards} />
+			{#if current.citations.length}
 				<h2>Geciteerde regelsecties</h2>
-				{#each form.citations as c (c.n)}
+				{#each current.citations as c (c.n)}
 					{@const essence = citationEssence(c.text)}
 					{@const dateLabel = citationDateLabel(c)}
 					<details class="cite">
@@ -670,12 +430,12 @@
 				{/each}
 			{/if}
 
-			{#if form?.claims?.length}
+			{#if current.claims?.length}
 				<!-- Community-consensus (#51): interpretatielaag, visueel apart
 				     van de officiële citaties — met trust-label en bronnen. -->
 				<h2 class="community-h">Community-consensus</h2>
 				<p class="meta small community-sub">Geen officiële bron — zo leest de community het. De officiële regels hierboven winnen altijd.</p>
-				{#each form.claims as cl (cl.topicRef + cl.statement)}
+				{#each current.claims as cl (cl.topicRef + cl.statement)}
 					<details class="cite claim">
 						<summary>
 							<span class="community-badge">community</span>
@@ -702,13 +462,13 @@
 				{/each}
 			{/if}
 
-			{#if form?.misconceptions?.length}
+			{#if current.misconceptions?.length}
 				<!-- Misvattingen (#125): verworpen community-lezingen mét officiële
 				     weerlegging — naast de community-consensus, herkenbaar als
 				     negatieve kennis: zo zit het dus níet. -->
 				<h2 class="misconception-h">Veelgemaakte misvatting</h2>
 				<p class="meta small misconception-sub">Community-lezing die door de officiële regels is weerlegd — zo zit het dus niet.</p>
-				{#each form.misconceptions as m (m.topicRef + m.statement)}
+				{#each current.misconceptions as m (m.topicRef + m.statement)}
 					<details class="cite misconception">
 						<summary>
 							<span class="misconception-badge">misvatting</span>
@@ -742,9 +502,9 @@
 				{/each}
 			{/if}
 
-			{#if form?.cards?.length}
+			{#if current.cards.length}
 				<h2>Betrokken kaarten</h2>
-				{#each form.cards as k (k.riftboundId)}
+				{#each current.cards as k (k.riftboundId)}
 					<details class="cite card-detail">
 						<summary>
 							<strong>{k.name}</strong>
@@ -770,127 +530,124 @@
 				{/each}
 			{/if}
 
-			<!-- Self-learning: feedback wordt beoordeeld en stuurt daarna antwoorden -->
-			<div class="feedback">
-				{#if form?.feedbackSent}
-					<p class="meta">
-						{form.feedbackSent === 'up'
-							? 'Bedankt voor de bevestiging.'
-							: 'Bedankt — je correctie staat in de reviewqueue en stuurt na verificatie toekomstige antwoorden.'}
-					</p>
-				{:else}
-					<span class="meta">Was dit antwoord juist?</span>
-					<form method="POST" action="?/feedback" use:enhance class="fb-inline">
-						<input type="hidden" name="question" value={form?.question ?? ''} />
-						<input type="hidden" name="answer" value={form?.answer ?? ''} />
-						<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
-						<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
-						<input type="hidden" name="claims" value={JSON.stringify(form?.claims ?? [])} />
-						<input type="hidden" name="misconceptions" value={JSON.stringify(form?.misconceptions ?? [])} />
-						<input type="hidden" name="verdict" value="up" />
-						<button class="fb">Ja</button>
-					</form>
-					<button class="fb" type="button" onclick={() => (correcting = !correcting)}>Nee, corrigeer</button>
-				{/if}
-			</div>
-			{#if correcting && !form?.feedbackSent}
-				<form method="POST" action="?/feedback" use:enhance={() => async ({ update }) => { correcting = false; await update(); }} class="correct-form">
-					<input type="hidden" name="question" value={form?.question ?? ''} />
-					<input type="hidden" name="answer" value={form?.answer ?? ''} />
-					<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
-					<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
-					<input type="hidden" name="claims" value={JSON.stringify(form?.claims ?? [])} />
-						<input type="hidden" name="misconceptions" value={JSON.stringify(form?.misconceptions ?? [])} />
-					<input type="hidden" name="verdict" value="down" />
-					<textarea name="text" rows="3" placeholder="Wat is het juiste antwoord? Verwijs waar mogelijk naar een §-sectie."></textarea>
-					<button type="submit">Verstuur correctie</button>
-				</form>
-			{/if}
-
-			{#if data.isAdmin || data.loggedIn}
-				<!-- Ruling vastleggen vanuit dit gesprek (#166): hergebruikt de
-				     Correction-infrastructuur. Beheerder ⇒ direct geverifieerd;
-				     ingelogde gebruiker ⇒ voorstel in de reviewqueue. Anoniem ziet
-				     deze actie niet — rb-api wijst het bovendien af. -->
-				<div class="ruling-cta">
-					{#if form?.rulingSaved}
+			{#if !current.interrupted}
+				<!-- Self-learning: feedback wordt beoordeeld en stuurt daarna antwoorden.
+				     Bij een onderbroken antwoord (#248) blijven feedback en "vastleggen
+				     als ruling" weg: een half antwoord beoordelen zegt niets. -->
+				<div class="feedback">
+					{#if form?.feedbackSent}
 						<p class="meta">
-							{form.rulingVerified
-								? 'Vastgelegd als geverifieerde ruling.'
-								: 'Ter beoordeling ingediend — telt mee na goedkeuring door de beheerder.'}
+							{form.feedbackSent === 'up'
+								? 'Bedankt voor de bevestiging.'
+								: 'Bedankt — je correctie staat in de reviewqueue en stuurt na verificatie toekomstige antwoorden.'}
 						</p>
 					{:else}
-						<button type="button" class="fb" onclick={() => (rulingOpen = !rulingOpen)}>
-							Vastleggen als ruling
-						</button>
+						<span class="meta">Was dit antwoord juist?</span>
+						<form method="POST" action="?/feedback" use:enhance class="fb-inline">
+							<input type="hidden" name="question" value={current.question ?? ''} />
+							<input type="hidden" name="answer" value={current.answer} />
+							<input type="hidden" name="citations" value={JSON.stringify(current.citations)} />
+							<input type="hidden" name="cards" value={JSON.stringify(current.cards)} />
+							<input type="hidden" name="claims" value={JSON.stringify(current.claims ?? [])} />
+							<input type="hidden" name="misconceptions" value={JSON.stringify(current.misconceptions ?? [])} />
+							<input type="hidden" name="verdict" value="up" />
+							<button class="fb">Ja</button>
+						</form>
+						<button class="fb" type="button" onclick={() => (correcting = !correcting)}>Nee, corrigeer</button>
 					{/if}
 				</div>
-				{#if rulingOpen && !form?.rulingSaved}
-					<form
-						method="POST"
-						action="?/ruling"
-						use:enhance={() => async ({ update }) => { rulingOpen = false; await update(); }}
-						class="correct-form ruling-form"
-					>
-						<input type="hidden" name="question" value={form?.question ?? ''} />
-						<input type="hidden" name="answer" value={form?.answer ?? ''} />
-						<input type="hidden" name="citations" value={JSON.stringify(form?.citations ?? [])} />
-						<input type="hidden" name="cards" value={JSON.stringify(form?.cards ?? [])} />
-						<input type="hidden" name="claims" value={JSON.stringify(form?.claims ?? [])} />
-						<input
-							type="hidden"
-							name="misconceptions"
-							value={JSON.stringify(form?.misconceptions ?? [])}
-						/>
-						<label for="ruling-statement">Uitspraak</label>
-						<textarea id="ruling-statement" name="statement" rows="3">{form?.answer ?? ''}</textarea>
-						<label for="ruling-scope">Onderwerp</label>
-						<select id="ruling-scope" name="scope">
-							<option value="answer">Algemeen</option>
-							<option value="card">Kaart</option>
-							<option value="rule_section">Regelsectie</option>
-						</select>
-						<input type="text" name="topicRef" placeholder="Kaartnaam of §-code (bij kaart/regelsectie)" />
-						<input type="text" name="sourceRef" required placeholder="Waar besloten? (URL of citaat, verplicht)" />
-						<button type="submit">Vastleggen</button>
+				{#if correcting && !form?.feedbackSent}
+					<form method="POST" action="?/feedback" use:enhance={() => async ({ update }) => { correcting = false; await update(); }} class="correct-form">
+						<input type="hidden" name="question" value={current.question ?? ''} />
+						<input type="hidden" name="answer" value={current.answer} />
+						<input type="hidden" name="citations" value={JSON.stringify(current.citations)} />
+						<input type="hidden" name="cards" value={JSON.stringify(current.cards)} />
+						<input type="hidden" name="claims" value={JSON.stringify(current.claims ?? [])} />
+							<input type="hidden" name="misconceptions" value={JSON.stringify(current.misconceptions ?? [])} />
+						<input type="hidden" name="verdict" value="down" />
+						<textarea name="text" rows="3" placeholder="Wat is het juiste antwoord? Verwijs waar mogelijk naar een §-sectie."></textarea>
+						<button type="submit">Verstuur correctie</button>
 					</form>
 				{/if}
-				{#if form?.rulingError}<p class="warn">{form.rulingError}</p>{/if}
+
+				{#if data.isAdmin || data.loggedIn}
+					<!-- Ruling vastleggen vanuit dit gesprek (#166): hergebruikt de
+					     Correction-infrastructuur. Beheerder ⇒ direct geverifieerd;
+					     ingelogde gebruiker ⇒ voorstel in de reviewqueue. Anoniem ziet
+					     deze actie niet — rb-api wijst het bovendien af. -->
+					<div class="ruling-cta">
+						{#if form?.rulingSaved}
+							<p class="meta">
+								{form.rulingVerified
+									? 'Vastgelegd als geverifieerde ruling.'
+									: 'Ter beoordeling ingediend — telt mee na goedkeuring door de beheerder.'}
+							</p>
+						{:else}
+							<button type="button" class="fb" onclick={() => (rulingOpen = !rulingOpen)}>
+								Vastleggen als ruling
+							</button>
+						{/if}
+					</div>
+					{#if rulingOpen && !form?.rulingSaved}
+						<form
+							method="POST"
+							action="?/ruling"
+							use:enhance={() => async ({ update }) => { rulingOpen = false; await update(); }}
+							class="correct-form ruling-form"
+						>
+							<input type="hidden" name="question" value={current.question ?? ''} />
+							<input type="hidden" name="answer" value={current.answer} />
+							<input type="hidden" name="citations" value={JSON.stringify(current.citations)} />
+							<input type="hidden" name="cards" value={JSON.stringify(current.cards)} />
+							<input type="hidden" name="claims" value={JSON.stringify(current.claims ?? [])} />
+							<input
+								type="hidden"
+								name="misconceptions"
+								value={JSON.stringify(current.misconceptions ?? [])}
+							/>
+							<label for="ruling-statement">Uitspraak</label>
+							<textarea id="ruling-statement" name="statement" rows="3">{current.answer}</textarea>
+							<label for="ruling-scope">Onderwerp</label>
+							<select id="ruling-scope" name="scope">
+								<option value="answer">Algemeen</option>
+								<option value="card">Kaart</option>
+								<option value="rule_section">Regelsectie</option>
+							</select>
+							<input type="text" name="topicRef" placeholder="Kaartnaam of §-code (bij kaart/regelsectie)" />
+							<input type="text" name="sourceRef" required placeholder="Waar besloten? (URL of citaat, verplicht)" />
+							<button type="submit">Vastleggen</button>
+						</form>
+					{/if}
+					{#if form?.rulingError}<p class="warn">{form.rulingError}</p>{/if}
+				{/if}
 			{/if}
 		</article>
 	{/if}
 
-	{#if hasAnswer && !busy && !live}
-		<!-- Doorvragen (#41): bouwt voort op het gesprek, met alle context -->
+	{#if current && !current.interrupted && !busy && !live}
+		<!-- Doorvragen (#41): bouwt voort op het gesprek, met alle context. Op een
+		     onderbroken (onvolledig) antwoord bouw je niet verder — dat zou een
+		     half antwoord als context meesturen. -->
 		<form
 			method="POST"
 			action="?/ask"
 			use:enhance={({ formData, cancel }) => {
-				if (busy) {
-					cancel();
-					return;
-				}
-				busy = true;
+				// Doorvragen loopt via dezelfde sessie-store (#248); de historie
+				// komt uit het huidige antwoord in plaats van uit het hidden veld
+				// (dat blijft staan voor de JS-loze route).
+				cancel();
+				if (askSession.busy) return;
 				const q = String(formData.get('question') ?? '').trim();
-				if (q) remember(q);
-				if (q && canStream()) {
-					// Doorvragen streamt ook (#31); de historie reist mee.
-					let turns: Turn[] = [];
-					try {
-						turns = JSON.parse(String(formData.get('history') ?? '[]'));
-					} catch {
-						turns = [];
-					}
-					cancel();
-					followUp = '';
-					void streamAsk(q, turns.slice(-3), null, formData, false);
-					return;
-				}
-				return async ({ update }) => {
-					busy = false;
-					followUp = '';
-					await update();
-				};
+				if (!q) return;
+				remember(q);
+				followUp = '';
+				askSession.ask({
+					question: q,
+					turns: nextTurns,
+					photo: null,
+					approach: account ? approach : undefined,
+					clearQuestion: false
+				});
 			}}
 			class="panel followup"
 		>
@@ -910,7 +667,7 @@
 		<h2 class="hist-title">Eerdere vragen</h2>
 		<ul class="history">
 			{#each history as h (h.at)}
-				<li><button type="button" class="chip" onclick={() => (question = h.q)}>{h.q}</button></li>
+				<li><button type="button" class="chip" onclick={() => (askSession.draft = h.q)}>{h.q}</button></li>
 			{/each}
 		</ul>
 	{/if}
@@ -981,6 +738,9 @@
 		position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
 		overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 	}
+	/* Stoppen tijdens het wachten (#248): de vraag loopt door bij navigatie,
+	   dus is afbreken een expliciete actie. */
+	.stop { margin-top: 8px; }
 	.retry {
 		margin-top: 8px; background: var(--accent); color: var(--accent-ink);
 		border: 0; border-radius: 8px; padding: 7px 14px; font-weight: 600;

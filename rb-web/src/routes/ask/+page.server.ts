@@ -5,6 +5,13 @@ import { adminApi, authed } from '$lib/server/admin';
 import { firePrewarm } from '$lib/prewarm';
 import { quotaMessage } from '$lib/quota';
 import { USER_COOKIE, userHeaders } from '$lib/server/user';
+import type {
+	AskCard,
+	AskCitation,
+	AskClaim,
+	AskMisconception,
+	AskResult
+} from '$lib/types';
 
 // Quota-fouten van rb-api (#42) vertaald naar een bruikbare melding — de
 // api()-helper geeft alleen de status door. De teksten staan in $lib/quota,
@@ -86,83 +93,6 @@ export const load: PageServerLoad = async ({ cookies, getClientAddress }) => {
 	};
 };
 
-interface Citation {
-	n: number;
-	sourceName: string;
-	url: string;
-	section: string | null;
-	trust: number;
-	text: string | null;
-	pdfUrl: string | null;
-	page: number | null;
-	parents: { code: string; text: string }[] | null;
-	/** Temporele precedentie (#168): "laatst bijgewerkt" (een echte
-	 *  content-wijziging) of anders "geldig sinds" (publicatiedatum) —
-	 *  beide null als de bron geen van beide draagt. */
-	publishedAt: string | null;
-	updatedAt: string | null;
-}
-export interface AskCard {
-	riftboundId: string;
-	name: string;
-	type: string | null;
-	supertype: string | null;
-	domains: string[];
-	energy: number | null;
-	might: number | null;
-	textPlain: string | null;
-	mechanics: string[] | null;
-	imageUrl: string | null;
-	banned: boolean;
-	/** Set-legaliteit (#68): label voor kaarten uit een nog niet verschenen set. */
-	setName: string | null;
-	legalFrom: string | null;
-	legality: 'legal' | 'upcoming' | 'announced';
-}
-/** Community-consensus (#51): geaccepteerde claims die als interpretatielaag
- *  meegingen — apart blok onder het antwoord, met trust-label en bronnen. */
-export interface AskClaimSource {
-	sourceName: string;
-	url: string;
-}
-export interface AskClaim {
-	topicType: string;
-	topicRef: string;
-	statement: string;
-	corroboration: number;
-	trustScore: number;
-	officialStatus: string;
-	sources: AskClaimSource[];
-}
-/** Misvattingen-kanaal (#125): verworpen community-claims mét officiële
- *  weerlegging — het misvatting-blok toont beide bewijzen (community-citaat
- *  met bron-link én de weerlegging, met §-link waar herleidbaar). */
-export interface AskMisconceptionSource {
-	sourceName: string;
-	url: string;
-	quote: string | null;
-}
-export interface AskMisconception {
-	topicType: string;
-	topicRef: string;
-	statement: string;
-	rebuttal: string;
-	rebuttalSection: string | null;
-	sources: AskMisconceptionSource[];
-}
-interface AskResult {
-	answer: string;
-	citations: Citation[];
-	cards: AskCard[];
-	questionType: string;
-	claims: AskClaim[] | null;
-	misconceptions: AskMisconception[] | null;
-	/** Aanpak-terugmelding (#153): welke aanpak het werd en waarom die
-	 *  eventueel afwijkt van de keuze (machine-sleutel, zie $lib/approach). */
-	approach: string | null;
-	approachReason: string | null;
-}
-
 export const actions: Actions = {
 	ask: async ({ request, getClientAddress, cookies }) => {
 		const form = await request.formData();
@@ -224,7 +154,7 @@ export const actions: Actions = {
 		const verdict = String(form.get('verdict') ?? '');
 		const text = String(form.get('text') ?? '').trim() || undefined;
 		const answer = String(form.get('answer') ?? '');
-		let citations: Citation[] = [];
+		let citations: AskCitation[] = [];
 		let cards: AskCard[] = [];
 		let claims: AskClaim[] = [];
 		let misconceptions: AskMisconception[] = [];
@@ -281,7 +211,7 @@ export const actions: Actions = {
 		const sourceRef = String(form.get('sourceRef') ?? '').trim();
 		const question = String(form.get('question') ?? '').trim() || undefined;
 		const answer = String(form.get('answer') ?? '');
-		let citations: Citation[] = [];
+		let citations: AskCitation[] = [];
 		let cards: AskCard[] = [];
 		let claims: AskClaim[] = [];
 		let misconceptions: AskMisconception[] = [];

@@ -48,3 +48,95 @@ export interface ChangeCardData {
 	 *  rb-api-follow-up ná goedkeuring van de richting. */
 	domain?: string | null;
 }
+
+// ── /ask-antwoord (#31, gedeeld sinds #248) ──────────────────────────────
+// De vorm die de niet-streamende form action én het streamingpad opleveren.
+// Sinds #248 leest ook de sessie-store ($lib/askSession.svelte.ts) deze
+// types, dus wonen ze hier in plaats van bij de load van /ask.
+
+export interface AskCitation {
+	n: number;
+	sourceName: string;
+	url: string;
+	section: string | null;
+	trust: number;
+	text: string | null;
+	pdfUrl: string | null;
+	page: number | null;
+	parents: { code: string; text: string }[] | null;
+	/** Temporele precedentie (#168): "laatst bijgewerkt" (een echte
+	 *  content-wijziging) of anders "geldig sinds" (publicatiedatum) —
+	 *  beide null als de bron geen van beide draagt. */
+	publishedAt: string | null;
+	updatedAt: string | null;
+}
+
+export interface AskCard {
+	riftboundId: string;
+	name: string;
+	type: string | null;
+	supertype: string | null;
+	domains: string[];
+	energy: number | null;
+	might: number | null;
+	textPlain: string | null;
+	mechanics: string[] | null;
+	imageUrl: string | null;
+	banned: boolean;
+	/** Set-legaliteit (#68): label voor kaarten uit een nog niet verschenen set. */
+	setName: string | null;
+	legalFrom: string | null;
+	legality: 'legal' | 'upcoming' | 'announced';
+}
+
+/** Community-consensus (#51): geaccepteerde claims die als interpretatielaag
+ *  meegingen — apart blok onder het antwoord, met trust-label en bronnen. */
+export interface AskClaimSource {
+	sourceName: string;
+	url: string;
+}
+export interface AskClaim {
+	topicType: string;
+	topicRef: string;
+	statement: string;
+	corroboration: number;
+	trustScore: number;
+	officialStatus: string;
+	sources: AskClaimSource[];
+}
+
+/** Misvattingen-kanaal (#125): verworpen community-claims mét officiële
+ *  weerlegging — het misvatting-blok toont beide bewijzen (community-citaat
+ *  met bron-link én de weerlegging, met §-link waar herleidbaar). */
+export interface AskMisconceptionSource {
+	sourceName: string;
+	url: string;
+	quote: string | null;
+}
+export interface AskMisconception {
+	topicType: string;
+	topicRef: string;
+	statement: string;
+	rebuttal: string;
+	rebuttalSection: string | null;
+	sources: AskMisconceptionSource[];
+}
+
+export interface AskResult {
+	answer: string;
+	citations: AskCitation[];
+	cards: AskCard[];
+	questionType: string;
+	claims: AskClaim[] | null;
+	misconceptions: AskMisconception[] | null;
+	/** Aanpak-terugmelding (#153): welke aanpak het werd en waarom die
+	 *  eventueel afwijkt van de keuze (machine-sleutel, zie $lib/approach). */
+	approach: string | null;
+	approachReason: string | null;
+}
+
+/** Doorvragen (#41): één eerdere ronde in het gesprek. */
+export interface AskTurn {
+	question: string;
+	answer: string;
+}

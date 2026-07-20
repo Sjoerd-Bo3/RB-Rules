@@ -569,6 +569,23 @@ de globale duur-vangrail).
   (NDJSON-proxy) met vangnet naar de niet-streamende route; een
   voorlees-knop leest het antwoord voor (speechSynthesis).
   *Routes* `/ask`, `/ask/stream` · *endpoints* `/api/ask`, `/api/ask/stream`.
+- **Navigatiebestendige vraagsessie** (#248) — vraag, antwoord en de lopende
+  stream leven in een sessie-store buiten de pagina-component
+  (`$lib/askSession.svelte.ts`), niet in component-state. Navigeer je weg van
+  `/ask` en kom je terug, dan staat het antwoord er nog; een lopende search
+  loopt gewoon door en is bij terugkomst compleet of nog streamend. Het
+  huidige antwoord + de vraag worden ook in `localStorage` bewaard (naast de
+  bestaande vragenlijst, eigen sleutel, 12 uur houdbaar), zodat een page
+  reload het terugbrengt. Een antwoord dat níet afgemaakt is — verbinding
+  weg, zelf gestopt, of door de reload afgebroken — komt terug als
+  **onderbroken**: het deelantwoord blijft staan met een expliciete melding,
+  en feedback, "vastleggen als ruling" en doorvragen blijven daarbij weg (op
+  een half antwoord bouw je niet verder). Omdat de vraag doorloopt zonder dat
+  je erbij staat, kan hij expliciet **gestopt** worden (AbortController) en
+  kan een blijvend antwoord **gewist** worden. Anoniem net zo goed als
+  ingelogd; cross-device-sync via het account is bewust géén onderdeel
+  hiervan. Zonder JavaScript blijft de gewone form action het antwoord
+  server-side renderen.
 - **Query-rewrite** — een goedkope voor-call normaliseert de zoekzin (typo's,
   synoniemen, NL→EN speltermen) vóór retrieval (#66).
 - **Doorvragen met context** — follow-up-vragen behouden de volledige context
