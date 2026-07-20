@@ -41,7 +41,7 @@ public static class InteractionEvidence
 /// Belangrijk: die kennis is niet waardeloos — ze is de ruggengraat van de
 /// graph-verkenner. Maar ze bestaat al gratis en deterministisch:
 /// <c>GraphSyncService</c> projecteert <c>Card.Mechanics[]</c> als kaart→mechanic-
-/// edges (HAS_KEYWORD), en de keywords staan letterlijk gebracket in de kaarttekst.
+/// edges (HAS_MECHANIC), en de keywords staan letterlijk gebracket in de kaarttekst.
 /// De LLM-mining leidde hetzelfde feit nóg een keer af, betaalde daar tokens voor,
 /// en verdrong de gekwalificeerde interacties waar de tabel voor bedoeld is.
 ///

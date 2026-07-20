@@ -12,8 +12,16 @@ public enum AiCallOutcome
     Ok,
 
     /// <summary>HTTP 429: rate-limit op het abonnement. Plausibel bij lange runs en
-    /// het enige geval waar wachten-en-opnieuw-proberen zin heeft.</summary>
+    /// een van de twee gevallen waar wachten-en-opnieuw-proberen zin heeft.</summary>
     RateLimited,
+
+    /// <summary>HTTP 503: rb-ai even vol of aan het opstarten. Deelt het backoff-pad
+    /// met <see cref="RateLimited"/> — herstel-gedrag identiek — maar is een EIGEN
+    /// uitkomst (#251-review): een nachtrun met 40 sidecar-503's meldde anders "429
+    /// rate-limit×40", waaruit de beheerder concludeert dat het abonnement throttlet
+    /// en de doorvoer verlaagt, terwijl de container herstartte. Precies de samenval
+    /// die #251 wilde opheffen.</summary>
+    Overloaded,
 
     /// <summary>De aanroep liep in de client-timeout (geen annulering door de
     /// aanroeper).</summary>
@@ -45,6 +53,12 @@ public sealed class AiOutcomeTally
 {
     private readonly Dictionary<AiCallOutcome, int> _counts = [];
 
+    /// <summary>Verdient deze uitkomst een backoff-herhaling? Rate-limit én
+    /// overbelasting delen dat pad (een piek mag geen uitval worden); de rest faalt bij
+    /// een directe herhaling vrijwel zeker opnieuw.</summary>
+    public static bool IsRetryable(AiCallOutcome outcome) =>
+        outcome is AiCallOutcome.RateLimited or AiCallOutcome.Overloaded;
+
     public void Add(AiCallOutcome outcome) =>
         _counts[outcome] = _counts.GetValueOrDefault(outcome) + 1;
 
@@ -69,6 +83,7 @@ public sealed class AiOutcomeTally
     private static string Label(AiCallOutcome outcome) => outcome switch
     {
         AiCallOutcome.RateLimited => "429 rate-limit",
+        AiCallOutcome.Overloaded => "503 overbelast",
         AiCallOutcome.Timeout => "timeout",
         AiCallOutcome.ServerError => "5xx",
         AiCallOutcome.ClientError => "4xx",

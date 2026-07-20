@@ -183,6 +183,41 @@ public class RbAiOutcomeTests
         Assert.Equal("429 rate-limit×12, timeout×2, onleesbaar antwoord×1", tally.Summary);
     }
 
+    // ── #251-review: 503 is overbelasting, geen rate-limit ──────────────────────
+    // 503 werd bewust op het backoff-pad gezet, maar deelde dáármee ook de MELDING:
+    // een nachtrun waarin de sidecar 40× herstartte rapporteerde "429 rate-limit×40",
+    // waaruit de beheerder concludeert dat het abonnement throttlet en de doorvoer
+    // verlaagt. Precies de samenval die #251 wilde opheffen.
+    [Fact]
+    public async Task Extractie_503_IsOverbelasting_NietAlsRateLimitGemeld()
+    {
+        var calls = 0;
+        var ai = Ai(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        });
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Overloaded, r.Outcome);
+        Assert.Equal(503, r.StatusCode);
+        // Het herstelgedrag blijft ongewijzigd: 503 deelt het backoff-pad met 429.
+        Assert.Equal(3, calls);
+    }
+
+    [Fact]
+    public void Tally_ScheidtOverbelastingVanRateLimit()
+    {
+        var tally = new AiOutcomeTally();
+        tally.Add(AiCallOutcome.Overloaded);
+        tally.Add(AiCallOutcome.Overloaded);
+        tally.Add(AiCallOutcome.RateLimited);
+
+        Assert.Equal(3, tally.Failures);
+        Assert.Equal("503 overbelast×2, 429 rate-limit×1", tally.Summary);
+    }
+
     [Fact]
     public void Tally_ZonderUitval_HeeftEenLegeSamenvatting()
     {

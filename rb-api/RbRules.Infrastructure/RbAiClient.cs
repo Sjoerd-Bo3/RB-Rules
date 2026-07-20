@@ -193,7 +193,7 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
                 var outcome = Classify(res.StatusCode);
                 // Alleen rate-limit/overbelasting is het wachten waard; de rest faalt
                 // bij een directe herhaling vrijwel zeker opnieuw.
-                if (outcome == AiCallOutcome.RateLimited && attempt < MaxAttempts)
+                if (AiOutcomeTally.IsRetryable(outcome) && attempt < MaxAttempts)
                 {
                     var wait = RetryAfter(res) ?? Backoff(attempt);
                     logger.LogWarning(
@@ -243,8 +243,10 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         System.Net.HttpStatusCode.RequestTimeout or System.Net.HttpStatusCode.GatewayTimeout =>
             AiCallOutcome.Timeout,
         // 503 hoort bij 5xx maar is qua herstel een rate-limit-achtig signaal
-        // (rb-ai even vol) — zelfde backoff-pad, zodat een piek geen uitval wordt.
-        System.Net.HttpStatusCode.ServiceUnavailable => AiCallOutcome.RateLimited,
+        // (rb-ai even vol of aan het opstarten) — zelfde backoff-pad, zodat een piek
+        // geen uitval wordt, maar een EIGEN uitkomst zodat het run-detail "503
+        // overbelast" meldt en niet "429 rate-limit" (#251-review).
+        System.Net.HttpStatusCode.ServiceUnavailable => AiCallOutcome.Overloaded,
         >= System.Net.HttpStatusCode.InternalServerError => AiCallOutcome.ServerError,
         _ => AiCallOutcome.ClientError,
     };

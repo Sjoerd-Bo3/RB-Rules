@@ -47,7 +47,7 @@ public enum InteractionGateOutcome
 /// (#249)? Een self-loop is per definitie geen interactie.</param>
 /// <param name="IsCardOwnKeywordPair">Is dit een kaart met haar EIGEN keyword
 /// (#249)? Dat feit komt al deterministisch uit <c>Card.Mechanics[]</c> via de
-/// graph-projectie (HAS_KEYWORD) en hoort geen tweede, LLM-afgeleid bestaan als
+/// graph-projectie (HAS_MECHANIC) en hoort geen tweede, LLM-afgeleid bestaan als
 /// <see cref="Interaction"/> te krijgen.</param>
 public sealed record InteractionGateSignals(
     bool SchemaValid,
@@ -118,7 +118,7 @@ public static class InteractionPromotionGate
         //     andere weging komen, want ze zeggen dat er structureel niets te
         //     promoveren VALT:
         //     - een self-loop (agent == patient) is geen interactie;
-        //     - kaart↔eigen-keyword bestaat al deterministisch als HAS_KEYWORD-edge
+        //     - kaart↔eigen-keyword bestaat al deterministisch als HAS_MECHANIC-edge
         //       uit Card.Mechanics[] (GraphSyncService). De LLM leidde dat feit nóg
         //       een keer af en de lexicale poort beloonde het (de kaart ís de ene
         //       rol, haar keyword staat in haar eigen tekst) — 69% van de tabel,
@@ -134,7 +134,7 @@ public static class InteractionPromotionGate
         if (s.IsCardOwnKeywordPair)
             return new(InteractionGateOutcome.Rejected,
                 "kaart met haar eigen keyword: dat feit staat al deterministisch in de " +
-                "graph (HAS_KEYWORD uit Card.Mechanics) — geen LLM-afgeleide interactie",
+                "graph (HAS_MECHANIC uit Card.Mechanics) — geen LLM-afgeleide interactie",
                 WritesTombstone: false);
 
         // 2. Schema-poort is hard: een kale gekwalificeerde edge of een rol/conditie
