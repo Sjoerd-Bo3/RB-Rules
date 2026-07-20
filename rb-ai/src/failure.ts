@@ -593,14 +593,21 @@ export function withStderr(failure: AiFailure, stderr: StderrTail): AiFailure {
  * Eén rendering voor de twee afnemers (de faal-toelichting en de
  * warmpool-fallback-logregel), zodat de vorm niet uiteen kan lopen — en zodat
  * de regel "wat mag er uit stderr naar buiten" op ÉÉN plek staat in plaats van
- * per aanroeper opnieuw. */
+ * per aanroeper opnieuw.
+ *
+ * Redacteert ZELF, en niet omdat de huidige aanroepers dat niet doen (beide
+ * wel: `withStderrDigest` via `safeDetail`, `logEvent` via de poort). Maar dit
+ * is een functie die per definitie ONGECONTROLEERDE subprocess-uitvoer
+ * teruggeeft, en dan is "de aanroeper redacteert wel" precies het soort aanname
+ * dat #292 duur maakte. Wie hier een derde afnemer aan hangt, krijgt de
+ * redactie gratis mee. */
 export function stderrDigestLine(stderr: StderrTail): string {
   const d = stderr.digest();
   if (d.bytes === 0) return "";
   const parts = [`stderr ${d.bytes}B`];
   if (d.machine.length > 0) parts.push(d.machine.join(" // "));
   if (d.withheld > 0) parts.push(`${d.withheld} regel(s) niet gemeld`);
-  return parts.join(", ");
+  return safeDetail(parts.join(", "));
 }
 
 /** Plak de MACHINE-diagnostiek uit stderr achter een detail-tekst (#300).

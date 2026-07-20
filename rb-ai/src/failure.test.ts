@@ -864,3 +864,20 @@ test("het extract-pad houdt de VOLLEDIGE staart — de twee vormen zijn niet inw
     "de /ask-vorm hoort juist NIET te citeren",
   );
 });
+
+test("stderrDigestLine redacteert zelf — een derde afnemer erft de poort", () => {
+  // Beide huidige afnemers redacteren al (withStderrDigest via safeDetail,
+  // logEvent via de poort). Deze test bewaakt de functie zélf, want ze geeft
+  // per definitie ongecontroleerde subprocess-uitvoer terug en "de aanroeper
+  // doet het wel" is precies de aanname die #292 duur maakte.
+  const token = "sk-ant-api03-DERDE_AFNEMER_GEHEIM_0123456789";
+  const stderr = new StderrTail();
+  stderr.append(`Failed to spawn Claude Code process: token=${token} ENOMEM\n`);
+
+  const line = stderrDigestLine(stderr);
+  assert.equal(line.includes(token), false, `token gelekt: ${line}`);
+  // En weer: de niet-geheime helft moet overleven, anders bewijst de assert
+  // hierboven alleen dat er iets vernietigd is (#295-review).
+  assert.ok(line.includes("Failed to spawn"), line);
+  assert.ok(line.includes("ENOMEM"), line);
+});
