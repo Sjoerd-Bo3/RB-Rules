@@ -147,6 +147,13 @@ public class ContradictionDetectorTests
     {
         // De pure zelf-toets tegen OntologySchema: acyclisch, disjointness
         // vervulbaar, geen dangling domain/range. Consistent ⇒ geen bevindingen.
+        //
+        // Dit IS sinds #258 de gate. Er stond dezelfde toets ook als admin-job
+        // ("owlaudit"), maar die las geen data en raakte geen database: hij kon
+        // alleen falen op de gecompileerde OntologySchema en gaf dus pas ná de
+        // merge — en alleen als iemand op de knop drukte — antwoord op een vraag
+        // die de compiler-plus-CI hier vóór de merge beantwoordt. De job is weg;
+        // deze assert houdt een inconsistent schema tegen.
         Assert.Empty(OntologyConsistencyAudit.Run());
     }
 

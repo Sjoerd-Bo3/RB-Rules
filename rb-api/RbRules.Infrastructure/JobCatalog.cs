@@ -6,10 +6,19 @@ namespace RbRules.Infrastructure;
 /// Het werk krijgt een scoped IServiceProvider (JobRunner opent de scope),
 /// een voortgangs-reporter en een token; het resultaat is <see
 /// cref="JobOutcome"/> (detail-regel voor run_log/admin + of de job
-/// gedraineerd is).</summary>
+/// gedraineerd is).
+///
+/// <paramref name="RunUncapped"/> (#258) is de optionele ONGECAPTE variant van
+/// dezelfde job: geen per-run cap, wel een deadline. Alleen de dure miners
+/// hebben er een — zij zijn de enige jobs met een per-run budget dat de
+/// nachtrun juist wil loslaten. Het bestaat als aparte delegate en niet als
+/// vlag op <paramref name="Run"/> omdat alleen die paar jobs een zinvolle
+/// invulling hebben; de rest doet sowieso zijn hele werklast in één run.</summary>
 public sealed record JobDefinition(
     string Name,
-    Func<IServiceProvider, Action<string>, CancellationToken, Task<JobOutcome>> Run);
+    Func<IServiceProvider, Action<string>, CancellationToken, Task<JobOutcome>> Run,
+    Func<IServiceProvider, Action<string>, DateTimeOffset?, CancellationToken, Task<JobOutcome>>?
+        RunUncapped = null);
 
 /// <summary>Resultaat van één jobrun (#190): <paramref name="Detail"/> is de
 /// bestaande detail-regel (run_log/admin, ongewijzigd gedrag); <paramref
@@ -39,9 +48,13 @@ public static class JobCatalog
         {
             // Eén knop voor alles: elke stap best-effort in de juiste volgorde —
             // een haperende stap (Ollama/LLM even weg) stopt de rest niet.
-            // Lambda-wrap (niet als method-group): RunAllAsync draagt sinds #245
-            // trailing optionele params (mechanicMaxBatches/deadline) voor de nachtrun.
-            new("all", (sp, report, ct) => RunAllAsync(sp, report, ct)),
+            // Sinds #258 een DUNNE ALIAS op een pad (JobPaths.AllUpdate) i.p.v.
+            // een eigen, met de hand geschreven keten: dezelfde stappen, maar nu
+            // met een run_log-regel per stap en drain op de gecapte miners. De
+            // naam blijft "all" — rb-web, de docs en het run_log-grootboek kennen
+            // hem, en het pad-mechanisme zit erachter, niet ervoor.
+            new("all", (sp, report, ct) =>
+                PathRunner.RunAsync(JobPaths.AllUpdate, sp, report, ct)),
             new("scan", ScanAsync),
             // Bron-feeds (#167): losse, snelle trigger die alleen de feed-
             // crawl draait (geen volledige bron-scan) — handig om net
@@ -52,8 +65,16 @@ public static class JobCatalog
             new("feeds", FeedsAsync),
             new("cards", CardsAsync),
             new("embed", EmbedAsync),
-            new("mine", MineAsync),
+            new("mine", MineAsync, MineUncappedAsync),
             new("rules", RulesAsync),
+            // Incrementele regelindexering (#258): álleen nieuwe/gewijzigde
+            // documenten (force:false). Dit is wat de ketens nodig hebben — de
+            // losse "rules"-knop hierboven herbouwt bewust ALLES (force:true, na
+            // een parser-verbetering) en zou in een nachtelijke keten elke nacht
+            // de complete regelindex her-chunken én her-embedden voor niets.
+            // Twee namen i.p.v. een verborgen modus-vlag, zelfde keuze als
+            // "scan" vs. "feeds" en "benchmark" vs. "benchmarksweep".
+            new("rules-index", RulesIndexAsync),
             new("bans", BansAsync),
             new("graph", GraphAsync),
             // Brein-projectie (#227, §3.5): de brein-lagen die "graph" niet dekt
@@ -69,11 +90,21 @@ public static class JobCatalog
             // de "alles"-keten — de reasoner is Neo4j-afhankelijk en draait als
             // expliciete beheerdersactie (zelfde lijn als "graph" die apart staat).
             new("reason", ReasonAsync),
-            // OWL2-RL-nachtaudit (#227) — SKELETON per beslissing: een pure
-            // zelf-toets van de afgedwongen schema-bron (OntologySchema), geen
-            // OWL-runtime. Optioneel, nooit in "alles".
-            new("owlaudit", OwlAuditAsync),
+            // De OWL2-RL-audit was hier een job (#227) maar las geen data en
+            // raakte geen database: hij kon alleen falen als de GECOMPILEERDE
+            // OntologySchema intern inconsistent was. Dat is een unit-test, geen
+            // beheerdersactie — sinds #258 draait hij als CI-assert
+            // (OntologyConsistencyAuditTests), waar hij een kapot schema
+            // tegenhoudt vóór de merge in plaats van erna.
             new("primer", PrimerAsync),
+            // LEGACY (#258): de paar-lexicale, conditie-loze interactie-miner uit
+            // S3, inhoudelijk opgevolgd door BreinInteractionMiningService (de
+            // gereïficeerde, gekwalificeerde interacties). Bewust UIT elke keten
+            // gehaald — hij kostte elke nachtrun LLM-budget dat de opvolger nodig
+            // heeft, en beide vechten om dezelfde rb-ai-semafoor. Blijft
+            // registreerd (dus handmatig startbaar) zolang het leespad nog op de
+            // oude tabel terugvalt; zie InteractionService.NeighborsAsync voor de
+            // migratiebrug en het criterium waarop deze job weg mag.
             new("interactions", InteractionsAsync),
             // Brein-mining (#226, §3.1/§3.4): tool-forced, ontologie-begrensde
             // extractie via rb-ai → entity-resolutie (fase 1) → fase-2-promotie-poort
@@ -90,8 +121,8 @@ public static class JobCatalog
             // logisch vóór de twee mining-jobs en als eerste brein-stap in de
             // nachtrun.
             new("breinentiteiten", BreinRegisterEntitiesAsync),
-            new("breinmine-interacties", BreinMineInteractionsAsync),
-            new("breinmine-predicaten", BreinMinePredicatesAsync),
+            new("breinmine-interacties", BreinMineInteractionsAsync, BreinMineInteractionsUncappedAsync),
+            new("breinmine-predicaten", BreinMinePredicatesAsync, BreinMinePredicatesUncappedAsync),
             // Nachtrun (#245): de volledige ONGECAPTE keten in één job —
             // "alles bijwerken" (met ongecapte mechaniek-mining) → brein-interacties
             // → brein-predicaten → projectie → reason. Draait automatisch in het
@@ -181,75 +212,21 @@ public static class JobCatalog
                 BreinResetAsync(sp, report, BreinResetScope.InteractionsAndEntities, ct)),
         }.ToDictionary(j => j.Name);
 
-    private static async Task<JobOutcome> RunAllAsync(
-        IServiceProvider sp, Action<string> report, CancellationToken ct,
-        int mechanicMaxBatches = 25, DateTimeOffset? deadline = null)
-    {
-        var results = new List<string>();
-        async Task Step(string label, Func<Task<string>> run)
-        {
-            report($"{results.Count + 1}/8 · {label}");
-            try { results.Add($"{label}: {await run()}"); }
-            catch (Exception ex) { results.Add($"{label}: FOUT — {ex.Message}"); }
-        }
-
-        await Step("kaarten", async () =>
-        {
-            var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(
-                p => report($"1/8 · kaarten — {p}"), ct);
-            return $"{r.CardsSummary}{r.RepairSummary}";
-        });
-        await Step("bronnen scannen", async () =>
-        {
-            var r = await sp.GetRequiredService<IngestService>().ScanAsync(
-                onlyDue: false, progress: p => report($"2/8 · scan — {p}"), ct: ct);
-            return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
-        });
-        await Step("regels indexeren", async () =>
-        {
-            var r = await sp.GetRequiredService<RuleChunkPipeline>().RunAsync(
-                force: false, p => report($"3/8 · regels — {p}"), ct);
-            return $"{r.Sum(x => x.Chunks)} chunks";
-        });
-        await Step("bans/errata", async () =>
-        {
-            var r = await sp.GetRequiredService<BanErrataSyncService>().SyncAsync(ct);
-            return $"{r.Bans} bans, {r.Errata} errata";
-        });
-        await Step("embeddings", async () =>
-        {
-            var r = await sp.GetRequiredService<CardEmbeddingPipeline>().RunAsync(
-                progress: p => report($"5/8 · embeddings — {p}"), ct: ct);
-            return $"{r.Embedded} geembed";
-        });
-        await Step("mechanieken", async () =>
-        {
-            var r = await sp.GetRequiredService<MechanicMiningService>().RunAsync(
-                maxBatches: mechanicMaxBatches, deadline: deadline,
-                progress: p => report($"6/8 · mechanieken — {p}"), ct: ct);
-            return $"{r.Mined} gemined, {r.Remaining} resterend";
-        });
-        await Step("graph", async () =>
-        {
-            var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
-            return $"{r.Cards} cards, {r.Sections} secties, {r.Claims} claims";
-        });
-        await Step("interacties", async () =>
-        {
-            var r = await sp.GetRequiredService<InteractionService>().MineAsync(
-                progress: p => report($"8/8 · interacties — {p}"), ct: ct);
-            return $"{r.Verified} geverifieerd";
-        });
-        return new(string.Join(" · ", results));
-    }
-
-    /// <summary>Nachtrun (#245): de volledige ONGECAPTE kennis-keten in één job.
+    /// <summary>Nachtrun (#245; sinds #258 een PAD): de volledige ONGECAPTE keten
+    /// (<see cref="JobPaths.Nightly"/>) door <see cref="PathRunner"/>. Deze job is
+    /// nog maar één ding: hij bepaalt de DEADLINE en geeft die aan het pad mee.
+    ///
     /// Deadline = venster-einde (<see cref="NightlyRunSettings"/>) als binnen het
     /// venster gestart, anders geen deadline (handmatige volledige drain — bv. de
-    /// beheer-knop overdag). Elke stap best-effort in volgorde: alles bijwerken
-    /// (ongecapte mechaniek-mining) → canonieke entiteiten (#250) → brein-interacties
-    /// → brein-predicaten → projectie → reason. De mining-services stoppen zelf netjes op de deadline;
-    /// hun watermark bewaart de voortgang voor de volgende nacht.</summary>
+    /// beheer-knop overdag). De ongecapte stappen krijgen 'm mee; de
+    /// mining-services stoppen zelf netjes op de deadline en hun watermark bewaart
+    /// de voortgang voor de volgende nacht.
+    ///
+    /// Wat #258 hier oplost: de keten stond met de hand uitgeschreven in dit
+    /// bestand (RunNightlyAsync + RunAllAsync), met eigen volgorde, eigen
+    /// best-effort-afhandeling en ZONDER per-stap-run_log. Nu erft de nachtrun de
+    /// drain-semantiek, de per-stap-historie en de afbreek-afhandeling van het
+    /// pad-mechanisme, en staat de volgorde op één plek (JobPaths).</summary>
     private static async Task<JobOutcome> RunNightlyAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
@@ -263,42 +240,8 @@ public static class JobCatalog
                 ? Domain.NightlyWindow.Deadline(now, tz, settings.EndHour)
                 : null;
 
-        var parts = new List<string>();
-        async Task Stage(string label, Func<Task<string>> run)
-        {
-            report($"nachtrun · {label}");
-            try { parts.Add($"{label}: {await run()}"); }
-            catch (Exception ex) { parts.Add($"{label}: FOUT — {ex.Message}"); }
-        }
-
-        // 1. Alles bijwerken, met ONGECAPTE mechaniek-mining + deadline.
-        await Stage("alles bijwerken (ongecapt)", async () =>
-            (await RunAllAsync(sp, p => report($"nachtrun · {p}"), ct,
-                mechanicMaxBatches: Domain.NightlyWindow.UncappedBatches, deadline: deadline)).Detail);
-        // 2. Canonieke entiteiten registreren (#250) — deterministisch en goedkoop,
-        // maar wél de voorwaarde voor stap 4: zonder entiteiten vindt de predicaat-
-        // mining nul subjects. Draait ná de kaart-sync (nieuwe set = nieuwe keywords)
-        // en vóór de mining, die alleen tegen deze laag resolveert.
-        await Stage("canonieke entiteiten", async () =>
-            (await sp.GetRequiredService<EntityResolutionService>().RegisterExistingMechanicsAsync(
-                Domain.CanonicalEntityKinds.Keyword, p => report($"nachtrun · {p}"), ct)).Summary);
-        // 3. Brein-interacties, ongecapt.
-        await Stage("brein-interacties (ongecapt)", async () =>
-            (await sp.GetRequiredService<BreinInteractionMiningService>().RunAsync(
-                maxFocusCards: Domain.NightlyWindow.UncappedItems, deadline: deadline,
-                progress: p => report($"nachtrun · {p}"), ct: ct)).Summary);
-        // 4. Brein-predicaten, ongecapt.
-        await Stage("brein-predicaten (ongecapt)", async () =>
-            (await sp.GetRequiredService<BreinPredicateMiningService>().RunAsync(
-                maxSubjects: Domain.NightlyWindow.UncappedItems, deadline: deadline,
-                progress: p => report($"nachtrun · {p}"), ct: ct)).Summary);
-        // 5. Projectie + reason (Neo4j, geen LLM) op wat er nu staat.
-        await Stage("brein-projectie", async () =>
-            (await sp.GetRequiredService<BreinProjectionService>().ProjectAsync(progress: report, ct: ct)).Summary);
-        await Stage("reason", async () =>
-            (await sp.GetRequiredService<ReasoningService>().RunAsync(progress: report, ct: ct)).Summary);
-
-        return new(string.Join(" · ", parts));
+        return await PathRunner.RunAsync(
+            JobPaths.Nightly, sp, report, ct, deadline: deadline);
     }
 
     private static async Task<JobOutcome> ScanAsync(
@@ -345,11 +288,23 @@ public static class JobCatalog
         return new($"{r.Embedded} kaarten geembed, {r.Skipped} al actueel");
     }
 
+    /// <summary>Ongecapte mechaniek-mining (#258): de per-run batch-cap eraf, de
+    /// nachtrun-deadline erin. Zelfde service, zelfde vers-werk-semantiek — alleen
+    /// het budget verschilt, precies wat de nachtrun van deze stap wil.</summary>
+    private static Task<JobOutcome> MineUncappedAsync(
+        IServiceProvider sp, Action<string> report, DateTimeOffset? deadline, CancellationToken ct) =>
+        MineAsync(sp, report, ct, Domain.NightlyWindow.UncappedBatches, deadline);
+
+    private static Task<JobOutcome> MineAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct) =>
+        MineAsync(sp, report, ct, maxBatches: 25, deadline: null);
+
     private static async Task<JobOutcome> MineAsync(
-        IServiceProvider sp, Action<string> report, CancellationToken ct)
+        IServiceProvider sp, Action<string> report, CancellationToken ct,
+        int maxBatches, DateTimeOffset? deadline)
     {
         var r = await sp.GetRequiredService<MechanicMiningService>()
-            .RunAsync(progress: report, ct: ct);
+            .RunAsync(maxBatches: maxBatches, deadline: deadline, progress: report, ct: ct);
         // #190 (review-fix): vers-werk-semantiek. Remaining telt óók de
         // zojuist gefaalde kaarten mee (Mechanics blijft null) — een kale
         // Remaining==0 zou een pad-drain bij rb-ai-uitval of een poison card
@@ -369,6 +324,18 @@ public static class JobCatalog
         var r = await sp.GetRequiredService<RuleChunkPipeline>()
             .RunAsync(force: true, report, ct);
         return new($"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen (herbouwd)");
+    }
+
+    /// <summary>Incrementele regelindexering (#258): alleen documenten die nog
+    /// geen chunks hebben — het ketengedrag dat de oude RunAllAsync inline had
+    /// (force:false). Zie de registratie hierboven voor waarom dit een eigen
+    /// naam is en niet een modus op "rules".</summary>
+    private static async Task<JobOutcome> RulesIndexAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<RuleChunkPipeline>()
+            .RunAsync(force: false, report, ct);
+        return new($"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} nieuwe/gewijzigde bronnen");
     }
 
     private static async Task<JobOutcome> BansAsync(
@@ -404,19 +371,6 @@ public static class JobCatalog
         report("monotone inferentie draaien + bounded contradictie-detectie");
         var r = await sp.GetRequiredService<ReasoningService>().RunAsync(progress: report, ct: ct);
         return new(r.Summary);
-    }
-
-    private static Task<JobOutcome> OwlAuditAsync(
-        IServiceProvider sp, Action<string> report, CancellationToken ct)
-    {
-        // Pure zelf-toets tegen de afgedwongen schema-bron — geen IO, geen Neo4j.
-        report("ontologie-consistentie toetsen (OntologySchema)");
-        var findings = Domain.Reasoning.OntologyConsistencyAudit.Run();
-        var detail = findings.Count == 0
-            ? "ontologie consistent (geen bevindingen)"
-            : $"{findings.Count} bevinding(en): " +
-              string.Join("; ", findings.Select(f => $"{f.Code} — {f.Message}"));
-        return Task.FromResult(new JobOutcome(detail));
     }
 
     private static async Task<JobOutcome> PrimerAsync(
@@ -455,11 +409,32 @@ public static class JobCatalog
         return new(r.Summary, Drained: !r.CapHit);
     }
 
+    /// <summary>Ongecapte brein-interactie-mining (#258): alle focus-kaarten binnen
+    /// de nachtrun-deadline i.p.v. de per-run cap.</summary>
+    private static async Task<JobOutcome> BreinMineInteractionsUncappedAsync(
+        IServiceProvider sp, Action<string> report, DateTimeOffset? deadline, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BreinInteractionMiningService>().RunAsync(
+            maxFocusCards: Domain.NightlyWindow.UncappedItems, deadline: deadline,
+            progress: report, ct: ct);
+        return new(r.Summary, Drained: !r.CapHit);
+    }
+
     private static async Task<JobOutcome> BreinMinePredicatesAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
         var r = await sp.GetRequiredService<BreinPredicateMiningService>()
             .RunAsync(progress: report, ct: ct);
+        return new(r.Summary, Drained: !r.CapHit);
+    }
+
+    /// <summary>Ongecapte brein-predicaat-mining (#258).</summary>
+    private static async Task<JobOutcome> BreinMinePredicatesUncappedAsync(
+        IServiceProvider sp, Action<string> report, DateTimeOffset? deadline, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<BreinPredicateMiningService>().RunAsync(
+            maxSubjects: Domain.NightlyWindow.UncappedItems, deadline: deadline,
+            progress: report, ct: ct);
         return new(r.Summary, Drained: !r.CapHit);
     }
 

@@ -236,9 +236,14 @@ public class BreinMiningResetServiceTests
     public async Task AllesBijwerken_BevatDeResetNiet()
     {
         // Harde eis (#263): nooit onderdeel van "alles". Gedraaid op een lege
-        // container — élke stap faalt dan met "FOUT", maar de STAPLABELS staan
+        // container — élke stap faalt dan met "FOUT", maar de STAPNAMEN staan
         // gewoon in het detail. Zou iemand de reset als stap toevoegen, dan zou
-        // zijn label hier opduiken.
+        // zijn naam hier opduiken.
+        //
+        // Sinds #258 is "all" een dunne alias op een pad (JobPaths.AllUpdate),
+        // dus de samenvatting draagt de JOBNAMEN van de stappen ("cards",
+        // "graph") in plaats van de Nederlandse labels die RunAllAsync zelf
+        // verzon ("kaarten"). Zelfde bewijskracht, andere woorden.
         await using var sp = new ServiceCollection().BuildServiceProvider();
 
         var outcome = await JobCatalog.Find("all")!.Run(sp, _ => { }, CancellationToken.None);
@@ -246,8 +251,8 @@ public class BreinMiningResetServiceTests
         Assert.DoesNotContain("brein", outcome.Detail, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("terugzetten", outcome.Detail, StringComparison.OrdinalIgnoreCase);
         // Sanity: de bekende keten staat er wél in (anders bewijst de test niets).
-        Assert.Contains("kaarten", outcome.Detail, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("interacties", outcome.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cards", outcome.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("graph", outcome.Detail, StringComparison.OrdinalIgnoreCase);
     }
 
     // --- testinfra --------------------------------------------------------

@@ -74,30 +74,41 @@ public class JobPathsTests
     }
 
     [Fact]
-    public void KennisPad_HeeftClaimsClarifyRelationsRelationTriageAlsDrain_EnEindigtOpGraph()
+    public void KennisPad_HeeftDeMinersAlsDrain_MetPrimerEnGraphAlsAfsluiters()
     {
+        // #258: "primer" stond tot nu toe alleen in het aparte pad "full" —
+        // dat pad wás het kennis-pad plus primer en is daarmee overbodig
+        // geworden. Primer staat nu op zijn logische plek: ná de mining (hij
+        // vat samen wat er ligt) en vóór de graph-afsluiter.
         var path = JobPaths.Find("knowledge");
         Assert.NotNull(path);
         Assert.Equal(
-            new[] { "claims", "clarify", "relations", "relationtriage", "graph" },
+            new[] { "claims", "clarify", "relations", "relationtriage", "primer", "graph" },
             path!.Steps.Select(s => s.JobName).ToArray());
         Assert.True(path.Steps[0].Drain);
         Assert.True(path.Steps[1].Drain);
         Assert.True(path.Steps[2].Drain);
         Assert.True(path.Steps[3].Drain); // relationtriage (#199) is per-run gecapt
-        Assert.False(path.Steps[4].Drain); // graph is niet gecapt — geen drain nodig
+        Assert.False(path.Steps[4].Drain); // primer is niet gecapt
+        Assert.False(path.Steps[5].Drain); // graph is niet gecapt — geen drain nodig
     }
 
     [Fact]
-    public void VolledigPad_IsPrimerGevolgdDoorHetKennisPad_ZonderWipe()
+    public void DeVierPaden_DekkenDeVierFasesVanDeKeten()
     {
-        var full = JobPaths.Find("full");
-        var knowledge = JobPaths.Find("knowledge");
-        Assert.NotNull(full);
-        Assert.NotNull(knowledge);
-        Assert.Equal("primer", full!.Steps[0].JobName);
+        // #258: ingest (bronnen) → kaart (kaarten) → kennis (LLM-afgeleide
+        // laag) → brein (gereïficeerde laag). "full" is opgegaan in "knowledge".
         Assert.Equal(
-            knowledge!.Steps.Select(s => s.JobName).ToArray(),
-            full.Steps.Skip(1).Select(s => s.JobName).ToArray());
+            new[] { "ingest", "card", "knowledge", "brein" },
+            JobPaths.AllPaths.Select(p => p.Name).ToArray());
+    }
+
+    [Fact]
+    public void MechaniekMining_HoortInHetKaartPad_NietInHetIngestPad()
+    {
+        // #258: "mine" is kaart-afgeleid (het mint mechanieken uit kaartteksten)
+        // en stond in het ingest-pad, waar het niets met bronnen te maken had.
+        Assert.Contains(JobPaths.Find("card")!.Steps, s => s.JobName == "mine");
+        Assert.DoesNotContain(JobPaths.Find("ingest")!.Steps, s => s.JobName == "mine");
     }
 }
