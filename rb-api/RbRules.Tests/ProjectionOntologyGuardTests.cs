@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using RbRules.Domain;
 using RbRules.Domain.Ontology;
 using RbRules.Infrastructure;
@@ -13,39 +12,24 @@ namespace RbRules.Tests;
 ///
 /// HOE. Beide volledige rebuild-projecties (<see cref="GraphSyncService"/> en
 /// <see cref="BreinProjectionService"/>) draaien tegen een <see cref="RecordingDriver"/>;
-/// uit de OPGENOMEN Cypher wordt elke geschreven edge-naam geëxtraheerd en tegen
-/// <see cref="ProjectionEdgeCatalog"/> gehouden. De guard leest dus UITGEVOERDE Cypher,
-/// geen broncode: een alias hernoemen, de query anders formatteren of een statement naar
-/// een helper verplaatsen laat hem koud. Alleen een andere edge-NAAM of een verdwenen
-/// schrijf-clausule maakt hem rood — de vier PR's die vandaag op een broncode-scanner
-/// stukliepen zouden hier groen zijn gebleven.
+/// uit de OPGENOMEN Cypher haalt <see cref="CypherEdgeScanner"/> elke geschreven
+/// edge-naam, die tegen <see cref="ProjectionEdgeCatalog"/> wordt gehouden. De guard
+/// leest dus UITGEVOERDE Cypher, geen broncode: een alias hernoemen, de query anders
+/// formatteren of een statement naar een helper verplaatsen laat hem koud. Alleen een
+/// andere edge-NAAM of een verdwenen schrijf-clausule maakt hem rood.
 ///
-/// DE AANNAME EN HAAR BEWAKING. G1/G2 zijn alleen volledig als het opgenomen corpus
-/// onafhankelijk is van de data: élk statement in beide projecties vuurt
-/// onvoorwaardelijk, óók met lege <c>$rows</c> (RunPairsAsync/RunRowsAsync/RunEdgesAsync
-/// en elke inline RunAsync). Een probe tegen een LEGE database levert daarom het complete
-/// Cypher-corpus, en de guard kan niet stil onder-rapporteren doordat een fixture
-/// toevallig geen claim of ruling bevatte. <see cref="Corpus_IsRijOnafhankelijk"/> (G4)
-/// pint die aanname vast: wikkelt iemand ooit een statement in <c>if (rows.Count > 0)</c>,
-/// dan gaat de guard rood in plaats van dekking te verliezen.</summary>
+/// WAT G4 WEL EN NIET BEWIJST (#289-review, F1). G1/G2 zijn alleen volledig als het
+/// opgenomen corpus gelijk is aan wat in productie draait. G4 dekt daarvan twee
+/// bedreigingen af — rij-afhankelijkheid (G4a) en een statement dat stopt met vuren
+/// (G4b) — en pint met G4c de afhankelijkheids-oppervlakte vast waarlangs
+/// configuratie binnen zou komen. Wat een runtime-probe per constructie NIET kan
+/// zien, is een statement dat onder de testconfiguratie NOOIT vuurt: een tak die je
+/// niet neemt, neem je niet waar. Die restrisico staat expliciet in ARCHITECTURE §6.3
+/// en is de reden dat G4 hieronder niet meer als sluitend bewijs voor G1's
+/// volledigheid wordt opgevoerd — de eerdere PR-body deed dat wél, en dat was een
+/// over-claim.</summary>
 public class ProjectionOntologyGuardTests
 {
-    /// <summary>Elke SCHRIJF-clausule: <c>MERGE|CREATE (…)-[alias:EDGE_NAAM</c>. Vangt
-    /// zowel <c>MERGE (c)-[:FROM_SET]->(s)</c> als
-    /// <c>MERGE (ix)-[r:HAS_ROLE {role: row.role}]->(f)</c>, en laat opruim-clausules
-    /// (die met MATCH beginnen: <c>MATCH ()-[r:RELATES_TO]->() DELETE r</c>) er bewust
-    /// buiten — een edge verwijderen is geen bewering over de ontologie.
-    ///
-    /// Cypher is WITRUIMTE-TOLERANT en de guard hoort dat ook te zijn: <c>-[:X]-&gt;</c>
-    /// en <c>- [ :X ] -&gt;</c> zijn dezelfde query. Een strakkere variant (zonder
-    /// <c>\s*</c> rond het streepje) leest een herformattering als een verdwenen edge
-    /// en gaat dan rood op een wijziging die niets betekent — precies het
-    /// vals-alarm-gedrag dat deze guard moet vermijden; betrapt tijdens de
-    /// mutatie-verificatie. <c>&lt;?</c> dekt bovendien een inkomende richting.</summary>
-    private static readonly Regex WrittenEdge = new(
-        @"(?:MERGE|CREATE)\s*\([^)]*\)\s*<?-\s*\[\s*[a-zA-Z_]*\s*:\s*([A-Z_]+)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     // ── G1: elke geschreven edge staat in de catalogus ────────────────────────
 
     [Fact]
@@ -126,22 +110,24 @@ public class ProjectionOntologyGuardTests
         if (entry.Stance == ProjectionEdgeStance.DomeinNogNietGedeclareerd)
             Assert.False(string.IsNullOrWhiteSpace(entry.Issue),
                 $"'{entry.EdgeName}' is erkende domeinschuld en hoort naar een issue te wijzen");
-        else
-            Assert.Null(entry.Issue);
+
+        // Een issue-referentie is bij ELKE stand toegestaan (#289-review, F7): een
+        // geregistreerde relatie kan een open defect hebben (#296) en dat mag de
+        // catalogus niet wegpoetsen. Wel moet het een echte referentie zijn.
+        if (entry.Issue is not null)
+            Assert.Matches(@"^#\d+$", entry.Issue);
     }
 
-    // ── G4 (meta): het corpus is rij-onafhankelijk ────────────────────────────
+    // ── G4 (meta): het corpus is representatief ───────────────────────────────
 
     [Fact]
-    public async Task G4_Corpus_IsRijOnafhankelijk() => await Corpus_IsRijOnafhankelijk();
-
-    private static async Task Corpus_IsRijOnafhankelijk()
+    public async Task G4a_Corpus_IsRijOnafhankelijk()
     {
-        // De aanname waarop G1 rust, als test. Vergelijking als VERZAMELING statement-
-        // teksten (niet als volgorde): dat een projectie zijn stappen herschikt is geen
-        // drift, dat een stap alleen nog bij gevulde rijen vuurt wél.
-        var leeg = await CorpusAsync(filled: false);
-        var gevuld = await CorpusAsync(filled: true);
+        // Vergelijking als VERZAMELING statement-teksten (niet als volgorde): dat een
+        // projectie zijn stappen herschikt is geen drift, dat een stap alleen nog bij
+        // gevulde rijen vuurt wél.
+        var leeg = (await CorpusAsync(filled: false)).Select(s => s.Cypher).ToList();
+        var gevuld = (await CorpusAsync(filled: true)).Select(s => s.Cypher).ToList();
 
         var alleenGevuld = gevuld.Except(leeg).ToList();
         var alleenLeeg = leeg.Except(gevuld).ToList();
@@ -154,15 +140,128 @@ public class ProjectionOntologyGuardTests
             "een statement vuurt alleen bij lege rijen:\n" + string.Join("\n---\n", alleenLeeg));
     }
 
+    // Vastgepind aantal statements per projectie. Deze getallen mogen ALLEEN
+    // veranderen als er bewust een statement bij komt of af gaat — dan is het een
+    // zichtbare, reviewbare regel in de diff. Zonder deze pin blijft een statement dat
+    // achter een conditie verdwijnt (env-vlag, ManagedSettings-toggle, #254) stil weg
+    // uit het corpus: G4a ziet dat niet, want de conditie is in BEIDE DB-standen
+    // hetzelfde (#289-review, F1).
+    private const int GraphSyncStatements = 41;
+    private const int BreinProjectieStatements = 12;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task G4b_AantalStatements_LigtVastPerProjectie(bool filled)
+    {
+        await using var db = TestGraphDb.New();
+        if (filled) await VulAsync(db);
+
+        var graphSync = new RecordingDriver();
+        await new GraphSyncService(db, graphSync).SyncAsync();
+        Assert.True(GraphSyncStatements == graphSync.Statements.Count,
+            $"GraphSyncService voerde {graphSync.Statements.Count} statements uit i.p.v. "
+            + $"{GraphSyncStatements}. Ging er één AF, kijk dan of hij achter een conditie is "
+            + "beland (env-vlag, ManagedSettings) — dan verliest de guard stil dekking. Kwam er "
+            + "één BIJ, pas dan bewust dit getal aan.");
+
+        var brein = new RecordingDriver();
+        await new BreinProjectionService(db, brein).ProjectAsync();
+        Assert.True(BreinProjectieStatements == brein.Statements.Count,
+            $"BreinProjectionService voerde {brein.Statements.Count} statements uit i.p.v. "
+            + $"{BreinProjectieStatements}.");
+    }
+
+    [Fact]
+    public void G4c_ProjectiesHebbenGeenConfiguratieAfhankelijkheid()
+    {
+        // De laatste steun onder G1: zolang beide projecties alléén (DbContext, IDriver)
+        // krijgen, kan hun corpus niets anders zijn dan data-afhankelijk — en dat dekt
+        // G4a af. CLAUDE.md schrijft voor dat een schakelaar via ManagedSettings loopt
+        // (#254), dus de waarschijnlijkste manier waarop deze aanname breekt is een
+        // extra constructor-parameter. Precies dán hoort deze test rood te gaan, met de
+        // opdracht G4 uit te breiden in plaats van de aanname stil te laten verlopen.
+        foreach (var type in (Type[])[typeof(GraphSyncService), typeof(BreinProjectionService)])
+        {
+            var ctor = Assert.Single(type.GetConstructors());
+            Assert.Equal(
+                ["RbRulesDbContext", "IDriver"],
+                ctor.GetParameters().Select(p => p.ParameterType.Name));
+        }
+    }
+
+    [Fact]
+    public async Task G5_ElkeCypherInDeBron_IsOokUitgevoerd()
+    {
+        // Het gat dat G4 per constructie NIET kan dichten (#289-review, F1): een
+        // statement dat onder de testconfiguratie nooit vuurt — achter een env-vlag of
+        // een ManagedSettings-toggle (#254) — staat niet in het corpus en is dus voor
+        // G1 onzichtbaar. Bewezen met een gloednieuwe, ongeclassificeerde VERIFIED_BY
+        // achter zo'n vlag: alles bleef groen. De statement-teller (G4b) vangt dat óók
+        // niet, want een tak die niet vuurt verlaagt de telling niet.
+        //
+        // Deze toets kijkt daarom één keer wél naar de bron, en dan naar precies één
+        // ding: elke edge-naam die LETTERLIJK in de twee projectie-bestanden staat moet
+        // ook echt uitgevoerd zijn. Dat is geen broncode-scanner die opmaak bewaakt —
+        // aliassen, witruimte en helper-verhuizingen raken hem niet (bewezen met N1/N2/N3).
+        var uitgevoerd = await WrittenEdgesAsync(filled: false);
+
+        foreach (var (bestand, bron) in ProjectieBronnen())
+            foreach (var edge in CypherEdgeScanner.WrittenEdgesInSource(bron).Distinct())
+                Assert.True(uitgevoerd.Contains(edge),
+                    $"{bestand} bevat letterlijk een MERGE/CREATE van '{edge}', maar dat "
+                    + "statement is tijdens de projectie NIET uitgevoerd. Staat het achter een "
+                    + "conditie (env-vlag, ManagedSettings-toggle)? Dan is de edge onzichtbaar "
+                    + "voor G1 en bewaakt de guard hem niet.");
+    }
+
+    /// <summary>De broncode van de twee geprobede projecties. Opzoeken vanaf de
+    /// test-assembly omhoog: faalt dat, dan faalt de TEST — een guard die stil
+    /// overslaat omdat hij zijn eigen invoer niet vindt, is geen guard.</summary>
+    private static IEnumerable<(string Bestand, string Bron)> ProjectieBronnen()
+    {
+        foreach (var naam in (string[])["GraphSyncService.cs", "BreinProjectionService.cs"])
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            string? gevonden = null;
+            while (dir is not null && gevonden is null)
+            {
+                var kandidaat = Path.Combine(dir.FullName, "RbRules.Infrastructure", naam);
+                if (File.Exists(kandidaat)) gevonden = kandidaat;
+                dir = dir.Parent;
+            }
+            Assert.True(gevonden is not null, $"broncode van {naam} niet gevonden vanaf {AppContext.BaseDirectory}");
+            yield return (naam, File.ReadAllText(gevonden!));
+        }
+    }
+
     [Fact]
     public async Task Fixture_IsEchtGevuld()
     {
-        // Zonder deze check zou G4 triviaal groen kunnen worden doordat de "gevulde"
-        // fixture in werkelijkheid niets projecteert.
+        // De bewaker-van-de-bewaker. G4a vergelijkt een lege met een GEVULDE stand; is
+        // die tweede stand in werkelijkheid half leeg, dan wordt G4a stil krachteloos
+        // zonder dat iets rood gaat (#289-review, F6). Vroeger asserteerde deze test
+        // alleen resultaat-tellers — die zeggen niets over de EDGE-lijsten
+        // (supportedByPairs, explainsPairs, about*, RoleEdges, …). Nu wordt per
+        // uitgevoerd statement getoetst: schrijft het een edge, dan moet het ook rijen
+        // hebben gekregen. Dat is de eigenschap waar G4a op leunt, direct gemeten.
+        var statements = await CorpusAsync(filled: true);
+
+        var zonderRijen = statements
+            .Where(s => CypherEdgeScanner.WrittenEdges(s.Cypher).Count > 0)
+            .Where(s => s.RowList is null || s.RowList.Count == 0)
+            .ToList();
+
+        Assert.True(zonderRijen.Count == 0,
+            "de 'gevulde' fixture geeft deze edge-schrijvende statements géén rijen, dus G4a "
+            + "toetst er niets meer mee — vul VulAsync aan:\n"
+            + string.Join("\n---\n", zonderRijen.Select(s => s.Cypher)));
+
+        // En de teller-kant: elke rij-verzameling die de twee projecties opleveren is
+        // niet-leeg, zodat ook de knoop-statements echt werk doen.
         await using var db = TestGraphDb.New();
         await VulAsync(db);
         var driver = new RecordingDriver();
-
         var sync = await new GraphSyncService(db, driver).SyncAsync();
         var brein = await new BreinProjectionService(db, driver).ProjectAsync();
 
@@ -184,7 +283,7 @@ public class ProjectionOntologyGuardTests
 
     // ── Corpus-opname ─────────────────────────────────────────────────────────
 
-    private static async Task<IReadOnlyList<string>> CorpusAsync(bool filled)
+    private static async Task<IReadOnlyList<RecordedStatement>> CorpusAsync(bool filled)
     {
         await using var db = TestGraphDb.New();
         if (filled) await VulAsync(db);
@@ -200,12 +299,11 @@ public class ProjectionOntologyGuardTests
             "de brein-projectie degradeerde tegen de opnemende driver — het corpus is dan "
             + "afgekapt en de guard zou stil dekking verliezen");
 
-        return driver.Queries;
+        return driver.Statements;
     }
 
     private static async Task<HashSet<string>> WrittenEdgesAsync(bool filled) =>
-        [.. (await CorpusAsync(filled))
-            .SelectMany(q => WrittenEdge.Matches(q).Select(m => m.Groups[1].Value))];
+        [.. (await CorpusAsync(filled)).SelectMany(s => CypherEdgeScanner.WrittenEdges(s.Cypher))];
 
     // ── Fixture ───────────────────────────────────────────────────────────────
 

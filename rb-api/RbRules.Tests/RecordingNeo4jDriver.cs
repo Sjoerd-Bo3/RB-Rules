@@ -18,15 +18,31 @@ namespace RbRules.Tests;
 /// Sinds #289 gedeeld tussen <see cref="OntologyProjectionAlignmentTests"/> (de
 /// naam-uitlijning per facet) en <see cref="ProjectionOntologyGuardTests"/> (de
 /// projectie↔ontologie-guard over het hele corpus).</summary>
+internal sealed record RecordedStatement(string Cypher, IReadOnlyDictionary<string, object>? Parameters)
+{
+    /// <summary>De lijst-parameter (<c>$rows</c>/<c>$pairs</c>/<c>$ids</c>/<c>$refs</c>)
+    /// waarmee dit statement gevoed werd, of <c>null</c> als het er geen heeft. De
+    /// guard gebruikt dit om te toetsen dat de "gevulde" fixture élk
+    /// edge-schrijvend statement écht rijen geeft (#289-review, F6) — zonder die
+    /// controle erodeert de fixture stil en verliest de rij-onafhankelijkheidstest
+    /// zijn kracht zonder dat iets rood wordt.</summary>
+    public System.Collections.ICollection? RowList => Parameters?.Values
+        .OfType<System.Collections.ICollection>()
+        .FirstOrDefault();
+}
+
 internal sealed class RecordingDriver : IDriver
 {
-    private readonly List<string> _queries = [];
+    private readonly List<RecordedStatement> _statements = [];
 
-    /// <summary>Elke opgenomen query-tekst, in uitvoeringsvolgorde. De guards
+    /// <summary>Elk opgenomen statement, in uitvoeringsvolgorde. De guards
     /// vergelijken bewust als VERZAMELING — volgorde is geen contract.</summary>
-    public IReadOnlyList<string> Queries => _queries;
+    public IReadOnlyList<RecordedStatement> Statements => _statements;
 
-    public IAsyncSession AsyncSession() => new RecordingSession(_queries);
+    /// <summary>Alleen de query-teksten.</summary>
+    public IReadOnlyList<string> Queries => [.. _statements.Select(s => s.Cypher)];
+
+    public IAsyncSession AsyncSession() => new RecordingSession(_statements);
     public IAsyncSession AsyncSession(Action<SessionConfigBuilder> action) => AsyncSession();
 
     public Config Config => throw new NotSupportedException();
@@ -47,7 +63,7 @@ internal sealed class RecordingDriver : IDriver
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-internal sealed class RecordingSession(List<string> queries) : IAsyncSession
+internal sealed class RecordingSession(List<RecordedStatement> queries) : IAsyncSession
 {
     public Task<IAsyncTransaction> BeginTransactionAsync() =>
         Task.FromResult<IAsyncTransaction>(new RecordingTransaction(queries));
@@ -58,22 +74,23 @@ internal sealed class RecordingSession(List<string> queries) : IAsyncSession
     public Task<IAsyncTransaction> BeginTransactionAsync(AccessMode mode, Action<TransactionConfigBuilder> action) =>
         BeginTransactionAsync();
 
-    public Task<IResultCursor> RunAsync(string query) => Record(query);
-    public Task<IResultCursor> RunAsync(string query, object parameters) => Record(query);
+    public Task<IResultCursor> RunAsync(string query) => Record(query, null);
+    public Task<IResultCursor> RunAsync(string query, object parameters) => Record(query, null);
     public Task<IResultCursor> RunAsync(string query, IDictionary<string, object> parameters) =>
-        Record(query);
-    public Task<IResultCursor> RunAsync(Query query) => Record(query.Text);
+        Record(query, parameters);
+    public Task<IResultCursor> RunAsync(Query query) => Record(query.Text, null);
     public Task<IResultCursor> RunAsync(string query, Action<TransactionConfigBuilder> action) =>
-        Record(query);
+        Record(query, null);
     public Task<IResultCursor> RunAsync(
         string query, IDictionary<string, object> parameters, Action<TransactionConfigBuilder> action) =>
-        Record(query);
+        Record(query, parameters);
     public Task<IResultCursor> RunAsync(Query query, Action<TransactionConfigBuilder> action) =>
-        Record(query.Text);
+        Record(query.Text, null);
 
-    private Task<IResultCursor> Record(string query)
+    private Task<IResultCursor> Record(string query, IDictionary<string, object>? parameters)
     {
-        queries.Add(query);
+        queries.Add(new RecordedStatement(
+            query, parameters is null ? null : new Dictionary<string, object>(parameters)));
         return Task.FromResult<IResultCursor>(new EmptyCursor());
     }
 
@@ -102,17 +119,18 @@ internal sealed class RecordingSession(List<string> queries) : IAsyncSession
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-internal sealed class RecordingTransaction(List<string> queries) : IAsyncTransaction
+internal sealed class RecordingTransaction(List<RecordedStatement> queries) : IAsyncTransaction
 {
-    public Task<IResultCursor> RunAsync(string query) => Record(query);
-    public Task<IResultCursor> RunAsync(string query, object parameters) => Record(query);
+    public Task<IResultCursor> RunAsync(string query) => Record(query, null);
+    public Task<IResultCursor> RunAsync(string query, object parameters) => Record(query, null);
     public Task<IResultCursor> RunAsync(string query, IDictionary<string, object> parameters) =>
-        Record(query);
-    public Task<IResultCursor> RunAsync(Query query) => Record(query.Text);
+        Record(query, parameters);
+    public Task<IResultCursor> RunAsync(Query query) => Record(query.Text, null);
 
-    private Task<IResultCursor> Record(string query)
+    private Task<IResultCursor> Record(string query, IDictionary<string, object>? parameters)
     {
-        queries.Add(query);
+        queries.Add(new RecordedStatement(
+            query, parameters is null ? null : new Dictionary<string, object>(parameters)));
         return Task.FromResult<IResultCursor>(new EmptyCursor());
     }
 

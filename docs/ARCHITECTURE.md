@@ -1653,27 +1653,63 @@ brein-projectie (§6.5) schrijven staat geclassificeerd in
 domeinrelatie — `HAS_DOMAIN`, `HAS_MECHANIC`, `GOVERNED_BY`, `SUPERSEDES`,
 `RELATES_TO`), `DomeinNogNietGedeclareerd` (hoort in de TBox, staat er nog niet
 — `ABOUT`, `PART_OF`, `EXPLAINS`, `FROM_SET`, `HAS_TAG`, `HAS_ROLE`,
-`REQUIRES_CONDITION`; erkende schuld met reden én issue), `Provenance`
-(herkomsttrail, bewust buiten de TBox — `WAS_GENERATED_BY`, `DERIVED_FROM`,
-`SUPPORTED_BY`, `AFFECTS`) en `Infrastructuur` (onze eigen boekhouding —
-`MERGED_INTO`, `HAS_PREDICATE`, `PRECEDES`). Een lijst "bewust
+`REQUIRES_CONDITION`; erkende schuld, met reden én issue, opgelost in #304),
+`Provenance` (herkomsttrail, bewust buiten de TBox — `WAS_GENERATED_BY`,
+`DERIVED_FROM`, `SUPPORTED_BY`, `AFFECTS`) en `Infrastructuur` (onze eigen
+boekhouding — `MERGED_INTO`, `HAS_PREDICATE`, `PRECEDES`). Een lijst "bewust
 niet-ontologisch" is óók een beslissing; dat is precies waarom ze hier staat.
+Een `Issue`-referentie mag bij **elke** stand: `InSchema` zegt "de NAAM staat in
+het register", niet "er is niets aan de hand" — `SUPERSEDES` en `RELATES_TO`
+dragen daarom hun open defect #296 mee (zie §11).
 
-`ProjectionOntologyGuardTests` houdt die catalogus eerlijk door beide
-projecties tegen een opnemende Neo4j-driver te draaien en de **uitgevoerde**
-Cypher te lezen — geen broncode-scan, dus een alias hernoemen, een query
-herformatteren of een statement naar een helper verplaatsen is géén drift. Vier
-checks, alle vier verzameling-gebaseerd (volgorde is geen contract): een
-geschreven edge zonder classificatie is rood (G1); een catalogus-entry die
-niemand meer schrijft is óók rood (G2 — dít is wat de catalogus behoedt voor
-het lot van een lijst die niemand onderhoudt); de stand mag niet liegen over
-`OntologySchema` (G3); en het opgenomen corpus moet rij-onafhankelijk zijn
-(G4). Die laatste bewaakt de aanname waaronder G1/G2 volledig zijn: élk
-statement in beide projecties vuurt onvoorwaardelijk, óók met lege `$rows`
-(`RunPairsAsync`/`RunRowsAsync`/`RunEdgesAsync` en elke inline `RunAsync`), dus
-een probe tegen een lege database levert het complete Cypher-corpus. Wikkelt
-iemand later een statement in `if (rows.Count > 0)`, dan gaat G4 rood in plaats
-van dat de guard stil dekking verliest.
+`ProjectionOntologyGuardTests` houdt die catalogus eerlijk door beide projecties
+tegen een opnemende Neo4j-driver te draaien en de **uitgevoerde** Cypher te
+lezen — geen broncode-scan, dus een alias hernoemen, een query herformatteren of
+een statement naar een helper verplaatsen is géén drift. De extractie is een
+kleine tokenizer (`CypherEdgeScanner`), geen reguliere expressie: die laatste
+liet uitgecommentarieerde Cypher meetellen, zag in `(a)-[:X]->(b)-[:Y]->(c)`
+alleen `X`, struikelde over een geneste haak (`toLower(p.child)` gaf vals
+alarm) en kapte namen op het eerste cijfer, zodat `ABOUT` → `ABOUT2` als een
+stille alias doorglipte. De scanner heeft eigen tests
+(`CypherEdgeScannerTests`) die elk van die vier gevallen vastpinnen.
+
+De checks, alle verzameling-gebaseerd (volgorde is geen contract):
+
+- **G1** — een geschreven edge zonder classificatie is rood.
+- **G2** — een catalogus-entry die niemand meer schrijft is óók rood. Dít is wat
+  de catalogus behoedt voor het lot van een lijst die niemand onderhoudt, en het
+  dekt ook het uitzetten van een statement (uitcommentariëren telt niet als
+  schrijven).
+- **G3** — de stand mag niet liegen over `OntologySchema`.
+- **G4a** — het corpus is rij-onafhankelijk (lege DB == gevulde DB), zodat een
+  probe tegen een lege database het volledige Cypher-corpus levert.
+- **G4b** — het aantal statements per projectie ligt vastgepind (41 resp. 12).
+  Een statement dat achter een conditie belandt verdwijnt daarmee luidruchtig in
+  plaats van stil; G4a ziet dat níet, want zo'n conditie is in beide DB-standen
+  hetzelfde.
+- **G4c** — beide projecties krijgen uitsluitend `(RbRulesDbContext, IDriver)`.
+  Zolang dat zo is kan hun corpus niets ánders dan data-afhankelijk zijn; komt er
+  een configuratie-afhankelijkheid bij (de `ManagedSettings`-route die CLAUDE.md
+  voorschrijft, #254), dan gaat deze test rood met de opdracht G4 uit te breiden.
+- **G5** — elke edge-naam die **letterlijk** in de broncode van de twee
+  projecties staat, moet ook uitgevoerd zijn.
+
+**Wat G4 niet bewijst, en waarom G5 bestaat.** Een runtime-opname kan een tak die
+zij niet neemt per constructie niet waarnemen: een gloednieuw statement achter
+een uitstaande vlag staat niet in het corpus en is dus voor G1 onzichtbaar — en
+de statement-teller merkt het evenmin, want een tak die niet vuurt verlaagt de
+telling niet. G5 kijkt daarom één keer wél naar de bron, en dan naar precies één
+ding: bron ⊆ uitgevoerd. Die toets is bewust éénrichting, zodat een
+geïnterpoleerde edge-naam (`-[:{relation.EdgeName}]->`, niet letterlijk zichtbaar)
+en een statement dat naar een ander bestand verhuist géén vals alarm geven. G4
+mag dus niet als sluitend bewijs voor G1's volledigheid worden opgevoerd; G4 + G5
+samen dekken de bekende bedreigingen af.
+
+De guard-van-de-guard is `Fixture_IsEchtGevuld`: die toetst per uitgevoerd
+statement dat een edge-schrijvende query in de "gevulde" stand ook écht rijen
+kreeg. Zonder die controle erodeert de fixture stil (een weggevallen
+`ClaimSource` maakt de SUPPORTED_BY-tak leeg) en verliest G4a zijn kracht zonder
+dat iets rood wordt.
 
 Buiten de catalogus valt bewust `INTERACTS_WITH` (`InteractionService`): die
 edge-naam komt rechtstreeks uit `OntologySchema.Relations` en kan per
@@ -1683,7 +1719,7 @@ artefacten, twee levenscycli (de vingerafdruk beschrijft het schema, de
 catalogus wat de projectie doet), anders zou het opruimen van projectieschuld
 een schema-versiebump forceren. En hij toetst uitsluitend NAMEN — of een
 geprojecteerde edge ook domain/range-conform is, is een aparte vraag met een
-eigen guard (zie §11).
+eigen guard (#296, zie §11).
 
 ### 6.4 De reasoner (redeneer-run)
 
@@ -3418,24 +3454,34 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   chains) bron-edges/class-anchor-labels die `GraphSyncService` nog niet
   materialiseert; die projectie-uitbreiding + een integratietest tegen een echte
   Neo4j is de openstaande follow-up (`ReasoningService`, `InferenceRuleRegistry`).
-- **Projectie-schuld t.o.v. de ontologie (#289).** Zeven geprojecteerde edges
-  horen inhoudelijk in de TBox maar staan er niet in: `ABOUT`, `PART_OF`,
-  `EXPLAINS`, `FROM_SET`, `HAS_TAG`, `HAS_ROLE`, `REQUIRES_CONDITION`. Sinds PR 1
+- **Projectie-schuld t.o.v. de ontologie (#289 → #304).** Zeven geprojecteerde
+  edges horen inhoudelijk in de TBox maar staan er niet in: `ABOUT`, `PART_OF`,
+  `EXPLAINS`, `FROM_SET`, `HAS_TAG`, `HAS_ROLE`, `REQUIRES_CONDITION`. Sinds #289
   is dat *geregistreerde* schuld (`ProjectionEdgeCatalog`, stand
-  `DomeinNogNietGedeclareerd`) in plaats van onopgemerkte drift — de guard laat
-  ze staan, maar niemand kan er nog een achtste bij zetten zonder het te merken.
-  Twee scherpe punten: (a) `HAS_ROLE` wordt door
-  `OntologyValidationService.ValidateReifiedInteraction` al gevalideerd terwijl
-  het geen geregistreerd `RelationType` is — de poort beroept zich op iets wat
-  het schema niet kent; (b) `FROM_SET` is het spiegelbeeld van de #274-tweespalt:
-  het register kent `INTRODUCED_IN` (Card→Set, functioneel) terwijl de projectie
+  `DomeinNogNietGedeclareerd`) in plaats van onopgemerkte drift — de guard laat ze
+  staan, maar niemand kan er nog een achtste bij zetten zonder het te merken. De
+  declaratie zelf is **#304** (bewust een eigen spoor: zou de schuld naar #289
+  wijzen, dan verloopt het adres zodra dat issue sluit). Twee scherpe punten:
+  (a) `HAS_ROLE` wordt door `OntologyValidationService.ValidateReifiedInteraction`
+  (`OntologyValidationService.cs:186-192`) al gevalideerd terwijl het geen
+  geregistreerd `RelationType` is — de poort beroept zich op iets wat het schema
+  niet kent; (b) `FROM_SET` is het spiegelbeeld van de #274-tweespalt: het
+  register kent `INTRODUCED_IN` (Card→Set, functioneel) terwijl de projectie
   `FROM_SET` schrijft, dus de breuk loopt hier tussen een DODE declaratie en een
-  levende projectie. De guard toetst bovendien alleen NAMEN, niet domain/range:
-  `(:Erratum)-[:SUPERSEDES]->(:Card)` voldoet níet aan de gedeclareerde range
-  `NormativeSource`, en dat valt vandaag door geen enkele test. Ook nog open:
-  `BrainQuery.EdgeTypes` blijft met de hand bijgehouden — 7 van de 12
-  whitelist-entries staan niet in de TBox, dus mechanisch afleiden zou ze stil
-  uit de brein-API en het LLM-vocabulaire laten vallen.
+  levende projectie.
+- **Geregistreerde edges met een onjuiste of niet-afdwingbare declaratie (#296).**
+  Andere faalvorm dan hierboven, en een naam-guard vangt hem per constructie niet.
+  `SUPERSEDES` is gedeclareerd als `NormativeSource → NormativeSource` maar de
+  projectie schrijft `(:Erratum)-[:SUPERSEDES]->(:Card)`, en `Card` is geen
+  `NormativeSource`; `RELATES_TO` matcht label-loos op `ref`
+  (`MATCH (a {ref: …})`), waardoor de gedeclareerde domain/range niet afdwingbaar
+  ís. Beide staan als zodanig in `ProjectionEdgeCatalog` (stand `InSchema` mét
+  issue-referentie) zodat de catalogus het defect niet wegpoetst. De #270-les
+  geldt: meet eerst op de live graaf wat er werkelijk staat. Een knooplabel-guard
+  (#289 PR 2) zou beide gevallen vangen.
+- **`BrainQuery.EdgeTypes` blijft handwerk.** 7 van de 12 whitelist-entries staan
+  niet in de TBox, dus mechanisch afleiden uit `OntologySchema` zou ze stil uit de
+  brein-API en het LLM-vocabulaire laten vallen. Kan pas ná #304.
 - **Openstaande architectuurrakende issues.** O.a. #122 (periodieke
   zelfverrijking in de scheduler), #121 (echte token-metering), #124/#125
   (reviewqueue-/misvattingen-laag), #127 (publieke databank), #15 (decks:
