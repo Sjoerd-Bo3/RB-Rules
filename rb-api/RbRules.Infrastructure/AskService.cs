@@ -25,7 +25,10 @@ public record AskCard(
     string RiftboundId, string Name, string? Type, string? Supertype,
     string[] Domains, int? Energy, int? Might, string? TextPlain,
     string[]? Mechanics, string? ImageUrl, bool Banned,
-    string? SetName, DateOnly? LegalFrom, string Legality);
+    string? SetName, DateOnly? LegalFrom, string Legality,
+    // Presentatie voor de kaartwidget (#269/#270): juiste verhouding en een
+    // echte alt-tekst i.p.v. alleen de kaartnaam.
+    int? ImageWidth = null, int? ImageHeight = null, string? ImageAltText = null);
 
 public record AskTurn(string Question, string Answer);
 
@@ -1389,7 +1392,8 @@ public class AskService(
                 c.RiftboundId, c.Name, c.Type, c.Supertype, c.Domains, c.Energy, c.Might,
                 c.TextPlain, c.Mechanics, c.ImageUrl, BanLookup.IsBanned(banned, c),
                 c.SetLabel ?? c.SetId, legalFrom,
-                SetLegality.Key(SetLegality.StatusFor(legalFrom, today)));
+                SetLegality.Key(SetLegality.StatusFor(legalFrom, today)),
+                c.ImageWidth, c.ImageHeight, c.ImageAltText);
         })];
     }
 
@@ -1571,6 +1575,9 @@ public class AskService(
                 c.Energy, c.Might, c.TextPlain, c.Mechanics, c.ImageUrl, c.VariantOf,
             })
             .ToListAsync(ct);
+        // Bewust zónder de presentatievelden (#270): de prompt krijgt
+        // kaartfeiten, geen alt-tekst — die kan lokaal afgeleid zijn en is
+        // dus geen officiële bron.
         return [.. rows.Select(r => new Card
         {
             RiftboundId = r.RiftboundId, Name = r.Name, Type = r.Type,

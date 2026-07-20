@@ -59,15 +59,47 @@ public static partial class RiotCardMapper
     public static Card MapCard(JsonObject c)
     {
         var textHtml = c["text"]?["richText"]?["body"]?.GetValue<string>();
+        var textPlain = textHtml is null ? null : TextUtils.HtmlToText(textHtml);
+        var effectHtml = c["effect"]?["richText"]?["body"]?.GetValue<string>();
+        var image = c["cardImage"] as JsonObject;
+        var imageUrl = image?["url"]?.GetValue<string>();
+        // Riot geeft dimensions bij élke kaart; de URL-afleiding is de vangnet
+        // voor als dat ooit ontbreekt, zodat een tegel nooit zonder verhouding
+        // zit (#269).
+        var size = SizeOf(image) ?? CardPresentation.SizeFromUrl(imageUrl);
+        var name = c["name"]!.GetValue<string>();
+        // Token-kaarten (unl-t04/t08) hebben een lege type-lijst — ?[0]
+        // op een lege JsonArray gooit een index-fout.
+        var type = c["cardType"]?["type"] is JsonArray { Count: > 0 } types
+            ? types[0]?["label"]?.GetValue<string>()
+            : null;
         return new Card
         {
-            RiftboundId = c["id"]!.GetValue<string>(),
-            Name = c["name"]!.GetValue<string>(),
-            // Token-kaarten (unl-t04/t08) hebben een lege type-lijst — ?[0]
-            // op een lege JsonArray gooit een index-fout.
-            Type = c["cardType"]?["type"] is JsonArray { Count: > 0 } types
-                ? types[0]?["label"]?.GetValue<string>()
+            PublicCode = c["publicCode"]?.GetValue<string>(),
+            // illustrator.values is een lijst; in de hele gallery heeft elke
+            // kaart er precies één.
+            Illustrator = c["illustrator"]?["values"] is JsonArray { Count: > 0 } ill
+                ? ill[0]?["label"]?.GetValue<string>()
                 : null,
+            MightBonus = NumOf(c["mightBonus"]?["value"]),
+            EffectPlain = effectHtml is null ? null : TextUtils.HtmlToText(effectHtml),
+            Flags = c["flags"] is JsonArray flags
+                ? [.. flags.Select(f => f?["label"]?.GetValue<string>()).OfType<string>()]
+                : [],
+            ImageWidth = size?.Width,
+            ImageHeight = size?.Height,
+            ImageColorPrimary =
+                CardPresentation.NormalizeHexColor(image?["colors"]?["primary"]?.GetValue<string>()),
+            ImageColorSecondary =
+                CardPresentation.NormalizeHexColor(image?["colors"]?["secondary"]?.GetValue<string>()),
+            // Riots eigen accessibilityText waar die er is; anders zelf
+            // samenstellen — uitsluitend voor alt=, nooit als kaarttekst (#270).
+            // De gallery kent geen supertype, dus die blijft hier leeg.
+            ImageAltText = image?["accessibilityText"]?.GetValue<string>()
+                ?? CardPresentation.ComposeAltText(name, null, type, textPlain),
+            RiftboundId = c["id"]!.GetValue<string>(),
+            Name = name,
+            Type = type,
             Rarity = c["rarity"]?["value"]?["label"]?.GetValue<string>(),
             Domains = DomainsOf(c),
             Energy = NumOf(c["energy"]?["value"]),
@@ -79,8 +111,8 @@ public static partial class RiotCardMapper
             // Icon-tokens (:rb_energy_1: e.d.) blijven rauw in de opslag —
             // de site rendert ze als echte iconen; embeddings/LLM krijgen
             // de leesbare variant via CardText.HumanizeIcons.
-            TextPlain = textHtml is null ? null : TextUtils.HtmlToText(textHtml),
-            ImageUrl = c["cardImage"]?["url"]?.GetValue<string>(),
+            TextPlain = textPlain,
+            ImageUrl = imageUrl,
             Tags = c["tags"]?["tags"] is JsonArray t
                 ? [.. t.Select(x => x?.GetValue<string>()).OfType<string>()]
                 : [],
@@ -93,6 +125,18 @@ public static partial class RiotCardMapper
         if (c["domain"]?["values"] is JsonArray values)
             return [.. values.Select(v => v?["label"]?.GetValue<string>()).OfType<string>()];
         return [];
+    }
+
+    /// <summary>cardImage.dimensions = {width, height, aspectRatio}; alleen
+    /// width/height overnemen — de ratio is daaruit af te leiden en twee
+    /// bronnen voor dezelfde waarheid kunnen gaan afwijken (#269).</summary>
+    private static (int Width, int Height)? SizeOf(JsonObject? image)
+    {
+        var dims = image?["dimensions"];
+        if (dims?["width"]?.GetValue<int?>() is not { } w ||
+            dims["height"]?.GetValue<int?>() is not { } h ||
+            w <= 0 || h <= 0) return null;
+        return (w, h);
     }
 
     private static int? NumOf(JsonNode? value)

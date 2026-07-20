@@ -19,6 +19,21 @@ public record CardRelevantRule(string? Section, string Snippet, string SourceNam
 public record CardRuleLinks(
     IReadOnlyList<CardErratumRef> Errata, IReadOnlyList<CardRelevantRule> RelevantRules);
 
+/// <summary>Presentatievelden uit de bron (#270), gebundeld zodat de
+/// kaartpagina er één blok voor heeft. ImageAltText hoort UITSLUITEND in een
+/// <c>alt=</c>: hij kan lokaal afgeleid zijn en is dus geen officiële
+/// kaarttekst.</summary>
+public record CardPresentationFields(
+    string? PublicCode, string? Illustrator, int? MightBonus, string? EffectPlain,
+    string[] Flags, int? ImageWidth, int? ImageHeight,
+    string? ImageColorPrimary, string? ImageColorSecondary, string? ImageAltText)
+{
+    public static CardPresentationFields Of(Card c) => new(
+        c.PublicCode, c.Illustrator, c.MightBonus, c.EffectPlain, c.Flags,
+        c.ImageWidth, c.ImageHeight, c.ImageColorPrimary, c.ImageColorSecondary,
+        c.ImageAltText);
+}
+
 public record CardDetail(
     string RiftboundId, string Name, string? Type, string? Supertype,
     string? Rarity, string[] Domains, int? Energy, int? Might, int? Power,
@@ -26,7 +41,7 @@ public record CardDetail(
     string? ImageUrl, string[] Tags, string[]? Mechanics, string[]? Triggers,
     string[]? Effects, DateTimeOffset UpdatedAt, bool Banned, string? ErrataText,
     string? VariantOf, IReadOnlyList<CardVersion> Versions,
-    DateOnly? LegalFrom, string Legality);
+    DateOnly? LegalFrom, string Legality, CardPresentationFields Presentation);
 
 // ── Kaart-dossier (#127) ─────────────────────────────────────────────────
 
@@ -127,7 +142,8 @@ public class CardDetailService(RbRulesDbContext db, CardResolver resolver)
             c.UpdatedAt, banned, erratum, c.VariantOf, versions,
             set?.PublishedOn,
             SetLegality.Key(SetLegality.StatusFor(
-                set?.PublishedOn, DateOnly.FromDateTime(DateTime.UtcNow))));
+                set?.PublishedOn, DateOnly.FromDateTime(DateTime.UtcNow))),
+            CardPresentationFields.Of(c));
     }
 
     /// <summary>Regels & errata die bij een kaart horen (voor de kaartpagina):

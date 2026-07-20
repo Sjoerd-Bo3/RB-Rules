@@ -39,7 +39,11 @@ public record DeckFacets(IReadOnlyList<string> Domains);
 /// ImageUrl zijn null zolang PA-ingest de kaart (nog) niet kon koppelen
 /// (DeckCardLinker) — de pagina toont dan de rauwe CardCode zonder link.</summary>
 public record DeckCardView(
-    string CardCode, int Quantity, string? CanonicalRiftboundId, string? CardName, string? ImageUrl);
+    string CardCode, int Quantity, string? CanonicalRiftboundId, string? CardName, string? ImageUrl,
+    // Presentatie per kaart (#269/#270): battlefields zijn liggend, dus de
+    // tegel rekent zijn verhouding uit de echte maat i.p.v. één hardgecodeerde.
+    int? ImageWidth = null, int? ImageHeight = null,
+    string? ImageAltText = null, string? ImageColorPrimary = null);
 
 public record DeckSectionView(string Section, IReadOnlyList<DeckCardView> Cards);
 
@@ -165,7 +169,11 @@ public class DeckBrowserService(RbRulesDbContext db)
         var canonicalIds = rows.Select(r => r.CanonicalRiftboundId).OfType<string>().Distinct().ToList();
         var cardFacts = await db.Cards.AsNoTracking()
             .Where(c => canonicalIds.Contains(c.RiftboundId))
-            .Select(c => new { c.RiftboundId, c.Name, c.ImageUrl, c.SetId })
+            .Select(c => new
+            {
+                c.RiftboundId, c.Name, c.ImageUrl, c.SetId,
+                c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary,
+            })
             .ToDictionaryAsync(c => c.RiftboundId, ct);
 
         var context = await LoadLegalityContextAsync(format, ct);
@@ -186,7 +194,9 @@ public class DeckBrowserService(RbRulesDbContext db)
                     {
                         var fact = r.CanonicalRiftboundId is { } id ? cardFacts.GetValueOrDefault(id) : null;
                         return new DeckCardView(
-                            r.CardCode, r.Quantity, r.CanonicalRiftboundId, fact?.Name, fact?.ImageUrl);
+                            r.CardCode, r.Quantity, r.CanonicalRiftboundId, fact?.Name, fact?.ImageUrl,
+                            fact?.ImageWidth, fact?.ImageHeight,
+                            fact?.ImageAltText, fact?.ImageColorPrimary);
                     })
                     .OrderBy(c => c.CardName ?? c.CardCode, StringComparer.Ordinal)]))
             .Where(s => s.Cards.Count > 0)

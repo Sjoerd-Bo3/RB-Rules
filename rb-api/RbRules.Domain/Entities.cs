@@ -273,6 +273,47 @@ public class Card : IEmbeddable
     public string? TextPlain { get; set; }
     public string? ImageUrl { get; set; }
     public string[] Tags { get; set; } = [];            // facties/tribes — GEEN mechanieken
+
+    // ── Presentatievelden uit de bron (#270) ────────────────────────────────
+    // Riot levert deze bij élke gallery-kaart; voor de kaarten die alléén via
+    // riftcodex binnenkomen (JDG-promo's) vult die bron aan wat hij heeft en
+    // leidt CardPresentation de rest lokaal af. Voorrang: Riot schrijft
+    // onvoorwaardelijk, een aanvulling vult alleen lege velden (CardMerge).
+
+    /// <summary>Riots publieke kaartcode ("UNL-205/219") — wat op de kaart
+    /// zelf staat, niet ons interne RiftboundId.</summary>
+    public string? PublicCode { get; set; }
+    /// <summary>Illustrator, als krediet bij de afbeelding ("Envar Studio").</summary>
+    public string? Illustrator { get; set; }
+    /// <summary>Vaste might-bonus van een signature-kaart (+N); los van
+    /// <see cref="Might"/>, dat de basiswaarde is.</summary>
+    public int? MightBonus { get; set; }
+    /// <summary>Los "Effect"-blok naast de gewone kaarttekst (gear/attachments):
+    /// officiële Riot-tekst, met dezelfde :rb_…:-tokens als TextPlain. Niet te
+    /// verwarren met <see cref="Effects"/>, dat LLM-geminede clausules zijn.</summary>
+    public string? EffectPlain { get; set; }
+    /// <summary>Riot-markers op de kaart in de gallery; nu alleen "New".
+    /// Vluchtig van aard — verandert mee met elke sync.</summary>
+    public string[] Flags { get; set; } = [];
+
+    /// <summary>Afmetingen van de kaartafbeelding. Battlefields zijn liggend
+    /// (1039x744), de rest staand (744x1039) — de tegels in de UI rekenen hun
+    /// aspect-ratio hieruit, zodat niets bijgesneden wordt (#269).</summary>
+    public int? ImageWidth { get; set; }
+    public int? ImageHeight { get; set; }
+    /// <summary>Dominante kleuren van de afbeelding (hex), door Riot
+    /// meegeleverd — gebruikt als placeholder zolang de afbeelding laadt.</summary>
+    public string? ImageColorPrimary { get; set; }
+    public string? ImageColorSecondary { get; set; }
+    /// <summary>Alt-tekst voor de kaartafbeelding: Riots eigen
+    /// accessibilityText waar die er is, anders lokaal samengesteld
+    /// (<see cref="CardPresentation.ComposeAltText"/>).
+    /// HARDE GRENS (#270): dit veld hoort uitsluitend in een <c>alt=</c>. Het
+    /// mag nooit als Riots officiële kaarttekst getoond worden en gaat nooit
+    /// de kennisbank of een LLM-prompt in — afgeleid is niet officieel.
+    /// <see cref="CardText.Compose"/> en <see cref="CardText.DescribeForPrompt"/>
+    /// laten het daarom bewust links liggen.</summary>
+    public string? ImageAltText { get; set; }
     /// <summary>F3: LLM-geminede spelmechanieken (Accelerate, Tank, …).
     /// null = nog niet gemined; [] = gemined, niets gevonden.</summary>
     public string[]? Mechanics { get; set; }

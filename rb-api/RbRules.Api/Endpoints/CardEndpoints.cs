@@ -29,6 +29,10 @@ public static class CardEndpoints
                 {
                     c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
                     c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+                    // Presentatie (#269/#270): verhouding per kaart, alt-tekst
+                    // en de laadkleur — battlefields zijn liggend.
+                    c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary,
+                    c.Flags,
                 })
                 .ToListAsync();
 
@@ -44,6 +48,7 @@ public static class CardEndpoints
             {
                 c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
                 c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+                c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary, c.Flags,
                 Variants = variantCounts.GetValueOrDefault(c.RiftboundId),
                 LegalFrom = legality.DateOf(c.SetId),
                 Legality = legality.KeyOf(c.SetId),
@@ -106,6 +111,7 @@ public static class CardEndpoints
                 {
                     c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
                     c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+                    c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary, c.Flags,
                     Distance = c.Embedding!.CosineDistance(queryVector),
                 })
                 .ToListAsync();
@@ -113,7 +119,9 @@ public static class CardEndpoints
             return Results.Ok(results.Select(c => new
             {
                 c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
-                c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl, c.Distance,
+                c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+                c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary, c.Flags,
+                c.Distance,
                 LegalFrom = legality.DateOf(c.SetId),
                 Legality = legality.KeyOf(c.SetId),
             }));
