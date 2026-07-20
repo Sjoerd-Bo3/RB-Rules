@@ -140,9 +140,12 @@ public class InteractionOfferingTests
         var refs = plan.Refs.Select(r => r.Ref).ToList();
         var cardRefs = refs.Where(r => r.StartsWith("card:")).ToList();
 
-        // Anker + minstens de gereserveerde partner-rollen.
+        // Anker + minstens twee partner-rollen. Bewust een LETTERLIJKE 3 en niet
+        // 1 + OfferingLimits.Card.ReservedPartnerCards: een assertie tegen de constante
+        // die ze bewaakt schuift mee zodra iemand de reserve op 0 zet — dezelfde fout
+        // die de review in de vlaggenschip-test aanwees.
         Assert.True(
-            cardRefs.Count >= 1 + OfferingLimits.Card.ReservedPartnerCards,
+            cardRefs.Count >= 3,
             $"slechts {cardRefs.Count} kaart-refs; kaart↔kaart wordt dan onmogelijk");
         Assert.Contains("card:focus", refs);
         Assert.True(refs.Count <= 12);
