@@ -884,7 +884,10 @@ Paginastructuur (`rb-web/src/routes/`): `/` (**Overzicht-dashboard**, #214),
 `/rules` (+ `/rules/[code]`), `/primer`, `/ask` (+ `/ask/stream`), `/cards`
 (+ `/cards/[id]` + `explain`), `/decks` (+ `/decks/[id]`, #15 fase 3 spoor A:
 browser + legaliteitsbadge, detail met decklijst per sectie en deep-link naar
-Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner),
+Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner, met
+de client-side knoop-proxy `/graph/node?ref=` — #252: hover-preview en het
+detailpaneel ónder de graaf halen daar hun knoopgegevens, kaarten via
+`/api/cards/{id}` (+ `/dossier`), overige refs via `/api/brain/node`),
 `/rulings`, `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
 `/admin/overview/[kind]`, en de read-only **Brein-verkenner** `/admin/brein`
 met sub-routes `entities`/`interactions`/`conflicts`/`answertrace`, #236 — eigen
@@ -976,8 +979,12 @@ Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 `RuleWidget.svelte`, `CardWidget.svelte`, `RbText.svelte`, `ChangeCard.svelte`,
 `markdown.ts` + `rbtokens.ts` (sanitize + icoon-injectie vóór `{@html}`),
 `answerFormat.ts`, `changeCard.ts`, `passkeys.ts`, `quota.ts`, `ranges.ts`
-(compacte reeksweergave, #145), `types.ts` (API-responstypen die meer dan
-één route deelt). Ontwerptokens in `app.css` (`var(--accent)` etc.).
+(compacte reeksweergave, #145), `graphNode.ts` (ref-splitsing, knoop-label/
+-samenvatting en doorklik-links van de graph-verkenner — gedeeld door de
+`/graph`-pagina en haar `/graph/node`-proxy, #252), `types.ts`
+(API-responstypen die meer dan één route deelt — o.a. `CardDetail`, sinds
+#252 gedeeld door `/cards/[id]` en `/graph/node`).
+Ontwerptokens in `app.css` (`var(--accent)` etc.).
 `ChangeCard.svelte` (#210) is het eerste presentatiecomponent met een
 optioneel admin-actieslot via Svelte 5 snippets (`actions`,
 `confirmationActions`) en een `compact`-prop voor dichte contexten — het

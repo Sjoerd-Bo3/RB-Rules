@@ -1,6 +1,44 @@
 // Gedeelde API-response-types (docs/CONVENTIONS.md: "zodra twee routes
 // hetzelfde type nodig hebben verhuist het naar $lib/types.ts").
 
+/** Kaartdetail zoals `/api/cards/{id}` het levert. Gedeeld door `/cards/[id]`
+ *  en de graph-node-proxy `/graph/node` (#252 — de detailweergave onder de
+ *  brein-graaf toont dezelfde kaartfeiten zonder wegnavigeren). */
+export interface CardDetail {
+	riftboundId: string;
+	name: string;
+	type: string | null;
+	supertype: string | null;
+	rarity: string | null;
+	domains: string[];
+	energy: number | null;
+	might: number | null;
+	power: number | null;
+	setId: string | null;
+	setLabel: string | null;
+	collectorNumber: number | null;
+	textPlain: string | null;
+	imageUrl: string | null;
+	tags: string[];
+	mechanics: string[] | null;
+	triggers: string[] | null;
+	effects: string[] | null;
+	banned: boolean;
+	errataText: string | null;
+	variantOf: string | null;
+	/** Set-legaliteit (#22): releasedatum van de set (yyyy-mm-dd) of null. */
+	legalFrom: string | null;
+	legality: 'legal' | 'upcoming' | 'announced';
+	versions: {
+		riftboundId: string;
+		setId: string | null;
+		setLabel: string | null;
+		rarity: string | null;
+		collectorNumber: number | null;
+		imageUrl: string | null;
+	}[];
+}
+
 /** Bevestiging (#206): een secundaire change (andere bron, zelfde
  *  gebeurtenis) genest onder de primaire — dezelfde DTO-vorm
  *  (rb-api ChangeFeedConfirmation) op zowel de publieke feed als het

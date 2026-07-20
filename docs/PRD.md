@@ -696,6 +696,26 @@ de globale duur-vangrail).
   Nederlandse afgeleide laag schoon weg i.p.v. in-place te vertalen.
 - **Graph-verkenner** — interactieve kaart↔mechaniek↔regel-visualisatie.
   *Route* `/graph` · *endpoint* `/api/graph/neighbors`.
+  **Hover-preview en knoop-detail (#252)** — hoveren over een knoop toont een
+  vaste hovercard (patroon uit #243/#244: `position: fixed` op paginaniveau
+  met viewport-clamp, boven/onder-flip en `pointer-events: none`, bewust
+  buiten de horizontaal scrollende graaf-container die hem zou clippen): bij
+  een kaart naam + afbeelding + type/domeinen, bij mechaniek/regelsectie/
+  claim/concept het label met een korte uitleg uit de brein-projectie
+  (facetten tonen hun kaart-telling). **Klikken selecteert** in plaats van weg
+  te navigeren: de verkende graaf-positie blijft staan, de gekozen knoop
+  krijgt een accent-ring en de volledige info verschijnt in een detailpaneel
+  ónder de graaf — voor kaarten de kaartweergave (afbeelding, tekst met
+  rb-iconen, type/domeinen/stats, ban- en legaliteitsstatus, mechaniek- en
+  tag-chips) plus een compact dossier-blok (rulings, community-claims,
+  ban-historie, met "N van totaal"), voor overige soorten de compacte
+  brein-projectie. Het paneel draagt de bestaande doorklik-links plus "Verken
+  vanaf deze knoop" (dát navigeert wél en maakt de knoop het nieuwe centrum);
+  ctrl/cmd-klik op een knoop opent hem nog gewoon in een nieuw tabblad. Het
+  detail komt client-side via de proxy `GET /graph/node?ref=` (kaarten:
+  `/api/cards/{id}` + `/api/cards/{id}/dossier`, overige: `/api/brain/node`).
+  Knopen hebben een ruime onzichtbare trefzone zodat hover en klik ook met een
+  vinger raak zijn.
 - **Self-learning** — negatieve/positieve feedback → reviewqueue →
   geverifieerde correcties (embedded, gezaghebbend) die semantisch terugkomen
   in de prompt.
