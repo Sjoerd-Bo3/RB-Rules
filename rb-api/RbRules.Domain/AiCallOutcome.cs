@@ -64,6 +64,16 @@ public sealed class AiOutcomeTally
 {
     private readonly Dictionary<AiCallOutcome, int> _counts = [];
 
+    /// <summary>Fijnmazige uitvalsoort per uitkomst (#281), zoals rb-ai die in zijn
+    /// foutbody meestuurt (<c>reason</c>: <c>max_turns</c>, <c>spawn</c>,
+    /// <c>api_error</c>, <c>no_tool_call</c>, …). <see cref="AiCallOutcome"/> zegt op
+    /// welke LAAG het misging (5xx = "rb-ai's eigen uitvalpad"); de reden zegt WAAROM,
+    /// en dat is een andere knop. Ze staan bewust niet als extra enum-waarden in
+    /// <see cref="AiCallOutcome"/>: de vocabulaire hoort bij rb-ai en mag daar
+    /// groeien zonder dat rb-api meemigreert — onbekende redenen worden gewoon
+    /// meegeteld en getoond.</summary>
+    private readonly Dictionary<(AiCallOutcome Outcome, string Reason), int> _reasons = [];
+
     /// <summary>Verdient deze uitkomst een backoff-herhaling? Rate-limit,
     /// overbelasting én een volle sidecar-cap delen dat pad (een piek mag geen uitval
     /// worden); de rest faalt bij een directe herhaling vrijwel zeker opnieuw.</summary>
@@ -71,10 +81,23 @@ public sealed class AiOutcomeTally
         outcome is AiCallOutcome.RateLimited or AiCallOutcome.Overloaded
             or AiCallOutcome.ConcurrencyLimited;
 
-    public void Add(AiCallOutcome outcome) =>
+    /// <summary>Tel één uitkomst, optioneel met de fijnmazige reden die rb-ai
+    /// meestuurde (#281). Een lege/afwezige reden telt alleen op de uitkomst — dat is
+    /// exact het gedrag van vóór #281, zodat een oudere rb-ai (of een pad zonder
+    /// reden) dezelfde samenvatting oplevert als altijd.</summary>
+    public void Add(AiCallOutcome outcome, string? reason = null)
+    {
         _counts[outcome] = _counts.GetValueOrDefault(outcome) + 1;
+        if (string.IsNullOrWhiteSpace(reason)) return;
+        var key = (outcome, reason.Trim());
+        _reasons[key] = _reasons.GetValueOrDefault(key) + 1;
+    }
 
     public int Count(AiCallOutcome outcome) => _counts.GetValueOrDefault(outcome);
+
+    /// <summary>Hoe vaak deze uitkomst met déze reden voorkwam (#281).</summary>
+    public int Count(AiCallOutcome outcome, string reason) =>
+        _reasons.GetValueOrDefault((outcome, reason));
 
     /// <summary>Alle aanroepen die géén bruikbaar antwoord opleverden. <see
     /// cref="AiCallOutcome.Empty"/> telt NIET mee: een geldige lege uitslag is
@@ -85,12 +108,31 @@ public sealed class AiOutcomeTally
 
     /// <summary>Menselijke uitsplitsing van de uitval ("429×12, timeout×4"), of een
     /// lege string als er niets misging. Deterministische volgorde (aflopend aantal,
-    /// dan naam) zodat run-details vergelijkbaar blijven.</summary>
+    /// dan naam) zodat run-details vergelijkbaar blijven.
+    ///
+    /// Droeg rb-ai een reden mee (#281), dan staat die tussen haakjes achter de
+    /// uitkomst: <c>5xx×22 (max_turns×14, spawn×8)</c>. Dát is het verschil tussen
+    /// "meer dan de helft van de kaarten faalde" en een aanwijsbare knop — precies
+    /// wat #281 miste toen de containerlog één regel bevatte. Zonder reden blijft de
+    /// tekst byte-gelijk aan die van vóór #281.</summary>
     public string Summary => string.Join(", ", _counts
         .Where(kv => kv.Key is not (AiCallOutcome.Ok or AiCallOutcome.Empty) && kv.Value > 0)
         .OrderByDescending(kv => kv.Value)
         .ThenBy(kv => Label(kv.Key), StringComparer.Ordinal)
-        .Select(kv => $"{Label(kv.Key)}×{kv.Value}"));
+        .Select(kv => $"{Label(kv.Key)}×{kv.Value}{ReasonSuffix(kv.Key)}"));
+
+    /// <summary>De redenen achter één uitkomst, of een lege string als rb-ai er geen
+    /// meestuurde. Zelfde deterministische ordening als de hoofd-uitsplitsing.</summary>
+    private string ReasonSuffix(AiCallOutcome outcome)
+    {
+        var parts = _reasons
+            .Where(kv => kv.Key.Outcome == outcome && kv.Value > 0)
+            .OrderByDescending(kv => kv.Value)
+            .ThenBy(kv => kv.Key.Reason, StringComparer.Ordinal)
+            .Select(kv => $"{kv.Key.Reason}×{kv.Value}")
+            .ToList();
+        return parts.Count == 0 ? "" : $" ({string.Join(", ", parts)})";
+    }
 
     private static string Label(AiCallOutcome outcome) => outcome switch
     {

@@ -315,7 +315,7 @@ public class BreinInteractionMiningService(
             // OORZAAK wordt wel geteld (#251) zodat het run-detail laat zien of
             // dit rate-limits, timeouts of onleesbare antwoorden waren — en sinds
             // #279 of het onze eigen sidecar-cap was (ConcurrencyLimited).
-            tally.Fail(call.Outcome);
+            tally.Fail(call.Outcome, call.Reason);
             return;
         }
 
@@ -644,9 +644,12 @@ public class BreinInteractionMiningService(
 
         public void Ai(AiCallOutcome outcome) { lock (_gate) _ai.Add(outcome); }
 
-        public void Fail(AiCallOutcome outcome)
+        /// <summary>Telt één uitval, met de fijnmazige reden die rb-ai meestuurde
+        /// (#281) — zo staat er "5xx×22 (max_turns×14, spawn×8)" in het run-detail
+        /// in plaats van alleen "5xx×22". Null blijft het gedrag van vóór #281.</summary>
+        public void Fail(AiCallOutcome outcome, string? reason = null)
         {
-            lock (_gate) { _failed++; _ai.Add(outcome); }
+            lock (_gate) { _failed++; _ai.Add(outcome, reason); }
         }
 
         public void Extract() { lock (_gate) _extracted++; }

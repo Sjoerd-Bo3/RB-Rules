@@ -217,6 +217,49 @@ test("collectAnswer: sawOutput blijft false bij alleen systeemberichten (dode wa
   assert.equal(progress2.sawOutput, true);
 });
 
+// ── collectAnswer leest de SDK-uitval mee (#281) ───────────────────────────
+// Dit is precies het gat waardoor 22 mislukte mining-aanroepen géén logregel
+// achterlieten: de Agent SDK gooit niet bij een mislukte run, ze eindigt met
+// een result-bericht met subtype/is_error/api_error_status/errors[]. Werd dat
+// bericht alleen op `result`/`usage` gelezen, dan bleef er een leeg antwoord
+// over zonder enig spoor van de oorzaak.
+
+test("collectAnswer: een fout-result levert een failure op, geen stil leeg antwoord", async () => {
+  const res = await collectAnswer(
+    stream({
+      type: "result",
+      subtype: "error_max_turns",
+      is_error: true,
+      num_turns: 3,
+      errors: [],
+    }),
+  );
+  assert.equal(res.answer, "");
+  assert.equal(res.failure?.reason, "max_turns");
+  assert.match(res.failure!.detail, /turns=3/);
+});
+
+test("collectAnswer: een geslaagd result draagt géén failure", async () => {
+  const res = await collectAnswer(
+    stream({ type: "result", subtype: "success", is_error: false, result: "ok" }),
+  );
+  assert.equal(res.answer, "ok");
+  assert.equal(res.failure, undefined);
+});
+
+test("collectAnswer: een API-fout op een run mét tekst blijft bruikbaar én zichtbaar", async () => {
+  // Deelantwoord + foutstatus: het antwoord telt (askClaude gooit alleen bij
+  // een LEGE uitkomst), maar de oorzaak gaat wél mee naar de logregel.
+  const res = await collectAnswer(
+    stream(
+      { type: "assistant", message: { content: [{ type: "text", text: "deel" }] } },
+      { type: "result", subtype: "success", is_error: true, api_error_status: 529 },
+    ),
+  );
+  assert.equal(res.answer, "deel");
+  assert.equal(res.failure?.reason, "api_error");
+});
+
 // ── Prewarm telt niet mee voor de concurrentie-cap (#154/#155) ────────────
 // De boot die `/prewarm` triggert (bootWarmCheapSession, aangeroepen door
 // WarmPool los van askClaude) mag nooit een permit uit `aiSemaphore`
@@ -266,6 +309,37 @@ test("prewarm-boot raakt de concurrency-cap niet aan: acquire zit alleen in de e
     "de warme-boot-functie mag de semaphore nooit aanraken (#154/#155-ontwerpgrens)",
   );
 });
+
+// ── De extract-timeout is een LLM-begroting, geen wachtrij-begroting (#281) ─
+// De 90 s-timer stond vóór `aiSemaphore.acquire`, dus een extractie die eerst
+// in de achtergrond-wachtrij stond (tot AI_QUEUE_WAIT_MS = 30 s) begon aan zijn
+// LLM-run met een derde van het budget al op — en strandde daarna als
+// "timeout", wat naar de LLM lijkt te wijzen terwijl de call simpelweg te
+// weinig tijd kreeg. Sinds de mining parallel draait (#279) is die wachttijd de
+// regel. Bedradings-toets, want een echte test zou een SDK-subprocess vragen.
+test("de extract-timeout start ná de permit, niet bij binnenkomst (#281)", () => {
+  const src = readFileSync(fileURLToPath(new URL("./ai.ts", import.meta.url)), "utf8");
+  const start = src.indexOf("export async function extractWithTool");
+  const end = src.indexOf("\n/** Bericht-vorm voor streaming input", start);
+  assert.ok(start >= 0 && end > start, "extractWithTool moet te isoleren zijn");
+  const body = src.slice(start, end);
+  const acquireAt = body.indexOf("aiSemaphore.acquire(");
+  const timerAt = body.indexOf("EXTRACT_TIMEOUT_MS)");
+  assert.ok(acquireAt > 0, "extractWithTool hoort een permit te verwerven");
+  assert.ok(timerAt > 0, "extractWithTool hoort een harde timeout te zetten");
+  assert.ok(
+    timerAt > acquireAt,
+    "de setTimeout op EXTRACT_TIMEOUT_MS moet ná aiSemaphore.acquire staan, " +
+      "anders eet de wachtrij het LLM-budget op",
+  );
+});
+
+// De twee bron-grep-tests die hier stonden (#281) zijn vervangen door echte
+// gedragstests in extract-timeout.test.ts. Ze checkten met regexes op deze
+// broncode dát `timedOut: true` en `? 504 : 500` erin voorkwamen — en toen een
+// pure refactor die tekens verplaatste zonder één gedragswijziging, faalden ze,
+// terwijl ze de omgekeerde mutatie (`timedOut = true` weghalen, waardoor elke
+// timeout weer een generieke 500 werd) juist NIET zagen. Precies verkeerd om.
 
 // ── Model-override slaat de warme pool over (#174) ─────────────────────────
 // De voorverwarmde sessie is altijd op MODEL.cheap gebootstrapt

@@ -1076,6 +1076,19 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   `AGENT_ADDENDUM`; de in-process brein-MCP-server (`createBrainMcpServer`);
   `extractWithTool` (#226) — één geforceerde in-process MCP-tool die de
   gevalideerde argumenten in een closure vangt (tool-forced structured output).
+- `src/failure.ts` — PUUR (zonder Agent SDK, unit-getest): de faaldiagnostiek
+  van #281. Levert het redenen-vocabulaire (`AiFailureReason`), de twee
+  vertalers (`describeThrown` voor een geworpen fout, `resultFailure` voor het
+  SDK-resultaatbericht), de `RetryTracker` op `api_retry`-berichten, de
+  `StderrTail` van het subprocess, en `logCall` — één JSON-regel per
+  LLM-aanroep (`{"evt":"ai_call","endpoint":…,"ms":…,"status":…,"outcome":…,
+  "reason":…,"detail":…}`), greppelbaar met
+  `docker logs rb-v2-ai | grep ai_call`. `redactSecrets`/`safeDetail` zijn de
+  verplichte poort: env-waarden met TOKEN/KEY/SECRET in de naam, `sk-ant-…`,
+  `Bearer …` en lange ondoorzichtige runs gaan eruit vóór er iets naar buiten
+  gaat (werkafspraak 7, met een test die vastlegt dat het token nooit in een
+  logregel belandt). Prompt-inhoud wordt nooit gelogd — `detail` komt
+  uitsluitend uit foutmeldingen. Zie §6.6 voor waaróm dit bestand bestaat.
 - `src/extract.ts` — PUUR (zonder Agent SDK, unit-getest): de
   vocabulaire→zod-schema-vertaling voor de brein-extractie (#226). Bouwt de
   enum-poorten voor `emit_interactions`/`emit_mechanic_predicates` uit het door
@@ -1734,6 +1747,145 @@ reizen dus via de tool-input, niet via de antwoordtekst. Uitval (tool niet
 geroepen, timeout, run gefaald) → de endpoint antwoordt 500, wat `RbAiClient` als
 AI-uitval leest (null, nette degradatie); een 200 met lege lijst betekent "geen
 kandidaten" — dat onderscheid blijft bewaard.
+
+**Faaldiagnostiek op dat pad (#281).** Een mining-run over 40 kaarten meldde
+`22 rb-ai-uitval (5xx×22)` terwijl `docker logs rb-v2-ai` één regel bevatte: de
+opstartregel. Meer dan de helft van de kaarten haalde de LLM niet en de oorzaak
+was van buitenaf niet vast te stellen. Er zaten twee stille gaten in de keten,
+en één gemeten hoofdoorzaak.
+
+1. **De Agent SDK gooit niet bij een mislukte run.** Ze eindigt met een gewoon
+   `result`-bericht met `subtype: "error_*"`, `is_error`, `api_error_status`,
+   `errors[]` en `permission_denials`. `collectAnswer` las daar alleen
+   `result`/`usage` uit; `extractWithTool` las de berichtenstroom zelfs volledig
+   leeg (`for await (const _ of …)`). Elke mislukking werd zo een kale
+   `captured === null` → `500 {"error":"extractie mislukt"}`, spoorloos.
+   `resultFailure` leest het bericht nu wél.
+2. **rb-api gooide de foutbody weg.** `RbAiClient` logde alleen de statuscode.
+   De 500 draagt nu `reason` + `detail`; `ReadErrorAsync` leest ze (samen met de
+   `code` van #279, uit één lezing) en `AiExtraction.Reason` brengt ze naar de
+   tally.
+3. **De gemeten hoofdoorzaak: SDK-interne retries met exponentiële backoff.**
+   Een probe met een ongeldige sleutel legde bloot dat de SDK een mislukte
+   API-call ZELF tot `max_retries` (10) opnieuw probeert en elke poging als
+   `{"type":"system","subtype":"api_retry",…,"error_status":429,…}` uitzendt —
+   een berichtsoort die rb-ai nergens las. Gemeten wachttijden: 0,5s → 1,0s →
+   2,3s → 4,5s → 9,6s → 16,4s → 32,1s. Na zeven pogingen is er 37 seconden
+   verstreken zónder één verwerkt token; poging 8 en 9 duwen het totaal ruim
+   voorbij `EXTRACT_TIMEOUT_MS` (90 s), waarna onze AbortController de run
+   afkapt. **Een aanhoudende 429/529 op het abonnement kwam daardoor naar buiten
+   als ónze timeout → een generieke rb-ai-500** — met een container die
+   nauwelijks geheugen gebruikte omdat het subprocess vooral lag te wáchten
+   (`OOMKilled=false`, `restarts=0`, ~120 MiB van 2,44 GiB). Dat verklaart ook
+   waarom #251 concludeerde "5xx, geen rate-limit": de 5xx was onze eigen
+   timeout-vertaling, de rate-limit zat een laag dieper.
+
+`RetryTracker` telt die retries en `withRetries` laat de upstream-oorzaak bij
+een timeout wínnen van het woord "timeout" — een run die na zeven mislukte
+API-pogingen afgekapt wordt is een API-fout, geen trage LLM. De timeout blijft
+in de detail-tekst staan. Verder gemeten en vastgelegd: de SDK-meldingen
+`Failed to spawn …` / `… exited with code N` / `… terminated by signal SIGKILL`
+worden als `spawn` herkend (letterlijk uit `sdk.mjs`, niet geraden), en de
+`stderr`-callback van het subprocess gaat in een ringbuffer die alleen bij
+uitval wordt uitgestort — stil bij succes, doorslaggevend bij een crash.
+
+Twee kleine fixes zaten in dezelfde meting:
+- **de harde timeout start nu ná de semaphore-permit**, niet bij binnenkomst.
+  Daarvóór at een volle achtergrond-deelcap tot 30 s (`AI_QUEUE_WAIT_MS`) van
+  het 90 s-budget op en verscheen dat als een timeout die naar de LLM leek te
+  wijzen. Sinds de mining parallel draait (#279) is die wachttijd de regel.
+  **Gevolg dat erbij hoort:** de worst-case wandkloktijd van één aanroep gaat
+  van 90 s naar `AI_QUEUE_WAIT_MS + AI_EXTRACT_TIMEOUT_MS` = 30 + 90 = **120 s**.
+  Dat past ruim binnen de HttpClient-timeout van 6 minuten aan de rb-api-kant,
+  dus er verandert niets aan het degradatiepad; het is wél de bovengrens die je
+  moet meerekenen als je aan één van beide knoppen draait.
+- **"tool niet geroepen" is niet langer hetzelfde als "run gefaald"**: een run
+  die netjes afrondt zonder de geforceerde tool te callen krijgt
+  `reason: "no_tool_call"` — een prompt-/schemaprobleem, een andere knop dan een
+  machineprobleem.
+
+**De uitval is een TIMEOUT, en de duur schaalt met het aantal refs.** Twee
+onafhankelijke metingen wijzen dezelfde kant op.
+
+*Rekensom op de run.* De interactie-run deed 40 kaarten in 43 min (2580 s),
+sequentieel, met 18 successen en 22 uitvallen. Reken met een uitval van 90 s
+(de harde timeout): dan blijft (2580 − 22×90)/18 = **33 s per geslaagde kaart**
+over — precies de gedocumenteerde ~40 s. Omgekeerd, bij 40 s per succes:
+(2580 − 18×40)/22 = **84,5 s** per uitval, oftewel de timeout. Er is maar één
+oplossing die past.
+
+*Direct experiment op productie.* Zelfde kaarttekst, alleen het aantal
+aangeboden refs verschilt:
+
+| refs | payload | uitkomst |
+|---|---|---|
+| 3 | 0,5k tekens | 200 na **49,0 s** |
+| 39 | 2,2k tekens | **500** na **92,1 s** (afgekapt) |
+
+Die 500 is precies het probleem waar #281 over gaat: het experiment draaide op
+de toen-live sidecar, dus de afkapping kwam als generieke serverfout naar
+buiten, ononderscheidbaar van "tool niet geroepen" en "er ging iets stuk". Ná
+deze PR geeft dezelfde run een **504** met `code: "extract_timeout"`.
+
+Niet de kaarttekst drijft de duur, maar **het aantal aangeboden refs** — het
+ontologie-vocabulaire dat `BuildOfferedRefsAsync` per kaart meestuurt. Bij 3
+refs is er 41 s marge, bij 39 refs is de marge weg.
+
+**Dit is een schaalklip, geen vaste 55%.** Het aantal refs is een functie van
+hoeveel de kennisbank wéét (nu 38 canonieke entiteiten, groeiend met elke set).
+Hoe meer het brein leert, hoe meer extracties omvallen — en een gefaalde kaart
+krijgt geen watermark, dus ze komt terug en valt opnieuw om. Het gemeten
+verloop over opeenvolgende runs (45% → 47% → 55%) is die klim, niet ruis. Het
+wegnemen van de oorzaak staat in **#288**; de timeout ophogen verschuift de klip
+alleen (bij ~60 refs ligt hij er weer), dus `AI_EXTRACT_TIMEOUT_MS` is er als
+ops-noodrem met de bestaande 90 s als default — expliciet niet als fix.
+
+> **Correctie op een eerdere lezing in deze PR.** Een eerste analyse verwierp
+> "de payload doet het" op grond van magnitude: worst case ~12 KB ≈ 3000 tokens
+> is ~1,5% van het contextvenster, en "prompt te lang" is een niet-herhaalbare
+> 400 die in <1 s terugkomt. Dat deel klopt nog steeds — de payload wordt niet
+> *afgewezen*. Maar het weerlegde alleen dat mechanisme, niet het verband: de
+> payload (specifiek het aantal refs) drijft de **latency**, en latency tegen
+> een vaste 90 s-begroting is precies wat uitval bepaalt. De redenering sprong
+> van "de API kan dit aan" naar "dus ligt het niet aan de payload", en dat is
+> een non sequitur. Ook het watermark-argument werd verkeerd gelezen: 45 → 47 →
+> 55% is monotoon stijgend, wat de grootte-afhankelijke verklaring juist
+> ONDERSTEUNT; het werd als "schommelt" afgedaan. De les staat in CLAUDE.md.
+
+**Waar de SDK-retries dan staan.** Het retry-mechanisme hierboven is echt en nu
+zichtbaar, maar het is een **tweede versterker**, niet de aangetoonde
+hoofdoorzaak van de 22: het experiment haalt de timeout al zonder dat er
+retries aan te pas hoeven komen. De twee kunnen elkaar wel opstapelen — elke
+retry eet marge die een refs-rijke kaart niet heeft. Er is één losse draad die
+de nieuwe logging moet ophelderen: **49 s voor een payload van 0,5k tekens is
+opvallend traag** voor een enkele tool-call-extractie; de `ai_call`-regel
+vermeldt vanaf nu of daar retries in zitten of dat het pure generatietijd is.
+
+De `ai_call`-regel draagt daarom `ms`, `bytes`, `refs` en `items` mee (maten en
+aantallen, nooit inhoud), zodat de klip meetbaar is in plaats van
+reproduceerbaar-op-verzoek.
+
+Bewust NIET aangepast: `EXTRACT_MAX_TURNS` (3) en de verhouding tussen onze
+timeout en de SDK-`max_retries` (10) — een timeout die korter is dan de eigen
+retry-keten eronder is aantoonbaar scheef, maar #281 ging over meten en de
+structurele fix staat in #288.
+
+**Grens van de redactie-garantie.** `redactSecrets`/`safeDetail` is de enige
+poort waar diagnostiek doorheen gaat, en hij is getest tegen tien
+aanvalsvormen (JSON-embedded, over chunks gesplitst, afgekapt door de
+ringbuffer, via een stack trace, met een env-naam die het patroon niet matcht).
+Twee ontwerpkeuzes zijn daarbij load-bearing en staan als zodanig in de code:
+`describeThrown` leest **nooit** `e.stack` (een stack trace is een onbegrensd
+kanaal), en `safeDetail` redacteert **vóór** het afkapt (andersom snijdt
+`MAX_DETAIL` een token doormidden en glipt het restant langs de patronen).
+
+Voor SECRETS is de garantie hard. Voor PROMPT-INHOUD is ze zwakker en dat is
+bewust: `StderrTail` is een ongecontroleerd kanaal — wat het Claude-subprocess
+naar stderr schrijft belandt in `detail`, en draait de CLI ooit verbose, dan
+kan daar kaarttekst tussen zitten. Dat is publieke Riot-tekst, dus het residu
+is aanvaard in ruil voor de diagnostische waarde. Twee oudere `console.log`'s
+in `ai.ts` (de agentic tool-call-log en het warmpool-faalpad) omzeilen de poort
+volledig; die staan al op main en zijn los opgepakt in **#292**.
 
 **rb-api-kant (mining-orkestratie).** Drie jobs in `JobCatalog`. De twee
 LLM-jobs staan bewust NIET in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk —

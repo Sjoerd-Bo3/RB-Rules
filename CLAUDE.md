@@ -213,6 +213,45 @@ met quota en rate-limiting.
   vraag kost 2 permits. Bijkomend: `AI_MAX_CONCURRENCY` en het memory-plafond
   van `rb-v2-ai` horen bij elkaar (~300-400 MiB RSS per gelijktijdige sessie) —
   verhoog nooit het één zonder het ander.
+- **De Claude Agent SDK GOOIT niet als een run mislukt** (#281) — ze eindigt met
+  een gewoon `result`-bericht (`subtype: "error_max_turns"`, `is_error`,
+  `api_error_status`, `errors[]`) en retryt een mislukte API-call bovendien
+  ZELF tot 10× met exponentiële backoff, elke poging gemeld als
+  `{"type":"system","subtype":"api_retry",…}`. rb-ai las geen van beide, dus 22
+  van de 40 mining-kaarten faalden zonder één logregel. Gemeten backoff: 0,5 →
+  1,0 → 2,3 → 4,5 → 9,6 → 16,4 → 32,1 s — na zeven pogingen 37 s zonder één
+  verwerkt token, dus een aanhoudende 429/529 loopt gegarandeerd in onze eigen
+  90 s-timeout en komt naar buiten als een generieke 500. **Een harde timeout
+  die korter is dan de retry-keten eronder verkleedt elke upstream-fout als
+  "traag".** Lees bij elke SDK-lus dus het result-bericht én `api_retry` uit;
+  `rb-ai/src/failure.ts` doet dat nu op één plek. Diagnostiek gaat verplicht
+  door `safeDetail`/`redactSecrets` — groottes en aantallen loggen mag,
+  prompt-inhoud en het token nooit.
+- **Reken een hypothese na op de wandkloktijd** (#281) — 40 kaarten in 43 min
+  met 18 successen laat maar één oplossing toe: 22 × ~85 s, oftewel de
+  90 s-timeout. Zulke rekensommen sluiten hele klassen verklaringen uit vóór je
+  gaat graven, en ze kosten een minuut.
+- **"De limiet wordt niet geraakt" ≠ "het ligt niet aan de omvang"** (#281,
+  duur betaald) — dezelfde analyse verwierp de payload-hypothese omdat de
+  payload worst case ~1,5% van het contextvenster is en "prompt te lang" een
+  niet-herhaalbare 400 in <1 s zou zijn. Beide feiten kloppen, de conclusie
+  niet: de payload werd niet *afgewezen*, maar dreef wel de **latency**, en
+  latency tegen een vaste timeout is precies wat uitval bepaalt. Een
+  productie-experiment met identieke kaarttekst gaf 3 refs → 200 na 49,0 s en
+  39 refs → 500 na 92,1 s (meting van vóór de fix; sindsdien is dat een 504 met
+  `code: extract_timeout`). Toets een omvang-hypothese dus altijd óók op DUUR,
+  niet alleen op limieten. Tweede fout in dezelfde analyse: 45 → 47 → 55% werd
+  als "schommelt dus willekeurig" gelezen terwijl het monotoon stíjgt — en een
+  gefaalde kaart krijgt geen watermark, dus zo'n klim is juist het handtekening-
+  patroon van een grootte-afhankelijke fout. Lees een reeks van drie niet als
+  ruis zonder ernaar te kijken.
+- **Vocabulaire dat met de kennisbank meegroeit is een schaalklip** (#281/#288)
+  — de brein-extractie stuurt per kaart het hele aangeboden refs-vocabulaire
+  mee. Dat groeit met elke set die het brein leert, dus de faalkans stijgt mee
+  met de kennis: geen vaste 55% maar een klim. De timeout ophogen verschuift de
+  klip alleen (`AI_EXTRACT_TIMEOUT_MS` staat er als ops-noodrem, niet als fix).
+  Bij elk "per item sturen we alles wat we weten"-patroon: begrens het budget,
+  of stel de vraag op het niveau waar het antwoord kaart-onafhankelijk is.
 - **Meet je eigen cap niet als "de LLM is overbelast"** (#279) — rb-ai's
   semaphore-afwijzing komt óók als 429 terug, maar mét
   `{"code":"concurrency_limit"}`. Zonder dat onderscheid telt zelf-veroorzaakte

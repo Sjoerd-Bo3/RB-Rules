@@ -301,6 +301,207 @@ public class RbAiOutcomeTests
         Assert.Equal("", tally.Summary);
     }
 
+    // ── #281: rb-ai's uitvalsoort reist mee naar het run-detail ──────────────
+    //
+    // Een mining-run over 40 kaarten meldde "22 rb-ai-uitval (5xx×22)" terwijl
+    // `docker logs rb-v2-ai` één regel bevatte. #251 gaf ons de LAAG (5xx), maar niet
+    // de oorzaak; rb-ai stuurt die nu als `reason` mee en RbAiClient gooide de
+    // foutbody tot nu toe ongelezen weg.
+
+    [Fact]
+    public async Task Extractie_500MetReden_DraagtDeRedenMee()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.InternalServerError,
+            """{"error":"extractie mislukt","reason":"max_turns","detail":"subtype=error_max_turns turns=3"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Equal("max_turns", r.Reason);
+        Assert.Null(r.Raw);   // degradatie-contract blijft: geen half feit
+    }
+
+    [Fact]
+    public async Task Extractie_500ZonderReden_BlijftHetOudeGedrag()
+    {
+        // Een oudere rb-ai (of een pad zonder reden) mag niets breken.
+        var ai = Ai(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Null(r.Reason);
+    }
+
+    [Fact]
+    public async Task Extractie_KapotteFoutbody_LeestGeenReden_EnBreektNiet()
+    {
+        // Zelfde defensieve regel als bij de concurrency-code: onleesbaar betekent
+        // "geen extra informatie", nooit "kapot".
+        var ai = Ai(_ => Json(HttpStatusCode.InternalServerError, "<html>502 nginx</html>"));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Null(r.Reason);
+    }
+
+    [Fact]
+    public async Task Extractie_429MetCodeEnReden_LeestBeideUitEenLezing()
+    {
+        // `code` (#279, de sidecar-cap) en `reason` (#281) zitten in dezelfde body;
+        // ze mogen elkaar niet in de weg zitten. De reden zelf voegt hier niets toe
+        // aan de uitkomst en wordt daarom weggelaten — anders staat er
+        // "429 AI-slots vol×1 (concurrency_limit×1)" in het run-detail, precies de
+        // ruis die de uitsplitsing onleesbaar maakt (#281-review).
+        var ai = Ai(_ => Json(HttpStatusCode.TooManyRequests,
+            """{"error":"alle AI-slots bezet","code":"concurrency_limit","reason":"concurrency_limit"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+        var tally = new AiOutcomeTally();
+        tally.Add(r.Outcome, r.Reason);
+
+        Assert.Equal(AiCallOutcome.ConcurrencyLimited, r.Outcome);
+        Assert.Null(r.Reason);
+        Assert.Equal("429 AI-slots vol×1", tally.Summary);
+    }
+
+    [Fact]
+    public async Task Extractie_429MetAFWIJKENDEReden_BehoudtDieWel()
+    {
+        // Alleen de 1-op-1 corresponderende reden is ruis; alles wat écht iets
+        // toevoegt blijft staan.
+        var ai = Ai(_ => Json(HttpStatusCode.TooManyRequests,
+            """{"error":"vol","code":"concurrency_limit","reason":"api_error"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ConcurrencyLimited, r.Outcome);
+        Assert.Equal("api_error", r.Reason);
+    }
+
+    // ── #281: een afgekapte extractie is een TIMEOUT, geen generieke 5xx ─────
+    //
+    // Op productie gereproduceerd: dezelfde kaarttekst, alleen het aantal aangeboden
+    // refs verschilt — 3 refs → 200 na 49,0 s, 39 refs → 500 na 92,1 s. Die 500 was
+    // onze eigen 90 s-timeout, maar op de draad niet te onderscheiden van "het model
+    // riep de tool niet" of "er ging echt iets stuk". rb-ai geeft een afgekapte run
+    // nu een 504 + code; deze tests falen zodra dat weer samenvalt.
+
+    [Fact]
+    public async Task Extractie_504_IsTimeout_GeenServerfout()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.GatewayTimeout,
+            """{"error":"extractie afgebroken op de tijdslimiet","code":"extract_timeout","reason":"timeout","detail":"extractie afgebroken na 90s (harde timeout)"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Timeout, r.Outcome);
+        Assert.NotEqual(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Equal(504, r.StatusCode);
+        Assert.Null(r.Raw);   // degradatie-contract blijft: geen half feit
+    }
+
+    [Fact]
+    public async Task Extractie_Timeout_WordtNietOpnieuwGeprobeerd()
+    {
+        // Een run die op de tijdslimiet strandde faalt bij een directe herhaling
+        // vrijwel zeker opnieuw — en kost dan twee keer 90 s uit de nachtrun.
+        var calls = 0;
+        var ai = Ai(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.GatewayTimeout);
+        });
+
+        await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Tally_TimeoutStaatOpZichzelf_NietWeggestoptOnder5xx()
+    {
+        // Dit is de regressie die #281 moet voorkomen: 22 afgekapte runs die als
+        // "5xx×22" gemeld worden sturen de beheerder naar de verkeerde knop.
+        var tally = new AiOutcomeTally();
+        for (var i = 0; i < 22; i++) tally.Add(AiCallOutcome.Timeout);
+
+        Assert.Equal("timeout×22", tally.Summary);
+        Assert.DoesNotContain("5xx", tally.Summary);
+    }
+
+    [Fact]
+    public async Task Extractie_504MetRedenTimeout_HerhaaltZichzelfNietInDeSamenvatting()
+    {
+        // "timeout×22 (timeout×22)" is ruis; een reden telt alleen als hij iets
+        // TOEVOEGT aan de uitkomst.
+        var ai = Ai(_ => Json(HttpStatusCode.GatewayTimeout,
+            """{"error":"afgebroken","code":"extract_timeout","reason":"timeout"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+        var tally = new AiOutcomeTally();
+        tally.Add(r.Outcome, r.Reason);
+
+        Assert.Null(r.Reason);
+        Assert.Equal("timeout×1", tally.Summary);
+    }
+
+    [Fact]
+    public async Task Extractie_504MetUpstreamReden_BehoudtDieWel()
+    {
+        // Wél informatief: de run liep in ONZE timeout, maar de SDK zat al die tijd
+        // op een aanhoudende API-fout te wachten. Dat wijst naar een andere knop.
+        var ai = Ai(_ => Json(HttpStatusCode.GatewayTimeout,
+            """{"error":"afgebroken","code":"extract_timeout","reason":"api_error","detail":"8 SDK-retries"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+        var tally = new AiOutcomeTally();
+        tally.Add(r.Outcome, r.Reason);
+
+        Assert.Equal("api_error", r.Reason);
+        Assert.Equal("timeout×1 (api_error×1)", tally.Summary);
+    }
+
+    [Fact]
+    public void Tally_SplitstDeUitvalUitPerReden()
+    {
+        var tally = new AiOutcomeTally();
+        for (var i = 0; i < 14; i++) tally.Add(AiCallOutcome.ServerError, "max_turns");
+        for (var i = 0; i < 8; i++) tally.Add(AiCallOutcome.ServerError, "spawn");
+        tally.Add(AiCallOutcome.Timeout);
+
+        // Dit is het verschil tussen "22 kaarten faalden" en een aanwijsbare knop.
+        Assert.Equal("5xx×22 (max_turns×14, spawn×8), timeout×1", tally.Summary);
+        Assert.Equal(23, tally.Failures);
+        Assert.Equal(14, tally.Count(AiCallOutcome.ServerError, "max_turns"));
+    }
+
+    [Fact]
+    public void Tally_ZonderReden_BlijftByteGelijkAanVoor281()
+    {
+        // De bestaande run-detail-teksten (en de tests die ze vastleggen) mogen niet
+        // verschuiven zolang rb-ai geen reden meestuurt.
+        var tally = new AiOutcomeTally();
+        tally.Add(AiCallOutcome.ServerError);
+        tally.Add(AiCallOutcome.ServerError);
+        tally.Add(AiCallOutcome.RateLimited, "   ");   // witruimte telt niet als reden
+
+        Assert.Equal("5xx×2, 429 rate-limit×1", tally.Summary);
+    }
+
+    [Fact]
+    public void Tally_RedenenVanVerschillendeUitkomsten_LopenNietDoorElkaar()
+    {
+        var tally = new AiOutcomeTally();
+        tally.Add(AiCallOutcome.ServerError, "spawn");
+        tally.Add(AiCallOutcome.Timeout, "spawn");
+
+        Assert.Equal("5xx×1 (spawn×1), timeout×1 (spawn×1)", tally.Summary);
+        Assert.Equal(1, tally.Count(AiCallOutcome.ServerError, "spawn"));
+        Assert.Equal(0, tally.Count(AiCallOutcome.ServerError, "max_turns"));
+    }
+
     // ── testinfra ────────────────────────────────────────────────────────────
 
     private static HttpResponseMessage Json(HttpStatusCode status, string body) =>

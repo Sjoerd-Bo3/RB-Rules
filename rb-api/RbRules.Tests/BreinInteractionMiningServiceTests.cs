@@ -503,6 +503,29 @@ public class BreinInteractionMiningServiceTests
         Assert.EndsWith("0 rb-ai-uitval", r.Summary);   // geen oorzaak-staart
     }
 
+    // ── #281: rb-ai's REDEN staat in de samenvatting, niet alleen de laag ──────
+    // Dit is de keten waar de issue om vroeg: rb-ai classificeert de uitval, zet hem
+    // in de foutbody, RbAiClient leest hem, de tally telt hem op en het run-detail
+    // toont hem. Vóór #281 stopte alles bij "5xx×22" — de oorzaak stond nergens,
+    // ook niet in de containerlog.
+    [Fact]
+    public async Task RunAsync_RbAiUitvalMetReden_ToontDeRedenInDeSamenvatting()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        var svc = new BreinInteractionMiningService(
+            db, FailingAi("""{"error":"extractie mislukt","reason":"no_tool_call"}"""),
+            new EntityResolutionService(db), new InteractionPromotionService(db));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Failed);
+        Assert.Equal("5xx×1 (no_tool_call×1)", r.FailureDetail);
+        Assert.Contains("(5xx×1 (no_tool_call×1))", r.Summary);
+    }
+
     // ── Nachtrun-deadline (#245) ───────────────────────────────────────────────
     [Fact]
     public async Task RunAsync_DeadlineVerstreken_StoptDirect_GeenHalfFeit_MeerWerk()
@@ -805,6 +828,17 @@ public class BreinInteractionMiningServiceTests
     {
         RetryDelay = (_, _) => Task.CompletedTask,
     };
+
+    /// <summary>rb-ai dat 500 geeft mét een machine-leesbare uitvalsoort (#281) —
+    /// het pad dat de 22 spoorloze mining-uitvallen alsnog verklaarbaar maakt.</summary>
+    private static RbAiClient FailingAi(string body) => new(
+        new HttpClient(new StubHandler(_ => new HttpResponseMessage(
+            HttpStatusCode.InternalServerError)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        }))
+        { BaseAddress = new Uri("http://rb-ai.test") },
+        NullLogger<RbAiClient>.Instance);
 
     private static RbAiClient Ai(Func<string?> body) => new(
         new HttpClient(new StubHandler(_ => body() is { } b

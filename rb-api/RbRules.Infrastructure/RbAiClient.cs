@@ -9,8 +9,15 @@ namespace RbRules.Infrastructure;
 /// <summary>Eén brein-extractie-aanroep mét haar uitslag (#251): de rauwe body
 /// (<c>null</c> bij uitval — het bestaande degradatie-contract), de OORZAAK, en de
 /// statuscode waar er een was. Zo kan de mining-orkestratie de uitval per oorzaak
-/// optellen in plaats van alleen te tellen dát het misging.</summary>
-public sealed record AiExtraction(string? Raw, AiCallOutcome Outcome, int? StatusCode);
+/// optellen in plaats van alleen te tellen dát het misging.
+///
+/// <paramref name="Reason"/> (#281) is rb-ai's eigen, fijnmazige uitvalsoort uit de
+/// foutbody (<c>max_turns</c>, <c>spawn</c>, <c>api_error</c>, <c>no_tool_call</c>,
+/// <c>timeout</c>, …). <see cref="AiCallOutcome"/> zegt op welke laag het misging,
+/// de reden zegt waarom — zonder dat laatste was "5xx×22" alles wat een run-detail
+/// over 55% uitval kon melden. Null bij een geslaagde call of een oudere rb-ai.</summary>
+public sealed record AiExtraction(
+    string? Raw, AiCallOutcome Outcome, int? StatusCode, string? Reason = null);
 
 /// <summary>Echte token-tellingen van één rb-ai-call (#121): input telt de
 /// cache-tokens mee (rb-ai's volume-maat), bij multi-turn-taken opgeteld over
@@ -191,13 +198,17 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
                 }
 
                 var outcome = Classify(res.StatusCode);
+                // De foutbody één keer lezen en er beide machine-leesbare velden uit
+                // halen (#281): `code` (de sidecar-cap, #279) en `reason` (rb-ai's
+                // uitvalsoort). Best-effort — een onleesbare body levert simpelweg
+                // geen van beide op.
+                var error = await ReadErrorAsync(res, ct);
                 // 429 komt uit twee heel verschillende bronnen (#279): Anthropic's
                 // rate-limit op het abonnement, óf onze eigen semaphore in rb-ai die
                 // alle slots bezet zag. Alleen die laatste draagt een machine-leesbare
                 // code — zonder dit onderscheid meet een parallelle mining-run zijn
                 // eigen cap als "de LLM is overbelast".
-                if (outcome == AiCallOutcome.RateLimited
-                    && await IsConcurrencyLimitAsync(res, ct))
+                if (outcome == AiCallOutcome.RateLimited && error.Code == ConcurrencyLimitCode)
                     outcome = AiCallOutcome.ConcurrencyLimited;
                 // Alleen rate-limit/overbelasting is het wachten waard; de rest faalt
                 // bij een directe herhaling vrijwel zeker opnieuw.
@@ -211,8 +222,13 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
                     continue;
                 }
 
-                logger.LogWarning("rb-ai {Path} gaf {Status}", path, status);
-                return new(null, outcome, status);
+                // De reden hoort in de logregel (#281): een kale "gaf 500" was
+                // precies wat het diagnosticeren van 55% uitval onmogelijk maakte.
+                // rb-ai redacteert zijn detail-tekst al (werkafspraak 7).
+                logger.LogWarning(
+                    "rb-ai {Path} gaf {Status} (reden={Reason}: {Detail})",
+                    path, status, error.Reason ?? "onbekend", error.Detail ?? "-");
+                return new(null, outcome, status, Distinct(outcome, error.Reason));
             }
         }
     }
@@ -245,33 +261,71 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
 
     private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(60);
 
-    /// <summary>Draagt deze 429 rb-ai's eigen <c>{"code":"concurrency_limit"}</c>
-    /// (#279)? Best-effort en bewust defensief: een onleesbare of lege body betekent
-    /// alleen "geen bewijs voor de sidecar-cap" en laat de uitslag op de bestaande
-    /// <see cref="AiCallOutcome.RateLimited"/> staan — een meet-verfijning mag nooit
-    /// zelf een uitvalpad worden.</summary>
-    private static async Task<bool> IsConcurrencyLimitAsync(
+    /// <summary>De machine-leesbare velden uit een rb-ai-foutbody: <c>code</c> (de
+    /// sidecar-cap, #279) en <c>reason</c>/<c>detail</c> (de uitvalsoort, #281). Alle
+    /// drie mogen ontbreken.</summary>
+    private readonly record struct AiError(string? Code, string? Reason, string? Detail);
+
+    /// <summary>Lees de foutbody van rb-ai uit. Best-effort en bewust defensief: een
+    /// onleesbare of lege body betekent alleen "geen extra informatie" en laat de
+    /// uitslag staan zoals de statuscode hem al classificeerde — een meet-verfijning
+    /// mag nooit zelf een uitvalpad worden. Eén lezing voor beide velden, zodat er
+    /// geen tweede pad ontstaat dat de body opnieuw moet buffer'en.</summary>
+    private static async Task<AiError> ReadErrorAsync(
         HttpResponseMessage res, CancellationToken ct)
     {
         try
         {
             var body = await res.Content.ReadAsStringAsync(ct);
-            if (!LooksLikeJson(body)) return false;
+            if (!LooksLikeJson(body)) return default;
             using var doc = JsonDocument.Parse(body!);
-            return doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("code", out var code)
-                && code.ValueKind == JsonValueKind.String
-                && code.GetString() == ConcurrencyLimitCode;
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return default;
+            string? Text(string name) =>
+                root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(v.GetString())
+                    ? v.GetString() : null;
+            return new(Text("code"), Text("reason"), Text("detail"));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return false;
+            return default;
         }
     }
 
     /// <summary>De machine-leesbare code die rb-ai's <c>ConcurrencyLimitError</c>
     /// meestuurt (rb-ai/src/concurrency.ts) — één string, twee kanten.</summary>
     private const string ConcurrencyLimitCode = "concurrency_limit";
+
+    /// <summary>Laat een reden weg die niets toevoegt aan de uitkomst (#281).
+    ///
+    /// Een 504 met <c>reason: "timeout"</c> zou anders als "timeout×22 (timeout×22)"
+    /// in het run-detail landen — ruis die de uitsplitsing juist onleesbaar maakt.
+    /// Zodra rb-ai wél iets extra's weet (een timeout die in werkelijkheid een
+    /// aanhoudende API-fout was: "timeout×22 (api_error×14)") blijft de reden
+    /// gewoon staan. Puur cosmetisch; de meting zelf verandert niet.
+    ///
+    /// De koppeling is EXPLICIET en niet op naamgelijkenis (#281-review): een
+    /// <c>outcome.ToString()</c>-vergelijking dekte wel <c>Timeout</c>/"timeout"
+    /// maar niet <c>ConcurrencyLimited</c>/"concurrency_limit", waardoor precies
+    /// de ruis die deze helper moet doden alsnog doorkwam als
+    /// "429 AI-slots vol×1 (concurrency_limit×1)". rb-ai's redenen-vocabulaire
+    /// (<c>rb-ai/src/failure.ts</c>) is snake_case en volgt zijn eigen leven; die
+    /// twee namen laten samenvallen is toeval, geen contract.</summary>
+    private static string? Distinct(AiCallOutcome outcome, string? reason) =>
+        reason is not null && RedundantReasons.TryGetValue(outcome, out var redundant)
+        && string.Equals(reason, redundant, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : reason;
+
+    /// <summary>Per uitkomst de rb-ai-reden die er niets aan toevoegt. Alleen
+    /// uitkomsten waar rb-ai een 1-op-1 corresponderende reden voor stuurt staan
+    /// erin; al het andere blijft bewaard.</summary>
+    private static readonly Dictionary<AiCallOutcome, string> RedundantReasons = new()
+    {
+        [AiCallOutcome.Timeout] = "timeout",
+        [AiCallOutcome.ConcurrencyLimited] = ConcurrencyLimitCode,
+    };
 
     private static AiCallOutcome Classify(System.Net.HttpStatusCode status) => status switch
     {

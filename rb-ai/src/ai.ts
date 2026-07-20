@@ -12,6 +12,16 @@ import {
   createBrainSession,
 } from "./brain-tools.js";
 import { aiSemaphore, AI_QUEUE_WAIT_MS, ConcurrencyLimitError } from "./concurrency.js";
+import {
+  AiRunError,
+  describeThrown,
+  resultFailure,
+  RetryTracker,
+  StderrTail,
+  withRetries,
+  withStderr,
+  type AiFailure,
+} from "./failure.js";
 import { RELATIONS_MARKER } from "./relations.js";
 import { usageFromSdk, type AskUsage } from "./usage.js";
 import {
@@ -122,7 +132,131 @@ export function createBrainMcpServer(onStep?: (step: string) => void) {
 // tool te roepen, één om af te ronden — ruim gehouden op 3. Harde timeout net als
 // research/agentic zodat een hangende run nooit op abonnementskosten blijft draaien.
 const EXTRACT_MAX_TURNS = 3;
-const EXTRACT_TIMEOUT_MS = 90_000;
+
+/** Harde grens per extractie-run. Verstelbaar via `AI_EXTRACT_TIMEOUT_MS`, met
+ * de bestaande 90 s als default — dus zonder env-wijziging verandert er niets.
+ *
+ * EERLIJKE MOTIVERING (#281): ophogen is een PLEISTER, geen oplossing. Een
+ * productie-experiment liet zien dat de duur van een extractie meeschaalt met
+ * het AANTAL AANGEBODEN REFS — 3 refs → 200 na 49,0 s, 39 refs → 500 na 92,1 s.
+ * Het vocabulaire dat we per kaart meesturen groeit met elke set die de
+ * kennisbank leert, dus dit is een SCHAALKLIP: hoe meer het brein weet, hoe
+ * groter de kans dat een extractie omvalt. De timeout verhogen verschuift die
+ * klip alleen — bij 60 refs ligt hij er weer. De echte oplossing (minder refs
+ * per aanroep aanbieden, of op mechanic-niveau vragen in plaats van per kaart)
+ * staat in #288 en hoort NIET in de meet-PR van #281.
+ *
+ * De knop staat er dus als ops-noodrem, niet als fix. Let op: hem daadwerkelijk
+ * gebruiken vraagt óók een regel in de compose-`environment:` van `rb-v2-ai`
+ * (#268-valkuil: een variabele in de VM-`.env` is een substitutiebron voor de
+ * compose-file, géén container-env). */
+const EXTRACT_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(process.env.AI_EXTRACT_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : 90_000;
+})();
+
+/** De SDK-aanroep als injecteerbare functie (test-seam, zie
+ * {@link extractWithTool}). Structureel getypeerd op wat wij ervan gebruiken:
+ * prompt + options erin, een berichtenstroom eruit. */
+export type QueryRunner = (arg: {
+  prompt: string;
+  options: Options;
+}) => AsyncIterable<unknown>;
+
+/** Uitkomst van één {@link extractWithTool}-run (#281). `items` houdt het
+ * bestaande contract: de gevangen array (mogelijk leeg) of `null` bij uitval.
+ * `failure` is nieuw en staat er ALLEEN bij `items === null`: het zegt WAAROM
+ * er niets kwam, zodat server.ts het kan loggen én in de foutbody kan
+ * meesturen. Vóór #281 was dit onderscheid nergens: elke mislukking — timeout,
+ * max beurten, API-fout, een model dat de tool gewoon niet riep — kwam als
+ * dezelfde kale `null` naar buiten en daarna als hetzelfde kale
+ * `500 {"error":"extractie mislukt"}`. */
+export interface ExtractOutcome {
+  items: unknown[] | null;
+  failure?: AiFailure;
+  /** Is de run door ONZE harde timeout afgekapt (#281)? Apart van
+   * `failure.reason`, want `withRetries` mag die reden overschrijven met de
+   * upstream-oorzaak (een timeout ná zeven mislukte API-pogingen is een
+   * API-fout). Op HTTP-niveau blijft het feit "wij hebben afgekapt" staan, en
+   * dáár hangt de 504 aan — zodat rb-api een timeout als `timeout` telt en niet
+   * als generieke 5xx. Precies de samenval die #281 blind maakte: drie
+   * verschillende oorzaken (tool niet geroepen, timeout, echte fout) kwamen
+   * allemaal als dezelfde kale 500 naar buiten. */
+  timedOut?: boolean;
+}
+
+/** De afloop van één extractie-run, als PURE functie (#281-review).
+ *
+ * Waarom dit geen inline-branches meer zijn: de eerste versie besliste dit op
+ * twee plaatsen — in het catch-blok én na de leeslus — en die twee liepen
+ * uiteen. Alleen het catch-pad woog `timedOut`, dus een afgebroken run die
+ * NIET gooide (de iterator loopt leeg, of geeft nog een fout-result af) kwam er
+ * als `no_tool_call` + 500 uit. Dat is niet alleen fout maar actief misleidend:
+ * het stuurt de beheerder naar de prompt terwijl het de tijdslimiet was. En het
+ * sprak de kernbevinding van deze PR tegen — de Agent SDK gooit juist NIET
+ * noodzakelijk bij een mislukte run.
+ *
+ * Eén functie voor beide paden maakt die drift per constructie onmogelijk, en
+ * maakt de beslissing bovendien uitputtend testbaar zonder SDK.
+ *
+ * Volgorde is betekenisvol: een geldige vangst wint van elke faalreden (weggooien
+ * zou goed werk vernietigen), en de afkapping wint van wat de run verder ook
+ * meldde (wij hakten af — dat is wat er gebeurde). */
+export function decideExtractOutcome(input: {
+  captured: unknown[] | null;
+  timedOut: boolean;
+  aborted: boolean;
+  runFailure?: AiFailure;
+  toolName: string;
+  timeoutMs: number;
+}): ExtractOutcome {
+  const { captured, timedOut, aborted, runFailure, toolName, timeoutMs } = input;
+  const seconds = timeoutMs / 1000;
+
+  if (captured !== null) {
+    // De tool vuurde: de kandidaten zijn geldig en gaan mee. Werd de run dáárna
+    // afgekapt, dan is het een PARTIËLE vangst — de meting moet dat zien, anders
+    // vallen juist de traagste kaarten uit de schaalklip-meting weg.
+    return timedOut
+      ? {
+          items: captured,
+          timedOut: true,
+          failure: {
+            reason: "timeout",
+            detail:
+              `tool vuurde nog vóór de tijdslimiet van ${seconds}s; ` +
+              "resultaat behouden, run daarna afgekapt",
+          },
+        }
+      : { items: captured };
+  }
+  if (timedOut) {
+    return {
+      items: null,
+      timedOut: true,
+      failure: {
+        reason: "timeout",
+        detail: `extractie afgebroken na ${seconds}s (harde timeout)`,
+      },
+    };
+  }
+  if (aborted) {
+    return {
+      items: null,
+      failure: { reason: "aborted", detail: "client heeft de verbinding gesloten" },
+    };
+  }
+  // Geen afkapping: de run liep echt af. Meldde de SDK een eigen fout, dan is
+  // dát de oorzaak; anders koos het model ervoor de tool niet te roepen — een
+  // prompt-/schemaprobleem, een andere knop dan een machineprobleem.
+  return {
+    items: null,
+    failure: runFailure ?? {
+      reason: "no_tool_call",
+      detail: `run afgerond zonder aanroep van ${toolName}`,
+    },
+  };
+}
 
 /** Tool-forced brein-extractie (#226, docs/ARCHITECTURE brein-epic §3.1). Draait
  * één geforceerde in-process MCP-tool (createSdkMcpServer/tool, zelfde mechaniek als
@@ -130,10 +264,12 @@ const EXTRACT_TIMEOUT_MS = 90_000;
  * model KAN geen ref/kind/window buiten het aangeboden vocabulaire noemen. De
  * tool-handler VANGT de gevalideerde argumenten in een closure en geeft een ack
  * terug; de daadwerkelijke kandidaten reizen dus niet via de antwoordtekst maar via
- * de tool-input. Retourneert de gevangen array (mogelijk leeg) of <c>null</c> als de
- * tool niet werd geroepen / de run faalde — de aanroeper (rb-api) degradeert daarop
- * netjes (null → geen half feit). Puur SDK-gedreven en dus, net als askClaude, niet
- * los unit-getest; de vocabulaire→schema-vertaling in extract.ts is dat wél. */
+ * de tool-input. Puur SDK-gedreven en dus, net als askClaude, niet los unit-getest;
+ * de vocabulaire→schema-vertaling in extract.ts en de faalvertaling in failure.ts
+ * zijn dat wél.
+ *
+ * Wat de tool vóór een uitval al ving blijft geldig (dan is er gewoon een
+ * resultaat); anders komt er `null` mét een {@link AiFailure} terug. */
 export async function extractWithTool(opts: {
   toolName: string;
   description: string;
@@ -143,8 +279,19 @@ export async function extractWithTool(opts: {
   addendum: string;
   text: string;
   signal?: AbortSignal;
-}): Promise<unknown[] | null> {
-  const { toolName, description, schema, resultKey, system, addendum, text, signal } = opts;
+  /** Test-seam (#281-review): de SDK-aanroep zelf. Productie laat dit weg en
+   * krijgt `query`; een test levert een eigen berichtenstroom en kan zo de
+   * faal- en timeout-paden ECHT doorlopen. Zonder deze naad viel er over dit
+   * pad alleen te toetsen dát de juiste tekens in de broncode staan — en zo'n
+   * bron-grep vangt zijn eigen bug niet: het weghalen van één `timedOut = true`
+   * liet alle tests groen terwijl elke timeout weer als generieke 500 naar
+   * buiten kwam. Zelfde patroon als `RbAiClient.RetryDelay` in rb-api. */
+  runQuery?: QueryRunner;
+}): Promise<ExtractOutcome> {
+  const {
+    toolName, description, schema, resultKey, system, addendum, text, signal,
+    runQuery = query as unknown as QueryRunner,
+  } = opts;
   const serverName = "extract";
 
   let captured: unknown[] | null = null;
@@ -164,16 +311,40 @@ export async function extractWithTool(opts: {
 
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, EXTRACT_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const onAbort = () => controller.abort();
   if (signal?.aborted) controller.abort();
   else signal?.addEventListener("abort", onAbort, { once: true });
 
   const systemPrompt = [system, addendum].filter(Boolean).join("\n\n");
+  // Stderr van het subprocess meelezen (#281): stil bij succes, doorslaggevend
+  // bij uitval — zie StderrTail.
+  const stderr = new StderrTail();
+  // SDK-interne retries meetellen (#281): een aanhoudende 429/529 kost via de
+  // exponentiële backoff meer dan de hele 90s-begroting en verscheen daardoor
+  // als onze timeout in plaats van als de API-fout die het was.
+  const retries = new RetryTracker();
+  /** Elke uitval krijgt dezelfde context mee: wat het subprocess naar stderr
+   * schreef en hoe vaak de SDK intern opnieuw probeerde. Eén poort, zodat geen
+   * enkel faalpad half-geïnstrumenteerd kan achterblijven. */
+  const enrich = (failure: AiFailure): AiFailure =>
+    withRetries(withStderr(failure, stderr), retries);
+  /** Beide uitgangen — na de leeslus én uit het catch-blok — lopen hier
+   * doorheen, zodat ze per constructie dezelfde beslissing nemen. De
+   * stderr-staart en de SDK-retries worden er hier overheen gelegd. */
+  const finish = (): ExtractOutcome => {
+    const outcome = decideExtractOutcome({
+      captured,
+      timedOut,
+      aborted: controller.signal.aborted,
+      runFailure,
+      toolName,
+      timeoutMs: EXTRACT_TIMEOUT_MS,
+    });
+    return outcome.failure ? { ...outcome, failure: enrich(outcome.failure) } : outcome;
+  };
   let release: (() => void) | undefined;
+  let runFailure: AiFailure | undefined;
   try {
     // Background (#279): de extractie-endpoints zijn batch-werk voor de
     // brein-mining — er zit geen bezoeker op te wachten. Ze mogen daarom
@@ -186,6 +357,16 @@ export async function extractWithTool(opts: {
       maxWaitMs: AI_QUEUE_WAIT_MS,
       priority: "background",
     });
+    // Timer PAS na de permit (#281): de 90 s is een begroting voor de
+    // LLM-run, niet voor de wachtrij. Startte hij bij binnenkomst, dan at een
+    // volle achtergrond-deelcap tot 30 s (AI_QUEUE_WAIT_MS) van het budget op
+    // en verscheen het resultaat als een timeout die op de LLM leek te wijzen
+    // terwijl de call gewoon te kort de tijd kreeg. Sinds de mining parallel
+    // draait (#279) is die wachttijd de regel, niet de uitzondering.
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, EXTRACT_TIMEOUT_MS);
     const options: Options = {
       model: MODEL.cheap,
       maxTurns: EXTRACT_MAX_TURNS,
@@ -195,22 +376,29 @@ export async function extractWithTool(opts: {
       permissionMode: "dontAsk" as const,
       abortController: controller,
       systemPrompt,
+      stderr: (data: string) => stderr.append(data),
     };
     // De berichten leeglezen zodat de tool-call daadwerkelijk vuurt; het
     // tekstantwoord interesseert ons niet — captured draagt het resultaat.
-    for await (const _ of query({ prompt: text, options })) {
-      // no-op: de closure hierboven vangt de tool-input.
+    // Het afsluitende result-bericht lezen we WEL (#281): daar — en nergens
+    // anders — meldt de SDK dat de run mislukte.
+    for await (const message of runQuery({ prompt: text, options })) {
+      retries.observe(message);
+      runFailure = resultFailure(message) ?? runFailure;
     }
-    return captured;
+    // De leeslus is afgelopen — één beslispunt, gedeeld met het catch-blok.
+    return finish();
   } catch (e) {
     if (e instanceof ConcurrencyLimitError) throw e;
     // Timeout/uitval is verwacht pad: null → rb-api degradeert. Wat de tool vóór
-    // de uitval al ving blijft geldig; anders null.
-    if (timedOut) return captured;
-    if (controller.signal.aborted) return captured;
-    throw e;
+    // de uitval al ving blijft geldig; anders null MET de reden.
+    // Een geworpen fout is alleen de oorzaak als er geen afkapping was; anders
+    // wint de afkapping (dezelfde beslissing als hierboven).
+    if (!timedOut && !controller.signal.aborted && captured === null)
+      return { items: null, failure: enrich(runFailure ?? describeThrown(e)) };
+    return finish();
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
     release?.();
   }
@@ -251,10 +439,16 @@ async function* userMessage(prompt: string, images: AskImage[]) {
 /** Antwoord + echte token-usage van één askClaude-run (#121). `usage` komt
  * uit het afsluitende result-bericht van de SDK (opgeteld over alle beurten,
  * incl. tool-overhead bij research/agentic) en is null wanneer de SDK er
- * geen meegaf — de aanroeper behandelt dat als "onbekend", nooit als 0. */
+ * geen meegaf — de aanroeper behandelt dat als "onbekend", nooit als 0.
+ *
+ * `failure` (#281) draagt de uitvalsoort die datzelfde result-bericht meldde
+ * (`error_max_turns`, een `api_error_status`, een geweigerde tool). De Agent
+ * SDK GOOIT daar niet bij — het is een gewoon bericht — dus zonder dit veld
+ * eindigde een mislukte run als een leeg antwoord zonder enig spoor. */
 export interface AskAnswer {
   answer: string;
   usage: AskUsage | null;
+  failure?: AiFailure;
 }
 
 /** Eén bron van waarheid voor de query-opties per taaktype (#154): het koude
@@ -374,11 +568,20 @@ export async function collectAnswer(
   messages: AsyncIterable<unknown>,
   onDelta?: (text: string) => void | Promise<void>,
   progress?: CollectProgress,
+  retries?: RetryTracker,
 ): Promise<AskAnswer> {
   let assistantText = "";
   let resultText = "";
   let usage: AskUsage | null = null;
+  let failure: AiFailure | undefined;
   for await (const message of messages) {
+    // Mislukte run (#281): de SDK meldt die met een result-bericht, niet met
+    // een exception. Vóór deze regel viel zo'n run stil terug op een leeg
+    // antwoord — de directe oorzaak van 22 spoorloze 5xx'en. `api_retry`-
+    // berichten gaan naar de tracker: die maken zichtbaar dat de SDK intern
+    // al minutenlang op een 429/529 zat te wachten.
+    retries?.observe(message);
+    failure = resultFailure(message) ?? failure;
     const m = message as {
       type: string;
       text?: string;
@@ -414,7 +617,11 @@ export async function collectAnswer(
       usage = usageFromSdk(m.usage) ?? usage;
     }
   }
-  return { answer: (resultText || assistantText).trim(), usage };
+  return {
+    answer: (resultText || assistantText).trim(),
+    usage,
+    ...(failure ? { failure } : {}),
+  };
 }
 
 /** Stuur één prompt (optioneel met afbeeldingen) naar Claude.
@@ -486,6 +693,10 @@ export async function askClaude(opts: {
   else signal?.addEventListener("abort", onAbort, { once: true });
 
   const includePartialMessages = Boolean(onDelta);
+  // SDK-interne retries (#281): dezelfde meting als op het extract-pad, zodat
+  // een /ask-timeout die in werkelijkheid een aanhoudende API-fout was ook hier
+  // als zodanig in de log belandt.
+  const retries = new RetryTracker();
   let release: (() => void) | undefined;
   let unhookWarmAbort: (() => void) | undefined;
   const progress: CollectProgress = { sawOutput: false };
@@ -511,7 +722,7 @@ export async function askClaude(opts: {
           controller.signal.removeEventListener("abort", killWarm);
         try {
           claimed.send(buildUserMessage(prompt, images));
-          const res = await collectAnswer(claimed.messages(), onDelta, progress);
+          const res = await collectAnswer(claimed.messages(), onDelta, progress, retries);
           if (progress.sawOutput) return res;
           // Sessie eindigde zonder één output-bericht: subprocess was dood
           // bij de claim — er is geen API-call gedaan, dus koud is veilig.
@@ -539,11 +750,18 @@ export async function askClaude(opts: {
       prompt: images.length > 0 ? userMessage(prompt, images) : prompt,
       options,
     };
-    return await collectAnswer(
+    const res = await collectAnswer(
       query(arg as Parameters<typeof query>[0]),
       onDelta,
       progress,
+      retries,
     );
+    // Mislukte run ZONDER antwoord (#281): de SDK gooit hier niet, dus dit
+    // eindigde voorheen als een 200 met een leeg antwoord — rb-api degradeerde
+    // dan wel correct naar null, maar de reden was nergens te zien. Met een
+    // antwoord erbij is de run bruikbaar en telt de fout niet.
+    if (res.failure && !res.answer) throw new AiRunError(withRetries(res.failure, retries));
+    return res;
   } catch (e) {
     // Capaciteitsgrens (#155) onvertaald doorgeven: server.ts maakt er een
     // 429 met machine-leesbare reden van.
@@ -552,14 +770,24 @@ export async function askClaude(opts: {
     // overige fouten ongewijzigd doorgeven — server.ts vertaalt ze naar een
     // nette 500 of een error-frame.
     if (timedOut && timeoutMs) {
-      throw new Error(
-        `${task}-call afgebroken na ${timeoutMs / 1000}s (harde timeout)`,
-      );
+      throw new AiRunError(withRetries(
+        {
+          reason: "timeout",
+          detail: `${task}-call afgebroken na ${timeoutMs / 1000}s (harde timeout)`,
+        },
+        retries,
+      ));
     }
     if (controller.signal.aborted) {
-      throw new Error("aanroep afgebroken: client heeft de verbinding gesloten");
+      throw new AiRunError({
+        reason: "aborted",
+        detail: "aanroep afgebroken: client heeft de verbinding gesloten",
+      });
     }
-    throw e;
+    // Overige fouten geclassificeerd doorgeven (#281): de melding blijft
+    // leesbaar (AiRunError.message = "reden: detail") en server.ts kan de reden
+    // eruit lezen in plaats van hem uit een string te moeten raden.
+    throw new AiRunError(withRetries(describeThrown(e), retries));
   } finally {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);

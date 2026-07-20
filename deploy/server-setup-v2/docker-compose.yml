@@ -169,6 +169,20 @@ services:
       # aan BREIN_MINING_CONCURRENCY bij rb-api.
       AI_MAX_CONCURRENCY: ${AI_MAX_CONCURRENCY:-5}
       AI_INTERACTIVE_RESERVE: ${AI_INTERACTIVE_RESERVE:-2}
+      # Tijdslimiet per brein-extractie (#281). Default 90000 = het bestaande
+      # gedrag; hij staat hier zodat de knop er in een incident daadwerkelijk
+      # ís — een waarde die alleen in de VM-.env staat bereikt de container
+      # nooit (zie de regel hierboven, en de NIGHTLY_ENABLED-les bij rb-api).
+      #
+      # NOODREM, GEEN FIX. Ophogen verschuift alleen de schaalklip: de duur van
+      # een extractie schaalt mee met het aantal aangeboden refs (gemeten:
+      # 3 refs → 200 na 49,0 s, 39 refs → 92,1 s afgekapt), en dat aantal groeit
+      # met elke set die de kennisbank leert. Bij ~60 refs ligt de klip er weer.
+      # De structurele oplossing (minder refs per aanroep, of de vraag op
+      # mechanic-niveau stellen) staat in #288. Verhogen kost bovendien
+      # wandkloktijd per mislukte kaart in de nachtrun — een run met 22
+      # uitvallen betaalt 22× deze waarde.
+      AI_EXTRACT_TIMEOUT_MS: ${AI_EXTRACT_TIMEOUT_MS:-90000}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

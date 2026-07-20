@@ -1170,6 +1170,41 @@ de globale duur-vangrail).
   throttelend abonnement en zo de verkeerde knop verdraaien. *Na deploy: het
   geheugenplafond van de AI-container is meeverhoogd (1 GiB → 2500 MiB); beide
   waarden horen bij elkaar.*
+- **rb-ai vertelt waaróm een aanroep mislukte** (#281) — de mining meldde
+  `22 rb-ai-uitval (5xx×22)` op 40 kaarten terwijl `docker logs rb-v2-ai` sinds
+  de start één regel bevatte: meer dan de helft van de kaarten haalde de LLM
+  niet en niemand kon zien waarom. rb-ai schrijft nu **één regel per
+  LLM-aanroep** (`evt=ai_call`: endpoint, duur, statuscode, uitkomst, oorzaak),
+  en geeft die oorzaak óók terug in de foutbody, zodat ze in de per-oorzaak-
+  telling van #251 belandt en in het **run-detail** staat in plaats van in de
+  containerlog: `5xx×22 (api_error×14, no_tool_call×8)`. Onderscheiden worden
+  onder meer SDK-fout, max beurten, API-fout, auth, subprocess-crash, timeout,
+  afgebroken door de client en "geforceerde tool niet geroepen". **Secrets en
+  prompt-inhoud blijven eruit** (werkafspraak 7): elke tekst gaat verplicht door
+  een redactie-poort, met een test die vastlegt dat het token nooit in een
+  logregel belandt.
+
+  **Een afgebroken run is geen serverfout meer.** Drie totaal verschillende
+  oorzaken vielen samen in één ononderscheidbare 500: het model rondde af zonder
+  de gevraagde tool te roepen, de tijdslimiet sloeg toe, of er ging echt iets
+  stuk. Een afgekapte extractie krijgt nu een eigen statuscode, waardoor het
+  run-detail **"timeout×22"** meldt in plaats van "5xx×22" — een heel andere
+  aanwijzing voor wie moet beslissen wat er mis is.
+
+  Wat de meting daarmee blootlegde: de duur van een extractie schaalt mee met
+  het **aantal begrippen dat we per kaart aanbieden** (gemeten op productie: 3
+  begrippen → klaar in 49 s, 39 begrippen → afgekapt op 92 s). Dat aantal groeit
+  met elke set die de kennisbank leert, dus dit is een schaalklip: hoe meer het
+  brein weet, hoe meer extracties omvallen. De tijdslimiet ophogen verschuift die
+  klip alleen — er staat wel een ops-noodrem op, maar de echte oplossing (minder
+  begrippen per vraag, of de vraag op mechanic-niveau stellen) is **#288**.
+  Tweede, nu zichtbare versterker: de Agent SDK probeert een mislukte API-call
+  zelf tot tien keer opnieuw met oplopende wachttijden, en die pogingen passen
+  samen niet in het tijdsbudget — zo'n timeout wordt voortaan aan de échte
+  oorzaak toegeschreven. Meegenomen: de tijdslimiet begint pas als de aanroep
+  daadwerkelijk een AI-slot heeft (de wachtrij at tot een derde van het budget
+  op sinds de mining parallel draait). *Na deploy: draai een mining-job en lees
+  het run-detail — dáár staat nu welke knop verdraaid moet worden.*
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
   er ook als signaalregel op (#171, `SourceDossierCompleteness`), met
