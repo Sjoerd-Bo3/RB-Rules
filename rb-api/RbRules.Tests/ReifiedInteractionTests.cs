@@ -286,6 +286,48 @@ public class ReifiedInteractionTests
         Assert.False(parsed[1].Interacts);
     }
 
+    // ── #251-review: vorm-fout ≠ leeg antwoord ──────────────────────────────────
+    // Een afgekapte body of schema-drift werd stil tot [] gereduceerd; de mining-lus
+    // telde dat als 'geldig, leeg' (geslaagd werk) en de uitvalmeting van #251 zag
+    // parse-fouten dus structureel niet. AiCallOutcome.Unparseable bestond wel maar
+    // was vanuit dit pad onbereikbaar.
+    [Theory]
+    [InlineData("""{"interactions":[{"from":"card:a","to":"card:b" """)]   // afgekapt
+    [InlineData("""{"interactions":"none"}""")]                            // schema-drift
+    [InlineData("""{"resultaat":"geen"}""")]                               // envelop mist
+    [InlineData("")]                                                        // niets
+    public void Extraction_ParseDetailed_KapotteEnvelop_IsMalformed(string raw)
+    {
+        var parsed = InteractionExtraction.ParseDetailed(raw, Vocab());
+
+        Assert.True(parsed.Malformed);
+        Assert.Empty(parsed.Items);
+    }
+
+    [Theory]
+    [InlineData("""{"interactions":[]}""")]
+    [InlineData("[]")]
+    public void Extraction_ParseDetailed_GeldigeLegeEnvelop_IsGeenVormFout(string raw)
+    {
+        var parsed = InteractionExtraction.ParseDetailed(raw, Vocab());
+
+        Assert.False(parsed.Malformed);   // "het model wist niets" ≠ "het model gaf onzin"
+        Assert.Empty(parsed.Items);
+    }
+
+    [Fact]
+    public void Extraction_ParseDetailed_ItemsBuitenHetVocabulaire_BlijvenGeldigWerk()
+    {
+        // De envelop klopt; alleen de INHOUD haalt de tweede muur niet. Dat is geen
+        // vorm-fout — anders zou elke te-strenge poort als rb-ai-uitval tellen.
+        var raw = """{"interactions":[{"from":"card:a","to":"card:ZZZ","kind":"COUNTERS"}]}""";
+
+        var parsed = InteractionExtraction.ParseDetailed(raw, Vocab());
+
+        Assert.False(parsed.Malformed);
+        Assert.Empty(parsed.Items);
+    }
+
     [Fact]
     public void Extraction_Parse_DropsSelfLoop()
     {

@@ -97,9 +97,17 @@ public static class MechanicPredicateExtraction
     /// worden ook tokens buiten het advisieve lexicon van hun predicaat geweigerd
     /// (strengere modus voor auto-review); default lenient (onbekend token → kandidaat
     /// voor menselijke review, nooit stil weg).</summary>
-    public static IReadOnlyList<ExtractedPredicate> Parse(string? raw, bool knownTokensOnly = false)
+    public static IReadOnlyList<ExtractedPredicate> Parse(string? raw, bool knownTokensOnly = false) =>
+        ParseDetailed(raw, knownTokensOnly).Items;
+
+    /// <summary>Zelfde parse, maar mét het vorm-oordeel (#251-review): een afgekapte
+    /// body of een schema-vreemde envelop levert <see cref="ExtractionParse{T}.Malformed"/>
+    /// in plaats van stil een lege lijst, zodat de mining-lus hem als
+    /// <see cref="AiCallOutcome.Unparseable"/> telt i.p.v. als geslaagd-maar-leeg.</summary>
+    public static ExtractionParse<ExtractedPredicate> ParseDetailed(
+        string? raw, bool knownTokensOnly = false)
     {
-        if (string.IsNullOrWhiteSpace(raw)) return [];
+        if (string.IsNullOrWhiteSpace(raw)) return ExtractionParse<ExtractedPredicate>.Broken;
 
         JsonElement root;
         try
@@ -107,13 +115,14 @@ public static class MechanicPredicateExtraction
             using var doc = JsonDocument.Parse(ExtractJsonSpan(raw));
             root = doc.RootElement.Clone();
         }
-        catch (JsonException) { return []; }
+        catch (JsonException) { return ExtractionParse<ExtractedPredicate>.Broken; }
 
         var array = root.ValueKind == JsonValueKind.Object
             && root.TryGetProperty("predicates", out var inner) && inner.ValueKind == JsonValueKind.Array
             ? inner
             : root.ValueKind == JsonValueKind.Array ? root : default;
-        if (array.ValueKind != JsonValueKind.Array) return [];
+        if (array.ValueKind != JsonValueKind.Array)
+            return ExtractionParse<ExtractedPredicate>.Broken;
 
         var seen = new HashSet<(string, string)>();
         var result = new List<ExtractedPredicate>();
@@ -134,7 +143,7 @@ public static class MechanicPredicateExtraction
             if (!seen.Add((predicate, token))) continue;                       // dedupe
             result.Add(new ExtractedPredicate(predicate, token));
         }
-        return result;
+        return new(result, Malformed: false);
     }
 
     private static string ExtractJsonSpan(string raw)

@@ -139,10 +139,21 @@ public static class InteractionExtraction
     /// weg wat buiten het aangeboden vocabulaire valt (onbekende ref, niet-
     /// gereïficeerd kind, conditie-as/lexicon-schending). Accepteert zowel de
     /// tool-envelop <c>{"interactions":[…]}</c> als een kale array.</summary>
-    public static IReadOnlyList<ExtractedInteraction> Parse(string? raw, ExtractionVocab vocab)
+    public static IReadOnlyList<ExtractedInteraction> Parse(string? raw, ExtractionVocab vocab) =>
+        ParseDetailed(raw, vocab).Items;
+
+    /// <summary>Zelfde parse, maar mét het vorm-oordeel (#251-review): een afgekapte
+    /// body of een schema-vreemde envelop (<c>{"interactions":"none"}</c>) levert
+    /// <see cref="ExtractionParse{T}.Malformed"/> in plaats van stil een lege lijst.
+    /// De mining-lus telt dat als <see cref="AiCallOutcome.Unparseable"/> i.p.v. als
+    /// geslaagd-maar-leeg werk, en zet er géén voortgangs-watermark op — een kaart
+    /// met een kapot antwoord moet juist terugkomen. Wat de enum-/lexicon-poorten
+    /// hieronder wegfilteren blijft wél geslaagd: de envelop was geldig.</summary>
+    public static ExtractionParse<ExtractedInteraction> ParseDetailed(
+        string? raw, ExtractionVocab vocab)
     {
         ArgumentNullException.ThrowIfNull(vocab);
-        if (string.IsNullOrWhiteSpace(raw)) return [];
+        if (string.IsNullOrWhiteSpace(raw)) return ExtractionParse<ExtractedInteraction>.Broken;
 
         var refSet = vocab.Refs.Select(r => r.Ref).ToHashSet(StringComparer.Ordinal);
         var windowSet = vocab.WindowLexicon.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -154,13 +165,14 @@ public static class InteractionExtraction
             using var doc = JsonDocument.Parse(ExtractJsonSpan(raw));
             root = doc.RootElement.Clone();
         }
-        catch (JsonException) { return []; }
+        catch (JsonException) { return ExtractionParse<ExtractedInteraction>.Broken; }
 
         var array = root.ValueKind == JsonValueKind.Object
             && root.TryGetProperty("interactions", out var inner) && inner.ValueKind == JsonValueKind.Array
             ? inner
             : root.ValueKind == JsonValueKind.Array ? root : default;
-        if (array.ValueKind != JsonValueKind.Array) return [];
+        if (array.ValueKind != JsonValueKind.Array)
+            return ExtractionParse<ExtractedInteraction>.Broken;
 
         var result = new List<ExtractedInteraction>();
         foreach (var item in array.EnumerateArray())
@@ -201,7 +213,7 @@ public static class InteractionExtraction
 
             result.Add(new(from, to, kind, interacts, explanation, conditions));
         }
-        return result;
+        return new(result, Malformed: false);
     }
 
     private static string ExtractJsonSpan(string raw)
