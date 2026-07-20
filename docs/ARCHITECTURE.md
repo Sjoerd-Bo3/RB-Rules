@@ -918,6 +918,28 @@ een bottom-sheet opent** waarin de chips wrappen (Reset + "Toon N") —
 `documentElement` en bewaart de keuze in `localStorage`; een inline-script in
 `app.html` zet het thema vóór de eerste verf (FOUC-vrij).
 
+**Vraagsessie-store (#248).** `/ask` houdt zijn state níet in de
+pagina-component: vraag, antwoord, de groeiende stream, de foutafhandeling en
+de `AbortController` leven in `$lib/askSession.svelte.ts` — een module-level
+runes-class met één gedeelde instantie. Reden: bij client-side navigatie
+unmount `routes/ask/+page.svelte`, en daarmee sneuvelde eerder de
+`fetch`/`ReadableStream` naar `/ask/stream` (antwoord én lopende search kwijt).
+De stream-lus draait dus in de store; de pagina leest en rendert alleen. De
+pure delen staan ernaast en zijn unit-getest: `$lib/askStream.ts`
+(NDJSON-frames → antwoordstate) en `$lib/askPersist.ts` (localStorage-codec met
+versie-, vorm- en houdbaarheidsbewaking; sleutel `rb-ask-current`, náást de
+bestaande `rb-ask-history`). Randvoorwaarden: (a) de module wordt ook op de
+server geëvalueerd en zou daar door alle bezoekers gedeeld worden — er wordt
+daarom **nooit tijdens SSR geschreven**, elke mutatie hangt aan een
+browser-actie; (b) de store draait door nadat je `/ask` verlaten hebt, dus
+gebruikt hij absolute paden (`/ask?/ask`, niet `?/ask`) en géén
+`$app/navigation`-import — het verversen van de duurstatistiek hangt de pagina
+als haakje (`onAnswered`) op zolang zij gemonteerd is; (c) vanaf `pagehide`
+schrijft de store niets meer, zodat de "onderbroken door herladen"-momentopname
+niet alsnog door de afbrekende verbinding overschreven wordt. Het antwoord
+komt uit de store, met de ActionData (`form`) als vangnet voor bezoekers
+zonder JavaScript.
+
 **Merk-assets (#216).** De poro-mascotte leeft in één herbruikbaar component
 `rb-web/src/lib/PoroMark.svelte` (viewBox `0 0 120 124`, `size`-prop,
 crème lijf via `--poro-*`-CSS-vars zodat 'm op elk oppervlak crème blijft in
