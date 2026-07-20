@@ -240,6 +240,28 @@ met quota en rate-limiting.
   parser-verbetering) en zou in de nachtelijke keten élke nacht de complete
   regelindex herbouwen; de keten hoort de incrementele `rules-index` te
   gebruiken.
+- **Een run die zijn TE-DOEN-aantal als resultaat meldt, liegt** (#282, ADR-20).
+  `CardEmbeddingPipeline` gaf `Embedded = todo.Count` terug vóór het embedden;
+  viel Ollama halverwege om (de cgroup-OOM-killer schoot `llama-server` af op de
+  2,5 GiB-cap), dan meldde de run vrolijk "1429 geembed" terwijl de helft geen
+  vector had. De aanroepers vingen de exception generiek op — `ScanScheduler`
+  logde "Ollama onbereikbaar?" naar de containerlog, waar niemand kijkt — dus de
+  degradatie was volledig stil tot iemand toevallig `dmesg` las. Twee regels:
+  (a) tel wat er ECHT gelukt is en meld de uitval **per oorzaak**
+  (`EmbedCallOutcome`, zelfde vorm als `AiCallOutcome` uit #251 — gelijk
+  herstelgedrag ≠ gelijke oorzaak: 5xx = runner-kill, 4xx = model niet gepulld,
+  `Transport` = container weg); (b) laat de **pijplijn zelf** de foutregel in
+  `run_log` schrijven, niet de aanroeper — anders is de uitval alleen zichtbaar
+  langs het pad dat toevallig logt, en juist de scheduler-tick doet dat niet.
+- **Begrens het gebruik vóór je een memory-plafond verzet** (#282). Op de 8
+  GB-VM is na #279 geen ruimte meer om te schuiven; een hogere cap verplaatst de
+  OOM alleen naar Postgres of Neo4j, en dan kiest de *host*-killer, die de
+  veroorzaker niet kent. Meet eerst waar de piek zit: Ollama houdt idle ~69 MiB
+  vast, dus die zat volledig in het VERZOEK. En let op wát je begrenst — een
+  batch-**telling** zegt niets over de kosten, want 8 regel-secties (tot 2400
+  tekens) is een heel ander verzoek dan 8 kaartteksten (~300 tekens). Vandaar
+  `EMBED_BATCH_SIZE` (16 → 8) én een tekenbudget `EMBED_BATCH_CHARS` (~8000).
+  Een kleinere batch is géén ander model: bge-m3 en `vector(1024)` blijven.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`

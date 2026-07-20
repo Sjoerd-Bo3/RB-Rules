@@ -871,6 +871,27 @@ de globale duur-vangrail).
   regenerateknowledge) draaien via
   `JobRunner` met live-voortgang en run_log. *Route* `/admin` · *endpoints*
   `/api/admin/jobs/{name}`, `/api/admin/status`, `/api/admin/logs`.
+- **Embed-uitval zichtbaar in beheer** (#282) — valt Ollama om tijdens een
+  embed-run (de kernel schoot `llama-server` af op zijn 2,5 GiB-cap), dan slaat
+  de pijplijn de gefaalde batch over, loopt door met de rest, en meldt achteraf
+  **per oorzaak** hoeveel kaarten/regelsecties bleven liggen — "5xx
+  (model-runner omgevallen?)×3", "onbereikbaar×1", "4xx (model niet
+  gepulld?)×2", net zoals #251 dat voor rb-ai-uitval doet. Die uitsplitsing
+  landt als `run_log`-regel (kind `embed`, status `error`) ongeacht wie de
+  pijplijn startte — beheer-knop, job óf scheduler-tick — en de cockpit licht
+  de nieuwste eruit als eigen paneel, zodat hij niet in de logtabel wegzakt.
+  Voorheen was de degradatie stil: de run meldde het aantal *te-doen* kaarten
+  als "geembed" en de scheduler logde hooguit "Ollama onbereikbaar?" naar de
+  containerlog, waar niemand kijkt — kaarten liepen zonder embedding rond en
+  semantisch zoeken verslechterde ongemerkt. **Niet-geëmbedde items blijven
+  staan** voor de volgende run (de pijplijn selecteert op ontbrekende
+  embedding), en bij de regel-index wordt de hele bron overgeslagen in plaats
+  van een complete index door een gatenkaas te vervangen. Het gebruik is
+  begrensd in plaats van het plafond verhoogd: `EMBED_BATCH_SIZE` (16 → 8) en
+  een tekenbudget `EMBED_BATCH_CHARS` (~8000), omdat de piek in het verzoek zit
+  en regel-secties (tot 2400 tekens) veel zwaarder zijn dan kaartteksten.
+  Model en dimensie blijven ongewijzigd — een kleinere batch is geen ander
+  model. *Route* `/admin` (paneel "Embeddings onvolledig" + logtabel).
 - **Lopende job afbreken** (#253) — naast de "Nu bezig"-voortgangsbalk staat
   een **Afbreken**-knop (met bevestiging) die de lopende job of het lopende
   pad coöperatief stopt; binnen enkele seconden is `running` weer leeg en kan
@@ -1402,7 +1423,10 @@ Bindende kwaliteitseisen; ze zijn uitgeschreven in `docs/CONVENTIONS.md` en
 - **Pijplijnen zijn best-effort per stap.** Een haperende externe dienst
   (Ollama, rb-ai, Riot, Neo4j) stopt nooit de hele run; de fout wordt gelogd en
   de run gaat door. Neo4j-uitval degradeert per brein-koppelvlak; de site blijft
-  volledig functioneel.
+  volledig functioneel. **Best-effort betekent zichtbaar, niet stil** (#282):
+  een overgeslagen stap meldt per oorzaak wat er bleef liggen en laat dat werk
+  staan voor de volgende run — een resultaat dat "klaar" zegt terwijl de helft
+  ontbreekt, is een bug.
 - **Mobiel eerst.** Getest op 390px met **0 horizontale overflow** (stub-API +
   Playwright-screenshots op 390/768/1280px).
 - **Geen emoji's in de UI.** Serieus, strak ontwerp via de tokens in `app.css`
@@ -1464,6 +1488,11 @@ openstaande PR.
 - **#45** Ops-hardening voor de 8GB-VM: memory-limits, healthchecks +
   deploy-verificatie, één updatemechanisme (Watchtower vs push-to-deploy),
   log-rotatie, migratie-retry bij opstart, secrets-hygiëne, CSP/security-headers.
+- **#282** Ollama OOM-gekilled op zijn 2,5 GiB-cap, embeddings vielen stil —
+  *in-flight*, zie §4.5. Uitval per oorzaak zichtbaar in het run-detail, werk
+  blijft staan voor de volgende run, en het gebruik is begrensd
+  (`EMBED_BATCH_SIZE`/`EMBED_BATCH_CHARS`) in plaats van het plafond verhoogd —
+  daar is op de 8 GB-VM na #279 geen ruimte meer voor.
 - **#254** Feature-vlaggen beheerbaar in de beheerpagina i.p.v. de VM-`.env` —
   *in-flight*, zie §4.5. Een `setting`-tabel met lezen-op-gebruiksmoment: de
   `/ask`-retrieval-vlag en de nachtrun-noodrem + het venster zijn vanuit beheer

@@ -53,12 +53,17 @@ public static class AdminEndpoints
             try
             {
                 var r = await pipeline.RunAsync(force ?? false);
-                db.RunLogs.Add(new RunLog
+                // Uitval schrijft de pijplijn zelf al weg (#282, ook voor de
+                // scheduler-tick die hier nooit langskomt) — hier alleen de
+                // ok-afronding, zodat een gefaalde run niet twee regels krijgt.
+                if (!r.HasFailures)
                 {
-                    Kind = "embed", Ref = "cards", Status = "ok",
-                    Detail = $"{r.Embedded} geembed, {r.Skipped} al actueel",
-                });
-                await db.SaveChangesAsync();
+                    db.RunLogs.Add(new RunLog
+                    {
+                        Kind = "embed", Ref = "cards", Status = "ok", Detail = r.Summary,
+                    });
+                    await db.SaveChangesAsync();
+                }
                 return Results.Ok(r);
             }
             catch (Exception ex)
@@ -112,12 +117,17 @@ public static class AdminEndpoints
             {
                 var results = await pipeline.RunAsync();
                 var total = results.Sum(r => r.Chunks);
-                db.RunLogs.Add(new RunLog
+                // Overgeslagen bronnen logt de pijplijn zelf als error-regel (#282).
+                var indexed = results.Count(r => !r.Failed);
+                if (results.All(r => !r.Failed))
                 {
-                    Kind = "embed", Ref = "rules", Status = "ok",
-                    Detail = $"{results.Count} bronnen, {total} sectie-chunks",
-                });
-                await db.SaveChangesAsync();
+                    db.RunLogs.Add(new RunLog
+                    {
+                        Kind = "embed", Ref = "rules", Status = "ok",
+                        Detail = $"{indexed} bronnen, {total} sectie-chunks",
+                    });
+                    await db.SaveChangesAsync();
+                }
                 return Results.Ok(results);
             }
             catch (Exception ex)
