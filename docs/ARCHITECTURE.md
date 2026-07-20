@@ -1717,9 +1717,63 @@ constructie niet uiteenlopen — een sterkere garantie dan een catalogus-regel.
 De catalogus zit óók bewust NIET in `OntologySnapshot.Capture`: twee
 artefacten, twee levenscycli (de vingerafdruk beschrijft het schema, de
 catalogus wat de projectie doet), anders zou het opruimen van projectieschuld
-een schema-versiebump forceren. En hij toetst uitsluitend NAMEN — of een
-geprojecteerde edge ook domain/range-conform is, is een aparte vraag met een
-eigen guard (#296, zie §11).
+een schema-versiebump forceren.
+
+**Knooplabel-guard (#289 PR 2).** De catalogus hierboven toetst uitsluitend
+NAMEN, en een naam-guard ziet per constructie niet dat een edge de verkeerde
+KLASSEN verbindt. `ProjectionEdgeShapeCatalog` (Domain) registreert daarom de
+**28 knooplabel-vormen** waarin de twee projecties hun edges schrijven —
+`(:Claim)-[:ABOUT]->(:Card)`, `(:Erratum)-[:SUPERSEDES]->(:Card)`,
+`()-[:RELATES_TO]->()`, … — en `ProjectionLabelCheck` houdt elke vorm
+subklasse-polymorf (`OntologySchema.IsA`) tegen de gedeclareerde domain/range.
+Een LEGE labellijst betekent "de projectie legt hier geen label op"; die staat
+expliciet in het register, want een stille overgang van gebonden naar label-loos
+is precies het dekkingsverlies dat de guard moet betrappen. De vormen zijn tegen
+de live graaf gehouden en komen daar één-op-één uit (`PART_OF` 2139, `HAS_TAG`
+982, `FROM_SET` 963, `EXPLAINS` 101, `ABOUT` 77 rijen).
+
+De labels komen uit dezelfde tokenizer, uitgebreid met **alias-binding per
+statement**: in `MERGE (c)-[:HAS_TAG]->(t)` staat het label van `c` in een
+eerdere `MATCH`/`MERGE` van hetzelfde statement. Twee passes over dezelfde
+gestripte tekst, met drie regels. (a) De binding is **statement-scoped** — `c` is
+`:Card` in de kaart-projectie en `:Condition` in de conditie-projectie, en die
+twee mogen elkaar niet raken. (b) Een alias zonder label is **onbepaald**, geen
+fout. (c) Bindingen worden **geunieerd**, niet overschreven, anders wist de
+latere label-loze vermelding in `MERGE (c)-[:FROM_SET]->(s)` de eerdere. Alleen
+patronen in keten-positie tellen mee, zodat een predicaat
+(`WHERE (n:Set OR n:Domain)`) geen nep-binding oplevert — dat zou vals alarm
+geven. De labels zijn die welke het STATEMENT afdwingt, niet elk label dat de
+knoop toevallig draagt: `MATCH (ix:Interaction {ref: …})` levert `Interaction`,
+ook al meet de live graaf bij `REQUIRES_CONDITION` óók `Concept` (de knoop is
+`:Interaction:Concept`).
+
+`ProjectionLabelGuardTests` draait, net als G1-G5, op de UITGEVOERDE Cypher:
+
+- **L1** — een geschreven vorm die niet geregistreerd is, is rood.
+- **L2** — een geregistreerde vorm die niemand meer schrijft, is óók rood.
+- **L3** — elke schending van de gedeclareerde domain/range is gedekt door een
+  erkend, gedocumenteerd `KnownLabelDefect` mét issue-referentie.
+- **L4** — elk erkend defect bestaat nog écht. Dít onderscheidt een waiver van
+  een mute-knop: wordt #296 gerepareerd, of verandert het van vorm, dan gaat de
+  waiver rood met de opdracht hem op te ruimen. Zonder deze kant blijft een
+  opgelost defect als open schuld geboekt staan én dekt de waiver vanaf dat
+  moment stil iets ánders af dan waarvoor hij is aangenomen.
+- **L5/L0** — de vormen zijn rij-onafhankelijk, en de twee registers dekken
+  elkaar (elke naam heeft een vorm, elke vorm een geclassificeerde naam).
+
+Vandaag dekken drie `KnownLabelDefect`s precies drie bevindingen af, alle drie
+#296: de `SUPERSEDES`-range en beide label-loze kanten van `RELATES_TO`.
+
+**Wat de knooplabel-guard niet ziet.** G5 (bron ⊆ uitgevoerd) is bewust NIET
+herhaald op vormen. Een heel bronbestand is geen statement: de aliassen van álle
+statements zouden op één hoop komen (`c` is in `GraphSyncService` zowel `:Card`
+als `:Condition`), en fragmenten die pas bij het aanroepen worden samengesteld —
+`RunPairsAsync` plakt de `MATCH (c:Card …)`-prefix er zelf voor — zouden als
+label-loos binnenkomen. Dat levert vals alarm, en een guard die vals alarm slaat
+wordt uitgezet. Restrisico: een TWÉÉDE statement dat een al uitgevoerde
+edge-naam met ándere labels schrijft, achter een tak die de probe niet neemt,
+blijft onzichtbaar. G5 dekt de naam-kant daarvan wél af, dus een gloednieuwe
+edge glipt er niet langs — alleen een nieuwe VORM van een bestaande edge.
 
 ### 6.4 De reasoner (redeneer-run)
 
@@ -1770,6 +1824,18 @@ jarenlang uit elkaar. Let op dat de eerste guard bewust ook *aliassen* vastpint
 (`m`/`d` in `Facets()`): een alias hernoemen is daar dus wél rood, in de tweede
 guard niet. Dat is geen inconsistentie maar een verschil in wat ze beweren — de
 ene pint een concrete clausule, de andere het edge-vocabulaire.
+
+De tweede richting heeft sinds #289 PR 2 twee lagen, en het onderscheid is
+wezenlijk. De NAAM-guard vraagt "kent het register deze edge?"; de
+KNOOPLABEL-guard (§6.3) vraagt "verbindt hij de klassen die het register
+belooft?". Alleen die tweede vraag betrapt `(:Erratum)-[:SUPERSEDES]->(:Card)`
+tegen een gedeclareerde range `NormativeSource` — de naam klopt daar namelijk
+perfect. Een derde vraag blijft open en hoort NIET bij deze guards: of de
+KARDINALITEIT en de logische eigenschappen (functioneel, transitief, acyclisch)
+kloppen met wat de projectie bouwt. `SUPERSEDES` is bijvoorbeeld gedeclareerd
+als `0..1` én acyclisch; niets toetst dat vandaag op de echte graaf, want dat is
+een vraag over RIJEN en niet over Cypher-tekst — een runtime-probe tegen een
+opnemende driver kan haar per constructie niet beantwoorden.
 
 ### 6.5 De brein-projectie
 
@@ -3465,10 +3531,17 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   (a) `HAS_ROLE` wordt door `OntologyValidationService.ValidateReifiedInteraction`
   (`OntologyValidationService.cs:186-192`) al gevalideerd terwijl het geen
   geregistreerd `RelationType` is — de poort beroept zich op iets wat het schema
-  niet kent; (b) `FROM_SET` is het spiegelbeeld van de #274-tweespalt: het
-  register kent `INTRODUCED_IN` (Card→Set, functioneel) terwijl de projectie
-  `FROM_SET` schrijft, dus de breuk loopt hier tussen een DODE declaratie en een
-  levende projectie.
+  niet kent, en bovendien op de VERKEERDE klasse: die validatie noemt `Keyword`
+  als rol-filler-type, terwijl de live graaf 492 × `Card` en 274 × `Mechanic`
+  telt en NUL × `Keyword`. De projectie matcht de filler label-loos, dus dat
+  liep nooit ergens tegenaan; wie #304 oppakt moet de declaratie op de METING
+  baseren, niet op wat de miner of deze documentatie beweerde (#270-les);
+  (b) `FROM_SET` is het spiegelbeeld van de #274-tweespalt: het register kent
+  `INTRODUCED_IN` (Card→Set, functioneel) terwijl de projectie `FROM_SET`
+  schrijft, dus de breuk loopt hier tussen een DODE declaratie en een levende
+  projectie. De knooplabel-vormen van alle zeven staan sinds #289 PR 2 in
+  `ProjectionEdgeShapeCatalog`, dus de declaratie hoeft niet opnieuw uitgezocht
+  te worden — ze staat er gemeten bij.
 - **Geregistreerde edges met een onjuiste of niet-afdwingbare declaratie (#296).**
   Andere faalvorm dan hierboven, en een naam-guard vangt hem per constructie niet.
   `SUPERSEDES` is gedeclareerd als `NormativeSource → NormativeSource` maar de
@@ -3477,8 +3550,17 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   (`MATCH (a {ref: …})`), waardoor de gedeclareerde domain/range niet afdwingbaar
   ís. Beide staan als zodanig in `ProjectionEdgeCatalog` (stand `InSchema` mét
   issue-referentie) zodat de catalogus het defect niet wegpoetst. De #270-les
-  geldt: meet eerst op de live graaf wat er werkelijk staat. Een knooplabel-guard
-  (#289 PR 2) zou beide gevallen vangen.
+  geldt: meet eerst op de live graaf wat er werkelijk staat.
+  **Stand sinds #289 PR 2:** de knooplabel-guard (§6.3) betrapt beide gevallen nu
+  daadwerkelijk — ze zijn de drie `KnownLabelDefect`s die er zijn. De guard is
+  daarmee groen, maar het defect blijft geregistreerd én *afdwingbaar*
+  geregistreerd: L4 laat de erkenning rood gaan zodra ze niet meer klopt, dus een
+  reparatie kán niet stil zijn en de erkenning kan het defect niet overleven. Wat
+  nog OPEN is, is de inhoudelijke beslissing: `SUPERSEDES`-range verruimen naar
+  `Card` of de relatie splitsen (`ERRATA_OF` bestaat al als Erratum → Card, wat
+  `SUPERSEDES` in de huidige projectie dood zou maken), en bij `RELATES_TO` óf de
+  declaratie op de werkelijke breedte brengen óf per doelsoort een eigen statement
+  schrijven zoals `ABOUT` dat wél doet.
 - **`BrainQuery.EdgeTypes` blijft handwerk.** 7 van de 12 whitelist-entries staan
   niet in de TBox, dus mechanisch afleiden uit `OntologySchema` zou ze stil uit de
   brein-API en het LLM-vocabulaire laten vallen. Kan pas ná #304.

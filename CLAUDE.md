@@ -457,6 +457,35 @@ met quota en rate-limiting.
   rij-onafhankelijkheidstest leunt moet per statement toetsen dát er rijen zijn —
   assert je alleen resultaat-tellers, dan haalt iemand een fixture-rij weg, wordt
   niets rood, en is de test daarna krachteloos.
+- **Een guard bewaakt precies de vraag die hij stelt — stel dus de goede** (#289
+  PR 2). PR 1 vroeg "kent het register deze edge-NAAM?" en was groen, terwijl
+  `OntologySchema` `SUPERSEDES` als `NormativeSource → NormativeSource`
+  declareerde en de projectie al jaren `(:Erratum)-[:SUPERSEDES]->(:Card)`
+  schreef (#296). De naam klopte perfect; de KLASSEN niet. Bij elke guard: schrijf
+  op wat hij níet beweert, en kijk of dat de interessante vraag is.
+  Drie lessen uit het bouwen van de labelkant.
+  (a) **Scope is de hele moeilijkheid.** Labels lezen betekent aliassen binden
+  (`MERGE (c)-[:HAS_TAG]->(t)` zegt niets zonder de eerdere `MATCH (c:Card …)`),
+  en dan is de scope-eenheid het STATEMENT, niet het bestand: in
+  `GraphSyncService` is `c` zowel `:Card` als `:Condition`. Diezelfde G5-truc uit
+  PR 1 (bron ⊆ uitgevoerd) is daarom op labels bewust NIET herhaald — over een heel
+  bronbestand vallen alle aliassen op één hoop en composeerbare fragmenten
+  (`RunPairsAsync` plakt zijn eigen `MATCH`-prefix ervoor) komen als label-loos
+  binnen. Vals alarm kost een guard zijn leven; het restrisico staat liever
+  opgeschreven in ARCHITECTURE §6.3 dan afgekocht met ruis.
+  (b) **Een uitzondering voor een bekend defect moet zelf een bewering zijn die
+  rood kan gaan.** Een waiver die alleen "negeer dit" zegt, overleeft het defect
+  en dekt vanaf dat moment stil iets anders af. Dus twee richtingen, net als
+  G1/G2: elke schending moet gedekt zijn (anders is het nieuwe drift) én elke
+  waiver moet zijn schending nog HÉBBEN (anders is het defect weg en hoort de
+  regel weg). Geverifieerd met de mutatie die het defect "repareert" — dan hoort
+  de waiver rood te gaan.
+  (c) **Toets wat het statement AFDWINGT, niet wat de graaf toevallig bevat.**
+  `MATCH (ix:Interaction {ref: …})` levert `Interaction`, ook al draagt die knoop
+  in productie `:Interaction:Concept` — de guard bewaakt de belofte van de query,
+  want dát is wat een latere wijziging kan breken. En een label-loze match
+  (`RELATES_TO`) is géén schending maar "niet te garanderen": rood zou daar
+  onterecht zijn, stil doorlaten net zo goed.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`
