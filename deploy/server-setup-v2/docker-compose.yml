@@ -8,8 +8,19 @@
 # Ops-hardening (issue #45):
 #  - memory-limits per service: op de 8GB B2ms kiest de host-OOM-killer anders
 #    willekeurig; caps localiseren een piek in de veroorzakende container.
-#    Budget: api 1.5g + web 512m + ai 1g + postgres 1g + neo4j 1.5g (heap 512m
+#    Budget: api 1.5g + web 512m + ai 2500m + postgres 1g + neo4j 1.5g (heap 512m
 #    + pagecache 384m uit .env + JVM-overhead) + ollama 2.5g (bge-m3 geladen).
+#    De som ligt bewust bóven de 7,7 GiB van de VM: dit zijn PLAFONDS, geen
+#    reserveringen — geen enkele service zit normaal aan zijn cap, en de caps
+#    bestaan juist om een uitschieter te localiseren in plaats van de host mee te
+#    slepen. rb-ai ging in #279 van 1g naar 2500m omdat de brein-mining sindsdien
+#    parallel draait: elke gelijktijdige SDK-sessie is een Claude-subprocess van
+#    orde-grootte 300-400 MiB RSS, dus AI_MAX_CONCURRENCY=5 vraagt ~2 GiB náást
+#    node zelf (~300 MiB). Bij 1g paste dat niet en OOM-killte de container
+#    zichzelf precies wanneer het druk is. Gemeten vóór de wijziging: 4,2 GiB vrij
+#    op de VM, rb-ai op 290 MiB — de ~1,7 GiB extra past daar met marge voor
+#    Ollama/Neo4j/Postgres. Verhoog AI_MAX_CONCURRENCY nooit zonder deze limiet
+#    mee te nemen (en omgekeerd).
 #  - healthchecks op alle services + log-rotatie (json-file groeit anders
 #    onbegrensd).
 #
@@ -74,6 +85,14 @@ services:
       NIGHTLY_START_HOUR: ${NIGHTLY_START_HOUR:-0}
       NIGHTLY_END_HOUR: ${NIGHTLY_END_HOUR:-11}
       NIGHTLY_TZ: ${NIGHTLY_TZ:-Europe/Amsterdam}
+      # Brein-mining-parallellisme (#279): hoeveel kaarten/subjecten er gelijktijdig
+      # door de rb-ai-extractie gaan. Moet GELIJK zijn aan rb-ai's achtergrond-
+      # deelcap (AI_MAX_CONCURRENCY − AI_INTERACTIVE_RESERVE = 5 − 2 = 3): precies
+      # zoveel workers als er achtergrond-permits zijn betekent geen wachtrij en
+      # geen zelf-veroorzaakte 429's. Hoger levert daarom géén doorvoer op maar
+      # uitval (zichtbaar als "429 AI-slots vol" in het run-detail); lager laat
+      # slots onbenut. Bijstellen doe je aan beide kanten tegelijk.
+      BREIN_MINING_CONCURRENCY: ${BREIN_MINING_CONCURRENCY:-3}
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,6 +153,22 @@ services:
       # Brein-tools (#106/#107): de agentic-taak praat via de brein-API terug
       # met rb-api (compose-intern, containernaam zoals RB_AI_URL hierboven).
       RB_API_URL: http://rb-v2-api:8080
+      # Gelijktijdigheid (#279). MOETEN hier staan: Compose geeft alleen door wat
+      # expliciet onder environment: staat — een waarde in de VM-.env alléén is een
+      # substitutie-bron voor deze file, geen container-env (de NIGHTLY_ENABLED-les
+      # hieronder bij rb-api). Verifieer na deploy met:
+      #   docker exec rb-v2-ai printenv | grep AI_
+      #
+      # AI_MAX_CONCURRENCY is de harde cap op gelijktijdige SDK-sessies en hangt
+      # vast aan het memory-plafond hierboven (2500m ≈ 5 subprocessen + node).
+      # AI_INTERACTIVE_RESERVE is het aantal permits dat NOOIT naar batch-werk
+      # (de brein-mining via /extract/*) gaat: die reserve is wat /ask overeind
+      # houdt tijdens een nachtrun. 2 (niet 1) omdat een agentic /ask 2 permits
+      # kost — met één vrij slot zou juist het zwaarste vraagpad alsnog in de rij
+      # belanden. 5 − 2 = 3 achtergrond-permits, en dat getal moet gelijk blijven
+      # aan BREIN_MINING_CONCURRENCY bij rb-api.
+      AI_MAX_CONCURRENCY: ${AI_MAX_CONCURRENCY:-5}
+      AI_INTERACTIVE_RESERVE: ${AI_INTERACTIVE_RESERVE:-2}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -143,7 +178,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1g
+          # 1g → 2500m in #279; hoort bij AI_MAX_CONCURRENCY hierboven (zie de
+          # budget-toelichting bovenaan deze file).
+          memory: 2500m
     networks: [internal]
 
   postgres:

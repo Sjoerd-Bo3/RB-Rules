@@ -23,9 +23,10 @@ async function withKeepAlive<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Volgt of een promise al gesettled is zonder erop te wachten. */
+/** Volgt of een promise al gesettled is zonder erop te wachten. `promise`
+ * blijft beschikbaar zodat een test de wachter aan het eind kan opruimen. */
 function track<T>(p: Promise<T>) {
-  const state = { settled: false, rejected: undefined as unknown };
+  const state = { settled: false, rejected: undefined as unknown, promise: p };
   p.then(
     () => {
       state.settled = true;
@@ -136,6 +137,98 @@ test("FIFO: een zware wachter vooraan wordt niet ingehaald door lichte nieuwkome
   (await lightP)();
 });
 
+// ── /ask-vrijwaring tijdens een mining-run (#279) ─────────────────────────
+//
+// Dit is de acceptatie-eis van #279 die niet aangenomen mag worden: draait de
+// brein-mining op volle sterkte, dan moet een bezoeker nog steeds meteen een
+// slot krijgen. Zonder deze garantie belandt elke vraag tijdens de nachtrun in
+// de rij en komt hij als 429 terug — "AI weg" terwijl de machine werkt.
+
+test("mining op volle sterkte: een interactieve aanvraag krijgt nog meteen een slot", async () => {
+  // Productie-instelling: cap 5, reserve 2 → mining mag er hoogstens 3.
+  const sem = new AiSemaphore(5, 3);
+  const mining = [];
+  for (let i = 0; i < 3; i++)
+    mining.push(await sem.acquire(1, { maxWaitMs: 1_000, priority: "background" }));
+  assert.equal(sem.snapshot().active, 3);
+
+  // Een vierde mining-aanvraag past NIET meer: de deelcap houdt de reserve vrij.
+  const fourth = track(sem.acquire(1, { maxWaitMs: 1_000, priority: "background" }));
+  await tick();
+  assert.equal(fourth.settled, false, "background stopt bij de deelcap, niet bij max");
+
+  // …maar de bezoeker gaat er dwars doorheen, zónder te wachten.
+  const ask = track(sem.acquire(1, { maxWaitMs: 1_000, priority: "interactive" }));
+  await tick();
+  assert.equal(ask.settled, true, "/ask mag de reserve gebruiken en het wachtende mining-werk inhalen");
+
+  mining.forEach((r) => r());
+  (await fourth.promise)();
+});
+
+test("ook een agentic vraag (2 permits) past nog naast een volle mining-run", async () => {
+  const sem = new AiSemaphore(5, 3);
+  for (let i = 0; i < 3; i++)
+    await sem.acquire(1, { maxWaitMs: 1_000, priority: "background" });
+  // Reserve 2 is precies op het agentic-gewicht gekozen: één vrij slot zou het
+  // zwaarste vraagpad alsnog in de rij duwen.
+  const agentic = track(sem.acquire(2, { maxWaitMs: 1_000, priority: "interactive" }));
+  await tick();
+  assert.equal(agentic.settled, true);
+  assert.equal(sem.snapshot().active, 5);
+});
+
+test("strikte voorrang in de rij: background wordt niet toegelaten vóór een wachtende vraag", async () => {
+  const sem = new AiSemaphore(2, 2);   // geen reserve: alleen de rij-voorrang telt hier
+  const r1 = await sem.acquire(1, { maxWaitMs: 1_000, priority: "background" });
+  const r2 = await sem.acquire(1, { maxWaitMs: 1_000, priority: "background" });
+
+  // Eerst een background-wachter, dan pas de vraag — FIFO zou background winnen.
+  const queuedMining = track(sem.acquire(1, { maxWaitMs: 1_000, priority: "background" }));
+  const ask = track(sem.acquire(1, { maxWaitMs: 1_000, priority: "interactive" }));
+  await tick();
+  assert.equal(sem.snapshot().waiting, 2);
+  assert.equal(sem.snapshot().waitingBackground, 1);
+
+  r1();
+  await tick();
+  assert.equal(ask.settled, true, "het vrijgekomen slot gaat naar de vraag, niet naar de mining");
+  assert.equal(queuedMining.settled, false, "mining wacht netjes achteraan");
+
+  r2();
+  await tick();
+  assert.equal(queuedMining.settled, true, "daarna komt de mining alsnog aan de beurt");
+  (await ask.promise)();
+  (await queuedMining.promise)();
+});
+
+test("background dringt niet voor bij de directe toewijzing (wachtende vraag gaat voor)", async () => {
+  const sem = new AiSemaphore(2, 2);
+  const r1 = await sem.acquire(1, { maxWaitMs: 1_000, priority: "interactive" });
+  const r2 = await sem.acquire(1, { maxWaitMs: 1_000, priority: "interactive" });
+  const ask = track(sem.acquire(1, { maxWaitMs: 1_000, priority: "interactive" }));
+  await tick();
+
+  // Er is een wachtende vraag: nieuw mining-werk moet erachter aansluiten,
+  // ook al zou het gewicht op dat moment passen zodra r1 loslaat.
+  const mining = track(sem.acquire(1, { maxWaitMs: 1_000, priority: "background" }));
+  r1();
+  await tick();
+  assert.equal(ask.settled, true);
+  assert.equal(mining.settled, false);
+
+  r2();
+  await tick();
+  (await ask.promise)();
+  (await mining.promise)();
+});
+
+test("deelcap wordt op de cap begrensd en blijft minstens 1", async () => {
+  assert.equal(new AiSemaphore(3, 99).backgroundMax, 3, "nooit meer dan de cap");
+  assert.equal(new AiSemaphore(3, 0).backgroundMax, 1, "achtergrondwerk komt nooit volledig stil te liggen");
+  assert.equal(new AiSemaphore(3).backgroundMax, 3, "zonder deelcap: gedrag als vóór #279");
+});
+
 test("tellers: waited en rejected lopen mee voor bijstelling op cijfers", async () => {
   const sem = new AiSemaphore(1);
   const release = await sem.acquire(1, { maxWaitMs: 1_000 });
@@ -147,4 +240,20 @@ test("tellers: waited en rejected lopen mee voor bijstelling op cijfers", async 
   assert.equal(snap.waitedTotal, 2);
   assert.equal(snap.rejectedTotal, 1);
   assert.equal(snap.maxConcurrency, 1);
+});
+
+test("de afwijzing noemt de cap die je daadwerkelijk raakte", async () => {
+  // "achtergrond-deelcap 1" wijst naar een andere knop dan "cap 3": zonder dat
+  // onderscheid zoek je de fout in de totale sidecar-capaciteit terwijl alleen
+  // het batch-aandeel op was.
+  const sem = new AiSemaphore(3, 1);
+  const release = await sem.acquire(1, { maxWaitMs: 1_000, priority: "background" });
+  await withKeepAlive(() =>
+    assert.rejects(
+      sem.acquire(1, { maxWaitMs: 15, priority: "background" }),
+      (e: unknown) =>
+        e instanceof ConcurrencyLimitError && /achtergrond-deelcap 1/.test(e.message),
+    ),
+  );
+  release();
 });

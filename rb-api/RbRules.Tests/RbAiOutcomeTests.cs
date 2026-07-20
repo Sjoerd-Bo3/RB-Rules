@@ -119,6 +119,78 @@ public class RbAiOutcomeTests
         Assert.Null(r.Raw);
     }
 
+    // ── #279: onze eigen cap ≠ Anthropic's rate-limit ────────────────────────
+    //
+    // Beide komen als 429 binnen. Zonder onderscheid meet een parallelle mining-run
+    // zijn eigen semaphore als "het abonnement throttlet" — en dan is de conclusie
+    // ("minder vragen stellen") precies verkeerd: de fix is de cap of het aantal
+    // workers bijstellen.
+
+    [Fact]
+    public async Task Extractie_429MetConcurrencyCode_IsSidecarCap_GeenRateLimit()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.TooManyRequests,
+            """{"error":"alle AI-slots bezet (cap 5)","code":"concurrency_limit"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ConcurrencyLimited, r.Outcome);
+        Assert.Equal(429, r.StatusCode);
+        Assert.Null(r.Raw);   // degradatie-contract blijft: geen half feit
+    }
+
+    [Fact]
+    public async Task Extractie_429ZonderCode_BlijftRateLimit()
+    {
+        // Anthropic's eigen 429 draagt onze machine-leesbare code niet.
+        var ai = Ai(_ => Json(HttpStatusCode.TooManyRequests, """{"error":"rate limited"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.RateLimited, r.Outcome);
+    }
+
+    [Fact]
+    public async Task Extractie_429MetKapotteBody_ValtTerugOpRateLimit()
+    {
+        // De meet-verfijning mag zelf nooit een uitvalpad worden: onleesbaar =
+        // "geen bewijs voor de sidecar-cap", niet "kapot".
+        var ai = Ai(_ => Json(HttpStatusCode.TooManyRequests, "<html>nginx</html>"));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.RateLimited, r.Outcome);
+    }
+
+    [Fact]
+    public async Task Extractie_VolleSlots_WordtOpnieuwGeprobeerd_EnSlaagtAlsnog()
+    {
+        // Wachten helpt hier per definitie: een slot komt vanzelf vrij.
+        var calls = 0;
+        var ai = Ai(_ => ++calls == 1
+            ? Json(HttpStatusCode.TooManyRequests, """{"code":"concurrency_limit"}""")
+            : Json(HttpStatusCode.OK, """{"interactions":[]}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(2, calls);
+        Assert.Equal(AiCallOutcome.Ok, r.Outcome);
+    }
+
+    [Fact]
+    public void Tally_ToontVolleSlotsApartVanRateLimit()
+    {
+        var tally = new AiOutcomeTally();
+        tally.Add(AiCallOutcome.ConcurrencyLimited);
+        tally.Add(AiCallOutcome.ConcurrencyLimited);
+        tally.Add(AiCallOutcome.RateLimited);
+
+        // Op één hoop zou hier "429 rate-limit×3" staan — de meting die #279 juist
+        // moet kunnen weerleggen.
+        Assert.Equal("429 AI-slots vol×2, 429 rate-limit×1", tally.Summary);
+        Assert.Equal(3, tally.Failures);
+    }
+
     [Fact]
     public async Task Extractie_RetryAfterHeader_WintVanDeEigenBackoff()
     {

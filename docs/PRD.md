@@ -1116,6 +1116,21 @@ de globale duur-vangrail).
   die kaart komt juist terug. Zichtbaar effect: het drain-signaal in beheer klopt
   weer, en de pool loopt daadwerkelijk leeg. *Na deploy geen actie nodig — de
   al verwerkte kaarten blijven herkend.*
+- **Brein-mining draait parallel** (#279) — de extractie kostte ~40 s per kaart
+  en liep één kaart tegelijk: 40 kaarten was een half uur, een ongecapte
+  nachtrun (~900 kaarten) tien uur. De kaart- en subject-lus verwerken nu
+  meerdere items tegelijk (`BREIN_MINING_CONCURRENCY`, default 3), wat de
+  wandkloktijd van een mining-run ruwweg derdeert — bij gelijkblijvende
+  uitkomst: elk item is een eigen unit-of-work en de promotie-poort blijft
+  geserialiseerd, dus geen dubbele en geen verloren feiten. **`/ask` gaat vóór
+  de mining**: het aantal workers is gelijk aan rb-ai's achtergrond-deelcap,
+  zodat er altijd slots vrij blijven voor bezoekers, en in de wachtrij haalt een
+  vraag lopend mining-werk in. Een bezoeker merkt een draaiende nachtrun dus
+  niet. Nieuw in de uitval-telling: **"429 AI-slots vol"** staat apart van "429
+  rate-limit" — dat onderscheid voorkomt dat we onze eigen cap aanzien voor een
+  throttelend abonnement en zo de verkeerde knop verdraaien. *Na deploy: het
+  geheugenplafond van de AI-container is meeverhoogd (1 GiB → 2500 MiB); beide
+  waarden horen bij elkaar.*
 - **Kennis-gaten-rapport** — geclusterde onzekere/lege-retrieval-vragen sturen
   de volgende harvest; bronnen met een gefaalde/onvolledige verwerking staan
   er ook als signaalregel op (#171, `SourceDossierCompleteness`), met
@@ -1381,10 +1396,14 @@ Bindende kwaliteitseisen; ze zijn uitgeschreven in `docs/CONVENTIONS.md` en
   voorverwarmsignaal bij het laden van `/ask` (fire-and-forget, per-IP
   gelimiteerd) haalt de SDK-subprocess-boot van het kritieke pad voor de
   query-rewrite-call; een globale sessie-cap in rb-ai (`AI_MAX_CONCURRENCY`,
-  default 3, agentic weegt 2) voorkomt dat een piek aan gelijktijdige vragen
-  de VM leegtrekt — boven de cap wacht een vraag kort (max 30s) en degradeert
-  daarna netjes (bestaand "AI weg"-pad), nooit een crash of een stille
-  wurging van de VM.
+  default 5 sinds #279, agentic weegt 2) voorkomt dat een piek aan gelijktijdige
+  vragen de VM leegtrekt — boven de cap wacht een vraag kort (max 30s) en
+  degradeert daarna netjes (bestaand "AI weg"-pad), nooit een crash of een
+  stille wurging van de VM. Sinds #279 kent die cap **prioriteit**: de
+  brein-mining is batch-werk en mag maar een deel van de slots bezetten
+  (`AI_INTERACTIVE_RESERVE` blijft gereserveerd voor vragen), en in de wachtrij
+  gaat een bezoeker altijd vóór de mining — een nachtrun mag `/ask` nooit
+  uithongeren.
 - **CI is de poort.** `dotnet test` + `svelte-check` + `tsc` groen vóór images
   publiceren; elke productie-bug krijgt eerst een regressietest.
 
@@ -1435,6 +1454,14 @@ openstaande PR.
   sideboard en chosen champion.
 
 **Brein & kennisbank**
+- **#279** Brein-mining parallelliseren — *in-flight*, zie §4.5. De extractie is
+  vrijwel volledig wachttijd op rb-ai (~40 s/kaart), dus een ongecapte nachtrun
+  duurde tien uur terwijl de sidecar meerdere sessies aankan. Opgelost in twee
+  bewegingen die bij elkaar horen: de lus draait op meerdere workers (elk met
+  een eigen `DbContext`), en de sidecar-cap + het geheugenplafond van de
+  AI-container gaan mee omhoog. Randvoorwaarde die de hele vorm bepaalt: een
+  mining-run mag `/ask` niet uithongeren, dus batch-werk krijgt een deelcap en
+  wijkt in de wachtrij voor interactief verkeer.
 - **#263** Gerichte brein-mining-reset — *in-flight*, zie §4.5. Zonder deze
   reset blijven ~800 kaarten afgevinkt met de in #249 als ondeugdelijk
   vastgestelde extractie, waardoor de verbeterde extractie precies die kaarten
