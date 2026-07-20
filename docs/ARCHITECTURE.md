@@ -3563,6 +3563,18 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   30-90s gaan; gemitigeerd door de gate, maxTurns/tool-cap/harde timeout en
   Sonnet i.p.v. Opus, maar meten vóór verbreden blijft nodig (`docs/BRAIN.md`
   §4).
+- **Directe pin op `Microsoft.OpenApi` 2.7.5 (#298).** `RbRules.Api` verwijst
+  rechtstreeks naar een package die het niet zelf gebruikt, puur om NU1903
+  (GHSA-v5pm-xwqc-g5wc / CVE-2026-49451) te sluiten.
+  `Microsoft.AspNetCore.OpenApi` 10.0.9 declareert `Microsoft.OpenApi` 2.0.0 als
+  **ondergrens** en NuGet kiest de laagste die past, dus kwam de kwetsbare 2.0.0
+  binnen; ook de nieuwste 10.0.10 declareert nog 2.0.0, dus de parent bumpen lost
+  het niet op. Een directe verwijzing wint van de transitieve — de smalste fix.
+  **Weghaalcriterium:** zodra `Microsoft.AspNetCore.OpenApi` zelf `>= 2.7.5`
+  eist, kan de regel uit `RbRules.Api.csproj`; `dotnet nuget why RbRules.slnx
+  Microsoft.OpenApi` laat zien of dat zo is. Blijft de pin staan, dan loopt hij
+  stil achter op de 2.x-lijn — hij is een ondergrens voor de CVE, geen
+  onderhoudsplan.
 
 ---
 
