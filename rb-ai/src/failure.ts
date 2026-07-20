@@ -472,22 +472,51 @@ export function extractFailureResponse(outcome: {
  * De oplossing is dezelfde als bij de brein-stappen in #292: niet "beter
  * redacteren" — `safeDetail` haalt secrets weg, geen gebruikersinvoer — maar de
  * inhoud NIET meegeven. Alleen regels die op dit lijstje matchen worden
- * doorgelaten; de rest wordt geteld, niet geciteerd.
+ * doorgelaten (bij een match reist de hele regel mee); de rest wordt geteld,
+ * niet geciteerd.
  *
- * De lijst is bewust klein gehouden. Een gemiste machine-regel kost hooguit wat
- * diagnostisch comfort (hij telt nog steeds mee in `withheld`); een te ruime
- * regel laat willekeurige tekst door en dát is de fout die dit vocabulaire moet
- * voorkomen. Uitbreiden mag, maar alleen met patronen die aantoonbaar uit de
- * SDK, node of de kernel komen — nooit met iets dat "meestal wel een foutmelding
- * is". */
+ * BEWUST NIET `SPAWN_PATTERNS` + `AUTH_PATTERNS` hergebruikt (#300-review). Die
+ * zijn gebouwd als CLASSIFIERS: gegeven een tekst waarvan al vaststaat dat het
+ * een machinefout is, wélke knop is het — daar is "matcht ergens" precies goed.
+ * Hier is de rol omgekeerd: een POORT die van een WILLEKEURIGE regel beslist of
+ * hij door mag, en dan is "matcht ergens" juist gevaarlijk. `forbidden`, `401`,
+ * `Killed`, `token invalid` zijn gewone woorden die een speler in zijn vraag
+ * tikt ("Is the **Forbidden** Idol banned", "if my unit is **Killed** in
+ * combat") — hergebruik lekte 6 van 8 natuurlijke vragen als hele regel. Zelfde
+ * verwarring als de tie-break-les van #206: een predicaat dat in de ene rol
+ * klopt, klopt niet vanzelf in de andere.
+ *
+ * Daarom twee soorten patroon, elk met zijn eigen veiligheidsargument:
+ *  - TOKENS die in geen enkele natuurlijke Riftbound-vraag voorkomen (errno,
+ *    signalen, `heap out of memory`) — die mogen overal in de regel matchen;
+ *  - PREFIXEN van echte machine-regels, verankerd aan regel-START (`^`), zodat
+ *    een vraag die zo'n woord ergens in het midden bevat niet per ongeluk zijn
+ *    hele regel doorlaat.
+ *
+ * Auth staat er bewust NIET meer in: een 401/403 wordt al geclassificeerd uit
+ * het `result`-bericht en de `RetryTracker` (`api_error_status`), niet uit
+ * stderr — we verliezen dus geen diagnose door het uit de passthrough te halen,
+ * en we winnen dat `forbidden`/`401` geen willekeurige vraagregel meer
+ * doorlaten. Uitbreiden mag, maar alleen met een token dat geen natuurlijke
+ * taal is, of een aan `^` verankerde prefix van een echte SDK-/node-/kernel-
+ * regel — nooit met een los woord dat "meestal wel een foutmelding is". */
 const MACHINE_STDERR_PATTERNS = [
-  ...SPAWN_PATTERNS,
-  ...AUTH_PATTERNS,
-  /^[A-Z][A-Za-z]*Error:/,
-  /FATAL ERROR/i,
-  /cannot find module/i,
-  /\bKilled\b/,
-  /\b(ECONNRESET|ECONNREFUSED|EACCES|EMFILE|ENFILE|ETIMEDOUT)\b/,
+  // Tokens/frasen die geen natuurlijke Riftbound-vraag zijn — veilig overal in
+  // de regel. `process exited with code N` en `process terminated by signal`
+  // zijn de letterlijke SDK-vormen (`getProcessExitError` in `sdk.mjs`), dus de
+  // "Claude Code process …"-regels vallen hieronder zonder aparte prefix.
+  /\b(ENOMEM|ENOENT|EPIPE|EAGAIN|EACCES|EMFILE|ENFILE|ETIMEDOUT|ECONNRESET|ECONNREFUSED)\b/,
+  /\bSIG(KILL|SEGV|TERM|ABRT|BUS|FPE)\b/,
+  /heap out of memory/i,
+  /\bprocess exited with code \d+/,
+  /\bprocess terminated by signal\b/,
+  // Prefixen van echte machine-regels — verankerd aan regel-START, zodat alleen
+  // een regel die ZO BEGINT doorgaat, niet een vraag die het woord ergens bevat.
+  /^Failed to spawn\b/,
+  /^[A-Z][A-Za-z]*Error:/, // Error:, TypeError:, RangeError: …
+  /^FATAL ERROR\b/,
+  /^Cannot find module\b/,
+  /^Killed$/, // de bash-OOM-killer print exact deze regel, in z'n eentje
 ];
 
 /** Hoeveel machine-regels er hooguit uit een staart gemeld worden, en hoe lang
@@ -568,7 +597,14 @@ export class StderrTail {
         machine.length < MAX_MACHINE_LINES &&
         MACHINE_STDERR_PATTERNS.some((p) => p.test(line))
       )
-        machine.push(line.slice(0, MAX_MACHINE_LINE_LENGTH));
+        // Redacteren VÓÓR het afkappen (#281-regel, ook hier): een `slice` die
+        // een secret doormidden snijdt laat een fragment achter dat te kort is
+        // voor de patronen en alsnog lekt. `redactSecrets` matcht op de patroon-
+        // grens (`\b`), niet op de regel-startankers hierboven, dus dit
+        // verandert de PASSTHROUGH-beslissing niet — die is al gevallen op de
+        // ongeredacteerde regel — alleen wat er van de doorgelaten regel
+        // overblijft.
+        machine.push(redactSecrets(line).slice(0, MAX_MACHINE_LINE_LENGTH));
       else withheld += 1;
     }
     return { bytes: this.bytes, machine, withheld };

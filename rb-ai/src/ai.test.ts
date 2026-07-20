@@ -618,14 +618,68 @@ test("/ask koud: de stderr van het subprocess verklaart de uitval (#300)", async
   await assert.rejects(
     askClaude({ prompt: "vraag", pool: noWarmPool(), runQuery }),
     (e: unknown) => {
-      const { detail } = failureOf(e);
+      const { reason, detail } = failureOf(e);
       assert.match(detail, /exited with code 137/, `stderr-staart ontbreekt: ${detail}`);
+      // De REDEN is de knop die de beheerder afleest (#300-review, finding 2):
+      // `error_during_execution` zonder spawn-marker in het result IS `sdk_error`.
+      // De buitenste catch mag hem niet HERclassificeren op de "exited with code
+      // 137" die uit de stderr-staart in de message belandde — dan werd het
+      // `spawn`. Een assert op alleen `.detail` (die staat er in beide gevallen)
+      // zou die misattributie nooit zien.
+      assert.equal(reason, "sdk_error", `reason ge-herclassificeerd: ${reason}`);
+      // En geen dubbele aanplak: `finishAskRun` verrijkt één keer, de catch
+      // mag hem niet nóg eens door `withStderrDigest` halen.
+      assert.equal(
+        (detail.match(/exited with code 137/g) ?? []).length,
+        1,
+        `stderr-staart dubbel aangeplakt: ${detail}`,
+      );
+      assert.equal(detail.includes("AiRunError:"), false, `ruis-prefix: ${detail}`);
       return true;
     },
   );
   // Expliciet, zodat een gebroken bedrading niet als een vage assert-fout
   // hierboven verschijnt maar als wat het is: er wordt niets opgevangen.
   assert.equal(typeof seen?.stderr, "function", "het koude /ask-pad spawnt zonder stderr-opvang");
+});
+
+test("/ask: de al-geclassificeerde reason overleeft de buitenste catch (#300-review)", async () => {
+  // Finding 2, de scherpste vorm. `finishAskRun` gooit een AL geclassificeerde
+  // AiRunError binnen de try; de buitenste catch ving die en haalde hem opnieuw
+  // door `describeThrown` — die kent geen AiRunError-special-case (alleen
+  // `failureOf` doet dat), dus `max_turns`/`permission_denied` werden `unknown`.
+  // Dat is precies de stille misattributie die deze werklijn moet wegnemen.
+  //
+  // `max_turns` en `permission_denied` zijn de scherpste bewijzen: `describeThrown`
+  // KAN ze niet produceren (ze komen alleen uit `resultFailure` op het
+  // result-bericht), dus "reason klopt" bewijst hier ondubbelzinnig dat de catch
+  // niet herclassificeerde.
+  const cases: Array<{ result: Record<string, unknown>; reason: string }> = [
+    {
+      result: { type: "result", subtype: "error_max_turns", is_error: true, num_turns: 1, errors: [] },
+      reason: "max_turns",
+    },
+    {
+      result: {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        permission_denials: [{ tool: "x" }],
+      },
+      reason: "permission_denied",
+    },
+  ];
+  for (const { result, reason } of cases) {
+    const runQuery: AskQueryRunner = ({ options }) => {
+      options.stderr?.("Claude Code process exited with code 137\n");
+      return stream(result);
+    };
+    const failure = await askClaude({ prompt: "vraag", pool: noWarmPool(), runQuery }).then(
+      () => assert.fail("een mislukte run zonder antwoord hoort te gooien"),
+      (e: unknown) => failureOf(e),
+    );
+    assert.equal(failure.reason, reason, `reason ge-herclassificeerd voor ${reason}: ${failure.reason}`);
+  }
 });
 
 test("/ask: de vraag van de bezoeker komt NIET in de logregel, de machineregel WEL", async () => {
@@ -690,9 +744,16 @@ test("/ask warm: een mislukte warme run gooit net zo goed als een koude (#300)",
   claimed.end();
 
   await assert.rejects(run, (e: unknown) => {
-    const { detail } = failureOf(e);
-    // …en met de staart van de sessie die het écht deed.
+    const { reason, detail } = failureOf(e);
+    // …met de juiste reden (niet ge-herclassificeerd door de catch, #300-review)…
+    assert.equal(reason, "sdk_error", `reason ge-herclassificeerd: ${reason}`);
+    // …en met de staart van de sessie die het écht deed, precies één keer.
     assert.match(detail, /exited with code 137/, `warme staart ontbreekt: ${detail}`);
+    assert.equal(
+      (detail.match(/exited with code 137/g) ?? []).length,
+      1,
+      `warme staart dubbel aangeplakt: ${detail}`,
+    );
     return true;
   });
 });

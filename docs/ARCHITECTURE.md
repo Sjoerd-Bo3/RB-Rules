@@ -2027,16 +2027,39 @@ invoer de vraag van een bezoeker, dus dezelfde afweging valt andersom uit: die
 vraag hoort in `ask_trace` achter de admin-poort, niet in `docker logs
 rb-v2-ai`. `StderrTail` heeft daarom twee leesvormen — `tail()` geeft alles
 (extract), `digest()` alleen de regels uit een **gesloten machine-vocabulaire**
-(spawn/OOM/auth/node-crash) plus maten: het aantal bytes dat het subprocess
-schreef en het aantal regels dat níét gemeld wordt. Dat is dezelfde zet als bij
-de brein-stappen in #292 — niet "beter redacteren" (`safeDetail` haalt secrets
-weg, geen gebruikersinvoer) maar de inhoud niet meegeven — en het dekt precies
-het scenario waarvoor #300 bestaat, want een omgevallen subprocess laat juist
-die regels achter. Het blijft een **bound, geen belofte**: een echode regel die
-toevallig op een machine-patroon matcht komt er nog steeds door. Het
-lekoppervlak gaat van "de hele staart" naar "regels uit een gesloten lijst".
+plus maten: het aantal bytes dat het subprocess schreef en het aantal regels dat
+níét gemeld wordt. Dat is dezelfde zet als bij de brein-stappen in #292 — niet
+"beter redacteren" (`safeDetail` haalt secrets weg, geen gebruikersinvoer) maar
+de inhoud niet meegeven — en het dekt precies het scenario waarvoor #300 bestaat,
+want een omgevallen subprocess laat juist die regels achter.
 
-*Bijvangst: een tweede pad dat de faal-poort oversloeg.* Het koude pad gooide
+Dat vocabulaire is bewust **niet** `SPAWN_PATTERNS` + `AUTH_PATTERNS`
+hergebruikt, en dat is een correctie uit de review: die zijn gebouwd als
+*classifiers* (gegeven een machinefout, wélke knop is het — daar is "matcht
+ergens" goed), maar hier vervullen ze de rol van *passthrough-poort* die van een
+willekeurige regel beslist of hij door mag, en dan is "matcht ergens" juist
+gevaarlijk. `forbidden`, `401`, `Killed`, `token invalid` zijn gewone woorden
+die een speler tikt — het naïeve hergebruik lekte 6 van 8 natuurlijke vragen als
+hele regel ("Is the **Forbidden** Idol banned", "if my unit is **Killed** in
+combat"). Zelfde verwarring als de tie-break-les van #206: een predicaat dat in
+de ene rol klopt, klopt niet vanzelf in de andere. De poort matcht daarom nu op
+twee soorten patroon met elk hun eigen veiligheidsargument: **tokens die geen
+natuurlijke taal zijn** (errno, signalen, `heap out of memory`, de letterlijke
+SDK-frasen `process exited with code N` / `terminated by signal`) mogen overal
+in de regel matchen; **prefixen van echte machine-regels** (`^Failed to spawn`,
+`^…Error:`, `^FATAL ERROR`, `^Cannot find module`, `^Killed$`) zijn verankerd
+aan regel-START. Auth staat er bewust niet meer in: een 401/403 wordt al uit het
+`result`-bericht en de `RetryTracker` geclassificeerd, niet uit stderr — dus we
+verliezen geen diagnose en winnen dat een auth-woord geen vraagregel meer
+doorlaat.
+
+Het blijft een **bound, geen belofte**: een echode regel die letterlijk met een
+machine-prefix begint of een errno-token bevat komt er nog steeds door. Maar het
+lekoppervlak gaat van "de hele staart" naar "regels die op een gesloten,
+zorgvuldig-niet-natuurlijke-taal set matchen", en de doc-framing moet dát zeggen
+en niet het geruststellender "alleen spawn-/OOM-regels".
+
+*Bijvangst 1: een tweede pad dat de faal-poort oversloeg.* Het koude pad gooide
 al een `AiRunError` bij een mislukte run zonder antwoord; de warme claim deed
 `if (progress.sawOutput) return res` en gaf diezelfde run terug als een 200 met
 een leeg antwoord. Voor de aanroeper maakte dat niets uit (`RbAiClient`
@@ -2048,6 +2071,29 @@ enkele test kwam er ooit. `askClaude` heeft daarom nu dezelfde soort naden als
 `extractWithTool` (`runQuery`, plus een injecteerbare `pool`) — een gedragstest
 kan per definitie niet zien dat er een tweede pad bestaat dat ze nooit aanroept
 (#292), en met de naad roept ze het wél aan.
+
+*Bijvangst 2: `finishAskRun` gooit binnen de `try`, dus de reden mag niet
+opnieuw geclassificeerd worden.* Die `AiRunError` is al volledig gebouwd (reden
++ retries + stderr-digest). De buitenste catch haalde hem echter nog eens door
+`describeThrown` — en die kent, anders dan `failureOf`, geen
+`AiRunError`-special-case, dus hij herclassificeerde de reden op de tekst van de
+al-gebouwde melding. Gemeten: `max_turns` en `permission_denied` werden
+`unknown`, en waar de stderr-staart toevallig "exited with code 137" bevatte
+werd het `spawn`. Plus een dubbel aangeplakte stderr-digest en een
+`AiRunError:`-ruisprefix. Dat is precies de stille misattributie die deze
+werklijn moet wegnemen — de `reason` is de knop die de beheerder afleest, en
+`max_turns` verkleed als `unknown` is #281 opnieuw. Eén regel in de catch
+(`if (e instanceof AiRunError) throw e;`, direct na de
+`ConcurrencyLimitError`-guard) geeft de al-geclassificeerde fout ongewijzigd
+door; de enige `AiRunError` die de catch bereikt komt uit `finishAskRun`, want
+`collectAnswer` en de warme claim gooien rauwe fouten. Deze fout was
+pre-existing op main maar de PR verergerde hem (de dubbele stderr-append was
+nieuw), en geen enkele gooi-test asserteerde `reason` — ze keken alleen naar
+`.detail`-substrings, die de misattributie noch de dubbele staart zien. Sinds de
+review asserteren de gooi-tests daarom `failure.reason`, met `max_turns`/
+`permission_denied` als scherpste bewijs: `describeThrown` kán die niet
+produceren, dus "reason klopt" bewijst ondubbelzinnig dat de catch niet
+herclassificeerde.
 
 **Eén poort, geen tweede pad (#292).** Twee oudere `console.log`'s in `ai.ts`
 liepen volledig om de poort heen: de agentic tool-call-log en het

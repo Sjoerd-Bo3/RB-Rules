@@ -923,6 +923,17 @@ export async function askClaude(opts: {
     // Capaciteitsgrens (#155) onvertaald doorgeven: server.ts maakt er een
     // 429 met machine-leesbare reden van.
     if (e instanceof ConcurrencyLimitError) throw e;
+    // AL geclassificeerd door `finishAskRun` (#300-review): niet opnieuw door
+    // `describeThrown` halen. Dat zou de reden HERclassificeren op de tekst van
+    // de al-gebouwde melding — `max_turns`/`permission_denied` werden zo
+    // `unknown` (`describeThrown` kent geen AiRunError-special-case, alleen
+    // `failureOf` doet dat), of toevallig `spawn` omdat "exited with code 137"
+    // uit de stderr-staart in de message stond. Plus: de stderr-digest werd een
+    // TWEEDE keer aangeplakt en er kwam een `AiRunError:`-prefix als ruis bij.
+    // De reason is precies de knop die de beheerder afleest — dit is #281
+    // opnieuw. De enige AiRunError die hier aankomt komt uit `finishAskRun`;
+    // `collectAnswer`/de warme claim gooien rauwe fouten.
+    if (e instanceof AiRunError) throw e;
     // Timeout en client-abort herkenbaar maken voor de aanroeper (run_log);
     // overige fouten ongewijzigd doorgeven — server.ts vertaalt ze naar een
     // nette 500 of een error-frame.

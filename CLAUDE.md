@@ -262,10 +262,37 @@ met quota en rate-limiting.
   dus nooit mee naar een nieuw pad zonder de motivering opnieuw te lezen; ze
   hangt bijna altijd aan wát erin zit, niet aan wáár het doorheen loopt. De fix
   is dezelfde als bij de brein-stappen (#292): niet beter redacteren maar de
-  inhoud niet meegeven — hier een **gesloten machine-vocabulaire** (alleen
-  spawn-/OOM-/auth-regels) plus maten (bytes, aantal niet-gemelde regels), zodat
-  je nog steeds ziet dát het subprocess iets riep. Blijft een bound, geen
-  belofte: een echode regel die toevallig matcht komt er nog door.
+  inhoud niet meegeven — hier een **gesloten machine-vocabulaire** plus maten
+  (bytes, aantal niet-gemelde regels), zodat je nog steeds ziet dát het subprocess
+  iets riep. Blijft een bound, geen belofte: een echode regel die letterlijk met
+  een machine-prefix begint of een errno-token bevat komt er nog door.
+- **Een classifier is geen passthrough-poort — hergebruik ze niet** (#300-review).
+  Het "gesloten machine-vocabulaire" hierboven hergebruikte eerst
+  `SPAWN_PATTERNS` + `AUTH_PATTERNS`. Die zijn gebouwd om, GEGEVEN dat iets een
+  machinefout is, te bepalen wélke knop het is — daar is "matcht ergens in de
+  tekst" precies goed. Als passthrough-poort beslissen ze van een WILLEKEURIGE
+  regel of hij door mag, en dan is "matcht ergens" juist het lek: `forbidden`,
+  `401`, `Killed`, `token invalid` zijn gewone woorden die een speler tikt
+  (gemeten: 6 van 8 natuurlijke vragen lekten hun hele regel). Dezelfde
+  rol-verwarring als de tie-break-les van #206. Voor een poort die op invoer
+  loslaat: match alleen op **tokens die geen natuurlijke taal zijn** (errno,
+  signalen) of op **aan `^` verankerde prefixen** van echte machine-regels — nooit
+  op een los woord dat "meestal wel een foutmelding is". En haal een dimensie uit
+  de poort die je langs een ánder kanaal al classificeert (auth komt uit het
+  result-bericht, niet uit stderr): dat kost geen diagnose en scheelt lekoppervlak.
+- **Een al-geclassificeerde fout die binnen de `try` gegooid wordt, mag de catch
+  niet HERclassificeren** (#300-review). `finishAskRun` bouwt een volledige
+  `AiRunError` (reden + retries + stderr) en gooit die; de buitenste catch haalde
+  hem nog eens door `describeThrown`, die — anders dan `failureOf` — geen
+  `AiRunError`-special-case kent en de reden dus op de MELDINGSTEKST
+  herclassificeert. `max_turns`/`permission_denied` werden zo `unknown`, en de
+  stderr-digest werd dubbel aangeplakt met een `AiRunError:`-ruisprefix. De reden
+  is de knop die de beheerder afleest — dit is #281 opnieuw. Regel: laat de catch
+  een al-geclassificeerde fout ongewijzigd door (`if (e instanceof AiRunError)
+  throw e;` vóór de generieke tak), en **asserteer `reason` op het gooi-pad** —
+  een test die alleen `.detail`-substrings checkt ziet noch de misattributie noch
+  de dubbele staart. `max_turns`/`permission_denied` zijn het scherpste bewijs,
+  want `describeThrown` kán ze niet produceren.
 - **Een optie kan een SCHAKELAAR zijn in plaats van een afnemer** (#300). De
   `stderr`-callback van de Agent SDK leek een doorgeefluik dat je kon vergeten;
   in werkelijkheid spawnt de SDK met `stdio:[…,…, options.stderr ? "pipe" :

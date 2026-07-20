@@ -865,6 +865,68 @@ test("het extract-pad houdt de VOLLEDIGE staart — de twee vormen zijn niet inw
   );
 });
 
+test("digest: natuurlijke vragen die een machine-woord bevatten LEKKEN niet (#300-review)", () => {
+  // Finding 1: het passthrough-vocabulaire hergebruikte AUTH_PATTERNS +
+  // `\bKilled\b` — gewone woorden die een speler tikt. Gemeten lekten 6 van 8
+  // natuurlijke vragen hun hele regel. De passthrough matcht nu op tokens die
+  // geen natuurlijke taal zijn (errno/signalen) of op aan `^` verankerde
+  // machine-prefixen, dus zo'n vraag-echo hoort geteld te worden, niet geciteerd.
+  const vragen = [
+    "If my unit is Killed during combat, does its ability still trigger?",
+    "Is the Forbidden Idol banned in the current format?",
+    "Why is my token invalid when I attach it to a champion?",
+    "Does a 401 error mean my deck is unauthorized in the event?",
+    "Is attacking forbidden while my unit is exhausted?",
+    "What happens when a process exits — does the chain resolve?",
+  ];
+  for (const vraag of vragen) {
+    const stderr = new StderrTail();
+    stderr.append(`${vraag}\n`);
+    const d = stderr.digest();
+    assert.deepEqual(
+      d.machine,
+      [],
+      `natuurlijke vraag doorgelaten als machine-regel: ${JSON.stringify(d.machine)}`,
+    );
+    assert.equal(d.withheld, 1, `vraag niet geteld: ${vraag}`);
+  }
+});
+
+test("digest: echte machine-regels gaan WÉL door (tegenproef bij #300-review)", () => {
+  // De keerzijde van de test hierboven: het verankeren mag de echte
+  // diagnostiek niet wegfilteren. Anders "beschermt" de digest door niets meer
+  // te melden — dan verklaart hij geen enkele crash.
+  const regels = [
+    "Failed to spawn Claude Code process: ENOENT",
+    "Claude Code process exited with code 137",
+    "Claude Code process terminated by signal SIGKILL",
+    "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+    "TypeError: Cannot read properties of undefined",
+    "Killed",
+    "read ECONNRESET",
+  ];
+  for (const regel of regels) {
+    const stderr = new StderrTail();
+    stderr.append(`${regel}\n`);
+    assert.equal(stderr.digest().machine.length, 1, `machine-regel weggefilterd: ${regel}`);
+  }
+});
+
+test("digest: machine[] is ZELF geredacteerd, vóór het afkappen (#281-regel)", () => {
+  // `digest()` is publiek en `machine[]` kan rechtstreeks gelezen worden (niet
+  // alleen via stderrDigestLine's slot-redactie). Een secret dat in een
+  // doorgelaten machine-regel meelift mag daar dus al uit zijn — en de redactie
+  // hoort VÓÓR de 160-teken-kap te gebeuren, anders snijdt de kap een token
+  // doormidden en glipt het restant langs de patronen. De machine-prefix blijft.
+  const token = "sk-ant-api03-DIGEST_MACHINE_GEHEIM_0123456789";
+  const stderr = new StderrTail(4000);
+  stderr.append(`Failed to spawn Claude Code process: token=${token}\n`);
+  const [line] = stderr.digest().machine;
+  assert.ok(line, "de machine-regel is er niet");
+  assert.equal(line.includes(token), false, `token onveilig in machine[]: ${line}`);
+  assert.ok(line.includes("Failed to spawn"), `diagnostiek vernietigd: ${line}`);
+});
+
 test("stderrDigestLine redacteert zelf — een derde afnemer erft de poort", () => {
   // Beide huidige afnemers redacteren al (withStderrDigest via safeDetail,
   // logEvent via de poort). Deze test bewaakt de functie zélf, want ze geeft
