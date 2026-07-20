@@ -454,7 +454,23 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `RbAiClient`, `GraphSyncService`/`GraphQueryService`/`BrainGraphService`
   (Neo4j), `BrainService`, `BrainExplorerService` (read-only inspectie-laag over
   de brein-tabellen voor de admin-Brein-verkenner, #236 — puur Postgres, geen
-  live-Neo4j), `MechanicMiningService`, `ClaimMiningService`,
+  live-Neo4j), `MechanicMiningService` (job "mine" — mechanieken/triggers/
+  effects per kaart. Sinds #188-restant **#211** ligt de werkverdeling vast op
+  wat de bron zelf al zegt: Riot drukt élk keyword gebracket af
+  (`[Equip]`, `[Assault 2]`), dus `MechanicMiner.Analyze` haalt de mechanieken
+  er deterministisch uit — magnitude-vrij, want "Assault 2" en "Assault 3" zijn
+  dezelfde familie (ADR-17) — en schrijft ze vóór en onafhankelijk van de
+  rb-ai-call. De LLM krijgt alleen nog het oordeel dat een regex niet kán
+  vellen: per kaart een **gesloten** lijst bekende keywords die er ongebracket
+  in staan, met de vraag of ze daar als spelterm worden gebruikt ("Equip
+  :rb_rune_body:", Jagged Cutlass) of als gewoon Engels woord ("Repeat this
+  gear's play effect", Sprite Fountain); `MechanicMiner.MergeMechanics`
+  valideert dat oordeel achteraf tegen diezelfde lijst, zodat de LLM alleen kán
+  toevoegen, nooit afnemen of een term buiten het vocabulaire binnenhalen.
+  Nieuwe keywords lopen onveranderd via de kandidatenqueue langs een mens
+  (`MechanicVocabularyService`, #52). De wachtrij-poort is daarom
+  `Mechanics == null || Triggers == null`: het deterministische deel alléén
+  maakt een kaart nog niet klaar), `ClaimMiningService`,
   `ClarificationMiningService` (#177, job "clarify" — concept-extractie uit
   officiële FAQ-/clarificatie-artikelen naar `Correction`s met eigen gefocuste
   embedding en onderwerp-anker. Hybride autoriteitspoort: alleen `verified` als
@@ -2278,6 +2294,47 @@ in plaats van de assets zelf te bewerken. Ze schalen mee met de tekstregel
 
 ---
 
+### ADR-17 — Het LLM krijgt alleen wat deterministisch onbeslisbaar is (#211, #249)
+
+**Context.** #188 zette de lijn "LLM boven regex" voor classificatie-
+beslissingen. Toegepast op mechaniek-herkenning slaat die lijn dóór: Riot zet
+élk keyword letterlijk tussen blokhaken in de kaarttekst. Een meting over de
+1429 live kaartteksten met tekst vond 31 verschillende keywords, állemaal in
+gebrackete vorm; slechts ~47 vermeldingen (≈3%) staan érgens zónder haken. Een
+LLM inzetten voor de andere 97% is precies de verspilling die #249 op de
+brein-extractie aantoonde (69% van de gemínede interacties herkauwde wat
+`Card.Mechanics[]` al wist).
+
+**Beslissing.** Determinisme gaat vóór; de LLM krijgt alleen het restje dat
+écht een oordeel is. Concreet drie regels, die als patroon gelden voor elke
+volgende mining-stap:
+1. **Wat de bron gedrukt heeft, wordt gelezen — niet geraden.** De gebrackete
+   vorm is de mechaniek, met de magnitude gestript tot de familie ("Assault 2"
+   → "Assault", zie `CanonicalEntity.CanonicalLabel`); de magnitude rijdt als
+   parameter op `HAS_KEYWORD` mee en wordt nooit een eigen entiteit.
+2. **De LLM-vraag is gesloten, niet open.** Niet "welke mechanieken zitten
+   hierin" maar "van déze termen, die aantoonbaar ongebracket in déze
+   kaarttekst staan, welke zijn spelterm en welke gewoon Engels?". Dat is een
+   echte tweedeling die een woord-match niet haalt: "Equip :rb_rune_body:"
+   (Jagged Cutlass) en "Ganking (I can move…)" (Laurent Bladekeeper) zijn
+   speltermen, "Repeat this gear's play effect" (Sprite Fountain) niet.
+3. **Het oordeel wordt deterministisch nagerekend.** `MergeMechanics` laat
+   niets door dat niet in de aangeboden lijst stond, en het antwoord kan
+   uitsluitend toevoegen. Een nieuw keyword komt dus nooit via de LLM binnen —
+   dat blijft de kandidatenqueue met een mens erachter (#52).
+
+**Gevolg.** Mechanieken zijn niet langer afhankelijk van rb-ai: bij uitval
+(verwacht pad) heeft een kaart gewoon zijn keywords en houdt de graaf zijn
+`HAS_KEYWORD`-edges, in plaats van niets. Omdat de LLM-velden dan nog wél
+ontbreken, is de wachtrij-poort verbreed naar `Mechanics == null || Triggers ==
+null` — anders zou het deterministische deel de kaart als "klaar" wegschrijven,
+en dat is precies het halve feit dat we niet willen. De admin-tegel
+"Geanalyseerd" telt daarom óók op `Triggers`, en `MiningResult.LlmAdded` maakt
+meetbaar hoeveel het LLM-pad nog oplevert — blijft dat structureel nul, dan
+mag het pad weg.
+
+---
+
 ## 10. Kwaliteitsscenario's
 
 Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
@@ -2295,6 +2352,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
 | Q9 | VM-reboot, Postgres nog niet klaar | rb-api retriet de migratie kort en begrensd; anders faalt de start hard en vangt de deploy-verify het | `Program.cs`, `docker-compose.yml` healthcheck |
 | Q10 | Regressie in domeinlogica | Elke productie-bug krijgt eerst een regressietest; CI is de poort (test-gate vóór publish) | `docs/CONVENTIONS.md`, `RbRules.Tests/`, `v2-ci.yml` |
 | Q11 | Eén parallel retrieval-kanaal van `/ask` gooit (bv. de misvattingen-query faalt) | Dat kanaal levert leeg + een marker in de trace (`kanaal-uitval: ...`); de overige kanalen en het antwoord blijven ongemoeid, nooit een 500. Sequentieel (zonder factory) vs. parallel (met factory) leveren byte-voor-byte dezelfde prompt | `AskService` (#152), `AskServiceParallelRetrievalTests` |
+| Q12 | rb-ai onbereikbaar tijdens de mechaniek-mining | De gebrackete mechanieken worden tóch geschreven (deterministisch, ADR-17), inclusief magnitude-familie; de kaart blijft in de wachtrij omdat `Triggers` null blijft en wordt de volgende run afgemaakt — nooit een half feit dat als "gemined" telt | `MechanicMiningService` (#211), `MechanicMiningServiceTests` |
 
 ---
 

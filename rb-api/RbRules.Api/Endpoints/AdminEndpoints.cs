@@ -77,7 +77,9 @@ public static class AdminEndpoints
             {
                 Kind = "mine", Ref = "mechanics", Status = r.Failed > 0 ? "info" : "ok",
                 Detail = $"{r.Mined} gemined, {r.Failed} mislukt, {r.Remaining} resterend, " +
-                         $"{r.NewCandidates} nieuwe keyword-kandidaten",
+                         $"{r.NewCandidates} nieuwe keyword-kandidaten, " +
+                         $"{r.LlmAdded} mechanieken uit LLM-oordeel, " +
+                         $"{r.Reconciled} kaarten hergesynchroniseerd",
             });
             await db.SaveChangesAsync();
             return Results.Ok(r);
@@ -215,7 +217,13 @@ public static class AdminEndpoints
                     Changes = await db.Changes.CountAsync(c => c.ConsolidatedWithId == null),
                     Cards = await db.Cards.CountAsync(),
                     CardsEmbedded = await db.Cards.CountAsync(c => c.Embedding != null),
-                    CardsMined = await db.Cards.CountAsync(c => c.Mechanics != null),
+                    // Vólledig gemined (#211): mechanieken komen sinds die
+                    // increment deterministisch uit de gebrackete kaarttekst en
+                    // staan er dus ook bij rb-ai-uitval al — alleen op
+                    // Mechanics tellen zou de tegel op 100% zetten terwijl de
+                    // LLM-velden nog ontbreken.
+                    CardsMined = await db.Cards.CountAsync(
+                        c => c.Mechanics != null && c.Triggers != null),
                     RuleChunks = await db.RuleChunks.CountAsync(),
                     Bans = await db.BanEntries.CountAsync(),
                     Errata = await db.Errata.CountAsync(),
