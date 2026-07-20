@@ -13,7 +13,7 @@ namespace RbRules.Infrastructure;
 /// <paramref name="Uncapped"/> (#258) draait de stap via
 /// <see cref="JobDefinition.RunUncapped"/> — de per-run cap gaat eraf en de
 /// pad-deadline gaat erin. Alleen zinvol op jobs die zo'n variant hébben
-/// (JobPathsTests dwingt dat af) en nooit samen met Drain: een ongecapte run
+/// (JobPathOrderTests dwingt dat af) en nooit samen met Drain: een ongecapte run
 /// verwerkt in één keer alles wat binnen de deadline past, dus een drain-lus
 /// zou er alleen overheen lopen tót de deadline al verstreken is.</summary>
 public sealed record PathStep(

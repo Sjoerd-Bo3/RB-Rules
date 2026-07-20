@@ -32,7 +32,7 @@ namespace RbRules.Infrastructure;
 /// Een stap met <see cref="PathStep.Uncapped"/> draait via
 /// <see cref="JobDefinition.RunUncapped"/> en krijgt de pad-deadline mee (het
 /// nachtrun-venster); heeft de job geen ongecapte variant, dan valt de stap
-/// terug op de gewone, gecapte Run — JobPathsTests maakt zo'n combinatie
+/// terug op de gewone, gecapte Run — JobPathOrderTests maakt zo'n combinatie
 /// zichtbaar in plaats van hem stil te laten degraderen.
 ///
 /// Twee vangrails op de drain-lus (review-fix #190): de harde
@@ -117,7 +117,7 @@ public static class PathRunner
                 {
                     // Ongecapte stap (#258): de per-run cap gaat eraf en de
                     // pad-deadline erin. Heeft de job geen ongecapte variant,
-                    // dan draait gewoon de gecapte Run (JobPathsTests bewaakt
+                    // dan draait gewoon de gecapte Run (JobPathOrderTests bewaakt
                     // dat die combinatie niet per ongeluk ontstaat).
                     outcome = step.Uncapped && job.RunUncapped is { } runUncapped
                         ? await runUncapped(sp, p => report($"{stepLabel} — {p}"), deadline, ct)
