@@ -1145,12 +1145,24 @@ de globale duur-vangrail).
   een redactie-poort, met een test die vastlegt dat het token nooit in een
   logregel belandt.
 
-  De meting wees meteen de hoofdoorzaak aan: de Agent SDK probeert een mislukte
-  API-call **zelf tot tien keer opnieuw** met exponentiële backoff, en die
-  pogingen passen samen niet in de 90 s die een extractie krijgt. Een
-  aanhoudende 429/529 op het abonnement kwam daardoor naar buiten als ónze
-  timeout — een generieke 500, zonder spoor. Zo'n timeout wordt nu aan de échte
-  oorzaak toegeschreven. Meegenomen: de harde timeout begint pas als de aanroep
+  **Een afgebroken run is geen serverfout meer.** Drie totaal verschillende
+  oorzaken vielen samen in één ononderscheidbare 500: het model rondde af zonder
+  de gevraagde tool te roepen, de tijdslimiet sloeg toe, of er ging echt iets
+  stuk. Een afgekapte extractie krijgt nu een eigen statuscode, waardoor het
+  run-detail **"timeout×22"** meldt in plaats van "5xx×22" — een heel andere
+  aanwijzing voor wie moet beslissen wat er mis is.
+
+  Wat de meting daarmee blootlegde: de duur van een extractie schaalt mee met
+  het **aantal begrippen dat we per kaart aanbieden** (gemeten op productie: 3
+  begrippen → klaar in 49 s, 39 begrippen → afgekapt op 92 s). Dat aantal groeit
+  met elke set die de kennisbank leert, dus dit is een schaalklip: hoe meer het
+  brein weet, hoe meer extracties omvallen. De tijdslimiet ophogen verschuift die
+  klip alleen — er staat wel een ops-noodrem op, maar de echte oplossing (minder
+  begrippen per vraag, of de vraag op mechanic-niveau stellen) is **#288**.
+  Tweede, nu zichtbare versterker: de Agent SDK probeert een mislukte API-call
+  zelf tot tien keer opnieuw met oplopende wachttijden, en die pogingen passen
+  samen niet in het tijdsbudget — zo'n timeout wordt voortaan aan de échte
+  oorzaak toegeschreven. Meegenomen: de tijdslimiet begint pas als de aanroep
   daadwerkelijk een AI-slot heeft (de wachtrij at tot een derde van het budget
   op sinds de mining parallel draait). *Na deploy: draai een mining-job en lees
   het run-detail — dáár staat nu welke knop verdraaid moet worden.*

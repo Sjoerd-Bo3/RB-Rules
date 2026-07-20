@@ -228,7 +228,7 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
                 logger.LogWarning(
                     "rb-ai {Path} gaf {Status} (reden={Reason}: {Detail})",
                     path, status, error.Reason ?? "onbekend", error.Detail ?? "-");
-                return new(null, outcome, status, error.Reason);
+                return new(null, outcome, status, Distinct(outcome, error.Reason));
             }
         }
     }
@@ -296,6 +296,19 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
     /// <summary>De machine-leesbare code die rb-ai's <c>ConcurrencyLimitError</c>
     /// meestuurt (rb-ai/src/concurrency.ts) — één string, twee kanten.</summary>
     private const string ConcurrencyLimitCode = "concurrency_limit";
+
+    /// <summary>Laat een reden weg die niets toevoegt aan de uitkomst (#281).
+    ///
+    /// Een 504 met <c>reason: "timeout"</c> zou anders als "timeout×22 (timeout×22)"
+    /// in het run-detail landen — ruis die de uitsplitsing juist onleesbaar maakt.
+    /// Zodra rb-ai wél iets extra's weet (een timeout die in werkelijkheid een
+    /// aanhoudende API-fout was: "timeout×22 (api_error×14)") blijft de reden
+    /// gewoon staan. Puur cosmetisch; de meting zelf verandert niet.</summary>
+    private static string? Distinct(AiCallOutcome outcome, string? reason) =>
+        reason is not null && string.Equals(reason, outcome.ToString(),
+            StringComparison.OrdinalIgnoreCase)
+            ? null
+            : reason;
 
     private static AiCallOutcome Classify(System.Net.HttpStatusCode status) => status switch
     {

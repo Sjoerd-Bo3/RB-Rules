@@ -360,6 +360,89 @@ public class RbAiOutcomeTests
         Assert.Equal("concurrency_limit", r.Reason);
     }
 
+    // ── #281: een afgekapte extractie is een TIMEOUT, geen generieke 5xx ─────
+    //
+    // Op productie gereproduceerd: dezelfde kaarttekst, alleen het aantal aangeboden
+    // refs verschilt — 3 refs → 200 na 49,0 s, 39 refs → 500 na 92,1 s. Die 500 was
+    // onze eigen 90 s-timeout, maar op de draad niet te onderscheiden van "het model
+    // riep de tool niet" of "er ging echt iets stuk". rb-ai geeft een afgekapte run
+    // nu een 504 + code; deze tests falen zodra dat weer samenvalt.
+
+    [Fact]
+    public async Task Extractie_504_IsTimeout_GeenServerfout()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.GatewayTimeout,
+            """{"error":"extractie afgebroken op de tijdslimiet","code":"extract_timeout","reason":"timeout","detail":"extractie afgebroken na 90s (harde timeout)"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Timeout, r.Outcome);
+        Assert.NotEqual(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Equal(504, r.StatusCode);
+        Assert.Null(r.Raw);   // degradatie-contract blijft: geen half feit
+    }
+
+    [Fact]
+    public async Task Extractie_Timeout_WordtNietOpnieuwGeprobeerd()
+    {
+        // Een run die op de tijdslimiet strandde faalt bij een directe herhaling
+        // vrijwel zeker opnieuw — en kost dan twee keer 90 s uit de nachtrun.
+        var calls = 0;
+        var ai = Ai(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.GatewayTimeout);
+        });
+
+        await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Tally_TimeoutStaatOpZichzelf_NietWeggestoptOnder5xx()
+    {
+        // Dit is de regressie die #281 moet voorkomen: 22 afgekapte runs die als
+        // "5xx×22" gemeld worden sturen de beheerder naar de verkeerde knop.
+        var tally = new AiOutcomeTally();
+        for (var i = 0; i < 22; i++) tally.Add(AiCallOutcome.Timeout);
+
+        Assert.Equal("timeout×22", tally.Summary);
+        Assert.DoesNotContain("5xx", tally.Summary);
+    }
+
+    [Fact]
+    public async Task Extractie_504MetRedenTimeout_HerhaaltZichzelfNietInDeSamenvatting()
+    {
+        // "timeout×22 (timeout×22)" is ruis; een reden telt alleen als hij iets
+        // TOEVOEGT aan de uitkomst.
+        var ai = Ai(_ => Json(HttpStatusCode.GatewayTimeout,
+            """{"error":"afgebroken","code":"extract_timeout","reason":"timeout"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+        var tally = new AiOutcomeTally();
+        tally.Add(r.Outcome, r.Reason);
+
+        Assert.Null(r.Reason);
+        Assert.Equal("timeout×1", tally.Summary);
+    }
+
+    [Fact]
+    public async Task Extractie_504MetUpstreamReden_BehoudtDieWel()
+    {
+        // Wél informatief: de run liep in ONZE timeout, maar de SDK zat al die tijd
+        // op een aanhoudende API-fout te wachten. Dat wijst naar een andere knop.
+        var ai = Ai(_ => Json(HttpStatusCode.GatewayTimeout,
+            """{"error":"afgebroken","code":"extract_timeout","reason":"api_error","detail":"8 SDK-retries"}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+        var tally = new AiOutcomeTally();
+        tally.Add(r.Outcome, r.Reason);
+
+        Assert.Equal("api_error", r.Reason);
+        Assert.Equal("timeout×1 (api_error×1)", tally.Summary);
+    }
+
     [Fact]
     public void Tally_SplitstDeUitvalUitPerReden()
     {

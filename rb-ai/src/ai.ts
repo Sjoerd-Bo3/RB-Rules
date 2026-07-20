@@ -132,7 +132,28 @@ export function createBrainMcpServer(onStep?: (step: string) => void) {
 // tool te roepen, één om af te ronden — ruim gehouden op 3. Harde timeout net als
 // research/agentic zodat een hangende run nooit op abonnementskosten blijft draaien.
 const EXTRACT_MAX_TURNS = 3;
-const EXTRACT_TIMEOUT_MS = 90_000;
+
+/** Harde grens per extractie-run. Verstelbaar via `AI_EXTRACT_TIMEOUT_MS`, met
+ * de bestaande 90 s als default — dus zonder env-wijziging verandert er niets.
+ *
+ * EERLIJKE MOTIVERING (#281): ophogen is een PLEISTER, geen oplossing. Een
+ * productie-experiment liet zien dat de duur van een extractie meeschaalt met
+ * het AANTAL AANGEBODEN REFS — 3 refs → 200 na 49,0 s, 39 refs → 500 na 92,1 s.
+ * Het vocabulaire dat we per kaart meesturen groeit met elke set die de
+ * kennisbank leert, dus dit is een SCHAALKLIP: hoe meer het brein weet, hoe
+ * groter de kans dat een extractie omvalt. De timeout verhogen verschuift die
+ * klip alleen — bij 60 refs ligt hij er weer. De echte oplossing (minder refs
+ * per aanroep aanbieden, of op mechanic-niveau vragen in plaats van per kaart)
+ * staat in #288 en hoort NIET in de meet-PR van #281.
+ *
+ * De knop staat er dus als ops-noodrem, niet als fix. Let op: hem daadwerkelijk
+ * gebruiken vraagt óók een regel in de compose-`environment:` van `rb-v2-ai`
+ * (#268-valkuil: een variabele in de VM-`.env` is een substitutiebron voor de
+ * compose-file, géén container-env). */
+const EXTRACT_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(process.env.AI_EXTRACT_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : 90_000;
+})();
 
 /** Uitkomst van één {@link extractWithTool}-run (#281). `items` houdt het
  * bestaande contract: de gevangen array (mogelijk leeg) of `null` bij uitval.
@@ -145,6 +166,15 @@ const EXTRACT_TIMEOUT_MS = 90_000;
 export interface ExtractOutcome {
   items: unknown[] | null;
   failure?: AiFailure;
+  /** Is de run door ONZE harde timeout afgekapt (#281)? Apart van
+   * `failure.reason`, want `withRetries` mag die reden overschrijven met de
+   * upstream-oorzaak (een timeout ná zeven mislukte API-pogingen is een
+   * API-fout). Op HTTP-niveau blijft het feit "wij hebben afgekapt" staan, en
+   * dáár hangt de 504 aan — zodat rb-api een timeout als `timeout` telt en niet
+   * als generieke 5xx. Precies de samenval die #281 blind maakte: drie
+   * verschillende oorzaken (tool niet geroepen, timeout, echte fout) kwamen
+   * allemaal als dezelfde kale 500 naar buiten. */
+  timedOut?: boolean;
 }
 
 /** Tool-forced brein-extractie (#226, docs/ARCHITECTURE brein-epic §3.1). Draait
@@ -276,6 +306,7 @@ export async function extractWithTool(opts: {
           reason: "timeout",
           detail: `extractie afgebroken na ${EXTRACT_TIMEOUT_MS / 1000}s (harde timeout)`,
         }),
+        timedOut: true,
       };
     if (controller.signal.aborted)
       return {

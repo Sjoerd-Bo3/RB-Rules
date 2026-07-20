@@ -227,16 +227,30 @@ met quota en rate-limiting.
   `rb-ai/src/failure.ts` doet dat nu op één plek. Diagnostiek gaat verplicht
   door `safeDetail`/`redactSecrets` — groottes en aantallen loggen mag,
   prompt-inhoud en het token nooit.
-- **Reken een hypothese na op de wandkloktijd vóór je hem gelooft** (#281) —
-  "de grote payloads vallen om" was plausibel (de predicaten-run met kleinere
-  payload gaf 0% uitval), maar 40 kaarten in 43 min met 18 successen laat maar
-  één oplossing toe: 22 × ~85 s, oftewel de timeout. Een payload-afwijzing is
-  een 400 in <1 s en zou impliceren dat een SUCCES 141 s duurde — langer dan de
-  timeout die hem afgekapt zou hebben. Zelfde soort toets: een gefaalde kaart
-  krijgt geen watermark en komt terug, dus een grootte-afhankelijke fout zou het
-  uitvalpercentage naar 100% duwen; gemeten schommelt het (45/47/55%). Het
-  echte verschil met de predicaten-run was **speling**, niet grootte: 9,5 s per
-  call laat ~80 s over voor retries, 33 s per call maar ~57 s.
+- **Reken een hypothese na op de wandkloktijd** (#281) — 40 kaarten in 43 min
+  met 18 successen laat maar één oplossing toe: 22 × ~85 s, oftewel de
+  90 s-timeout. Zulke rekensommen sluiten hele klassen verklaringen uit vóór je
+  gaat graven, en ze kosten een minuut.
+- **"De limiet wordt niet geraakt" ≠ "het ligt niet aan de omvang"** (#281,
+  duur betaald) — dezelfde analyse verwierp de payload-hypothese omdat de
+  payload worst case ~1,5% van het contextvenster is en "prompt te lang" een
+  niet-herhaalbare 400 in <1 s zou zijn. Beide feiten kloppen, de conclusie
+  niet: de payload werd niet *afgewezen*, maar dreef wel de **latency**, en
+  latency tegen een vaste timeout is precies wat uitval bepaalt. Een
+  productie-experiment met identieke kaarttekst gaf 3 refs → 200 na 49,0 s en
+  39 refs → 504 na 92,1 s. Toets een omvang-hypothese dus altijd óók op DUUR,
+  niet alleen op limieten. Tweede fout in dezelfde analyse: 45 → 47 → 55% werd
+  als "schommelt dus willekeurig" gelezen terwijl het monotoon stíjgt — en een
+  gefaalde kaart krijgt geen watermark, dus zo'n klim is juist het handtekening-
+  patroon van een grootte-afhankelijke fout. Lees een reeks van drie niet als
+  ruis zonder ernaar te kijken.
+- **Vocabulaire dat met de kennisbank meegroeit is een schaalklip** (#281/#288)
+  — de brein-extractie stuurt per kaart het hele aangeboden refs-vocabulaire
+  mee. Dat groeit met elke set die het brein leert, dus de faalkans stijgt mee
+  met de kennis: geen vaste 55% maar een klim. De timeout ophogen verschuift de
+  klip alleen (`AI_EXTRACT_TIMEOUT_MS` staat er als ops-noodrem, niet als fix).
+  Bij elk "per item sturen we alles wat we weten"-patroon: begrens het budget,
+  of stel de vraag op het niveau waar het antwoord kaart-onafhankelijk is.
 - **Meet je eigen cap niet als "de LLM is overbelast"** (#279) — rb-ai's
   semaphore-afwijzing komt óók als 429 terug, maar mét
   `{"code":"concurrency_limit"}`. Zonder dat onderscheid telt zelf-veroorzaakte

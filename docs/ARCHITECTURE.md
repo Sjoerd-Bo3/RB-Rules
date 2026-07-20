@@ -1663,54 +1663,66 @@ Twee kleine fixes zaten in dezelfde meting:
   `reason: "no_tool_call"` — een prompt-/schemaprobleem, een andere knop dan een
   machineprobleem.
 
-**Onderzocht en VERWORPEN: de payload-hypothese.** Het lag voor de hand dat de
-interactie-taak omviel op zijn grotere payload (kaarttekst + buren + regels +
-vocabulaire), omdat een predicaten-run op dezelfde sidecar en hetzelfde model
-`0 rb-ai-uitval` gaf. Drie onafhankelijke argumenten weerleggen dat.
+**De uitval is een TIMEOUT, en de duur schaalt met het aantal refs.** Twee
+onafhankelijke metingen wijzen dezelfde kant op.
 
-1. **De wandkloktijd sluit het uit.** De interactie-run deed 40 kaarten in 43
-   min (2580 s), sequentieel, met 18 successen en 22 uitvallen. Reken je met een
-   uitval van 90 s (onze harde timeout), dan blijft er (2580 − 22×90)/18 =
-   **33 s per geslaagde kaart** over — precies de gedocumenteerde ~40 s. Draai
-   het om en los op voor de uitvalduur bij 40 s per succes: (2580 − 18×40)/22 =
-   **84,5 s**, oftewel de timeout. Een payload-afwijzing is daarentegen een
-   HTTP 400 die in **onder een seconde** terugkomt; dan zou een succes
-   (2580 − 22×2)/18 = **141 s** hebben geduurd — langer dan de timeout die hem
-   allang afgekapt zou hebben. De hypothese spreekt zichzelf tegen; de
-   timeout-verklaring klopt op ~6% na.
-2. **De magnitude is er niet naar.** De aanbieding is hard begrensd: 1 focus- +
-   ≤4 partnerkaarten (kaarttekst ~100-300 tekens), ≤3 regelsecties van elk ≤2400
-   tekens (`RuleSectionParser.MaxSectionLength`), plus refs en enums. Worst case
-   ~12 KB ≈ 3000 tokens: **~1,5% van het 200k-contextvenster**. De predicaten-
-   payload is ~3 KB. Een factor 4 tussen twee waarden die allebei ruim twee
-   ordes onder de limiet liggen verklaart geen 55% uitval. Bovendien is
-   "prompt te lang" een NIET-herhaalbare 400 — de SDK zou er niet op retryen.
-3. **Het watermark falsifieert het patroon.** Een gefaalde kaart krijgt géén
-   watermark en komt de volgende run terug. Wás uitval een deterministische
-   functie van kaartgrootte, dan bestond run 2 uitsluitend uit de grote kaarten
-   van run 1 en liep het percentage monotoon naar 100%. Gemeten over
-   opeenvolgende runs: 45%, 47%, 55% — het schommelt, dus de falende verzameling
-   is niet stabiel en de uitval hangt niet aan de kaart.
+*Rekensom op de run.* De interactie-run deed 40 kaarten in 43 min (2580 s),
+sequentieel, met 18 successen en 22 uitvallen. Reken met een uitval van 90 s
+(de harde timeout): dan blijft (2580 − 22×90)/18 = **33 s per geslaagde kaart**
+over — precies de gedocumenteerde ~40 s. Omgekeerd, bij 40 s per succes:
+(2580 − 18×40)/22 = **84,5 s** per uitval, oftewel de timeout. Er is maar één
+oplossing die past.
 
-**Waarom de predicaten-run dan wél 0% haalt:** niet de payload maar de
-SPELING. Die calls duurden 9,5 s (38 subjects in 6 min) en houden dus ~80 s over
-binnen dezelfde 90 s-begroting — ruim genoeg om een paar SDK-retries te
-absorberen. Een interactie-call van 33 s houdt er ~57 s over en verdraagt er
-minder. Dat maakt uitval load-afhankelijk en stochastisch, wat precies past bij
-een percentage dat tussen runs schommelt in plaats van vastligt. De voorspelling
-die erbij hoort: onder aanhoudende API-druk gaan predicaten-calls óók vallen,
-alleen zeldzamer.
+*Direct experiment op productie.* Zelfde kaarttekst, alleen het aantal
+aangeboden refs verschilt:
 
-De `ai_call`-regel draagt daarom `bytes`, `refs` en `items` mee (maten en
-aantallen, nooit inhoud). Correleert uitval tóch met payload-grootte, dan blijkt
-dat nu direct uit de log in plaats van uit een reconstructie — de hypothese is
-weerlegd, niet genegeerd.
+| refs | payload | uitkomst |
+|---|---|---|
+| 3 | 0,5k tekens | 200 na **49,0 s** |
+| 39 | 2,2k tekens | 504 na **92,1 s** (afgekapt) |
 
-Bewust NIET aangepast: `EXTRACT_MAX_TURNS` (3), `EXTRACT_TIMEOUT_MS` (90 s) en
-de verhouding tot de SDK-`max_retries` (10). Dat zijn de plausibele vervolg-
-knoppen — een timeout die korter is dan de eigen retry-keten van de SDK is
-aantoonbaar scheef — maar #281 ging over meten, en welke van die knoppen het
-wordt hoort uit de eerste gemeten run te volgen, niet uit deze redenering.
+Niet de kaarttekst drijft de duur, maar **het aantal aangeboden refs** — het
+ontologie-vocabulaire dat `BuildOfferedRefsAsync` per kaart meestuurt. Bij 3
+refs is er 41 s marge, bij 39 refs is de marge weg.
+
+**Dit is een schaalklip, geen vaste 55%.** Het aantal refs is een functie van
+hoeveel de kennisbank wéét (nu 38 canonieke entiteiten, groeiend met elke set).
+Hoe meer het brein leert, hoe meer extracties omvallen — en een gefaalde kaart
+krijgt geen watermark, dus ze komt terug en valt opnieuw om. Het gemeten
+verloop over opeenvolgende runs (45% → 47% → 55%) is die klim, niet ruis. Het
+wegnemen van de oorzaak staat in **#288**; de timeout ophogen verschuift de klip
+alleen (bij ~60 refs ligt hij er weer), dus `AI_EXTRACT_TIMEOUT_MS` is er als
+ops-noodrem met de bestaande 90 s als default — expliciet niet als fix.
+
+> **Correctie op een eerdere lezing in deze PR.** Een eerste analyse verwierp
+> "de payload doet het" op grond van magnitude: worst case ~12 KB ≈ 3000 tokens
+> is ~1,5% van het contextvenster, en "prompt te lang" is een niet-herhaalbare
+> 400 die in <1 s terugkomt. Dat deel klopt nog steeds — de payload wordt niet
+> *afgewezen*. Maar het weerlegde alleen dat mechanisme, niet het verband: de
+> payload (specifiek het aantal refs) drijft de **latency**, en latency tegen
+> een vaste 90 s-begroting is precies wat uitval bepaalt. De redenering sprong
+> van "de API kan dit aan" naar "dus ligt het niet aan de payload", en dat is
+> een non sequitur. Ook het watermark-argument werd verkeerd gelezen: 45 → 47 →
+> 55% is monotoon stijgend, wat de grootte-afhankelijke verklaring juist
+> ONDERSTEUNT; het werd als "schommelt" afgedaan. De les staat in CLAUDE.md.
+
+**Waar de SDK-retries dan staan.** Het retry-mechanisme hierboven is echt en nu
+zichtbaar, maar het is een **tweede versterker**, niet de aangetoonde
+hoofdoorzaak van de 22: het experiment haalt de timeout al zonder dat er
+retries aan te pas hoeven komen. De twee kunnen elkaar wel opstapelen — elke
+retry eet marge die een refs-rijke kaart niet heeft. Er is één losse draad die
+de nieuwe logging moet ophelderen: **49 s voor een payload van 0,5k tekens is
+opvallend traag** voor een enkele tool-call-extractie; de `ai_call`-regel
+vermeldt vanaf nu of daar retries in zitten of dat het pure generatietijd is.
+
+De `ai_call`-regel draagt daarom `ms`, `bytes`, `refs` en `items` mee (maten en
+aantallen, nooit inhoud), zodat de klip meetbaar is in plaats van
+reproduceerbaar-op-verzoek.
+
+Bewust NIET aangepast: `EXTRACT_MAX_TURNS` (3) en de verhouding tussen onze
+timeout en de SDK-`max_retries` (10) — een timeout die korter is dan de eigen
+retry-keten eronder is aantoonbaar scheef, maar #281 ging over meten en de
+structurele fix staat in #288.
 
 **rb-api-kant (mining-orkestratie).** Drie jobs in `JobCatalog`. De twee
 LLM-jobs staan bewust NIET in de "alles"-keten (LLM-zwaar, rb-ai-afhankelijk —
