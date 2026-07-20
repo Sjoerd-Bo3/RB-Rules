@@ -56,7 +56,16 @@ public class EmbeddingService(HttpClient http)
                 var outcome = res.StatusCode >= HttpStatusCode.InternalServerError
                     ? EmbedCallOutcome.ServerError
                     : EmbedCallOutcome.ClientError;
-                return new(null, outcome, status, $"Ollama antwoordde {status}");
+                // Ollama's eigen foutbody erbij (#293). Zonder deze regel stond er
+                // alleen "Ollama antwoordde 400", en dan is de enige aanwijzing ons
+                // eigen label — dat in #293 juist de verkeerde kant op wees. De body
+                // zei letterlijk `do embedding request: … EOF`, oftewel: het
+                // llama-server-kindproces is tijdens dit verzoek gestorven. Lezen mag
+                // de meting niet kunnen slopen, dus de status blijft leidend als het
+                // uitlezen zelf mislukt.
+                var errorBody = await ReadErrorBodyAsync(res, ct);
+                return new(null, outcome, status,
+                    $"Ollama antwoordde {status}" + (errorBody is null ? "" : $": {errorBody}"));
             }
 
             EmbedResponse? body;
@@ -86,6 +95,26 @@ public class EmbeddingService(HttpClient http)
 
             return new([.. embeddings.Take(texts.Length).Select(e => new Vector(e))],
                 EmbedCallOutcome.Ok, (int)res.StatusCode, null);
+        }
+    }
+
+    /// <summary>De ruwe foutbody, kort gehouden en zonder nieuwe regels — hij landt in
+    /// een run_log-regel die een beheerder op één regel leest. <c>null</c> als er niets
+    /// te lezen viel; het uitlezen van een foutbody mag zelf nooit de fout worden.</summary>
+    private static async Task<string?> ReadErrorBodyAsync(
+        HttpResponseMessage res, CancellationToken ct)
+    {
+        try
+        {
+            var raw = await res.Content.ReadAsStringAsync(ct);
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var one = string.Join(' ', raw.Split(
+                (char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            return one.Length <= 300 ? one : one[..300] + "…";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
         }
     }
 

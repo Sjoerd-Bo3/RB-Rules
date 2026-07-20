@@ -27,8 +27,17 @@ public enum EmbedCallOutcome
     /// cref="ServerError"/>: dít is de container-kill, dát is de runner-kill.</summary>
     Transport,
 
-    /// <summary>Non-success 4xx: verkeerd verzoek of — het praktijkgeval — het model
-    /// is niet gepulld. Wachten helpt hier niet, pullen wel.</summary>
+    /// <summary>Non-success 4xx. De eerste lezing (#282) was "het model is niet
+    /// gepulld"; het praktijkgeval (#293) bleek iets ánders en de hint stuurde de
+    /// beheerder precies de verkeerde kant op. Gemeten op productie: het model stónd
+    /// er (<c>bge-m3:latest</c>, 1,2 GB), en tóch gaf een verzoek van 8000 tekens 3 van
+    /// de 3 keer een 400 met foutbody <c>do embedding request: … EOF</c>. Die EOF is
+    /// Ollama's kindproces <c>llama-server</c> dat STERFT tijdens het verzoek — de
+    /// OOM-teller (<c>dmesg | grep -c llama-server</c>) liep tijdens die meetreeks van
+    /// 10 naar 30. Een 4xx van Ollama betekent hier dus "de backend is overleden onder
+    /// geheugendruk", en de invoergrootte is de knop die dat bepaalt. Een ontbrekend
+    /// model geeft óók een 4xx, dus beide blijven mogelijk — vandaar dat het label
+    /// gokt noch verzwijgt en de RUWE foutbody meestuurt.</summary>
     ClientError,
 
     /// <summary>HTTP 200, maar Ollama gaf geen of te weinig embeddings terug voor de
@@ -48,16 +57,37 @@ public enum EmbedCallOutcome
 /// bewust mutabel: een pijplijn telt tientallen batches op.</summary>
 public sealed class EmbedOutcomeTally
 {
+    /// <summary>Hoeveel tekens ruwe foutbody er per oorzaak in de samenvatting mee mag.
+    /// Ollama's fouten zijn kort (<c>do embedding request: … EOF</c> is ~90 tekens);
+    /// dit is de rem voor het geval er ooit een HTML-foutpagina uit komt.</summary>
+    private const int MaxDetailChars = 160;
+
     private readonly Dictionary<EmbedCallOutcome, int> _calls = [];
+    private readonly Dictionary<EmbedCallOutcome, string> _details = [];
     private int _textsLost;
 
     /// <summary>Boek één aanroep. <paramref name="texts"/> is het aantal teksten dat
     /// in die aanroep zat: bij uitval zijn dat precies de kaarten/chunks die zónder
     /// embedding blijven staan, en dat getal is wat de beheerder wil zien.</summary>
-    public void Add(EmbedCallOutcome outcome, int texts = 1)
+    /// <param name="detail">De ruwe foutmelding van de poort (#293). Alleen de EERSTE
+    /// per oorzaak wordt bewaard: bij 40 identieke OOM-batches wil je één keer lezen
+    /// wát Ollama zei, niet veertig keer hetzelfde. De ruwe tekst is hier waardevoller
+    /// dan onze duiding ervan — juist het gokken naar een oorzaak ("model niet
+    /// gepulld?") kostte in #293 een verkeerde zoekrichting.</param>
+    public void Add(EmbedCallOutcome outcome, int texts = 1, string? detail = null)
     {
         _calls[outcome] = _calls.GetValueOrDefault(outcome) + 1;
-        if (outcome != EmbedCallOutcome.Ok) _textsLost += texts;
+        if (outcome == EmbedCallOutcome.Ok) return;
+        _textsLost += texts;
+        if (!string.IsNullOrWhiteSpace(detail) && !_details.ContainsKey(outcome))
+            _details[outcome] = Trim(detail);
+    }
+
+    private static string Trim(string detail)
+    {
+        var one = string.Join(' ', detail.Split(
+            (char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return one.Length <= MaxDetailChars ? one : one[..MaxDetailChars] + "…";
     }
 
     public int Count(EmbedCallOutcome outcome) => _calls.GetValueOrDefault(outcome);
@@ -75,19 +105,28 @@ public sealed class EmbedOutcomeTally
     /// <summary>Menselijke uitsplitsing van de uitval ("5xx×3, onbereikbaar×1"), of een
     /// lege string als er niets misging. Deterministische volgorde (aflopend aantal,
     /// dan naam) zodat run-details vergelijkbaar blijven — zelfde afspraak als
-    /// <see cref="AiOutcomeTally.Summary"/>.</summary>
+    /// <see cref="AiOutcomeTally.Summary"/>. Sinds #293 hangt de ruwe foutbody er per
+    /// oorzaak achter, zodat de beheerder Ollama's eigen woorden ziet en niet alleen
+    /// onze duiding ervan.</summary>
     public string Summary => string.Join(", ", _calls
         .Where(kv => kv.Key != EmbedCallOutcome.Ok && kv.Value > 0)
         .OrderByDescending(kv => kv.Value)
         .ThenBy(kv => Label(kv.Key), StringComparer.Ordinal)
-        .Select(kv => $"{Label(kv.Key)}×{kv.Value}"));
+        .Select(kv => $"{Label(kv.Key)}×{kv.Value}"
+            + (_details.TryGetValue(kv.Key, out var d) ? $" [{d}]" : "")));
 
+    /// <summary>Korte duiding per oorzaak. Bewust ZONDER stellige diagnose waar we er
+    /// geen hebben: de 4xx-hint luidde tot #293 "model niet gepulld?", terwijl het
+    /// model er gewoon stond en de echte oorzaak een OOM-kill van llama-server was —
+    /// een verkeerde gok is duurder dan een open vraag, want de beheerder gaat er
+    /// achteraan. Noemt daarom de meest waarschijnlijke oorzaak (backend overleden)
+    /// eerst en laat de tweede open; de ruwe foutbody in <see cref="Summary"/> beslist.</summary>
     private static string Label(EmbedCallOutcome outcome) => outcome switch
     {
         EmbedCallOutcome.ServerError => "5xx (model-runner omgevallen?)",
         EmbedCallOutcome.Timeout => "timeout",
         EmbedCallOutcome.Transport => "onbereikbaar",
-        EmbedCallOutcome.ClientError => "4xx (model niet gepulld?)",
+        EmbedCallOutcome.ClientError => "4xx (backend overleden? te grote invoer?)",
         EmbedCallOutcome.Incomplete => "onvolledig antwoord",
         EmbedCallOutcome.DimensionMismatch => "dimensie-mismatch",
         _ => outcome.ToString(),

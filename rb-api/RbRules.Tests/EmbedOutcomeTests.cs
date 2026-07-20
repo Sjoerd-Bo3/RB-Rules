@@ -408,7 +408,211 @@ public class EmbedOutcomeTests
     public void Settings_DefaultIsGehalveerdTenOpzichteVanVoor282()
     {
         Assert.Equal(8, EmbeddingSettings.Default.BatchSize);
-        Assert.Equal(8000, EmbeddingSettings.Default.BatchChars);
+        Assert.Equal(6000, EmbeddingSettings.Default.BatchChars);
+    }
+
+    // ── DE REGRESSIETEST VAN #293 ────────────────────────────────────────────
+    // #282 koos EMBED_BATCH_CHARS=8000 op gevoel en dat bleek EXACT de waarde waarop
+    // llama-server omvalt: de begrenzing stond op de klip in plaats van eronder.
+    // Meetreeks op productie (POST /api/embed, bge-m3, rb-v2-ollama):
+    //   500 / 2400 / 3908 / 4500 / 5000 / 6000 / 7000 → HTTP 200
+    //   8000                                          → HTTP 400, 3 van de 3
+    //   20000                                         → HTTP 400
+    // Foutbody `do embedding request: … EOF`; `dmesg | grep -c llama-server` liep
+    // tijdens de reeks van 10 naar 30 — elke 400 is één OOM-kill.
+    // Deze twee tests worden rood zodra de default weer boven die gemeten grens komt.
+
+    [Fact]
+    public void Settings_DefaultBlijftOnderDeGemetenKlip()
+    {
+        Assert.True(
+            EmbeddingSettings.DefaultBatchChars <= EmbeddingSettings.MeasuredSafeMaxBatchChars,
+            $"EMBED_BATCH_CHARS-default {EmbeddingSettings.DefaultBatchChars} ligt boven de "
+            + $"hoogste GEMETEN veilige waarde ({EmbeddingSettings.MeasuredSafeMaxBatchChars}). "
+            + $"Bij {EmbeddingSettings.MeasuredFailingBatchChars} tekens sterft llama-server "
+            + "aan een OOM-kill (#293) — verhogen mag pas ná een nieuwe meting én een hogere "
+            + "memory:-cap voor rb-v2-ollama in deploy/server-setup-v2/docker-compose.yml.");
+
+        // En niet vlák onder de klifrand: 7000 is de laatste waarde die het HAALDE,
+        // dus de echte grens ligt daar ergens boven en schuift mee met wat Postgres/
+        // Neo4j/rb-ai op dat moment van de 8 GB-VM claimen.
+        Assert.True(
+            EmbeddingSettings.DefaultBatchChars
+                <= EmbeddingSettings.MeasuredSafeMaxBatchChars * 9 / 10,
+            "De default hoort met marge onder de klip te liggen, niet er vlak onder.");
+    }
+
+    [Fact]
+    public void Settings_ClampLaatDeDefaultDoor_EnWeertDeGemetenKlipwaarde()
+    {
+        // De clamp mag de default niet stilletjes wegfilteren — dan zou een expliciete
+        // EMBED_BATCH_CHARS=6000 in de .env terugvallen op … 6000, maar mét een
+        // waarschuwing die niets betekent. Dit is óók de vangnettest voor de
+        // omgekeerde fout: zet de default boven MeasuredSafeMaxBatchChars en deze
+        // test valt om, want dan weigert de clamp zijn eigen fallback-waarde.
+        using (new EnvScope(("EMBED_BATCH_CHARS", $"{EmbeddingSettings.DefaultBatchChars}")))
+        {
+            var warnings = new List<string>();
+            var s = EmbeddingSettings.FromEnvironment(warnings.Add);
+
+            Assert.Equal(EmbeddingSettings.DefaultBatchChars, s.BatchChars);
+            Assert.Empty(warnings);
+        }
+
+        // De gemeten klipwaarde zelf gaat er níét meer in — het plafond is sinds #293
+        // de meetwaarde en geen ruime 100000 meer. Wel luid: stil terugvallen is de
+        // NIGHTLY_ENABLED-klasse fout (#268).
+        using (new EnvScope(
+            ("EMBED_BATCH_CHARS", $"{EmbeddingSettings.MeasuredFailingBatchChars}")))
+        {
+            var warnings = new List<string>();
+            var s = EmbeddingSettings.FromEnvironment(warnings.Add);
+
+            Assert.Equal(EmbeddingSettings.DefaultBatchChars, s.BatchChars);
+            Assert.Contains(warnings, w => w.Contains("EMBED_BATCH_CHARS"));
+        }
+    }
+
+    // ── De 4xx-hint stuurde de beheerder de verkeerde kant op ────────────────
+
+    [Fact]
+    public void Tally_4xxNoemtNietLangerHetModel_EnLaatOllamaZelfAanHetWoord()
+    {
+        // "4xx (model niet gepulld?)" was de enige aanwijzing in de job-melding, en
+        // hij was fout: bge-m3:latest stond er gewoon (1,2 GB). De echte oorzaak was
+        // een OOM-kill van llama-server onder een te grote invoer.
+        var tally = new EmbedOutcomeTally();
+        tally.Add(EmbedCallOutcome.ClientError, 4,
+            """Ollama antwoordde 400: {"error":"do embedding request: Post \"http://127.0.0.1:43215/v1/embeddings\": EOF"}""");
+
+        Assert.DoesNotContain("gepulld", tally.Summary);
+        Assert.Contains("4xx", tally.Summary);
+        // De ruwe foutbody erbij: onze duiding is een hypothese, Ollama's eigen
+        // woorden zijn het bewijs.
+        Assert.Contains("do embedding request", tally.Summary);
+        Assert.Contains("EOF", tally.Summary);
+    }
+
+    [Fact]
+    public void Tally_HerhaaltDezelfdeFoutbodyNietVeertigKeer()
+    {
+        var tally = new EmbedOutcomeTally();
+        for (var i = 0; i < 40; i++)
+            tally.Add(EmbedCallOutcome.ClientError, 8, "Ollama antwoordde 400: EOF");
+
+        Assert.Equal("4xx (backend overleden? te grote invoer?)×40 "
+            + "[Ollama antwoordde 400: EOF]", tally.Summary);
+    }
+
+    [Fact]
+    public async Task Embed_4xx_NeemtDeRuweFoutbodyMeeNaarHetRunLog()
+    {
+        // De hele keten: Ollama's body → EmbedBatchResult.Error → tally → run_log.
+        // Zonder deze keten staat er alleen "4xx×1" en begint het gokken opnieuw.
+        await using var db = NewDb();
+        db.Cards.AddRange(Cards(4));
+        await db.SaveChangesAsync();
+
+        var r = await Pipeline(db, _ => Json(HttpStatusCode.BadRequest,
+            """{"error":"do embedding request: EOF"}""")).RunAsync();
+
+        Assert.Contains("do embedding request", r.FailureSummary);
+        var log = Assert.Single(db.RunLogs.Where(l => l.Kind == "embed"));
+        Assert.Contains("do embedding request", log.Detail);
+        Assert.DoesNotContain("gepulld", log.Detail);
+    }
+
+    // ── Eén item boven het budget: kappen, en het zeggen ─────────────────────
+
+    [Fact]
+    public void Cap_KortGenoegeTekstenBlijvenOngemoeid()
+    {
+        var texts = new List<string> { "kort", new('x', 6000) };
+
+        var capped = EmbedBatching.CapItems(texts, 6000);
+
+        Assert.Equal(0, capped.CappedCount);
+        Assert.Equal(texts, capped.Texts);
+        Assert.Equal(6000, capped.LongestOriginal);
+    }
+
+    [Fact]
+    public void Cap_TeLangeTekstWordtIngekort_EnGeteld()
+    {
+        var texts = new List<string> { "kort", new('x', 20_000), new('y', 6001) };
+
+        var capped = EmbedBatching.CapItems(texts, 6000);
+
+        Assert.Equal(2, capped.CappedCount);
+        Assert.Equal(20_000, capped.LongestOriginal);
+        Assert.Equal([4, 6000, 6000], capped.Texts.Select(t => t.Length));
+        Assert.StartsWith("xxx", capped.Texts[1]);   // begin behouden, staart eraf
+    }
+
+    [Fact]
+    public void Cap_KnipptNooitMiddenInEenSurrogatePair()
+    {
+        // Een halve surrogate pair is geen geldige UTF-16 en zou als vervangingsteken
+        // de JSON in gaan. Budget 5, tekst "aaaa" + 🂡 (2 chars) → knip op 4.
+        var texts = new List<string> { "aaaa\U0001F0A1" };
+
+        var capped = EmbedBatching.CapItems(texts, 5);
+
+        Assert.Equal("aaaa", capped.Texts[0]);
+        Assert.Equal(1, capped.CappedCount);
+    }
+
+    [Fact]
+    public void Cap_MaaktDeBatchgarantieHard_GeenEnkelVerzoekBovenHetBudget()
+    {
+        // Dit is de kern van #293. EmbedBatching.Split gaf een uitschieter bewust een
+        // eigen verzoek (nooit weglaten, #282) — maar dat ene verzoek lag dan alsnog
+        // boven de klip en viel elke run opnieuw om. Met CapItems ervóór is élke
+        // batch gegarandeerd binnen het budget.
+        var texts = new List<string> { "kort", new('x', 20_000), "kort", new('y', 9000) };
+
+        var capped = EmbedBatching.CapItems(texts, 6000);
+        var batches = EmbedBatching.Split(capped.Texts, maxCount: 8, maxChars: 6000);
+
+        Assert.All(batches, b =>
+        {
+            var (offset, count) = b.GetOffsetAndLength(capped.Texts.Count);
+            Assert.True(capped.Texts.Skip(offset).Take(count).Sum(t => t.Length) <= 6000);
+        });
+        // En er is nog steeds niets weggelaten: 4 teksten in, 4 teksten verdeeld.
+        Assert.Equal(4, batches.Sum(b => b.GetOffsetAndLength(texts.Count).Length));
+    }
+
+    [Fact]
+    public async Task Embed_KaartBovenHetBudget_WordtGekapt_MaarNooitStil()
+    {
+        // Stil afkappen is precies de klasse fout die #282/#284 wegnamen, dus het
+        // aantal en de kaplengte horen in de run-melding.
+        await using var db = NewDb();
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-999", Name = "Reuzentekst", Type = "Unit",
+            TextPlain = string.Concat(Enumerable.Repeat("woord ", 3000)),
+        });
+        await db.SaveChangesAsync();
+
+        var sent = new List<int>();
+        var r = await Pipeline(db, req =>
+        {
+            sent.AddRange(InputLengths(req));
+            return OkEmbeddings(BatchTexts(req));
+        }).RunAsync();
+
+        // 1. Wat er de deur uit ging past binnen het budget — geen OOM-kill meer.
+        Assert.All(sent, len => Assert.True(len <= EmbeddingSettings.DefaultBatchChars));
+        // 2. De kaart is wél geembed; overslaan zou hem elke run opnieuw laten falen.
+        Assert.Equal(1, r.Embedded);
+        Assert.Equal(1, await db.Cards.CountAsync(c => c.Embedding != null));
+        // 3. En het staat er met zoveel woorden.
+        Assert.Equal(1, r.Capped);
+        Assert.Contains("afgekapt", r.Summary);
+        Assert.Contains($"{EmbeddingSettings.DefaultBatchChars}", r.Summary);
+        Assert.Contains("afgekapt", Assert.Single(db.RunLogs).Detail);
     }
 
     [Fact]
@@ -477,6 +681,16 @@ public class EmbedOutcomeTests
         var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
         return System.Text.Json.JsonDocument.Parse(body)
             .RootElement.GetProperty("input").GetArrayLength();
+    }
+
+    /// <summary>De lengte van elke tekst die daadwerkelijk de deur uit ging — zo meten
+    /// we de kap op de WIRE en niet alleen in de rekensom ernaartoe (#293).</summary>
+    private static IEnumerable<int> InputLengths(HttpRequestMessage req)
+    {
+        var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+        return [.. System.Text.Json.JsonDocument.Parse(body)
+            .RootElement.GetProperty("input").EnumerateArray()
+            .Select(e => e.GetString()!.Length)];
     }
 
     private static HttpResponseMessage OkEmbeddings(int count) =>

@@ -377,6 +377,45 @@ met quota en rate-limiting.
   tekens) is een heel ander verzoek dan 8 kaartteksten (~300 tekens). Vandaar
   `EMBED_BATCH_SIZE` (16 → 8) én een tekenbudget `EMBED_BATCH_CHARS` (~8000).
   Een kleinere batch is géén ander model: bge-m3 en `vector(1024)` blijven.
+- **Een zelfgekozen veiligheidsgrens is een gok tot je hem gemeten hebt** (#293,
+  duur betaald). #282 begrensde de embed-batch op `EMBED_BATCH_CHARS` ~8000 —
+  een plausibel getal ("ruim drie regel-secties"), nergens tegen de echte
+  backend gehouden. Meting op productie (`POST /api/embed`, bge-m3): 500 / 2400
+  / 3908 / 4500 / 5000 / 6000 / 7000 tekens → HTTP 200, **8000 → HTTP 400, 3 van
+  de 3**, 20000 → 400. Foutbody `do embedding request: … EOF` = het
+  `llama-server`-kindproces stérft; `dmesg | grep -c llama-server` liep tijdens
+  de reeks van 10 naar 30, dus elke 400 is één OOM-kill. De grens die de OOM moest
+  vóórkomen lag dus precies óp de klip (tussen 7000 en 8000) — de fix van #282
+  was in het ongunstigste geval de trigger. Drie regels hieruit: (a) leg een
+  grens niet op de laatste waarde die het haalde, maar met marge eronder (nu
+  6000; 7000 is de klifrand zelf, en die schuift mee met wat Postgres/Neo4j/rb-ai
+  van de 8 GB-VM claimen); (b) zet de meetwaarden als constanten in de code
+  (`MeasuredSafeMaxBatchChars`/`MeasuredFailingBatchChars`) met een regressietest
+  eraan, anders is de volgende ronde weer giswerk; (c) een env-knop die alléén
+  omlaag veilig is, hoort een plafond op die meetwaarde te krijgen in plaats van
+  een ruime bovengrens — verhogen kan dan niet zonder de bijbehorende
+  `memory:`-cap ook aan te raken. Let op: die meting is alleen geldig bij de
+  huidige Ollama-cap (2560m); verzet je die, dan is de reeks verlopen.
+- **Een 4xx van Ollama betekent niet "model niet gepulld"** (#293). Dat was de
+  hint in `EmbedOutcomeTally`, en hij stuurde de beheerder de verkeerde kant op:
+  het model stónd er (`bge-m3:latest`, 1,2 GB). Een OOM-kill van de model-runner
+  komt als 4xx naar buiten, niet alleen als 5xx. Sindsdien: `4xx (backend
+  overleden? te grote invoer?)` plus **de ruwe foutbody** in het run-detail. Een
+  open vraag met bewijs erbij is eerlijker dan een stellige verkeerde gok — de
+  beheerder gaat er namelijk achteraan. Algemener: zet in een foutlabel alleen
+  een diagnose die je kunt onderbouwen, en laat de bron zelf aan het woord.
+- **"Geen input weglaten" is niet hetzelfde als "elke input verwerken"** (#293).
+  `EmbedBatching.Split` gaf een item boven het tekenbudget bewust een eigen
+  verzoek (nooit stil weglaten, #282) — maar dat redt het item niet als het
+  zélf boven de klip ligt; dan valt precies dat ene verzoek elke run opnieuw om.
+  `RuleSectionParser.MaxSectionLength = 2400` is géén garantie: `SplitLong` knipt
+  op zinsgrens en laat één langere zin heel (Card Errata heeft al een chunk van
+  3908 tekens). Vandaar `CapItems` vóór `Split`. Kappen won het van overslaan
+  omdat overslaan in beide pijplijnen permanent is: de regel-index is
+  alles-of-niets per bron (één te lange chunk blokkeert die bron voorgoed) en
+  kaarten zonder embedding komen elke run terug (dus elke run dezelfde OOM-kill).
+  Gekapt wordt alleen de embed-INVOER — `RuleChunk.Text` en de kaarttekst blijven
+  volledig — en het aantal + de kaplengte staan altijd in de run-melding.
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`

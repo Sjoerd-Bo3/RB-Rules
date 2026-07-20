@@ -121,6 +121,62 @@ public class RuleChunkPipelineTests
         Assert.Empty(db.RunLogs);
     }
 
+    // ── #293: een chunk boven het budget mag geen permanente blokkade zijn ───
+
+    [Fact]
+    public async Task Index_ChunkBovenHetBudget_GaatGEKAPTDeDeurUit_EnWordtGemeld()
+    {
+        // RuleSectionParser.MaxSectionLength (2400) is een STREEFwaarde: SplitLong
+        // knipt op zinsgrens en laat één zin die zelf langer is heel — Card Errata
+        // heeft in de praktijk al een chunk van 3908 tekens. Een chunk boven de klip
+        // zou als solo-verzoek llama-server omver duwen, en met de alles-of-niets-
+        // regel hierboven zou die ene chunk de regelindex van deze bron voor altijd
+        // blokkeren. Vandaar: embed-invoer kappen op het budget.
+        await using var db = NewDb();
+        db.Sources.Add(Src("errata"));
+        db.Documents.Add(new Document
+        {
+            Id = 1, SourceId = "errata", ContentHash = "h1",
+            // Eén sectie, één "zin" zonder punt: precies het geval dat SplitLong
+            // ongemoeid laat.
+            Content = "101. " + string.Concat(Enumerable.Repeat("token ", 3000)),
+        });
+        await db.SaveChangesAsync();
+
+        var sent = new List<int>();
+        var results = await Pipeline(db, req =>
+        {
+            sent.AddRange(InputLengths(req));
+            // 5xx ná het meten: EF InMemory kent geen ExecuteDeleteAsync, dus het
+            // geslaagde swap-pad is hier niet te draaien (zie klasse-toelichting).
+            // Wat de deur uit ging is al gemeten, en dát is de claim.
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        }).RunAsync(force: true);
+
+        Assert.NotEmpty(sent);
+        Assert.All(sent, len => Assert.True(
+            len <= EmbeddingSettings.DefaultBatchChars,
+            $"tekst van {len} tekens ging ongekapt de deur uit"));
+        var r = Assert.Single(results);
+        Assert.Equal(1, r.Capped);
+        Assert.Contains("afgekapt", results.Summarize());
+    }
+
+    [Fact]
+    public void Summarize_MeldtKappenOokInEenVerderGeslaagdeRun()
+    {
+        // Afkappen is geen fout maar wél invoerverlies. Stil afkappen is precies de
+        // klasse fout die #282/#284 wegnamen, dus het staat er ook als er verder
+        // niets misging.
+        var results = new List<RuleIndexResult> { new("errata", 12, Capped: 1) };
+
+        var summary = results.Summarize();
+
+        Assert.Contains("12 sectie-chunks over 1 bronnen", summary);
+        Assert.Contains("1 chunk(s) te lang voor het embed-budget", summary);
+        Assert.Contains("opgeslagen tekst blijft volledig", summary);
+    }
+
     // ── Samenvatting voor de aanroepers ──────────────────────────────────────
 
     [Fact]
@@ -185,6 +241,16 @@ public class RuleChunkPipelineTests
         var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
         return System.Text.Json.JsonDocument.Parse(body)
             .RootElement.GetProperty("input").GetArrayLength();
+    }
+
+    /// <summary>De lengte van elke tekst die daadwerkelijk verstuurd is (#293) — de kap
+    /// meten op de wire, niet in de rekensom ernaartoe.</summary>
+    private static IEnumerable<int> InputLengths(HttpRequestMessage req)
+    {
+        var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+        return [.. System.Text.Json.JsonDocument.Parse(body)
+            .RootElement.GetProperty("input").EnumerateArray()
+            .Select(e => e.GetString()!.Length)];
     }
 
     private static HttpResponseMessage OkEmbeddings(int count) => new(HttpStatusCode.OK)
