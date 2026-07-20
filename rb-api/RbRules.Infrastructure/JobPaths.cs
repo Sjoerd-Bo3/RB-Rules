@@ -140,6 +140,12 @@ public static class JobPaths
         new("breinentiteiten"),
         new("breinmine-interacties", Drain: true),
         new("breinmine-predicaten", Drain: true),
+        // Steekproef-audit (#255) ná de interactie-mining: de pool bestaat uit
+        // gepromoveerde interacties, dus vers gepromoveerde feiten komen dezelfde
+        // keten nog aan bod. Vóór de projectie omdat een betwiste interactie dan al
+        // als reviewqueue-conflict zichtbaar is wanneer de beheerder 's ochtends
+        // kijkt — geen harde afhankelijkheid (de audit raakt Neo4j niet).
+        new("breinaudit-interacties", Drain: true),
         new("breinprojectie"),
         new("reason"),
     ];
@@ -229,7 +235,8 @@ public static class JobPaths
         // stoppen zelf netjes op de deadline en hun watermark bewaart de
         // voortgang voor de volgende nacht.
         .. UpdateChain(uncapped: true),
-        .. WithUncapped(BrainSteps, "breinmine-interacties", "breinmine-predicaten"),
+        .. WithUncapped(BrainSteps,
+            "breinmine-interacties", "breinmine-predicaten", "breinaudit-interacties"),
     ], ContinueOnError: true);
 
     /// <summary>De los startbare paden (/api/admin/paths). De samengestelde

@@ -147,6 +147,17 @@ Graph-edges: Card—STAPLE_IN→Archetype. Pas oppakken als laag 1+2 staan.
   nacht. Corroboratie-clustering is embeddings-werk (lokaal, gratis).
 - **Bron-hygiëne**: bronnen leven in het bestaande register met trust/rank;
   een bron die structureel door errata wordt tegengesproken zakt in trust.
+- **Zelfcontrole is geen kwaliteitsmeting** (#255): de accept-ratio van een
+  eigen promotie-poort is zelfreferentieel — een pijplijn die tautologieën
+  promoveert scoort er uitstekend op. Gepromoveerde brein-feiten (nu: de
+  gereïficeerde interacties) krijgen daarom een steekproef-audit door een
+  STERKER model (1 op de N, beheerd instelbaar): klopt het feit, en wordt het
+  gedragen door het bewijs waarop het promoveerde? Het oordeel is een aparte
+  audit-regel met eigen provenance (model + promptversie + datum) en volgt de
+  rode draad van alle lagen: een LLM-oordeel draagt nooit alleen een promotie
+  of degradatie — een negatief oordeel wordt zichtbaar in de reviewqueue, de
+  beheerder beslist. De gemeten precisie staat in de observability náást de
+  poort-ratio, expliciet gelabeld als steekproef.
 
 ## Evolutie-raamwerk: de bank groeit met het spel mee
 

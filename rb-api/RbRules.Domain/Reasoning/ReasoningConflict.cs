@@ -30,8 +30,16 @@ public static class ReasoningConflictKind
     /// Spell (vangt kaart-sync-schade à la #150).</summary>
     public const string DisjointnessViolation = "disjointness-violation";
 
+    /// <summary>De steekproef-audit (#255) betwist een gepromoveerde interactie:
+    /// het sterkere model oordeelde "onjuist" of "niet gedragen door het bewijs".
+    /// NIET uit de ContradictionDetector maar uit BreinInteractionAuditService —
+    /// het is de zichtbare-kanaal-route van de harde regel dat een LLM-oordeel
+    /// nooit zelfstandig een tier verandert: een beheerder beslist.</summary>
+    public const string AuditDisputesInteraction = "audit-disputes-interaction";
+
     public static readonly IReadOnlyList<string> All =
-        [ClaimContradictsOfficial, RulingCollision, DisjointnessViolation];
+        [ClaimContradictsOfficial, RulingCollision, DisjointnessViolation,
+         AuditDisputesInteraction];
 }
 
 /// <summary>Levenscyclus van een tegenspraak-rij.</summary>
@@ -57,6 +65,9 @@ public static class ConflictRouter
         ReasoningConflictKind.ClaimContradictsOfficial => ConflictChannel.Misconception,
         ReasoningConflictKind.RulingCollision => ConflictChannel.Escalation,
         ReasoningConflictKind.DisjointnessViolation => ConflictChannel.ReviewQueue,
+        // Een betwiste interactie (#255) gaat naar de reviewqueue: het oordeel is
+        // van een LLM en draagt geen actie alleen — de beheerder beslist.
+        ReasoningConflictKind.AuditDisputesInteraction => ConflictChannel.ReviewQueue,
         // Onbekend/nieuw soort: nooit stil laten vallen — altijd naar menselijke ogen.
         _ => ConflictChannel.ReviewQueue,
     };

@@ -36,7 +36,8 @@ public sealed record BreinMiningResetResult(
     int Entities,
     int MergeCandidates,
     int MergeDecisions,
-    int MiningRunsKept)
+    int MiningRunsKept,
+    int Audits = 0)
 {
     public string Message
     {
@@ -45,7 +46,7 @@ public sealed record BreinMiningResetResult(
             var parts = new List<string>
             {
                 $"{Interactions} interacties, {Conditions} condities, {Decisions} beslissingen, "
-                + $"{Assertions} interactie-assertions verwijderd; "
+                + $"{Assertions} interactie-assertions, {Audits} audit-oordelen verwijderd; "
                 + $"{TombstonesLifted} poort-grafsteen(en) gelicht",
             };
             if (Scope == BreinResetScope.InteractionsAndEntities)
@@ -166,6 +167,14 @@ public class BreinMiningResetService(RbRulesDbContext db)
         var interactions = await db.Interactions.ToListAsync(ct);
         db.Interactions.RemoveRange(interactions);
 
+        // Audit-oordelen (#255) horen bij exact deze interactie-laag: een oordeel
+        // over een verwijderd feit zou de gemeten precisie voor eeuwig blijven
+        // kleuren (en na her-mining zelfs als vals watermark werken). De
+        // audit-MiningRuns blijven staan — zelfde keuze 1 als de mining-runs:
+        // provenance is geen wegwerp-administratie.
+        var audits = await db.InteractionAudits.ToListAsync(ct);
+        db.InteractionAudits.RemoveRange(audits);
+
         // ── 3. Poort-grafstenen lichten (keuze 2 in de klasse-doc) ─────────
         var tombstones = await db.RejectionTombstones
             .Where(t => !t.Lifted && t.Actor == GateActor)
@@ -224,7 +233,8 @@ public class BreinMiningResetService(RbRulesDbContext db)
 
         var result = new BreinMiningResetResult(
             scope, interactions.Count, conditions.Count, decisions.Count, assertions,
-            tombstones.Count, predicates, entities, mergeCandidates, mergeDecisions, runsKept);
+            tombstones.Count, predicates, entities, mergeCandidates, mergeDecisions, runsKept,
+            Audits: audits.Count);
 
         db.RunLogs.Add(new RunLog
         {

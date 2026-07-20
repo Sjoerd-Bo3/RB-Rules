@@ -136,4 +136,10 @@ public static class FactKinds
     /// <summary>Gereïficeerde, gekwalificeerde interactie (fase 2, #226) — subject
     /// <c>interaction:{id}</c>.</summary>
     public const string Interaction = "interaction";
+
+    /// <summary>Steekproef-audit-oordeel over een gepromoveerde interactie (#255).
+    /// Het oordeel is een METING met eigen provenance, geen feit-tier — de
+    /// audit-run (MiningRun met dit Kind) mag dus nooit meedoen in
+    /// tier-beslissingen, alleen in de observability.</summary>
+    public const string InteractionAudit = "interaction_audit";
 }

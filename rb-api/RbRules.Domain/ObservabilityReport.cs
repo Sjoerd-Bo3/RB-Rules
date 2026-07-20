@@ -16,6 +16,24 @@ public sealed record MiningPrecisionRow(
     double Precision,
     double AcceptRate);
 
+/// <summary>Gemeten audit-precisie per (model × promptversie) over de
+/// steekproef-audits (#255). Bewust een EIGEN rij naast
+/// <see cref="MiningPrecisionRow"/>: die meet de accept-ratio van onze eigen
+/// promotie-poort (zelfreferentieel — een pijplijn die tautologieën promoveert
+/// scoort er uitstekend op), déze meet wat een onafhankelijk, sterker model van de
+/// gepromoveerde feiten vindt. <see cref="Precision"/> = correct-én-gedragen ÷
+/// geauditeerd; <see cref="Incorrect"/> en <see cref="Unsupported"/> splitsen de
+/// afwijzingen uit (een feit kan toevallig kloppen zonder dat het bewijs het
+/// draagt — dat onderscheid is de meting).</summary>
+public sealed record AuditPrecisionRow(
+    string Model,
+    string PromptVersion,
+    int Audited,
+    int Sound,
+    int Incorrect,
+    int Unsupported,
+    double Precision);
+
 /// <summary>Kosten/latency per retrieval-modus (#231, spec §7 — router-tuning uit
 /// fase 4). Rauwe rij: één afgeronde /ask-run, de primaire modus + zijn latency en
 /// tokenverbruik (de service leidt deze af uit <see cref="GraphRag.AnswerTrace"/> ×
@@ -124,6 +142,31 @@ public static class ObservabilityRollups
             .ThenBy(r => r.Model, StringComparer.Ordinal)];
     }
 
+    /// <summary>Gemeten audit-precisie per (model × promptversie) uit de
+    /// steekproef-audit-rijen (#255). Los van de poort-accept-ratio hierboven —
+    /// precies dat contrast is het bestaansrecht van de audit.</summary>
+    public static IReadOnlyList<AuditPrecisionRow> AuditPrecision(
+        IEnumerable<InteractionAudit> audits)
+    {
+        ArgumentNullException.ThrowIfNull(audits);
+        return [.. audits
+            .GroupBy(a => (a.Model, a.PromptVersion))
+            .Select(g =>
+            {
+                var audited = g.Count();
+                var sound = g.Count(a => a.Sound);
+                return new AuditPrecisionRow(
+                    g.Key.Model, g.Key.PromptVersion, audited,
+                    Sound: sound,
+                    Incorrect: g.Count(a => !a.Correct),
+                    Unsupported: g.Count(a => a.Correct && !a.SupportedByEvidence),
+                    Precision: audited == 0 ? 0.0 : (double)sound / audited);
+            })
+            .OrderByDescending(r => r.Audited)
+            .ThenBy(r => r.Model, StringComparer.Ordinal)
+            .ThenBy(r => r.PromptVersion, StringComparer.Ordinal)];
+    }
+
     /// <summary>Kosten/latency per retrieval-modus. Gesorteerd op meeste runs (de
     /// modi die het zwaarst wegen op het budget bovenaan).</summary>
     public static IReadOnlyList<RetrievalModeCostRow> RetrievalCost(
@@ -154,7 +197,8 @@ public sealed record ObservabilityReport(
     IReadOnlyList<MiningPrecisionRow> MiningPrecision,
     IReadOnlyList<RetrievalModeCostRow> RetrievalCost,
     HypothesisYield? HypothesisYield,
-    CommunityHealthRow? CommunityHealth)
+    CommunityHealthRow? CommunityHealth,
+    IReadOnlyList<AuditPrecisionRow> AuditPrecision)
 {
     /// <summary>Bouw het rapport uit de rauwe bronnen. De aanroeper levert de
     /// tellingen/rijen; dit rolt ze samen. GraphDrift en CanonicalDrift zijn al
@@ -166,7 +210,8 @@ public sealed record ObservabilityReport(
         IEnumerable<MiningRun>? miningRuns = null,
         IEnumerable<RetrievalModeCostSample>? retrievalCost = null,
         HypothesisYield? hypothesisYield = null,
-        CommunityHealthRow? communityHealth = null) =>
+        CommunityHealthRow? communityHealth = null,
+        IEnumerable<InteractionAudit>? interactionAudits = null) =>
         new(
             takenAt,
             graphDrift ?? [],
@@ -174,5 +219,6 @@ public sealed record ObservabilityReport(
             miningRuns is null ? [] : ObservabilityRollups.MiningPrecision(miningRuns),
             retrievalCost is null ? [] : ObservabilityRollups.RetrievalCost(retrievalCost),
             hypothesisYield,
-            communityHealth);
+            communityHealth,
+            interactionAudits is null ? [] : ObservabilityRollups.AuditPrecision(interactionAudits));
 }
