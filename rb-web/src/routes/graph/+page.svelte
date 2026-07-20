@@ -311,7 +311,7 @@
 				<dt>{row.key}</dt>
 				<dd>
 					{#if row.type === 'text'}
-						<span class:long-text={row.long}>{row.value}</span>
+						<span class:long-text={row.long}><RbText text={row.value} /></span>
 					{:else if row.type === 'ref'}
 						<a href="/graph?ref={encodeURIComponent(row.ref)}" class="mono">{row.ref}</a>
 					{:else if row.type === 'refs'}
@@ -326,7 +326,7 @@
 						{row.items.join(', ')}
 					{:else if row.type === 'parents'}
 						{#each row.items as p, i (i)}
-							<p class="parent"><strong>§{p.code}</strong> <span class="meta">{p.text}</span></p>
+							<p class="parent"><strong>§{p.code}</strong> <span class="meta"><RbText text={p.text} /></span></p>
 						{/each}
 					{/if}
 				</dd>

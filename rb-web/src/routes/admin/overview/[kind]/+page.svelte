@@ -5,6 +5,7 @@
 	import { relationBulkActionsVisible } from '$lib/reviewBulk';
 	import AnswerView from '$lib/AnswerView.svelte';
 	import ChangeCard from '$lib/ChangeCard.svelte';
+	import RbText from '$lib/RbText.svelte';
 	import type { ChangeConfirmation } from '$lib/types';
 
 	let { data, form } = $props();
@@ -740,7 +741,7 @@
 							Kandidaat-supersede — mogelijk vervangen door een recentere errata-bron (#{e.supersededByErratumId}); beide blijven zichtbaar, geen automatische wijziging.
 						</p>
 					{/if}
-					<p class="pre">{e.newText}</p>
+					<p class="pre"><RbText text={e.newText} /></p>
 				</div>
 			{/each}
 			{#if !errata.length}<p class="meta">Geen errata bekend.</p>{/if}
@@ -757,7 +758,7 @@
 						<a href="/cards/{i.cardBId}"><strong>{i.cardBName}</strong></a>
 						<span class="meta">{fmtDate(i.detectedAt)}</span>
 					</p>
-					<p class="pre">{i.explanation}</p>
+					<p class="pre"><RbText text={i.explanation} /></p>
 				</div>
 			{/each}
 		{/if}
@@ -794,7 +795,7 @@
 							<span class="meta">{c.scope} · {c.ref === 'down' ? 'gemeld als onjuist' : c.ref === 'up' ? 'bevestigd als juist' : c.ref} · {fmtDate(c.createdAt)}</span>
 						</p>
 						{#if c.question}<p class="meta">{c.question}</p>{/if}
-						<p class="pre">{c.text}</p>
+						<p class="pre"><RbText text={c.text} /></p>
 						<!-- Reden dat het item (nog) niet verified is (#177 hybride poort). -->
 						{#if c.statusReason}<p class="meta refs">{c.statusReason}</p>{/if}
 						{#if c.reviewNote && c.reviewNote !== c.statusReason}
@@ -879,7 +880,7 @@
 							<span class="badge {k.status === 'approved' ? 'ok-b' : 'warn-b'}">{k.status === 'approved' ? 'goedgekeurd' : 'draft'}</span>
 							<span class="meta">{k.topic} · {fmtDate(k.updatedAt)}</span>
 						</p>
-						<p class="pre">{k.body}</p>
+						<p class="pre"><RbText text={k.body} /></p>
 						{#if k.sectionRefs}<p class="meta refs">Gebaseerd op §{k.sectionRefs}</p>{/if}
 						<div class="row actions">
 							<button type="button" class="ghost small" onclick={() => (editing = k.id)}>Bewerk</button>
@@ -918,7 +919,7 @@
 							{:else if c.officialStatus === 'contradicted'}<span class="badge err">officieel tegengesproken</span>{/if}
 							<span class="meta">{c.topicType} · {c.topicRef} · {c.corroboration} {c.corroboration === 1 ? 'bron' : 'bronnen'} · trust {c.trustScore.toFixed(2)} · {fmtDate(c.lastSeen)}</span>
 						</p>
-						<p class="pre">{c.statement}</p>
+						<p class="pre"><RbText text={c.statement} /></p>
 						{#if c.statusReason}<p class="meta refs">{c.statusReason}</p>{/if}
 						<!-- Reden/notitie zichtbaar bij het item (#124); bij verwerpen-met-
 						     reden is de statusReason de notitie — dan niet dubbel tonen. -->
@@ -1028,7 +1029,7 @@
 							<span class="meta">→</span>
 							<a href={graphHref(r.toRef)} title="Verken deze knoop in de brein-verkenner"><strong>{r.toName ?? r.toRef}</strong></a>
 						</p>
-						<p class="pre">{r.explanation}</p>
+						<p class="pre"><RbText text={r.explanation} /></p>
 						<!-- Triage-motivering (#199 v1): naast het bestaande bewijs, vóór
 						     de beheerder-notitie — machine-aanbeveling eerst, mens-oordeel
 						     daaronder. -->
