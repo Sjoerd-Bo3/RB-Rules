@@ -2645,16 +2645,68 @@ nachtrun:
   elke uitspraak over "de vraag is nu goedkoper" een gok, en gokken is hier al drie
   keer misgegaan.
 
+  **Herijkt in #324 — het bewijs moet het NIVEAU van de claim dragen
+  (`PromptVersion` → `breinmine-interactions-v4`).** De eerste steekproef-audit
+  (§6.7, opus, n=10) keurde 9 van 10 gepromoveerde interacties af, en één
+  faalklasse bleek een ontwerpfout die geen sterker model repareert:
+  `mechanic:Stun -[GRANTS]-> mechanic:Ready`, gepromoveerd op het
+  kaart-specifieke effect van Eclipse Herald — de mechanic-pass stelt de vraag
+  op mechanic-niveau maar bood KAARTTEKSTEN als bewijs aan, en de lexicale poort
+  keurde dat goed omdat beide termen in die ene kaarttekst staan. Het model deed
+  wat we vroegen; de vraag was fout gesteld (de #286b-les, nu afgedwongen). Drie
+  samenhangende wijzigingen, conform het systeembrede invariant (deterministisch
+  bewijs draagt de actie):
+  16. **De promotiepoort kent een bewijstier per claim-niveau.** Elke
+     bewijs-eenheid draagt haar SOORT (`EvidenceSourceKind`: `CardText` of
+     `RuleText` — regelsectie-chunks én de officiële keyword-definitie,
+     trust-tier-1), en `InteractionEvidence.ExpressesRelation` eist naast de
+     ankers dat die soort het claim-niveau draagt
+     (`CarriesClaimLevel`): **mechanic↔mechanic promoveert alleen op regel-/
+     definitietekst; card↔X blijft promoveerbaar op de eigen kaarttekst** — dat
+     ís daar het juiste bewijsniveau. Een mech↔mech-paar met alléén
+     kaarttekst-co-occurrence wordt nog steeds geëxtraheerd en landt als
+     `candidate` in de reviewqueue (bewust die tier: het is geen emergente
+     card×card-hypothese maar een keyword-claim die op bewijs van het juiste
+     niveau of corroboratie wacht — nooit stil weg). Spiegelbeeld aan de
+     tombstone-kant: dezelfde steun die niet mag promoveren mag ook niet
+     duurzaam sluiten, dus een negatief verdict op kaarttekst-co-occurrence is
+     een soft-reject zonder grafsteen. De soort en de rol-typen zijn VERPLICHTE
+     parameters van `ExpressesRelation` (#300-les: de typechecker dwingt af dat
+     geen aanroeper de tier-toets kan overslaan).
+  17. **De buur-regel van de mechanic-pass spiegelt de poort** (#286a). Op
+     mechanic-niveau is élk kandidaat-paar mech↔mech, dus een buur die alleen in
+     een carrier-kaarttekst naast het subject staat kan per constructie nooit
+     promoveren — `InteractionOffering.ForMechanic` weegt buren daarom alleen
+     nog in definitie- en sectie-tekst. Zo'n subject levert dan `< 2` refs en
+     de LLM-call wordt deterministisch overgeslagen (wél een watermark: "niets
+     om over te redeneren" is een uitkomst, geen uitval). De carriers blijven
+     als bewijs in de prompt staan — context voor het verdict, geen buur-bron.
+     De kaart-pass is bewust NIET versmald: daar dient een buur-keyword primair
+     het card↔keyword-niveau, en dat draagt kaarttekst gewoon.
+  18. **De aanbieding zégt het ook.** De system-prompt meldt expliciet welk
+     bewijs voor welk claim-niveau telt ("een mechanic↔mechanic-claim telt
+     alleen met steun uit regel- of definitietekst; kaarttekst bewijst hooguit
+     iets over die kaart zelf") — anders extraheert het model kandidaten die de
+     poort daarna weggooit, de #286a-verspilling.
+  Bestaande al-gepromoveerde interacties degraderen NIET automatisch (het
+  invariant: een oordeel draagt geen actie alleen) — de volledige audit
+  (`brein.audit.sample_n` staat al op 1) levert de lijst en de negatieve
+  oordelen staan als `ReasoningConflict` in de reviewqueue; de beheerder
+  beslist. Meetpunt vóór/na: de audit-precisie van nieuwe mech↔mech-promoties
+  onder `breinmine-interactions-v4` naast die van v3 (de precisie-tabel splitst
+  al per promptversie, §6.7).
+
   **`PromptVersion` is een stempel, geen stale-conditie** (#286-review). De bump naar
-  `breinmine-interactions-v3` legt in de `mining_run`-provenance vast wélke vraagvorm een
-  feit voortbracht, maar NIETS leest hem als her-mine-trigger: de selectie kijkt alleen
-  naar `interactions_mined_at`. Kaarten die onder v2 een watermark kregen worden dus
-  nooit vanzelf met de goedkopere aanbieding herbevraagd — alleen de GEFAALDE komen
-  terug (die kregen immers geen watermark). Bij de uitval van dit moment is dat toevallig
-  het merendeel, maar de enige manier om ook de geslaagde v2-kaarten opnieuw te bevragen
-  is de expliciete `breinreset-interacties`. Wie hier ooit een echte stale-conditie van
-  wil maken, hangt hem aan een `PromptVersion`-vergelijking in de focus-selectie —
-  hetzelfde patroon als `Source.StripVersion` in `IngestService`.
+  `breinmine-interactions-v3` (en die naar v4, #324) legt in de `mining_run`-provenance
+  vast wélke vraagvorm een feit voortbracht, maar NIETS leest hem als her-mine-trigger:
+  de selectie kijkt alleen naar `interactions_mined_at`. Kaarten die onder v2 een
+  watermark kregen worden dus nooit vanzelf met de goedkopere aanbieding herbevraagd —
+  alleen de GEFAALDE komen terug (die kregen immers geen watermark). Bij de uitval van
+  dit moment is dat toevallig het merendeel, maar de enige manier om ook de geslaagde
+  v2-kaarten opnieuw te bevragen is de expliciete `breinreset-interacties`. Wie hier
+  ooit een echte stale-conditie van wil maken, hangt hem aan een
+  `PromptVersion`-vergelijking in de focus-selectie — hetzelfde patroon als
+  `Source.StripVersion` in `IngestService`.
 - `breinaudit-interacties` (`BreinInteractionAuditService`, #255). De
   steekproef-audit door een STERKER model: 1 op de N gepromoveerde interacties
   (deterministisch `Id % N == 0`; N beheerd via `brein.audit.sample_n`, #254,
@@ -2808,6 +2860,18 @@ audit-runs zijn juist UITGESLOTEN van de mining-precisie-tabel, anders zou de
 meting zich daar alsnog als accept-ratio vermommen. beheer → Brein toont beide
 tabellen onder elkaar, met de expliciete kanttekening dat de bovenste
 zelfreferentieel is.
+
+**Wat de eerste steekproef opleverde (#324).** De eerste run (opus, n=10) keurde
+9 van 10 gepromoveerde interacties af — het bestaansrecht van deze audit in één
+getal, tegenover de zelfreferentiële poort-ratio van ~0,91. De motiveringen
+vielen in vier klassen; drie daarvan (kind-verwarring, co-occurrence zonder
+relatie, woordbetekenis-botsing) zijn model-zwaktes die met een sterker
+extractie-model kleiner horen te worden, maar één was een ONTWERPFOUT in de
+vraagstelling zelf: de mechanic-pass bood kaartteksten als bewijs voor
+mechanic↔mechanic-claims aan. Die klasse is niet weggeaudit maar deterministisch
+dichtgezet — de bewijstier-eis op de promotiepoort (§6.6, punt 16-18). Precies
+zoals de harde regel het wil: het audit-oordeel veranderde geen enkele tier,
+het wees een structurele fout aan en de fix zit in de poort, niet in de data.
 
 ---
 

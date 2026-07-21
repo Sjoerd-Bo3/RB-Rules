@@ -292,7 +292,12 @@ public static class InteractionOffering
     /// Hier zijn ALLEEN keywords een rol: het subject en zijn directe buren. Kaarten
     /// en regelsecties gaan als bewijs mee maar nooit als rol, zodat de vraag
     /// letterlijk "hoe grijpen deze twee mechanieken in elkaar?" is en niet stilletjes
-    /// terugvalt op de kaart↔eigen-keyword-tautologie die #249 uitroeide.</summary>
+    /// terugvalt op de kaart↔eigen-keyword-tautologie die #249 uitroeide.
+    ///
+    /// Sinds #324 komen de buren bovendien alleen nog uit REGEL-/DEFINITIETEKST: elk
+    /// paar op dit niveau is mechanic↔mechanic, en de promotie-poort laat kaarttekst
+    /// dat claim-niveau niet dragen — dus weegt de buur-regel (de spiegel van die
+    /// poort) de carrier-kaartteksten hier niet meer mee.</summary>
     public static OfferingPlan ForMechanic(
         string subjectLabel, IReadOnlyList<string> vocabulary,
         IReadOnlyList<OfferingCard> carrierCandidates,
@@ -329,7 +334,16 @@ public static class InteractionOffering
         // aangeboden rol, dus elke buur moet zich TEXTUEEL naast het subject bewijzen.
         // Dat is strenger dan op kaart-niveau — en terecht, want het is precies wat de
         // lexicale poort straks ook eist.
-        units.AddRange(cards.Select(c => new EvidenceText(c.Text, IdentityAnchored: false)));
+        //
+        // De CARRIER-KAARTTEKSTEN doen sinds #324 bewust NIET mee aan de buur-weging:
+        // elk paar op dit niveau is mechanic↔mechanic, en dat claim-niveau draagt
+        // kaarttekst niet (InteractionEvidence.CarriesClaimLevel — een kaart bewijst
+        // hooguit iets over zichzelf). Een buur die alleen in een carrier-tekst naast
+        // het subject staat kan per constructie nooit promoveren; hem aanbieden is
+        // precies de ref-verspilling waar #286a voor waarschuwt, en het gat waardoor
+        // "Stun GRANTS Ready" op het kaart-specifieke effect van Eclipse Herald
+        // promoveerde. De carriers blijven wél bewijs in de prompt (context voor het
+        // verdict), alleen de spiegel van de promotie-poort leest ze niet meer.
         units.AddRange(sections.Select(s => new EvidenceText(s.Text, IdentityAnchored: false)));
 
         var neighbours = RankNeighbours(
@@ -365,7 +379,9 @@ public static class InteractionOffering
     /// kaart-rol), hetzij textueel (een ankerlabel staat er ook in). Dat is precies de
     /// voorwaarde waaronder de poort later steun kan vinden, dus we bieden geen buren
     /// aan die per constructie nooit een relatie-bewijs kunnen krijgen — en we laten er
-    /// ook geen weg die dat wél kan.
+    /// ook geen weg die dat wél kan. De bewijstier-kant van die spiegel (#324) ligt bij
+    /// de AANROEPER: die geeft alleen eenheden mee die het claim-niveau van zijn pass
+    /// kunnen dragen (op mechanic-niveau dus geen kaartteksten).
     ///
     /// <b>Eerlijk over de ordening</b> (#286-review): het gewicht is het aantal
     /// bewijs-eenheden, en die aanbieding telt er hooguit een handvol — dus de meeste

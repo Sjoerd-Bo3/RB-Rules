@@ -1285,6 +1285,23 @@ de globale duur-vangrail).
   de bestaande poorten). Zichtbaar effect: gepromoveerde interacties kunnen nu
   daadwerkelijk naar hun officiële regelsectie doorverwijzen; het aandeel mét zo'n
   verwijzing was tot deze fix per constructie 0% en is het meetpunt van de issue.
+- **Mechanic↔mechanic promoveert alleen nog op regel-/definitietekst** (#324) —
+  de eerste steekproef-audit (opus, n=10, zie de audit-feature hieronder) keurde
+  9 van 10 gepromoveerde interacties af, en één faalklasse bleek een ontwerpfout:
+  de mechanic-vraag bood kaartteksten als bewijs aan, dus een kaart-specifiek
+  effect ("deze kaart Ready't zichzelf wanneer ze Stunt") promoveerde tot een
+  algemene waarheid over de mechanieken (mechanic:Stun GRANTS mechanic:Ready).
+  De promotiepoort eist nu deterministisch dat het bewijs het NIVEAU van de
+  claim draagt: een keyword↔keyword-relatie telt alleen met een bewijszin uit
+  officiële regel- of definitietekst; een kaart↔X-relatie blijft promoveerbaar
+  op de eigen kaarttekst — dát is daar het juiste bewijsniveau. Een
+  mech↔mech-paar met alleen kaarttekst-bewijs verdwijnt niet stil maar wacht als
+  kandidaat in de reviewqueue, en de extractie-prompt zegt het bewijsniveau nu
+  ook expliciet, zodat het model geen kandidaten aandraagt die de poort toch
+  weggooit. Bestaande gepromoveerde interacties degraderen niet automatisch —
+  de volledige audit levert de lijst en de beheerder beslist per geval in de
+  reviewqueue. Meetpunt: de audit-precisie van nieuwe mech↔mech-promoties onder
+  de nieuwe promptversie, naast die van de oude.
 - **Brein-mining draait parallel** (#279) — de extractie kostte ~40 s per kaart
   en liep één kaart tegelijk: 40 kaarten was een half uur, een ongecapte
   nachtrun (~900 kaarten) tien uur. De kaart- en subject-lus verwerken nu

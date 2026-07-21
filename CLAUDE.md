@@ -145,6 +145,24 @@ met quota en rate-limiting.
   krijgen, niet als eerste te sneuvelen. (d) **Een assertie tegen de constante die ze
   bewaakt schuift mee** — test caps met een letterlijke waarde, en controleer met een
   mutatie dat de fixture de grens überhaupt kán overschrijden.
+- **Wie de vraag op een hoger niveau stelt, moet ook het BEWIJS naar dat niveau
+  tillen** (#324, gevonden door de eerste steekproef-audit: 9 van 10 afgekeurd).
+  De mechanic-pass (#286b) vroeg "hoe grijpen deze twee mechanieken in elkaar?"
+  maar bood kaartteksten als bewijs aan — en de lexicale poort keurde
+  `mechanic:Stun -[GRANTS]-> mechanic:Ready` goed omdat beide termen in het
+  kaart-specifieke effect van Eclipse Herald staan. Het model deed wat we
+  vroegen; de vraag was fout gesteld, en géén sterker model repareert dat.
+  Regel: een bewijs-eenheid draagt haar SOORT (kaarttekst/regeltekst) en de
+  poort eist per claim-niveau de passende soort — mech↔mech alleen op regel-/
+  definitietekst, card↔X op de eigen kaarttekst (`InteractionEvidence.
+  CarriesClaimLevel`, verplichte parameters zodat niemand eromheen kan, #300).
+  Drie uitlopers: (a) de aanbieding moet de eis SPIEGELEN (geen buren aanbieden
+  die per constructie niet kunnen promoveren, #286a) én UITSPREKEN in de prompt
+  (anders extraheert het model weggooi-kandidaten); (b) bewijs dat niet mag
+  promoveren mag ook geen tombstone dragen — zelfde steun, zelfde grens;
+  (c) bestaande gepromoveerde rijen degraderen NIET automatisch mee — een
+  oordeel draagt geen actie alleen; de audit levert de lijst, de reviewqueue de
+  beslissing.
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`

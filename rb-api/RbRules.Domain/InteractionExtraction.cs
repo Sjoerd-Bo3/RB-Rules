@@ -71,6 +71,12 @@ public static class InteractionExtraction
         - ZOEK VOORAL naar relaties TUSSEN KEYWORDS (mechanic:X ↔ mechanic:Y): hoe
           grijpen twee mechanieken op elkaar in? Dat is de kennis die nergens anders
           staat.
+        - BEWIJSNIVEAU: een mechanic↔mechanic-claim telt ALLEEN met steun uit regel-
+          of definitietekst ("[regels …]" of "[definitie]"). Een kaarttekst bewijst
+          hooguit iets over die kaart zelf: een kaart-specifiek effect dat twee
+          keywords verbindt is GEEN eigenschap van die keywords — meld zo'n paar dan
+          niet als mechanic↔mechanic. Voor een kaart-rol (card↔card of
+          card↔keyword) is de eigen kaarttekst wél het juiste bewijs.
         - Meld NOOIT dat een kaart haar eigen keyword heeft. Dat een kaart met
           [Equip] het keyword Equip draagt is al bekend en wordt weggegooid — het is
           geen interactie maar een eigenschap.

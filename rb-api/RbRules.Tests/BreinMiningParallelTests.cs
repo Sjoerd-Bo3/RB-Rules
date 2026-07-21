@@ -106,6 +106,10 @@ public class BreinMiningParallelTests
         await SeedCardAsync(db, "ogn-001", "Alpha");
         await SeedCardAsync(db, "ogn-002", "Beta");
         await SeedCardAsync(db, "ogn-003", "Gamma");
+        // Regeltekst-bewijs zodat het mech↔mech-paar blijft PROMOVEREN (#324):
+        // kaarttekst alleen zou het paar tot kandidaat maken, en deze test gaat
+        // juist over drie gelijktijdige promoties op dezelfde unieke sleutel.
+        await SeedDeflectRuleAsync(db);
 
         var probe = new ConcurrencyProbe(expected: 3);
         var svc = InteractionService(db, probe, () => Interactions(DeflectCountersAssault), workers: 3);
@@ -404,6 +408,24 @@ public class BreinMiningParallelTests
         {
             RiftboundId = id, Name = name, Type = "Unit", TextPlain = DeflectText,
             Mechanics = ["Deflect", "Assault"],
+        });
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Trust-tier-1-regelsectie met de Deflect↔Assault-bewijszin: sinds
+    /// #324 promoveert een mech↔mech-paar alleen op regel-/definitietekst.</summary>
+    private static async Task SeedDeflectRuleAsync(RbRulesDbContext db)
+    {
+        db.Sources.Add(new Source
+        {
+            Id = "core-rules-pdf", Name = "core-rules-pdf",
+            Url = "https://playriftbound.com/core-rules-pdf",
+            Type = "official", TrustTier = 1, Parser = "pdf", Cadence = "daily",
+        });
+        db.RuleChunks.Add(new RuleChunk
+        {
+            SourceId = "core-rules-pdf", SectionCode = "704.1", ChunkIndex = 1,
+            Text = DeflectText,
         });
         await db.SaveChangesAsync();
     }

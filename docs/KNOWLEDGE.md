@@ -163,6 +163,20 @@ topic_type="tactic", en graph-edges Card—STAPLE_IN→Archetype.
   of degradatie — een negatief oordeel wordt zichtbaar in de reviewqueue, de
   beheerder beslist. De gemeten precisie staat in de observability náást de
   poort-ratio, expliciet gelabeld als steekproef.
+- **Bewijs draagt een claim alleen op zijn eigen niveau** (#324, gevonden door
+  de eerste steekproef-audit): de kennispiramide zegt WIE er mag spreken
+  (officieel > community), dit principe zegt WAAROVER. Een kaarttekst is
+  officiële tekst, maar ze bewijst hooguit iets over die kaart zelf — een
+  kaart-specifiek effect dat twee keywords verbindt is geen eigenschap van die
+  keywords. Daarom eist de promotiepoort van de interactie-mining per
+  claim-niveau de passende bewijssoort: **mechanic↔mechanic** promoveert alleen
+  met een bewijszin uit regel-/definitietekst (trust-tier-1: een
+  RuleSection-chunk of de officiële keyword-definitie); **card↔X** promoveert op
+  de eigen kaarttekst, want dat ís daar het juiste bewijsniveau. Bewijs van het
+  verkeerde niveau maakt een voorstel niet stil weg maar hooguit kandidaat
+  (reviewqueue) — en het mag óók geen duurzame verwerping (tombstone) dragen:
+  wat niet sterk genoeg is om te promoveren, is niet sterk genoeg om permanent
+  te sluiten.
 
 ## Evolutie-raamwerk: de bank groeit met het spel mee
 
