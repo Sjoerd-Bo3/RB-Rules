@@ -47,6 +47,12 @@ export type AiFailureReason =
   | "api_error"
   /** Auth: token ontbreekt, is verlopen of werd geweigerd (401/403). */
   | "auth"
+  /** Het gevraagde MODEL(-variant) bestaat niet of is niet beschikbaar op dit
+   * abonnement (#323) — bv. een 1M-contextvariant (`claude-fable-5[1m]`) die
+   * het plan niet draagt. Eigen reden, want de knop is een ándere dan bij
+   * `api_error`: niet wachten of opnieuw proberen, maar in beheer een andere
+   * model-alias kiezen. */
+  | "model_unavailable"
   /** Het subprocess kon niet starten of viel om (ENOMEM, ENOENT, EPIPE,
    * SIGKILL). Op een krappe VM is dit het scenario dat GEEN container-restart
    * en GEEN OOMKilled-vlag achterlaat — de kernel killt het kind, niet de
@@ -302,6 +308,17 @@ export function resultFailure(message: unknown): AiFailure | null {
   return null;
 }
 
+/** Herkent een model-weigering in de fouttekst van het RESULT-bericht (#323).
+ * CLASSIFIER, geen passthrough-poort (#300-les): hij draait uitsluitend over
+ * tekst waarvan al vaststaat dat het een SDK-/API-foutmelding is, dus "matcht
+ * ergens" is hier de juiste vorm. De patronen eisen het woord "model" mét een
+ * weiger-woord in de buurt — een kale 404 blijft `api_error`. */
+const MODEL_UNAVAILABLE_PATTERNS = [
+  /model[^,;|]{0,80}(not[\s_-]?found|not[\s_-]?available|unavailable|not[\s_-]?supported|invalid|unknown)/i,
+  /(not[\s_-]?found|unknown|invalid|unsupported)[^,;|]{0,40}\bmodel\b/i,
+  /no access to[^,;|]{0,60}\bmodel\b/i,
+];
+
 function resultReason(
   subtype: string,
   status: number | null,
@@ -312,6 +329,11 @@ function resultReason(
   // Auth vóór de generieke api_error: 401/403 wijst naar het token, niet naar
   // de belasting van de dienst — een andere knop.
   if (status === 401 || status === 403) return "auth";
+  // Model-weigering vóór de generieke api_error (#323): "variant niet
+  // beschikbaar op dit abonnement" is een beheer-knop (andere alias kiezen),
+  // geen dienst-storing. Eén keer geclassificeerd, hier — de catch mag een
+  // al-geclassificeerde fout nooit herclassificeren (#300-les).
+  if (MODEL_UNAVAILABLE_PATTERNS.some((p) => p.test(detail))) return "model_unavailable";
   if (status !== null) return "api_error";
   if (denials > 0) return "permission_denied";
   if (subtype === "error_max_budget_usd" || subtype === "error_max_structured_output_retries")
@@ -783,6 +805,13 @@ export function logCall(entry: {
   rejected?: number;
   /** Condities die hun as-/lexicon-poort niet haalden terwijl het item bleef. */
   rejectedConditions?: number;
+  /** Aantal aangeboden kaarten in een batch-aanroep (#323). */
+  cards?: number;
+  /** Aantal kaarten dat een geldige tool-call kreeg (partial salvage, #323). */
+  cardsOk?: number;
+  /** Tool-calls met een kaartcode buiten de aangeboden set — geweigerd en
+   * geteld (kruisbesmettingspoort, #323). Een MAAT, geen inhoud. */
+  unknownCode?: number;
   /** Taaktype van een /ask-call (cheap/hard/research/agentic). */
   task?: string;
 }): void {
@@ -797,6 +826,9 @@ export function logCall(entry: {
     items: entry.items,
     rejected: entry.rejected,
     rejectedConditions: entry.rejectedConditions,
+    cards: entry.cards,
+    cardsOk: entry.cardsOk,
+    unknownCode: entry.unknownCode,
     reason: entry.reason,
     // Lege toelichting weglaten in plaats van als "" loggen: `logEvent` filtert
     // alleen undefined/null, want daar is `0` een betekenisvolle waarde.

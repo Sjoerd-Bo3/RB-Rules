@@ -23,6 +23,50 @@
 // hele vocabulaire-poort unit-testbaar zonder LLM.
 import { z } from "zod";
 
+// ── Model-aliassen (#323) ────────────────────────────────────────────────────
+//
+// Het extractie-model is een beheerde instelling in rb-api (brein.extract.model,
+// #254-patroon); rb-api stuurt de ALIAS mee en rb-ai vertaalt hem hier naar het
+// echte model-ID. GESLOTEN map, bewust: een vrije string zou onbeoordeeld in de
+// SDK-options belanden en elke typefout zou pas als SDK-fout ná een dure spawn
+// zichtbaar worden. Onbekende alias ⇒ 400 vóór er ook maar één permit is
+// geclaimd. rb-api houdt voor de rij-provenance een eigen kopie van deze map
+// (BreinExtractModels); drift daartussen komt luidruchtig terug als 400, en
+// beide kanten hebben een literal-test (#286-les: een assertie tegen de
+// constante die ze bewaakt schuift mee).
+// De `-1m`-aliassen kiezen de 1M-contextvariant (Claude Code/Agent SDK-notatie
+// `model[1m]`) — relevant voor grote batches (K richting 250), waar de sessie
+// voorbij het standaardvenster groeit. Of de variant op dit abonnement
+// beschikbaar is weten we niet zeker: een weigering komt als eigen reden
+// `model_unavailable` naar buiten (failure.ts), nooit als generieke uitval.
+export const EXTRACT_MODELS: Readonly<Record<string, string>> = {
+  sonnet: "claude-sonnet-4-6",
+  opus: "claude-opus-4-8",
+  fable: "claude-fable-5",
+  "fable-1m": "claude-fable-5[1m]",
+  "sonnet-1m": "claude-sonnet-4-6[1m]",
+};
+
+export type ExtractModelParse =
+  | { ok: true; model?: string }
+  | { ok: false; error: string };
+
+/** Vertaal het optionele `model`-veld van een extract-request naar een echt
+ * model-ID. Afwezig/leeg = geen override (het bestaande taak-gedrag, zodat een
+ * oudere rb-api niets merkt); een onbekende alias is een 400, nooit een stille
+ * terugval — een schakelaar die iets anders doet dan hij zegt is erger dan een
+ * foutmelding. */
+export function parseExtractModelAlias(v: unknown): ExtractModelParse {
+  if (v === undefined || v === null || v === "") return { ok: true };
+  if (typeof v !== "string" || !Object.hasOwn(EXTRACT_MODELS, v.trim())) {
+    return {
+      ok: false,
+      error: "onbekende model-alias (gebruik sonnet | opus | fable | fable-1m | sonnet-1m)",
+    };
+  }
+  return { ok: true, model: EXTRACT_MODELS[v.trim()] };
+}
+
 // ── Interacties (spiegelt InteractionExtraction, emit_interactions) ──────────
 
 /** Eén aangeboden ref (BrainRef + label) die de LLM als from/to MAG noemen. */
@@ -38,6 +82,10 @@ export interface OfferedRef {
  * en rekent het antwoord er deterministisch tegen na (#312). */
 export interface InteractionExtractRequest {
   system?: string;
+  /** Opgelost model-ID uit de gesloten aliasmap (#323), of undefined voor het
+   * bestaande taak-gedrag. Nooit de rauwe alias: de vertaling gebeurt éénmalig
+   * in {@link parseExtractModelAlias}, mét 400-poort. */
+  model?: string;
   text: string;
   refs: OfferedRef[];
   kinds: string[];
@@ -91,12 +139,10 @@ export const PREDICATE_TOOL_ADDENDUM =
   "die uit de tekst blijken (een lege lijst als er niets uit blijkt). Gebruik UITSLUITEND " +
   "de aangeboden predicaten. Verzin geen predicaten of tokens. Geef daarna geen verdere uitleg.";
 
-/** De vaste zod raw shape voor emit_interactions (#312). Vrije strings in plaats
- * van enums: het vocabulaire zit in de prompt en de poort in
- * {@link enforceInteractionVocabulary}. De vorm zelf (velden, types, verplicht/
- * optioneel) blijft exact die van vóór #312 — alleen de enum-poorten zijn naar
- * de narekening verhuisd. */
-export function buildInteractionToolShape(): z.ZodRawShape {
+/** Het vaste item-schema van één geëmit interactie — gedeeld door de losse en de
+ * batch-toolvorm (#312/#323), zodat die twee per constructie dezelfde velden
+ * accepteren. */
+function interactionItemSchema() {
   const conditionSchema = z.object({
     on_kind: z.string(),
     subject_role: z.string().nullish(),
@@ -105,7 +151,7 @@ export function buildInteractionToolShape(): z.ZodRawShape {
     value: z.string().nullish(),
     operator: z.string().nullish(),
   });
-  const interactionSchema = z.object({
+  return z.object({
     from: z.string(),
     to: z.string(),
     kind: z.string(),
@@ -119,7 +165,15 @@ export function buildInteractionToolShape(): z.ZodRawShape {
     // variatie die #312 uit de tool-definitie heeft gehaald.
     governed_by: z.string().nullish(),
   });
-  return { interactions: z.array(interactionSchema) };
+}
+
+/** De vaste zod raw shape voor emit_interactions (#312). Vrije strings in plaats
+ * van enums: het vocabulaire zit in de prompt en de poort in
+ * {@link enforceInteractionVocabulary}. De vorm zelf (velden, types, verplicht/
+ * optioneel) blijft exact die van vóór #312 — alleen de enum-poorten zijn naar
+ * de narekening verhuisd. */
+export function buildInteractionToolShape(): z.ZodRawShape {
+  return { interactions: z.array(interactionItemSchema()) };
 }
 
 /** Vaste description voor de emit_interactions-tool (#312): de refs staan niet
@@ -302,10 +356,163 @@ export function enforceInteractionVocabulary(
   return { accepted, rejected, rejectedConditions };
 }
 
+// ── Batch-extractie: K kaarten per sessie (#323) ─────────────────────────────
+//
+// De vaste sessiekost (SDK-spawn + opstart, gemeten ~49 s bij 3 refs) werd tot
+// #323 per kaart betaald. Eén sessie die K kaarten na elkaar behandelt
+// amortiseert die kost; de randen uit de issue zijn hard: K blijft klein
+// (nooit "de hele set"), de timeout schaalt mee met K (ai.ts), en
+// kruisbesmetting wordt afgedwongen — elke tool-call draagt de kaartcode, een
+// code buiten de aangeboden set wordt geweigerd en GETELD (unknown_code), en de
+// vocabulaire-narekening draait PER KAART tegen het vocabulaire van díe kaart.
+
+/** Harde bovengrens op K, aan déze kant van de lijn (defense-in-depth naast de
+ * clamp in rb-api's beheerde instelling). LETTERLIJK 250 — expliciete
+ * productkeuze van Sjoerd (een hele set in één context; de issue begon op
+ * 5-15). De vangnetten bij grote K zijn partial salvage, de heartbeat per
+ * kaart en de met K meeschalende timeout — niet een lagere grens. */
+export const MAX_BATCH_CARDS = 250;
+
+/** Eén kaart in een batch-request: eigen code, eigen tekst, eigen refs en eigen
+ * citeerbare secties. De assen (kinds/rollen/lexica) zijn run-constanten en
+ * reizen één keer mee op de envelop. */
+export interface BatchCard {
+  code: string;
+  text: string;
+  refs: OfferedRef[];
+  sections: string[];
+}
+
+export interface InteractionBatchExtractRequest {
+  system?: string;
+  /** Zie {@link InteractionExtractRequest.model} (#323). */
+  model?: string;
+  kinds: string[];
+  conditionKinds: string[];
+  roles: string[];
+  windowLexicon: string[];
+  statusLexicon: string[];
+  cards: BatchCard[];
+}
+
+/** Het per-kaart-vocabulaire als los {@link InteractionExtractRequest}, zodat de
+ * bestaande narekening ({@link enforceInteractionVocabulary}) ONGEWIJZIGD per
+ * kaart kan draaien. Dit is de anti-kruisbesmettingspoort: kaart A wordt tegen
+ * de refs/secties van kaart A nagerekend, nooit tegen die van kaart B. */
+export function batchCardRequest(
+  req: InteractionBatchExtractRequest,
+  card: BatchCard,
+): InteractionExtractRequest {
+  return {
+    system: req.system,
+    text: card.text,
+    refs: card.refs,
+    kinds: req.kinds,
+    conditionKinds: req.conditionKinds,
+    roles: req.roles,
+    windowLexicon: req.windowLexicon,
+    statusLexicon: req.statusLexicon,
+    sections: card.sections,
+  };
+}
+
+/** Server-side addendum voor de batchvorm: één tool-call per kaart, mét de
+ * kaartcode, en uitsluitend het vocabulaire van díe kaart. */
+export const BATCH_INTERACTION_TOOL_ADDENDUM =
+  "Je krijgt meerdere genummerde kaarten. Roep de tool `emit_interactions` voor ELKE " +
+  "kaart PRECIES ÉÉN keer aan, met `card` exact gelijk aan de aangeboden kaartcode. " +
+  "Gebruik per kaart UITSLUITEND de refs, kinds, window/status-waarden en " +
+  "governed_by-sectie-refs uit het vocabulaire dat bij DÍE kaart staat — nooit dat " +
+  "van een andere kaart, en verzin er geen. Behandel de kaarten onafhankelijk van " +
+  "elkaar. Geef daarna geen verdere uitleg.";
+
+/** De vaste zod raw shape voor de batchvorm (#323): het losse interactie-item
+ * plus de kaartcode die de vangst aan de juiste kaart bindt. */
+export function buildBatchInteractionToolShape(): z.ZodRawShape {
+  return { card: z.string(), interactions: z.array(interactionItemSchema()) };
+}
+
+export function batchInteractionToolDescription(): string {
+  return (
+    "Emit ontologie-begrensde, gekwalificeerde interacties voor één van de aangeboden " +
+    "kaarten: `card` is de kaartcode uit de invoer, `interactions` gebruikt uitsluitend " +
+    "het vocabulaire dat bij die kaart staat."
+  );
+}
+
+/** De prompt-invoer voor de batchvorm: per kaart een genummerde kop met de code,
+ * gevolgd door exact hetzelfde vocabulaire+tekst-blok als de losse vorm
+ * ({@link interactionPromptText}) — de per-kaart-lokaliteit van het vocabulaire
+ * is de eerste verdediging tegen kruisbesmetting; de narekening is de tweede. */
+export function batchInteractionPromptText(req: InteractionBatchExtractRequest): string {
+  const blocks = req.cards.map((card, i) => {
+    const header = `=== Kaart ${i + 1} van ${req.cards.length} — code: ${card.code} ===`;
+    return `${header}\n${interactionPromptText(batchCardRequest(req, card))}`;
+  });
+  return blocks.join("\n\n");
+}
+
+export function parseInteractionBatchExtractRequest(
+  body: unknown,
+): ExtractParseResult<InteractionBatchExtractRequest> {
+  const b = asRecord(body);
+
+  const kinds = stringArray(b.kinds);
+  if (kinds.length === 0) return { ok: false, error: "kinds-enum vereist" };
+
+  const model = parseExtractModelAlias(b.model);
+  if (!model.ok) return { ok: false, error: model.error };
+
+  const rawCards = Array.isArray(b.cards) ? b.cards : [];
+  if (rawCards.length === 0) return { ok: false, error: "ten minste één kaart vereist" };
+  if (rawCards.length > MAX_BATCH_CARDS)
+    return { ok: false, error: `maximaal ${MAX_BATCH_CARDS} kaarten per batch` };
+
+  const cards: BatchCard[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawCards) {
+    const c = asRecord(raw);
+    const code = typeof c.code === "string" ? c.code.trim() : "";
+    if (!code) return { ok: false, error: "elke kaart heeft een code nodig" };
+    // Dubbele codes maken de vangst-toewijzing ambigu — weigeren, niet raden.
+    if (seen.has(code)) return { ok: false, error: `dubbele kaartcode: ${code}` };
+    seen.add(code);
+    const text = typeof c.text === "string" ? c.text : "";
+    if (!text.trim()) return { ok: false, error: `kaart ${code}: text vereist` };
+    const rawRefs = Array.isArray(c.refs) ? c.refs : [];
+    const refs: OfferedRef[] = [];
+    for (const rr of rawRefs) {
+      const r = asRecord(rr);
+      const ref = typeof r.ref === "string" ? r.ref.trim() : "";
+      const label = typeof r.label === "string" ? r.label : ref;
+      if (ref) refs.push({ ref, label });
+    }
+    if (refs.length === 0)
+      return { ok: false, error: `kaart ${code}: ten minste één ref vereist` };
+    cards.push({ code, text, refs, sections: stringArray(c.sections) });
+  }
+
+  return {
+    ok: true,
+    request: {
+      system: optionalSystem(b.system),
+      ...(model.model ? { model: model.model } : {}),
+      kinds,
+      conditionKinds: stringArray(b.conditionKinds),
+      roles: stringArray(b.roles),
+      windowLexicon: stringArray(b.windowLexicon),
+      statusLexicon: stringArray(b.statusLexicon),
+      cards,
+    },
+  };
+}
+
 // ── Mechanic-predicaten (spiegelt MechanicPredicateExtraction) ───────────────
 
 export interface PredicateExtractRequest {
   system?: string;
+  /** Zie {@link InteractionExtractRequest.model} (#323). */
+  model?: string;
   text: string;
   subjectRef: string;
   subjectLabel: string;
@@ -420,10 +627,16 @@ export function parseInteractionExtractRequest(
   const kinds = stringArray(b.kinds);
   if (kinds.length === 0) return { ok: false, error: "kinds-enum vereist" };
 
+  // Model-alias (#323): onbekend is een 400 vóór er ook maar één SDK-sessie of
+  // permit aan te pas komt — nooit een vrije string richting de SDK-options.
+  const model = parseExtractModelAlias(b.model);
+  if (!model.ok) return { ok: false, error: model.error };
+
   return {
     ok: true,
     request: {
       system: optionalSystem(b.system),
+      ...(model.model ? { model: model.model } : {}),
       text,
       refs,
       kinds,
@@ -458,10 +671,14 @@ export function parsePredicateExtractRequest(
   const predicates = stringArray(b.predicates);
   if (predicates.length === 0) return { ok: false, error: "predicates-enum vereist" };
 
+  const model = parseExtractModelAlias(b.model);
+  if (!model.ok) return { ok: false, error: model.error };
+
   return {
     ok: true,
     request: {
       system: optionalSystem(b.system),
+      ...(model.model ? { model: model.model } : {}),
       text,
       subjectRef,
       subjectLabel,

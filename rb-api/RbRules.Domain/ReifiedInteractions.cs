@@ -62,6 +62,20 @@ public class Interaction
     /// ze kandidaat/hypothese/afgewezen is.</summary>
     public DateTimeOffset? PromotedAt { get; set; }
 
+    /// <summary>Provenance op de RIJ (#323, #299-les: run_log-regels verouderen —
+    /// "welke rijen komen uit welk model?" moet een <c>WHERE</c> zijn): het
+    /// rb-ai-model-ID (bv. "claude-fable-5") van de extractie die deze rij het
+    /// laatst aandroeg. Null = het sonnet-tijdperk vóór #323. Wordt bij ELKE
+    /// nieuwe extractie (her)geschreven, zodat de audit (#313) per model kan
+    /// vergelijken.</summary>
+    public string? ExtractModel { get; set; }
+
+    /// <summary>1-based positie van de bronkaart binnen de rb-ai-batchsessie
+    /// (#323). 1 bij een losse aanroep; null in het pre-#323-tijdperk. Dit is
+    /// het meetkanaal voor aandachts-verval bij latere kaarten in een batch —
+    /// zonder per-positie-cijfer is "K werkt" niet te claimen (issue-rand).</summary>
+    public int? ExtractBatchPosition { get; set; }
+
     /// <summary>Individueel weerlegbare condities (window/status/cost).</summary>
     public List<InteractionCondition> Conditions { get; set; } = [];
 

@@ -2,7 +2,7 @@
 // (CLAUDE_CODE_OAUTH_TOKEN) zodat rb-api (.NET) geen per-token API-key nodig
 // heeft. Alleen bereikbaar binnen het compose-netwerk — nooit publiek exposen.
 import { createServer } from "node:http";
-import { askClaude, extractWithTool, warmPool } from "./ai.js";
+import { askClaude, extractBatchWithTool, extractWithTool, warmPool } from "./ai.js";
 import { aiSemaphore, ConcurrencyLimitError } from "./concurrency.js";
 import {
   extractFailureResponse,
@@ -14,6 +14,11 @@ import {
 } from "./failure.js";
 import { buildAuditExtraction, parseInteractionAuditRequest } from "./audit.js";
 import {
+  BATCH_INTERACTION_TOOL_ADDENDUM,
+  batchCardRequest,
+  batchInteractionPromptText,
+  batchInteractionToolDescription,
+  buildBatchInteractionToolShape,
   buildInteractionToolShape,
   buildPredicateToolShape,
   enforceInteractionVocabulary,
@@ -21,6 +26,7 @@ import {
   INTERACTION_TOOL_ADDENDUM,
   interactionPromptText,
   interactionToolDescription,
+  parseInteractionBatchExtractRequest,
   parseInteractionExtractRequest,
   parsePredicateExtractRequest,
   PREDICATE_TOOL_ADDENDUM,
@@ -41,7 +47,7 @@ import { parseAskRequest } from "./validate.js";
  * request); sinds de vaste tool-vorm hangt de gesloten-vraag-regel aan één
  * regel in dit bestand, en die regel hoort bewaakt. server.test.ts stubt dit
  * veld en draait de échte handler — zie daar voor de twee richtingen. */
-export const deps = { extractWithTool };
+export const deps = { extractWithTool, extractBatchWithTool };
 
 const PORT = Number(process.env.PORT ?? 8090);
 
@@ -53,6 +59,7 @@ const LOGGED_PATHS = new Set([
   "/ask",
   "/ask/stream",
   "/extract/interactions",
+  "/extract/interactions/batch",
   "/extract/predicates",
   "/audit/interaction",
 ]);
@@ -95,6 +102,9 @@ export const server = createServer(async (req, res) => {
     task?: string;
     rejected?: number;
     rejectedConditions?: number;
+    cards?: number;
+    cardsOk?: number;
+    unknownCode?: number;
   } = {};
   const note = (status: number, failure?: AiFailure) => {
     if (logged || !LOGGED_PATHS.has(path)) return;
@@ -332,6 +342,9 @@ export const server = createServer(async (req, res) => {
           schema: buildInteractionToolShape(),
           resultKey: "interactions",
           system: parsed.request.system,
+          // Beheerd extractie-model (#323): al door de gesloten alias-poort in
+          // de request-parse vertaald naar een echt model-ID.
+          model: parsed.request.model,
           addendum: INTERACTION_TOOL_ADDENDUM,
           text: interactionPromptText(parsed.request),
           signal: abort.signal,
@@ -366,6 +379,115 @@ export const server = createServer(async (req, res) => {
       }
     }
 
+    if (req.method === "POST" && req.url === "/extract/interactions/batch") {
+      // Batch-extractie (#323): K kaarten in één SDK-sessie, elk met een eigen
+      // tool-call die de kaartcode draagt. Partial salvage is het contract: de
+      // kaarten die vóór een uitval al een geldige tool-call hadden gaan als
+      // ok terug (rb-api watermarkt alléén die); de rest krijgt een per-kaart
+      // status met de reden. Alleen als er NIETS gevangen is, is de hele
+      // aanroep een 5xx/504 — hetzelfde degradatiepad als het losse endpoint.
+      //
+      // NDJSON-stream, zelfde snit als /ask/stream: per geaccepteerde kaart een
+      // heartbeat-frame {type:"card",code,done,total} (een sessie met K=250 kan
+      // uren duren — zonder levensteken lijkt de job bevroren en nodigt dat uit
+      // tot een handmatige cancel), afgesloten met {type:"done",results,…}. De
+      // 200-head gaat pas de deur uit bij het eerste frame, dus een lege vangst
+      // of capaciteitsafwijzing komt nog als echte HTTP-status terug.
+      const body = await readJson(req);
+      const parsed = parseInteractionBatchExtractRequest(body.value);
+      if (!parsed.ok) return send(400, { error: parsed.error });
+      const cards = parsed.request.cards;
+      shape = {
+        bytes: body.bytes,
+        cards: cards.length,
+        refs: cards.reduce((sum, c) => sum + c.refs.length, 0),
+        ...(cards.some((c) => c.sections.length > 0)
+          ? { sections: cards.reduce((sum, c) => sum + c.sections.length, 0) }
+          : {}),
+      };
+      let headSent = false;
+      const frame = (obj: unknown) => {
+        if (res.destroyed) return;
+        if (!headSent) {
+          headSent = true;
+          res.writeHead(200, { "content-type": "application/x-ndjson" });
+        }
+        res.write(JSON.stringify(obj) + "\n");
+      };
+      try {
+        const outcome = await deps.extractBatchWithTool({
+          toolName: "emit_interactions",
+          description: batchInteractionToolDescription(),
+          schema: buildBatchInteractionToolShape(),
+          keyField: "card",
+          resultKey: "interactions",
+          keys: cards.map((c) => c.code),
+          system: parsed.request.system,
+          model: parsed.request.model,
+          addendum: BATCH_INTERACTION_TOOL_ADDENDUM,
+          text: batchInteractionPromptText(parsed.request),
+          signal: abort.signal,
+          // Heartbeat: kaartcode + tellers — codes zijn rb-api's eigen
+          // kaart-ID's (publiek), geen gebruikersinvoer; de tellers zijn maten.
+          onCapture: (code, done, total) => frame({ type: "card", code, done, total }),
+        });
+        // Niets gevangen: dezelfde 504/500-vertaling als het losse endpoint,
+        // zodat RbAiClient de oorzaak per laag blijft tellen (#251/#281). De
+        // head is dan per constructie nog niet verstuurd: frames bestaan
+        // alleen bij een geaccepteerde vangst.
+        if (outcome.perKey.size === 0) return sendExtractFailure(outcome);
+
+        // Partial salvage: per kaart een status. De narekening draait PER KAART
+        // tegen het vocabulaire van DÍE kaart (kruisbesmettingspoort, #323) —
+        // batchCardRequest is de bindende vertaling, dezelfde die de prompt
+        // bouwde.
+        let items = 0;
+        let rejected = 0;
+        let rejectedConditions = 0;
+        const missingReason = outcome.failure?.reason ?? "no_tool_call";
+        const results = cards.map((card) => {
+          const captured = outcome.perKey.get(card.code);
+          if (captured === undefined)
+            return { code: card.code, ok: false as const, reason: missingReason };
+          const gate = enforceInteractionVocabulary(
+            captured, batchCardRequest(parsed.request, card));
+          items += gate.accepted.length;
+          rejected += gate.rejected;
+          rejectedConditions += gate.rejectedConditions;
+          return { code: card.code, ok: true as const, interactions: gate.accepted };
+        });
+        shape = {
+          ...shape,
+          cardsOk: outcome.perKey.size,
+          items,
+          ...(rejected > 0 ? { rejected } : {}),
+          ...(rejectedConditions > 0 ? { rejectedConditions } : {}),
+          ...(outcome.unknownKeys > 0 ? { unknownCode: outcome.unknownKeys } : {}),
+        };
+        frame({
+          type: "done",
+          results,
+          ...(outcome.unknownKeys > 0 ? { unknownCode: outcome.unknownKeys } : {}),
+          // Token-usage van de hele sessie (#121-vorm): rb-api boekt ze in het
+          // run-detail en de token-metering, gelabeld met model-alias + K.
+          usage: outcome.usage,
+        });
+        // De logregel meldt een sessie-uitval (timeout/max_turns) óók bij een
+        // gedeeltelijk geslaagde batch — anders vallen juist de sessies die
+        // kaarten kostten uit de meting (#281-les, zelfde als sendExtractSuccess).
+        note(200, outcome.failure);
+        return res.end();
+      } catch (e) {
+        if (!headSent && e instanceof ConcurrencyLimitError)
+          return send(
+            429,
+            { error: e.message, code: e.code },
+            { reason: "concurrency_limit", detail: e.message },
+          );
+        throw e;
+      }
+    }
+
     if (req.method === "POST" && req.url === "/extract/predicates") {
       // Tool-forced mechanic-predicaat-extractie (#226/#229, §5): getypeerde
       // (predicate, object) uit de regel-/definitietekst van één mechanic/keyword.
@@ -382,6 +504,7 @@ export const server = createServer(async (req, res) => {
           schema: buildPredicateToolShape(),
           resultKey: "predicates",
           system: parsed.request.system,
+          model: parsed.request.model,
           addendum: PREDICATE_TOOL_ADDENDUM,
           text: predicatePromptText(parsed.request),
           signal: abort.signal,

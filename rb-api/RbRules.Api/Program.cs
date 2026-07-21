@@ -39,6 +39,18 @@ builder.Services.AddHttpClient<RbAiClient>(c =>
     // de sidecar doorwerkt. Overige taken antwoorden of falen veel eerder.
     c.Timeout = TimeSpan.FromMinutes(6);
 });
+// Batch-extractie (#323): een sessie met K kaarten duurt basis + (K−1) ×
+// per-kaart — bij K=250 vele uren, per constructie niet passend onder de
+// 6-minuten-client hierboven. Deze named client heeft daarom GEEN eigen
+// timeout; het echte budget is de verplichte per-call-parameter
+// (BreinExtractSettings.BatchCallTimeout: rb-ai's keten + marge — een
+// rb-api-timeout korter dan de keten eronder verkleedt elke fout als "traag",
+// #281). De heartbeat-frames houden de stream intussen aantoonbaar levend.
+builder.Services.AddHttpClient(RbAiClient.BatchClientName, c =>
+{
+    c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("RB_AI_URL") ?? "http://localhost:8090");
+    c.Timeout = Timeout.InfiniteTimeSpan;
+});
 // SSRF-guard (#45), fetch-laag: IngestService praat als enige client met
 // URL's van buiten (register/scout/hub) — DNS-check op elk verbindingsdoel
 // (ook redirect-hops) + redirect-limiet. De URL-regels zelf checkt

@@ -439,3 +439,172 @@ describe("predicaten: vaste vorm + narekening (#312)", () => {
     assert.deepEqual(r.accepted, []);
   });
 });
+
+// ── #323: model-aliassen en batch-extractie ──────────────────────────────────
+
+import {
+  batchCardRequest,
+  batchInteractionPromptText,
+  buildBatchInteractionToolShape,
+  EXTRACT_MODELS,
+  MAX_BATCH_CARDS,
+  parseExtractModelAlias,
+  parseInteractionBatchExtractRequest,
+  type InteractionBatchExtractRequest,
+} from "./extract.js";
+
+describe("model-aliassen (#323)", () => {
+  it("vertaalt de gesloten aliassen naar LETTERLIJKE model-ID's", () => {
+    // Bewust uitgeschreven literals, nooit een assert tegen EXTRACT_MODELS
+    // zelf: een assertie tegen de constante die ze bewaakt schuift mee
+    // (#286/#293-les). Verander de map en deze test hoort rood te gaan.
+    assert.deepEqual(parseExtractModelAlias("fable"), { ok: true, model: "claude-fable-5" });
+    assert.deepEqual(parseExtractModelAlias("opus"), { ok: true, model: "claude-opus-4-8" });
+    assert.deepEqual(parseExtractModelAlias("sonnet"), { ok: true, model: "claude-sonnet-4-6" });
+    // 1M-contextvarianten (#323-aanvulling): SDK-notatie model[1m], gesloten map.
+    assert.deepEqual(parseExtractModelAlias("fable-1m"), { ok: true, model: "claude-fable-5[1m]" });
+    assert.deepEqual(parseExtractModelAlias("sonnet-1m"), { ok: true, model: "claude-sonnet-4-6[1m]" });
+  });
+
+  it("afwezig/leeg = geen override (oudere aanroepers blijven werken)", () => {
+    assert.deepEqual(parseExtractModelAlias(undefined), { ok: true });
+    assert.deepEqual(parseExtractModelAlias(null), { ok: true });
+    assert.deepEqual(parseExtractModelAlias(""), { ok: true });
+  });
+
+  it("weigert een onbekende alias en een niet-string — nooit een vrije string richting de SDK", () => {
+    assert.equal(parseExtractModelAlias("gpt-5").ok, false);
+    // Een RUW model-ID is geen alias: de map is de enige toegang.
+    assert.equal(parseExtractModelAlias("claude-fable-5").ok, false);
+    assert.equal(parseExtractModelAlias(42).ok, false);
+    assert.equal(parseExtractModelAlias({}).ok, false);
+  });
+
+  it("de map kent exact de drie afgesproken aliassen", () => {
+    assert.deepEqual(Object.keys(EXTRACT_MODELS).sort(),
+      ["fable", "fable-1m", "opus", "sonnet", "sonnet-1m"]);
+  });
+
+  it("een onbekende alias in een extract-request is een parse-fout (→ 400)", () => {
+    const single = parseInteractionExtractRequest({ ...baseInteractionReq, model: "gpt-5" });
+    assert.equal(single.ok, false);
+    const goed = parseInteractionExtractRequest({ ...baseInteractionReq, model: "fable" });
+    assert.ok(goed.ok);
+    assert.equal(goed.request.model, "claude-fable-5");
+  });
+});
+
+const batchReq: InteractionBatchExtractRequest = {
+  kinds: ["COUNTERS", "MODIFIES", "GRANTS", "REQUIRES"],
+  conditionKinds: ["WINDOW", "STATUS", "COST"],
+  roles: ["agent", "patient"],
+  windowLexicon: ["Showdown"],
+  statusLexicon: ["Exhausted"],
+  cards: [
+    {
+      code: "ogn-001",
+      text: "Deflect prevents Assault damage.",
+      refs: [
+        { ref: "mechanic:Deflect", label: "Deflect" },
+        { ref: "mechanic:Assault", label: "Assault" },
+      ],
+      sections: ["section:core-7.4"],
+    },
+    {
+      code: "ogn-002",
+      text: "Tank reduces Snipe damage.",
+      refs: [
+        { ref: "mechanic:Tank", label: "Tank" },
+        { ref: "mechanic:Snipe", label: "Snipe" },
+      ],
+      sections: ["section:core-9.1"],
+    },
+  ],
+};
+
+describe("batch-request parse (#323)", () => {
+  it("accepteert een geldige batch en bewaart de per-kaart-vocabulaires", () => {
+    const r = parseInteractionBatchExtractRequest(batchReq);
+    assert.ok(r.ok);
+    assert.equal(r.request.cards.length, 2);
+    assert.deepEqual(r.request.cards[1]!.sections, ["section:core-9.1"]);
+  });
+
+  it("weigert 0 kaarten en meer dan 250 kaarten (LETTERLIJKE grens)", () => {
+    assert.equal(parseInteractionBatchExtractRequest({ ...batchReq, cards: [] }).ok, false);
+    // 251 kaarten: één boven de uitgeschreven grens (K ≤ 250, expliciete
+    // productkeuze van Sjoerd — begon op 5-15 in de issue).
+    const teVeel = Array.from({ length: 251 }, (_, i) => ({
+      ...batchReq.cards[0]!, code: `ogn-${1000 + i}`,
+    }));
+    assert.equal(parseInteractionBatchExtractRequest({ ...batchReq, cards: teVeel }).ok, false);
+    assert.equal(MAX_BATCH_CARDS, 250);
+    // 250 mag nog wél — de grens zelf is legaal.
+    const precies = Array.from({ length: 250 }, (_, i) => ({
+      ...batchReq.cards[0]!, code: `ogn-${1000 + i}`,
+    }));
+    assert.ok(parseInteractionBatchExtractRequest({ ...batchReq, cards: precies }).ok);
+  });
+
+  it("weigert dubbele kaartcodes, kaarten zonder code/text/refs en een onbekende alias", () => {
+    const dubbel = { ...batchReq, cards: [batchReq.cards[0]!, { ...batchReq.cards[1]!, code: "ogn-001" }] };
+    assert.equal(parseInteractionBatchExtractRequest(dubbel).ok, false);
+    assert.equal(parseInteractionBatchExtractRequest(
+      { ...batchReq, cards: [{ ...batchReq.cards[0]!, code: " " }] }).ok, false);
+    assert.equal(parseInteractionBatchExtractRequest(
+      { ...batchReq, cards: [{ ...batchReq.cards[0]!, text: "" }] }).ok, false);
+    assert.equal(parseInteractionBatchExtractRequest(
+      { ...batchReq, cards: [{ ...batchReq.cards[0]!, refs: [] }] }).ok, false);
+    assert.equal(parseInteractionBatchExtractRequest({ ...batchReq, model: "gpt-5" }).ok, false);
+    const fable = parseInteractionBatchExtractRequest({ ...batchReq, model: "fable" });
+    assert.ok(fable.ok);
+    assert.equal(fable.request.model, "claude-fable-5");
+  });
+});
+
+describe("batch: per-kaart-vocabulaire en kruisbesmetting (#323)", () => {
+  it("de prompt draagt per kaart een kop met code én het EIGEN vocabulaire", () => {
+    const p = batchInteractionPromptText(batchReq);
+    assert.ok(p.includes("Kaart 1 van 2 — code: ogn-001"));
+    assert.ok(p.includes("Kaart 2 van 2 — code: ogn-002"));
+    // Het Deflect-vocabulaire staat vóór de Deflect-tekst, het Tank-vocabulaire
+    // vóór de Tank-tekst — per-kaart-lokaliteit.
+    assert.ok(p.indexOf("mechanic:Deflect") < p.indexOf("Deflect prevents"));
+    assert.ok(p.indexOf("mechanic:Tank") > p.indexOf("code: ogn-002"));
+  });
+
+  it("KRUISBESMETTING wordt gepakt: een ref uit het vocabulaire van kaart B wordt bij kaart A geweigerd", () => {
+    // De wissel-test uit de opdracht: emit voor kaart A (ogn-001) een paar dat
+    // alleen in het vocabulaire van kaart B (ogn-002) bestaat. De narekening
+    // tegen het vocabulaire van kaart A MOET dat weigeren.
+    const besmet = [
+      { from: "mechanic:Tank", to: "mechanic:Snipe", kind: "COUNTERS", interacts: true },
+      { from: "mechanic:Deflect", to: "mechanic:Assault", kind: "COUNTERS", interacts: true },
+    ];
+    const gateA = enforceInteractionVocabulary(besmet, batchCardRequest(batchReq, batchReq.cards[0]!));
+    assert.equal(gateA.rejected, 1, "het Tank/Snipe-paar hoort bij kaart B, niet bij kaart A");
+    assert.deepEqual(gateA.accepted.map((i) => i.from), ["mechanic:Deflect"]);
+    // ...en andersom: hetzelfde besmette lijstje tegen het vocabulaire van
+    // kaart B weigert precies het Deflect/Assault-paar. Samen bewijzen de twee
+    // richtingen dat de poort echt PER KAART rekent, niet tegen de unie.
+    const gateB = enforceInteractionVocabulary(besmet, batchCardRequest(batchReq, batchReq.cards[1]!));
+    assert.equal(gateB.rejected, 1);
+    assert.deepEqual(gateB.accepted.map((i) => i.from), ["mechanic:Tank"]);
+  });
+
+  it("governed_by volgt óók het per-kaart-vocabulaire (sectie van kaart B valt bij kaart A weg)", () => {
+    const items = [{
+      from: "mechanic:Deflect", to: "mechanic:Assault", kind: "COUNTERS", interacts: true,
+      governed_by: "section:core-9.1", // sectie van kaart B
+    }];
+    const gate = enforceInteractionVocabulary(items, batchCardRequest(batchReq, batchReq.cards[0]!));
+    assert.equal(gate.accepted.length, 1);
+    assert.equal(gate.accepted[0]!.governed_by, undefined);
+  });
+
+  it("de batch-toolvorm eist een kaartcode naast de items", () => {
+    const schema = z.object(buildBatchInteractionToolShape());
+    assert.ok(schema.safeParse({ card: "ogn-001", interactions: [] }).success);
+    assert.equal(schema.safeParse({ interactions: [] }).success, false);
+  });
+});

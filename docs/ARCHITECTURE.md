@@ -2783,6 +2783,68 @@ eerste run (integratie-follow-up, §8). Het qualifier-lexicon (Window/Status) is
 seed (`InteractionQualifierLexicon`) die review/evolutie uitbreidt — een nieuwe set
 mag nieuwe timing-windows/toestanden introduceren (CLAUDE.md: mee-evolueren).
 
+**Instelbaar model + batch-sessies (#323).** Twee beheerde instellingen
+(#254-patroon, tabel `setting`, per mining-run gelezen — nooit gecachet over de
+job) sturen de interactie-extractie: `brein.extract.model` (gesloten aliasset
+`sonnet | opus | fable | fable-1m | sonnet-1m`, default **fable** — expliciete
+keuze van Sjoerd na de 10%-audituitslag van de sonnet-baseline; de
+`-1m`-varianten kiezen het 1M-contextvenster, Agent SDK-notatie `model[1m]`) en
+`brein.extract.batch_k` (1..250, default **50**): hoeveel kaarten één
+rb-ai-sessie behandelt. De ALIAS reist in de payload; rb-ai vertaalt hem tegen
+zijn eigen kopie van de gesloten map (`EXTRACT_MODELS` in extract.ts) en weigert
+onbekend met 400 — drift tussen de twee kopieën komt dus luidruchtig terug, en
+beide kanten hebben een literal-test. Weigert de API het model zelf (bv. een
+1M-variant die het abonnement niet draagt), dan classificeert rb-ai dat als
+eigen reden `model_unavailable` — een beheer-knop (alias terugzetten), geen
+dienst-storing.
+
+Het **batch-contract** (`POST /extract/interactions/batch`) is een
+NDJSON-stream: per kaart een eigen refs/sections-vocabulaire in de request, per
+GEACCEPTEERDE tool-call een heartbeat-frame `{type:"card",code,done,total}` (een
+K=250-sessie kan uren duren — de heartbeat voedt de job-voortgang in beheer,
+anders lijkt de run bevroren), en een slotframe `{type:"done",results,
+unknownCode?,usage}` met per kaart `ok+interactions` of `ok:false+reason`. De
+kruisbesmettingspoort is drievoudig: (1) elke tool-call draagt de KAARTCODE en
+een code buiten de aangeboden set wordt geweigerd én geteld (`unknown_code`,
+`captureBatchToolCall`); (2) rb-ai rekent per kaart na tegen het vocabulaire
+van díé kaart (`batchCardRequest` → `enforceInteractionVocabulary`); (3) de
+.NET-muur parseert per kaart met dat kaart-vocabulaire
+(`InteractionBatchExtraction` valideert de envelop, `InteractionExtraction.
+ParseDetailed` de items). **Partial salvage** is het contract: valt de sessie om
+na m van de K kaarten, dan gaan die m als ok terug en watermarkt rb-api ALLEEN
+die — de rest komt de volgende run terug, per oorzaak geteld (ADR-20: nooit K
+als resultaat melden; de blast radius van een omgevallen sessie staat expliciet
+in het run-detail). De timeout schaalt mee met K (`scaledExtractTimeoutMs` =
+`AI_EXTRACT_TIMEOUT_MS` + (K−1) × `AI_EXTRACT_PER_CARD_MS`, default 180 s per
+extra kaart — les #311: anders meet je alleen je eigen plafond), net als
+`maxTurns` (basis + K−1). Eén batch-sessie = één achtergrond-permit: de
+semaphore en de interactieve reserve (#279) blijven ongewijzigd, en de doorvoer
+per permit stijgt juist. rb-api's callbudget (`BreinExtractSettings.
+BatchCallTimeout` = dezelfde keten + 120 s marge, op een named client zónder
+eigen timeout — `rb-ai-batch`) is per constructie ruimer dan de keten eronder
+(#281-les); de twee `AI_EXTRACT_*`-envs worden daartoe aan béíde containers
+gespiegeld vanuit dezelfde .env-variabelen (compose). **Kanttekening bij de
+nachtrun-deadline (#245):** die wordt alleen tússen werkitems getoetst, en één
+werkitem is sinds #323 een hele groep — een sessie die vlak vóór het
+venster-einde start loopt in het slechtste geval haar volledige budget door
+(± 2,6 h bij K=50, ± 12,5 h bij K=250; de `BatchCallTimeout`-formule). Bewust
+geaccepteerd en in de helptekst van `brein.extract.batch_k` vermeld; een
+deadline-bewuste groepsgrootte (de laatste groep vóór venster-einde inkorten)
+is een nette vervolgstap, geen voorwaarde.
+
+**Provenance en metering (#323).** Elke (her)extractie schrijft op de
+`interaction`-RIJ het gebruikte `extract_model` (model-ID) en de 1-based
+`extract_batch_position` binnen de sessie (#299-les: run_log-regels verouderen;
+de audit #313 meet hiermee per-positie-precisie en vergelijkt modellen eerlijk —
+null = het sonnet-tijdperk vóór #323). De sessie-usage uit het done-frame
+(#121-vorm) telt op naar `mining_run.input_tokens`/`output_tokens` — bewust
+dáár en niet in `ask_metric`, dat de /ask-duurstatistiek en accountquota voedt;
+`mining_run.llm_model` draagt sindsdien het echt gebruikte model-ID. Het
+run-detail meldt model-alias, K, batch-sessies, unknown_code en tokens
+(migratie `InteractionExtractProvenance323`; promptversie
+`breinmine-interactions-v5`). Zonder settings-service (unit-tests) geldt het
+legacy-pad: K=1, geen model-veld, gedragsgelijk aan vóór #323.
+
 **Terugzetten (`breinreset-interacties` / `breinreset-volledig`, #263).**
 Beide mining-jobs hierboven schuiven met een watermark door de pool: een
 verwerkte focus-kaart (resp. een reeds-gepredikeerd subject) komt niet terug.
@@ -2955,9 +3017,13 @@ meer omver duwen. Het env-plafond ligt sinds **#303** op `MaxConfigurableBatchCh
 Voor #279 gaat het om `AI_MAX_CONCURRENCY` + `AI_INTERACTIVE_RESERVE` (rb-ai) en
 `BREIN_MINING_CONCURRENCY` (rb-api); voor #282 om `EMBED_BATCH_SIZE` +
 `EMBED_BATCH_CHARS` (rb-api), elk met een `${VAR:-default}` die het
-gedocumenteerde gedrag houdt. Verifieer na deploy met `docker exec rb-v2-ai
-printenv | grep AI_` respectievelijk `docker exec rb-v2-api printenv | grep
-EMBED_`.
+gedocumenteerde gedrag houdt. Voor #323 om `AI_EXTRACT_PER_CARD_MS` (rb-ai, en
+sámen met `AI_EXTRACT_TIMEOUT_MS` gespiegeld naar rb-api vanuit dezelfde
+.env-variabelen — het batch-callbudget moet de rb-ai-keten blijven overtreffen)
+plus de bootstrap-defaults `BREIN_EXTRACT_MODEL`/`BREIN_EXTRACT_BATCH_K`
+(rb-api; de beheerde instelling wint). Verifieer na deploy met `docker exec
+rb-v2-ai printenv | grep AI_` respectievelijk `docker exec rb-v2-api printenv |
+grep -E 'EMBED_|EXTRACT'`.
 
 Migraties draaien bij opstart met korte retry (Program.cs) — na een VM-reboot
 kan rb-api eerder starten dan Postgres klaar is.

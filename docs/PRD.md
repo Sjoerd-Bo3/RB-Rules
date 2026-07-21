@@ -1302,6 +1302,27 @@ de globale duur-vangrail).
   de volledige audit levert de lijst en de beheerder beslist per geval in de
   reviewqueue. Meetpunt: de audit-precisie van nieuwe mech↔mech-promoties onder
   de nieuwe promptversie, naast die van de oude.
+- **Extractie-model instelbaar, K kaarten per sessie** (#323) — het model van de
+  interactie-extractie is een beheerde instelling ("Brein-extractie: model",
+  gesloten keuzelijst `sonnet | opus | fable | fable-1m | sonnet-1m`, default
+  **fable** — de sonnet-baseline haalde 10% audit-precisie), en de kaart-pass
+  bundelt sinds #323 **K kaarten in één rb-ai-sessie** ("Brein-extractie:
+  kaarten per sessie", 1..250, default 50): de vaste sessiekost (~49 s gemeten)
+  wordt zo over K kaarten uitgesmeerd. Kruisbesmetting is hard afgedwongen
+  (elke tool-call draagt de kaartcode; codes buiten de set worden geweigerd en
+  als `unknown_code` geteld; de vocabulaire-narekening draait per kaart), een
+  omgevallen sessie behoudt de al-gevangen kaarten (partial salvage — alleen
+  díé krijgen een watermark, de rest komt terug), en de job-voortgang krijgt
+  per binnengekomen kaart een levensteken zodat een urenlange sessie niet
+  bevroren lijkt. Het run-detail meldt model-alias, K, sessies, uitval per
+  oorzaak én de echte token-kosten; elke interactie-rij draagt voortaan het
+  extractie-model en de batch-positie, zodat de audit (#313) modellen en
+  posities eerlijk kan vergelijken. Weigert het abonnement een modelvariant,
+  dan meldt het run-detail `model_unavailable` — terugzetten is de fix. Let op
+  bij grote K: de nachtrun-deadline wordt alleen tussen sessies getoetst, dus
+  een sessie die vlak voor het venster-einde start kan haar volledige budget
+  doorlopen (± 2,6 uur bij K=50, ± 12,5 uur bij K=250) — dat staat ook in de
+  helptekst van de instelling.
 - **Brein-mining draait parallel** (#279) — de extractie kostte ~40 s per kaart
   en liep één kaart tegelijk: 40 kaarten was een half uur, een ongecapte
   nachtrun (~900 kaarten) tien uur. De kaart- en subject-lus verwerken nu
@@ -1736,6 +1757,12 @@ openstaande PR.
   sideboard en chosen champion.
 
 **Brein & kennisbank**
+- **#323** Extractie-model instelbaar + batch-sessies — *in-flight*, zie §4.5.
+  Deel 1 van de issue (instelbaar model, default fable, en K kaarten per
+  rb-ai-sessie met partial salvage en per-positie-provenance) is gebouwd; de
+  batch-audit (deel 2) en het drie-armige model-experiment (sonnet-baseline
+  ligt vast: 10% audit-precisie · 10% timeout · 162 s) volgen daarna, met het
+  volle-pool-auditcijfer als vergelijkingsbasis.
 - **#279** Brein-mining parallelliseren — *in-flight*, zie §4.5. De extractie is
   vrijwel volledig wachttijd op rb-ai (~40 s/kaart), dus een ongecapte nachtrun
   duurde tien uur terwijl de sidecar meerdere sessies aankan. Opgelost in twee

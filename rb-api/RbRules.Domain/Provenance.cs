@@ -89,6 +89,16 @@ public class MiningRun
     public int Candidates { get; set; }
     public int Verified { get; set; }
     public int Rejected { get; set; }
+
+    /// <summary>Echte token-tellingen van de run (#323), opgeteld over alle
+    /// rb-ai-batchsessies die usage meldden (#121-vorm: input telt cache-tokens
+    /// mee). Null = geen enkele sessie gaf usage terug — onbekend, niet 0.
+    /// Bewust HIER en niet in <c>ask_metric</c>: die tabel voedt de
+    /// /ask-duurstatistiek en de accountquota, en mining-rijen zouden beide
+    /// vervuilen. Samen met <see cref="LlmModel"/> is dit de kostenmeting per
+    /// mining-run.</summary>
+    public long? InputTokens { get; set; }
+    public long? OutputTokens { get; set; }
 }
 
 /// <summary>PROV-O-gereïficeerd feit-met-herkomst (fase 0a, #233): de canonieke

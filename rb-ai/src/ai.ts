@@ -187,6 +187,27 @@ const EXTRACT_TIMEOUT_MS = (() => {
   return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : 90_000;
 })();
 
+/** Extra tijdsbudget per EXTRA kaart in een batch-sessie (#323). De issue-rand
+ * is hard: "timeout schaalt mee met K, anders meet je alleen je eigen plafond"
+ * (les #311). Default 180 s: ruim boven de gemeten sonnet-generatie per kaart
+ * (147-163 s), zodat de schaal niet zelf de klip wordt. Net als
+ * AI_EXTRACT_TIMEOUT_MS hoort de knop óók in de compose-`environment:` van
+ * `rb-v2-ai` (#268-valkuil), en spiegelt rb-api dezelfde waarde voor zijn
+ * HttpClient-budget — een rb-api-timeout die korter is dan deze keten verkleedt
+ * elke batchfout als "traag" (#281). */
+const EXTRACT_PER_CARD_MS = (() => {
+  const parsed = Number.parseInt(process.env.AI_EXTRACT_PER_CARD_MS ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : 180_000;
+})();
+
+/** De effectieve tijdslimiet van een sessie met `k` kaarten: basis + (k−1) ×
+ * per-kaart-budget. PURE functie, apart geëxporteerd zodat de schaling met
+ * LETTERLIJKE waarden getest kan worden (#286-les) — haal de schaling weg en de
+ * literal-test gaat rood. */
+export function scaledExtractTimeoutMs(k: number, baseMs: number, perCardMs: number): number {
+  return baseMs + Math.max(0, k - 1) * perCardMs;
+}
+
 /** De SDK-aanroep als injecteerbare functie (test-seam, zie
  * {@link extractWithTool}). Structureel getypeerd op wat wij ervan gebruiken:
  * prompt + options erin, een berichtenstroom eruit. */
@@ -349,6 +370,10 @@ export async function extractWithTool(opts: {
    * pointe van de audit, en de bestaande Task→model-mapping is er al — géén
    * nieuw model-config-mechanisme. */
   task?: Task;
+  /** Opgelost model-ID uit de gesloten aliasmap (#323, extract.ts
+   * `parseExtractModelAlias`) — wint van `MODEL[task]`. Nooit een rauwe
+   * gebruikersstring: de 400-poort zit in de request-parse. */
+  model?: string;
   /** Test-seam (#281-review): de SDK-aanroep zelf. Productie laat dit weg en
    * krijgt `query`; een test levert een eigen berichtenstroom en kan zo de
    * faal- en timeout-paden ECHT doorlopen. Zonder deze naad viel er over dit
@@ -360,7 +385,7 @@ export async function extractWithTool(opts: {
 }): Promise<ExtractOutcome> {
   const {
     toolName, description, schema, resultKey, system, addendum, text, signal,
-    task = "cheap",
+    task = "cheap", model,
     runQuery = query as unknown as QueryRunner,
   } = opts;
   const serverName = "extract";
@@ -439,7 +464,7 @@ export async function extractWithTool(opts: {
       controller.abort();
     }, EXTRACT_TIMEOUT_MS);
     const options: Options = {
-      model: MODEL[task],
+      model: model ?? MODEL[task],
       maxTurns: EXTRACT_MAX_TURNS,
       tools: [],
       mcpServers: { [serverName]: extractServer },
@@ -467,6 +492,277 @@ export async function extractWithTool(opts: {
     // wint de afkapping (dezelfde beslissing als hierboven).
     if (!timedOut && !controller.signal.aborted && captured === null)
       return { items: null, failure: enrich(runFailure ?? describeThrown(e)) };
+    return finish();
+  } finally {
+    if (timer) clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+    release?.();
+  }
+}
+
+// ── Batch-extractie: K kaarten per sessie (#323) ─────────────────────────────
+
+/** Uitkomst van één {@link extractBatchWithTool}-run. Anders dan het losse pad
+ * is de vangst hier PER SLEUTEL (kaartcode): valt de sessie om nadat m van de K
+ * kaarten een geldige tool-call hadden, dan blijven die m staan (partial
+ * salvage) en zegt `failure` waarom de rest ontbreekt. `perKey` is leeg én
+ * `failure` gezet ⇒ de hele sessie leverde niets — dat pad krijgt dezelfde
+ * 504/500-vertaling als het losse endpoint. */
+export interface BatchExtractOutcome {
+  /** Gevangen tool-input per aangeboden sleutel; een sleutel ontbreekt als het
+   * model er nooit een geldige call voor deed. */
+  perKey: Map<string, unknown[]>;
+  /** Tool-calls met een sleutel BUITEN de aangeboden set — geweigerd en geteld
+   * (kruisbesmettingspoort, #323). Een MAAT, geen inhoud. */
+  unknownKeys: number;
+  /** Echte token-usage van de sessie uit het SDK-result-bericht (#121-vorm),
+   * of null wanneer de run er geen afgaf (bv. afgekapt vóór het result). De
+   * batch amortiseert de sessiekost over K kaarten — zonder deze meting is
+   * "wat kost een fable-batch van 50?" niet te beantwoorden. */
+  usage: AskUsage | null;
+  failure?: AiFailure;
+  timedOut?: boolean;
+}
+
+/** De vangststand van één batch-sessie — gedeeld tussen de tool-handler en de
+ * afloop-beslissing. */
+export interface BatchCaptureState {
+  perKey: Map<string, unknown[]>;
+  unknownKeys: number;
+}
+
+/** Uitslag van één batch-tool-call: de ack-tekst voor het model, en — alléén
+ * bij een geaccepteerde vangst — de sleutel. Die laatste voedt de heartbeat
+ * per kaart (#323): zonder levensteken lijkt een sessie van uren bevroren en
+ * nodigt dat uit tot een handmatige cancel. */
+export interface BatchCaptureResult {
+  ack: string;
+  accepted?: string;
+}
+
+/** Verwerk één batch-tool-call, als PURE functie (#323). Dit is de
+ * kruisbesmettingspoort: een call met een sleutel buiten de aangeboden set
+ * wordt NIET opgeslagen — geweigerd en geteld (unknown_keys) — en de fouttekst
+ * gaat als ack terug de sessie in zodat het model zichzelf kan corrigeren.
+ * Binnen de set wint de laatste geldige call per sleutel (zelfcorrectie), en
+ * alles anders dan een array is een lege vangst — exact de regel van het losse
+ * pad. Apart van de SDK-handler zodat de poort op GEDRAG te toetsen is; de
+ * handler in {@link extractBatchWithTool} is er alleen de bedrading van. */
+export function captureBatchToolCall(
+  state: BatchCaptureState,
+  keySet: ReadonlySet<string>,
+  keyField: string,
+  resultKey: string,
+  args: Record<string, unknown>,
+): BatchCaptureResult {
+  const key = typeof args[keyField] === "string" ? (args[keyField] as string).trim() : "";
+  if (!keySet.has(key)) {
+    state.unknownKeys += 1;
+    return { ack: "geweigerd: onbekende kaartcode — gebruik exact één van de aangeboden codes" };
+  }
+  const value = args[resultKey];
+  state.perKey.set(key, Array.isArray(value) ? value : []);
+  return { ack: `ok (${state.perKey.size}/${keySet.size})`, accepted: key };
+}
+
+/** De afloop van één batch-run, als PURE functie — zelfde rol en zelfde
+ * volgorde-regels als {@link decideExtractOutcome}: wat gevangen is blijft
+ * (goed werk weggooien mag nooit), de afkapping wint van wat de run verder
+ * meldde, en een nette afloop zonder calls voor de resterende sleutels is een
+ * prompt-probleem (`no_tool_call`), geen machineprobleem. */
+export function decideBatchExtractOutcome(input: {
+  perKey: Map<string, unknown[]>;
+  expected: number;
+  unknownKeys: number;
+  timedOut: boolean;
+  aborted: boolean;
+  runFailure?: AiFailure;
+  toolName: string;
+  timeoutMs: number;
+  usage?: AskUsage | null;
+}): BatchExtractOutcome {
+  const { perKey, expected, unknownKeys, timedOut, aborted, runFailure, toolName, timeoutMs } =
+    input;
+  const usage = input.usage ?? null;
+  const seconds = timeoutMs / 1000;
+  const missing = expected - perKey.size;
+
+  if (timedOut) {
+    return {
+      perKey, unknownKeys, usage, timedOut: true,
+      failure: {
+        reason: "timeout",
+        detail:
+          perKey.size > 0
+            ? `sessie afgekapt na ${seconds}s; ${perKey.size}/${expected} kaarten al gevangen en behouden`
+            : `batch-extractie afgebroken na ${seconds}s (harde timeout)`,
+      },
+    };
+  }
+  if (aborted && missing > 0) {
+    return {
+      perKey, unknownKeys, usage,
+      failure: { reason: "aborted", detail: "client heeft de verbinding gesloten" },
+    };
+  }
+  if (runFailure && missing > 0) return { perKey, unknownKeys, usage, failure: runFailure };
+  if (missing > 0) {
+    return {
+      perKey, unknownKeys, usage,
+      failure: {
+        reason: "no_tool_call",
+        detail: `run afgerond met ${perKey.size}/${expected} aanroepen van ${toolName}`,
+      },
+    };
+  }
+  // Alles gevangen: een eventueel gemelde run-fout kost geen kaarten meer en
+  // reist alleen als context mee in de logregel.
+  return { perKey, unknownKeys, usage, ...(runFailure ? { failure: runFailure } : {}) };
+}
+
+/** Tool-forced batch-extractie (#323): één SDK-sessie behandelt K kaarten, elk
+ * met een eigen tool-call die de KAARTCODE draagt. Zelfde discipline als
+ * {@link extractWithTool} — achtergrond-permit, harde timeout (geschaald met K,
+ * {@link scaledExtractTimeoutMs}), result-bericht + api_retry gelezen, stderr
+ * meegelezen — plus de twee batch-specifieke poorten: een call met een code
+ * buiten `keys` wordt geweigerd en geteld (unknown_keys), en de vangst wordt
+ * incrementeel per kaart bewaard zodat een omvallende sessie de al-gevangen
+ * kaarten niet meesleept (partial salvage; rb-api watermarkt alléén die). */
+export async function extractBatchWithTool(opts: {
+  toolName: string;
+  description: string;
+  schema: Parameters<typeof tool>[2];
+  /** Veld in de tool-input dat de sleutel (kaartcode) draagt. */
+  keyField: string;
+  /** Veld in de tool-input dat de items-array draagt. */
+  resultKey: string;
+  /** De aangeboden sleutels — de gesloten set waartegen elke call getoetst wordt. */
+  keys: string[];
+  system?: string;
+  addendum: string;
+  text: string;
+  signal?: AbortSignal;
+  task?: Task;
+  /** Zie {@link extractWithTool}: opgelost model-ID, wint van MODEL[task]. */
+  model?: string;
+  /** Heartbeat per geaccepteerde kaart (#323): vuurt bij elke geldige
+   * tool-call met (code, gevangen, totaal). server.ts stuurt er een
+   * NDJSON-frame op uit zodat rb-api de job-voortgang per kaart kan tonen —
+   * zonder levensteken lijkt een sessie van uren bevroren. */
+  onCapture?: (key: string, done: number, total: number) => void;
+  /** Test-seam (#329-review): krijgt exact de vang-functie die de echte
+   * tool-handler gebruikt (gedeelde `fire` — seam en productie kunnen per
+   * constructie niet uiteenlopen). Zonder deze naad is het OOGST-pad — de
+   * catch die een geworpen fout omzet in een uitkomst mét de al-gevangen
+   * kaarten — alleen met een echt SDK-subprocess te raken: de reviewer-probe
+   * "vervang de catch door een kale rethrow" bleef groen omdat geen test een
+   * gevulde vangst met een gooiende run kon combineren (#292-klasse). */
+  captureProbe?: (fire: (args: Record<string, unknown>) => BatchCaptureResult) => void;
+  runQuery?: QueryRunner;
+}): Promise<BatchExtractOutcome> {
+  const {
+    toolName, description, schema, keyField, resultKey, keys, system, addendum, text,
+    signal, task = "cheap", model, onCapture, captureProbe,
+    runQuery = query as unknown as QueryRunner,
+  } = opts;
+  const serverName = "extract";
+  const keySet = new Set(keys);
+  const timeoutMs = scaledExtractTimeoutMs(keys.length, EXTRACT_TIMEOUT_MS, EXTRACT_PER_CARD_MS);
+
+  const state: BatchCaptureState = { perKey: new Map(), unknownKeys: 0 };
+  /** Eén vang-functie voor de echte handler ÉN de test-seam: de
+   * kruisbesmettings- en vangstregels staan in de pure poort
+   * {@link captureBatchToolCall}, de heartbeat hangt eraan vast. */
+  const fire = (args: Record<string, unknown>): BatchCaptureResult => {
+    const r = captureBatchToolCall(state, keySet, keyField, resultKey, args);
+    if (r.accepted) onCapture?.(r.accepted, state.perKey.size, keys.length);
+    return r;
+  };
+  captureProbe?.(fire);
+  const extractServer = createSdkMcpServer({
+    name: serverName,
+    version: "1.0.0",
+    tools: [
+      // Dunne bedrading om de gedeelde vang-functie hierboven.
+      tool(toolName, description, schema, async (args) => ({
+        content: [{
+          type: "text" as const,
+          text: fire(args as Record<string, unknown>).ack,
+        }],
+      })),
+    ],
+  });
+
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+
+  const systemPrompt = [system, addendum].filter(Boolean).join("\n\n");
+  const stderr = new StderrTail();
+  const retries = new RetryTracker();
+  const enrich = (failure: AiFailure): AiFailure =>
+    withRetries(withStderr(failure, stderr), retries);
+  const finish = (): BatchExtractOutcome => {
+    const outcome = decideBatchExtractOutcome({
+      perKey: state.perKey,
+      expected: keys.length,
+      unknownKeys: state.unknownKeys,
+      timedOut,
+      aborted: controller.signal.aborted,
+      runFailure,
+      toolName,
+      timeoutMs,
+      usage,
+    });
+    return outcome.failure ? { ...outcome, failure: enrich(outcome.failure) } : outcome;
+  };
+  let release: (() => void) | undefined;
+  let runFailure: AiFailure | undefined;
+  let usage: AskUsage | null = null;
+  try {
+    // Eén batch-call = één achtergrond-permit (#279): de semaphore blijft
+    // ongewijzigd en de interactieve reserve blijft vrij — dat K kaarten in
+    // één sessie reizen is juist wat de doorvoer per permit verhoogt.
+    release = await aiSemaphore.acquire(1, {
+      signal: controller.signal,
+      maxWaitMs: AI_QUEUE_WAIT_MS,
+      priority: "background",
+    });
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    const options: Options = {
+      model: model ?? MODEL[task],
+      // Eén tool-beurt per kaart plus de bestaande marge: bij K=1 exact
+      // EXTRACT_MAX_TURNS, elke extra kaart één beurt erbij. Een assistant-
+      // beurt kan meerdere tool-calls dragen, dus dit is een bovengrens.
+      maxTurns: EXTRACT_MAX_TURNS + (keys.length - 1),
+      tools: [],
+      mcpServers: { [serverName]: extractServer },
+      allowedTools: [`mcp__${serverName}__${toolName}`],
+      permissionMode: "dontAsk" as const,
+      abortController: controller,
+      systemPrompt,
+      stderr: (data: string) => stderr.append(data),
+    };
+    for await (const message of runQuery({ prompt: text, options })) {
+      retries.observe(message);
+      runFailure = resultFailure(message) ?? runFailure;
+      // Usage uit het result-bericht (#121-vorm): de echte token-kosten van de
+      // sessie — het antwoord op "wat kost een batch van K?".
+      const m = message as { type?: string; usage?: unknown };
+      if (m.type === "result") usage = usageFromSdk(m.usage) ?? usage;
+    }
+    return finish();
+  } catch (e) {
+    if (e instanceof ConcurrencyLimitError) throw e;
+    // Zelfde beslisregels als het losse pad: een geworpen fout is alleen de
+    // oorzaak als er geen afkapping was; wat al gevangen is blijft staan.
+    if (!timedOut && !controller.signal.aborted) runFailure = runFailure ?? describeThrown(e);
     return finish();
   } finally {
     if (timer) clearTimeout(timer);

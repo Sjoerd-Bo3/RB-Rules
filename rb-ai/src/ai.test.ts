@@ -348,7 +348,8 @@ test("prewarm-boot raakt de concurrency-cap niet aan: acquire zit alleen in de e
   const src = readFileSync(fileURLToPath(new URL("./ai.ts", import.meta.url)), "utf8");
   const acquireCalls = [...src.matchAll(/aiSemaphore\.acquire\(/g)];
   // Elke permit-verwervende functie is een echte LLM-run onder de cap: askClaude
-  // (koud pad + warme claim) en extractWithTool (#226, tool-forced extractie). De
+  // (koud pad + warme claim), extractWithTool (#226, tool-forced extractie) en
+// extractBatchWithTool (#323, K kaarten per sessie — één batch-call = één permit). De
   // boot van de warme pool hoort er NOOIT bij. Het aantal call-sites is het aantal
   // run-functies (niet vast op 1) — maar élke call-site MOET binnen een run-functie
   // uit de allowlist zitten. Zonder deze structuur-check zou een stray acquire in een
@@ -357,7 +358,7 @@ test("prewarm-boot raakt de concurrency-cap niet aan: acquire zit alleen in de e
     acquireCalls.length >= 1,
     "er hoort ten minste één plek te zijn die een permit verwerft",
   );
-  const runFunctions = new Set(["askClaude", "extractWithTool"]);
+  const runFunctions = new Set(["askClaude", "extractWithTool", "extractBatchWithTool"]);
   const declRe = /(?:export\s+)?(?:async\s+)?function\*?\s+([A-Za-z0-9_]+)/g;
   const decls = [...src.matchAll(declRe)].map((m) => ({ name: m[1], index: m.index ?? 0 }));
   for (const call of acquireCalls) {
@@ -366,7 +367,7 @@ test("prewarm-boot raakt de concurrency-cap niet aan: acquire zit alleen in de e
     assert.ok(
       enclosing && runFunctions.has(enclosing.name),
       `aiSemaphore.acquire op index ${at} zit in '${enclosing?.name ?? "<top-level>"}', ` +
-        "geen echte LLM-run-functie (askClaude/extractWithTool)",
+        "geen echte LLM-run-functie (askClaude/extractWithTool/extractBatchWithTool)",
     );
   }
   const askClaudeStart = src.indexOf("export async function askClaude");
