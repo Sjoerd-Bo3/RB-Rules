@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using RbRules.Domain.Ontology;
 
 namespace RbRules.Domain;
 
@@ -207,6 +208,10 @@ public static partial class RelationMiner
 /// (seed + geaccepteerde RelationKinds) staat.</summary>
 public static class RelationProjection
 {
+    /// <summary>Het éne edge-type waarin dynamische relaties projecteren (#116);
+    /// sleutel in <see cref="ProjectionEdgeShapeCatalog"/>.</summary>
+    public const string RelatesToEdgeName = "RELATES_TO";
+
     public static bool ShouldProject(
         string status, string kind, IReadOnlySet<string> acceptedKinds) =>
         status is "accepted" or "unreviewed" && acceptedKinds.Contains(kind);
@@ -215,4 +220,72 @@ public static class RelationProjection
     /// (case-ongevoelig; kinds zijn genormaliseerd opgeslagen).</summary>
     public static IReadOnlySet<string> AcceptedKindSet(IEnumerable<string> acceptedKinds) =>
         new HashSet<string>(RelationMiner.KindVocabulary(acceptedKinds), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Kan een knoop van deze soort aan de gegeven kant van een
+    /// RELATES_TO-edge landen? Leest de ÉNE bron van waarheid voor "wat
+    /// projecteert RELATES_TO": de vorm in <see cref="ProjectionEdgeShapeCatalog"/>
+    /// (#317/#320), die door <c>ProjectionLabelGuardTests</c> in beide richtingen
+    /// tegen de uitgevoerde Cypher wordt gehouden. Bewust GEEN eigen lijst van
+    /// vijf soorten — een tweede kopie is precies de stille drift die #321
+    /// dichtte: een poort die ruimer is dan de projectie geeft rijen uit die
+    /// elke rebuild opnieuw stil verdampen.</summary>
+    public static bool CanBeEndpoint(BrainRefKind kind, EdgeEndpoint side) =>
+        BrainQuery.GraphLabel(kind) is { } label &&
+        ProjectionEdgeShapeCatalog.For(RelatesToEdgeName)
+            .Any(shape => shape.Labels(side).Contains(label, StringComparer.Ordinal));
+
+    /// <summary>Zijde-loze variant voor kandidaat-refs die nog niet aan een
+    /// voorstel-kant gebonden zijn (agentic poort, #321). Vandaag zijn beide
+    /// kanten identiek (zelfde vijf soorten); lopen ze ooit uiteen, dan hoort
+    /// de poort zijde-bewust te worden — de symmetrie-test in
+    /// <c>RelationMiningTests</c> gaat dan rood met die opdracht.</summary>
+    public static bool CanBeEndpoint(BrainRefKind kind) =>
+        CanBeEndpoint(kind, EdgeEndpoint.From) || CanBeEndpoint(kind, EdgeEndpoint.To);
+
+    /// <summary>Ref-tekst-variant voor de rebuild-telling: een onparseerbare ref
+    /// (bv. een <c>entity:</c>-ref uit de brein-namespace) kan per constructie
+    /// nooit als eindpunt landen en telt dus als "buiten de projectie".</summary>
+    public static bool CanBeEndpoint(string? refText, EdgeEndpoint side) =>
+        BrainRef.TryParse(refText, out var parsed) && CanBeEndpoint(parsed.Kind, side);
+}
+
+/// <summary>Eerlijke telling van één RELATES_TO-schrijfronde in de graph-rebuild
+/// (#321, ADR-20-klasse): niet het TE-DOEN-aantal maar wat Neo4j werkelijk
+/// schreef, met het verschil uitgesplitst per oorzaak. <see cref="OutsideProjection"/>
+/// is deterministisch uit de rijen zelf af te leiden (de WHERE-label-disjunctie
+/// weigert zo'n eindpunt per constructie, #320); <see cref="MissingNode"/> is de
+/// rest van het gat — een ref waarvan de knoop niet (meer) bestaat (verdwenen
+/// mechaniek, verwijderd doc: het bestaande stille-wees-gedrag van ABOUT).</summary>
+public sealed record RelatesToWriteTally(
+    int Offered, int Written, int OutsideProjection, int MissingNode)
+{
+    /// <summary>Aangeboden rijen die géén edge werden.</summary>
+    public int Dropped => Offered - Written;
+
+    /// <summary>Bouwt de telling. <paramref name="written"/> is de
+    /// <c>RETURN count(r)</c>-uitkomst van het statement; <c>null</c> betekent
+    /// "de driver gaf geen rij terug" (opnemende test-driver — echte Neo4j
+    /// levert bij een aggregatie altijd precies één rij). Dan is alleen het
+    /// buiten-de-projectie-deel bekend: dat wordt per constructie nooit
+    /// geschreven, dus de telling rekent het wel af; de rest geldt als
+    /// geschreven, want er is geen meting die anders zegt.</summary>
+    public static RelatesToWriteTally Create(int offered, int? written, int outsideProjection)
+    {
+        if (written is not { } w)
+            return new(offered, offered - outsideProjection, outsideProjection, 0);
+        return new(offered, w, outsideProjection, Math.Max(0, offered - w - outsideProjection));
+    }
+
+    /// <summary>Oorzaak-tekst voor de run-melding, alleen zinvol bij
+    /// <see cref="Dropped"/> &gt; 0: "1 eindpunt-soort buiten de projectie,
+    /// 2 refs zonder knoop".</summary>
+    public string OorzaakTekst()
+    {
+        var parts = new List<string>();
+        if (OutsideProjection > 0)
+            parts.Add($"{OutsideProjection} eindpunt-soort buiten de projectie");
+        if (MissingNode > 0)
+            parts.Add($"{MissingNode} ref{(MissingNode == 1 ? "" : "s")} zonder knoop");
+        return string.Join(", ", parts);
+    }
 }

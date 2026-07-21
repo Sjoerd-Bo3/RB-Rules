@@ -107,7 +107,11 @@ public class SetReleaseService(
         await Step("graph", async () =>
         {
             var r = await graph.SyncAsync(ct);
-            return $"{r.Cards} cards";
+            // Zelfde Summarize-plicht als de embeddings-stap hierboven (#282):
+            // een RELATES_TO-ronde die rijen verloor mag hier niet als kaal
+            // "N cards" in het ketendetail belanden (#321).
+            return $"{r.Cards} cards"
+                + (r.RelationsDropNote is { } note ? $" — {note}" : "");
         });
         await Step("primer-herziening", async () =>
         {

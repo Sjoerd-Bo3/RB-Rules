@@ -9,7 +9,31 @@ public record GraphSyncResult(
     int Cards, int Domains, int Tags, int Mechanics,
     int Sections, int Concepts, int Claims, int Sources, int Errata, int Changes,
     int Relations, int Rulings, int MiningRuns = 0, int Assertions = 0,
-    int Interactions = 0, int Conditions = 0);
+    int Interactions = 0, int Conditions = 0,
+    RelatesToWriteTally? RelationEdges = null, RelatesToWriteTally? QualifierCacheEdges = null)
+{
+    /// <summary>Waarschuwingstekst wanneer een van de twee RELATES_TO-rondes
+    /// rijen aanbood die géén edge werden (#321, ADR-20): het verschil met het
+    /// aanbod, per oorzaak. <c>null</c> = alles geland (of niets aangeboden).
+    /// Aanroepers die hun eigen samenvatting bouwen (JobCatalog,
+    /// SetReleaseService, AdminEndpoints) horen dit veld te gebruiken — een
+    /// resultaat-record met de uitval erin helpt niets als de aanroeper hem
+    /// negeert (#282-review).</summary>
+    public string? RelationsDropNote
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (RelationEdges is { Dropped: > 0 } r)
+                parts.Add($"relaties {r.Written} van {r.Offered} geschreven ({r.OorzaakTekst()})");
+            if (QualifierCacheEdges is { Dropped: > 0 } c)
+                parts.Add($"qualifier-cache {c.Written} van {c.Offered} geschreven ({c.OorzaakTekst()})");
+            return parts.Count == 0
+                ? null
+                : "RELATES_TO onvolledig geprojecteerd: " + string.Join("; ", parts);
+        }
+    }
+}
 
 /// <summary>Neo4j-sync met batched UNWIND (audit-fix: de PoP deed ~4 queries
 /// per kaart; dit zijn er een handvol totaal). Tag ≠ Mechanic: facties/tribes
@@ -621,9 +645,10 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         // 5×5 aan per-soort-statements: RELATES_TO is de gedenormaliseerde
         // elk-naar-elk-link). MERGE op kind: twee kinds tussen hetzelfde paar
         // zijn twee edges. Refs zonder knoop (verdwenen mechaniek, verwijderd
-        // doc) vallen stil weg — knoop zonder edge is het bestaande
-        // ABOUT-gedrag.
-        await tx.RunAsync(
+        // doc) worden — anders dan bij ABOUT — niet stil weggelaten maar
+        // GETELD (#321, ADR-20): RETURN count(r) meet wat er werkelijk landde,
+        // en het verschil met het aanbod gaat per oorzaak de run-melding in.
+        var relationsWritten = await WrittenCountAsync(await tx.RunAsync(
             """
             UNWIND $rows AS row
             MATCH (a {ref: row.from})
@@ -633,8 +658,9 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)
               SET r.trust = row.trust, r.explanation = row.explanation,
                   r.status = row.status
+            RETURN count(r) AS written
             """,
-            new Dictionary<string, object> { ["rows"] = relationRows });
+            new Dictionary<string, object> { ["rows"] = relationRows }));
 
         // Reïficatie & gekwalificeerde relaties (fase 2, #226): eerst de
         // :Interaction- en :Condition-knopen (verwijderd in de DETACH DELETE
@@ -691,9 +717,10 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             new Dictionary<string, object> { ["rows"] = interactionRows.GovernedByEdges });
         // Zelfde WHERE-label-disjunctie als het #116-statement hierboven (#317):
         // de cache-edge is dezelfde RELATES_TO-bewering en draagt dus dezelfde
-        // afdwinging. Agent/patient-refs zijn in de praktijk card:/mechanic:,
-        // maar de poort is de declaratie, niet de gewoonte.
-        await tx.RunAsync(
+        // afdwinging — en sinds #321 ook dezelfde eerlijke telling.
+        // Agent/patient-refs zijn in de praktijk card:/mechanic:, maar de poort
+        // is de declaratie, niet de gewoonte.
+        var cacheWritten = await WrittenCountAsync(await tx.RunAsync(
             """
             UNWIND $rows AS row
             MATCH (a {ref: row.from})
@@ -704,12 +731,28 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
               SET r.window = row.window, r.actorStatus = row.actorStatus,
                   r.costDelta = row.costDelta, r.tier = row.tier,
                   r.reifiedOnly = row.reifiedOnly, r.source = 'interaction'
+            RETURN count(r) AS written
             """,
-            new Dictionary<string, object> { ["rows"] = interactionRows.RelatesToCache });
+            new Dictionary<string, object> { ["rows"] = interactionRows.RelatesToCache }));
 
         await tx.CommitAsync();
 
-        return new(
+        // Eerlijke RELATES_TO-telling (#321, ADR-20): het buiten-de-projectie-
+        // deel is deterministisch uit de rijen zelf bekend (de WHERE weigert
+        // zo'n eindpunt per constructie); de rest van het gat zijn refs zonder
+        // knoop. Geteld op de rijen die de statements écht kregen.
+        var relationTally = RelatesToWriteTally.Create(
+            relationRows.Count, relationsWritten,
+            relations.Count(r =>
+                !RelationProjection.CanBeEndpoint(r.FromRef, EdgeEndpoint.From) ||
+                !RelationProjection.CanBeEndpoint(r.ToRef, EdgeEndpoint.To)));
+        var cacheTally = RelatesToWriteTally.Create(
+            interactionRows.RelatesToCache.Count, cacheWritten,
+            interactionRows.RelatesToCache.Count(row =>
+                !RelationProjection.CanBeEndpoint(row["from"] as string, EdgeEndpoint.From) ||
+                !RelationProjection.CanBeEndpoint(row["to"] as string, EdgeEndpoint.To)));
+
+        var result = new GraphSyncResult(
             cardRows.Count,
             CountDistinct(domainPairs),
             CountDistinct(tagPairs),
@@ -720,12 +763,41 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             sourceRows.Count,
             erratumRows.Count,
             changeRows.Count,
-            relationRows.Count,
+            relationTally.Written,
             rulingRows.Count,
             miningRunRows.Count,
             assertionRows.Count,
             interactionRows.Nodes.Count,
-            interactionRows.ConditionNodes.Count);
+            interactionRows.ConditionNodes.Count,
+            relationTally,
+            cacheTally);
+
+        // De pijplijn schrijft zijn eigen waarschuwing (#282b): de scheduler-
+        // aanroep gooit het resultaat weg, dus alleen langs dit pad is de
+        // uitval op élke route zichtbaar. Ná de commit — een teruggerolde
+        // transactie hoort geen "deels geschreven"-melding achter te laten.
+        if (result.RelationsDropNote is { } note)
+        {
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "graph", Ref = "relates-to", Status = "warn", Detail = note,
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
+        return result;
+    }
+
+    /// <summary>Leest de <c>RETURN count(r) AS written</c>-uitkomst van een
+    /// RELATES_TO-statement. Echte Neo4j levert bij een aggregatie altijd
+    /// precies één rij; een opnemende test-driver levert er nul — dan is er
+    /// niets gemeten en geeft dit <c>null</c> terug
+    /// (<see cref="RelatesToWriteTally.Create"/> valt dan terug op wat
+    /// deterministisch bekend is).</summary>
+    private static async Task<int?> WrittenCountAsync(IResultCursor cursor)
+    {
+        if (!await cursor.FetchAsync()) return null;
+        return (int)cursor.Current["written"].As<long>();
     }
 
     private static async Task RunPairsAsync(
