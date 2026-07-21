@@ -70,7 +70,7 @@ public sealed record ProjectionEdgeShape(
 
     /// <summary>Cypher-achtige weergave, gebruikt als vergelijkings- én
     /// foutmeldingssleutel: <c>(:Claim)-[:ABOUT]-&gt;(:Card)</c>, en
-    /// <c>()-[:RELATES_TO]-&gt;()</c> voor een label-loze kant. Labels worden
+    /// <c>(:Assertion)-[:DERIVED_FROM]-&gt;()</c> voor een label-loze kant. Labels worden
     /// gesorteerd zodat de volgorde waarin ze in de Cypher staan geen contract
     /// is — een multi-label knoop is een verzameling, geen lijst. Een disjunctieve
     /// kant rendert met <c>|</c> (Cypher's eigen label-expressiesyntaxis):

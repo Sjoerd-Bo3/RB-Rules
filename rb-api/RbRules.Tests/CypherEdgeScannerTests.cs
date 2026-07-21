@@ -180,8 +180,11 @@ public class CypherEdgeShapeScannerTests
     [Fact]
     public void LabelLozeAlias_IsOnbepaald_GeenFout()
     {
-        // RELATES_TO en HAS_ROLE matchen op ref zonder label. Dat moet als "niets
-        // opgelegd" terugkomen, niet als een verzonnen label en niet als fout.
+        // Een kale ref-match zonder label (en zonder WHERE-disjunctie — zo schreef
+        // de projectie RELATES_TO tot #317, en DERIVED_FROM nog steeds) moet als
+        // "niets opgelegd" terugkomen, niet als een verzonnen label en niet als
+        // fout. Dít is ook de vorm die mutatie (a) van #317 oplevert: sloop de
+        // WHERE-disjunctie en deze lege vorm valt bij L1/L3 door de mand.
         Assert.Equal(["()-[:RELATES_TO]->()"], Shapes(
             "MATCH (a {ref: row.from}) MATCH (b {ref: row.to}) MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)"));
         Assert.Equal(["(:Interaction)-[:HAS_ROLE]->()"], Shapes(
