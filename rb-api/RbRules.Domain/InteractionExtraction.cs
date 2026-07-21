@@ -5,7 +5,7 @@ namespace RbRules.Domain;
 
 /// <summary>Eén aangeboden ref voor de tool-forced extractie (fase 2, #226, §3.1):
 /// de BrainRef die de LLM als <c>from</c>/<c>to</c> MAG noemen, plus het
-/// ontologie-type (Card/Keyword) waarmee de reïficatie-vorm-poort de rol-range
+/// ontologie-type (Card/Mechanic, #304) waarmee de reïficatie-vorm-poort de rol-range
 /// toetst. De <c>enum</c> in het tool-schema wordt hieruit gegenereerd — het model
 /// kan geen ref buiten de aangeboden set noemen.</summary>
 public sealed record OfferedRef(string Ref, string Label, EntityType Type);
@@ -32,7 +32,7 @@ public sealed record ExtractedCondition(
 /// gereïficeerd-verplichte relaties, condities ∈ het gesloten lexicon.</summary>
 /// <param name="GovernedByRef">De officiële regelsectie die deze interactie
 /// verankert (#286) — één van de aangeboden <c>section:</c>-refs, of null. GEEN rol:
-/// de HAS_ROLE-range is Card/Keyword, dit vult <see cref="Interaction.GovernedByRef"/>
+/// de HAS_ROLE-range is Card/Mechanic, dit vult <see cref="Interaction.GovernedByRef"/>
 /// (GOVERNED_BY). Gesloten enum, dus het model kan geen sectie verzinnen.</param>
 public sealed record ExtractedInteraction(
     string FromRef, string ToRef, string Kind, bool Interacts,
@@ -269,7 +269,7 @@ public static class InteractionExtraction
 /// <summary>Fase 2 (#226, §3.1) — de RelationTypeConstraint-poort (from-kind × kind
 /// × to-kind), afgeleid uit de ontologie zodat "een Card <c>clarifies</c> een
 /// Source" er nooit in komt. Voor gekwalificeerde interacties: agent en patient
-/// zijn een Card of Keyword, kind ∈ de gereïficeerd-verplichte relaties. Eén bron
+/// zijn een Card of Mechanic (#304), kind ∈ de gereïficeerd-verplichte relaties. Eén bron
 /// (de ontologie) genereert zowel de prompt-enums als deze parser-poort.</summary>
 public static class RelationTypeConstraint
 {

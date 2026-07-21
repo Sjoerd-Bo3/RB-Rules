@@ -102,8 +102,9 @@ public sealed record KnownLabelDefect(
 /// Alleen edges die in het register RESOLVEN worden getoetst — bij de standen
 /// <c>DomeinNogNietGedeclareerd</c>/<c>Provenance</c>/<c>Infrastructuur</c> is er
 /// per definitie geen declaratie om tegen te houden. Zodra zo'n edge wél
-/// gedeclareerd wordt (#304), gaat deze toets er vanzelf overheen lopen: dan is de
-/// vorm ineens een bewering die kan kloppen of niet.</summary>
+/// gedeclareerd wordt, gaat deze toets er vanzelf overheen lopen: dan is de vorm
+/// ineens een bewering die kan kloppen of niet — precies wat er in #304 met de
+/// zeven voormalige schuld-edges gebeurde.</summary>
 public static class ProjectionLabelCheck
 {
     /// <summary>Alle problemen met deze vorm (leeg = conform, of niets te
@@ -178,7 +179,8 @@ public static class ProjectionLabelCheck
 ///
 /// WAT HIER STAAT. Per edge élke (bronlabels, doellabels)-combinatie die de
 /// projectie schrijft. <c>ABOUT</c> heeft er acht (Claim en Ruling × vier
-/// doelsoorten), <c>AFFECTS</c> en <c>SUPPORTED_BY</c> elk twee, de rest één.
+/// doelsoorten), <c>AFFECTS</c>, <c>SUPPORTED_BY</c> en <c>HAS_ROLE</c> elk twee,
+/// de rest één.
 /// Een lege labellijst = label-loze match; die staat er expliciet in, want een
 /// stille overgang van "gebonden" naar "label-loos" is precies het soort
 /// dekkingsverlies dat deze guard moet betrappen.
@@ -195,12 +197,13 @@ public static class ProjectionLabelCheck
 /// <c>PART_OF</c> RuleSection→RuleSection (2139), <c>HAS_TAG</c> Card→Tag (982),
 /// <c>FROM_SET</c> Card→Set (963), <c>EXPLAINS</c> Concept→RuleSection (101),
 /// <c>ABOUT</c> Claim/Ruling → Card/Mechanic/RuleSection/Concept (77). Eén meting
-/// weerlegt bovendien de documentatie: <c>HAS_ROLE</c> wijst naar <c>Card</c> (492)
+/// weerlegde bovendien de documentatie: <c>HAS_ROLE</c> wijst naar <c>Card</c> (492)
 /// en <c>Mechanic</c> (274) — NOOIT naar <c>Keyword</c>, wat
 /// <c>OntologyValidationService.ValidateReifiedInteraction</c>, de miner én
-/// ARCHITECTURE §11 alle drie beweren. De projectie matcht daar label-loos, dus de
-/// guard registreert die kant als onbepaald en laat de meting het woord doen
-/// (#270-les: bevraag de live bron, ga niet af op wat een mapper mapt).</summary>
+/// ARCHITECTURE §11 alle drie beweerden (#270-les: bevraag de live bron, ga niet
+/// af op wat een mapper mapt). Sinds #304 is die meting de gedeclareerde range,
+/// dwingt de projectie haar per filler-soort af, en zijn de drie
+/// Keyword-beweringen gecorrigeerd.</summary>
 public static class ProjectionEdgeShapeCatalog
 {
     private static readonly ProjectionEdgeShape[] ShapeList =
@@ -231,7 +234,8 @@ public static class ProjectionEdgeShapeCatalog
         new("SUPPORTED_BY", ["Claim"], ["Source"]),
         new("SUPPORTED_BY", ["Ruling"], ["Source"]),
 
-        // #296: Card is geen NormativeSource — zie DefectList hieronder.
+        // Sinds #296 conform: het register declareert Erratum → Card (de meting),
+        // dus deze vorm heeft geen waiver meer nodig.
         new("SUPERSEDES", ["Erratum"], ["Card"]),
 
         new("AFFECTS", ["Change"], ["RuleSection"]),
@@ -247,12 +251,13 @@ public static class ProjectionEdgeShapeCatalog
         // ── Reïficatie-tak (#226) ────────────────────────────────────────────
         // Beide kanten label-loos: de gedenormaliseerde retrieval-projectie matcht
         // uitsluitend op ref. Twee statements schrijven deze vorm (de #116-relaties
-        // en de qualifier-cache); dat is dezelfde vorm, dus één regel. #296.
+        // en de qualifier-cache); dat is dezelfde vorm, dus één regel. #317.
         new("RELATES_TO", [], []),
         new("REQUIRES_CONDITION", ["Interaction"], ["Condition"]),
-        // Doel label-loos: de filler is een Card of Mechanic (gemeten: 492/274),
-        // maar de projectie legt dat niet op.
-        new("HAS_ROLE", ["Interaction"], []),
+        // Sinds #304 per filler-soort label-gebonden (zoals ABOUT per doelsoort):
+        // de gedeclareerde range Card/Mechanic wordt door het statement afgedwongen.
+        new("HAS_ROLE", ["Interaction"], ["Card"]),
+        new("HAS_ROLE", ["Interaction"], ["Mechanic"]),
         new("GOVERNED_BY", ["Interaction"], ["RuleSection"]),
 
         // ── BreinProjectionService (#227) ────────────────────────────────────
@@ -269,27 +274,22 @@ public static class ProjectionEdgeShapeCatalog
     public static IEnumerable<ProjectionEdgeShape> For(string edgeName) =>
         ShapeList.Where(s => string.Equals(s.EdgeName, edgeName, StringComparison.OrdinalIgnoreCase));
 
+    // De SUPERSEDES-waiver (#296) is opgeruimd: het register declareert sinds die
+    // fix de gemeten vorm (Erratum → Card), dus de vorm is conform en L4 zou een
+    // achtergebleven waiver terecht rood zetten — een waiver die zijn eigen defect
+    // overleeft dekt vanaf dat moment stil iets anders af.
     private static readonly KnownLabelDefect[] DefectList =
     [
-        new("SUPERSEDES", EdgeEndpoint.To, ProjectionLabelVerdict.Violates, ["Card"],
-            "Het register declareert range NormativeSource (RuleSection/Ruling/Erratum), maar de "
-            + "projectie laat een Erratum de KAART vervangen waarvan het de gedrukte tekst "
-            + "overschrijft. Inhoudelijk is dat verdedigbaar — het erratum vervangt wél degelijk "
-            + "iets — maar het is niet wat er gedeclareerd staat. Nog te beslissen welke kant "
-            + "wijkt: de range verruimen naar Card, of de relatie splitsen in 'vervangt normatieve "
-            + "tekst' (SUPERSEDES) en 'errateert kaart' (ERRATA_OF bestaat al, Erratum → Card). "
-            + "Die tweede optie maakt SUPERSEDES in de huidige projectie dood.", "#296"),
-
         new("RELATES_TO", EdgeEndpoint.From, ProjectionLabelVerdict.Unenforceable, [],
             "De projectie matcht beide eindpunten label-loos op ref (MATCH (a {ref: …})) omdat een "
             + "RELATES_TO tussen élke twee knoopsoorten kan lopen. De gedeclareerde domain "
             + "[Concept, Card] is daarmee per constructie niet afdwingbaar: wat er ook aan die ref "
             + "hangt, de edge wordt geschreven. Óf de declaratie moet de werkelijke breedte "
             + "beschrijven, óf de projectie moet per doelsoort een eigen statement krijgen "
-            + "(zoals ABOUT dat wél doet).", "#296"),
+            + "(zoals ABOUT en sinds #304 ook HAS_ROLE dat wél doen).", "#317"),
         new("RELATES_TO", EdgeEndpoint.To, ProjectionLabelVerdict.Unenforceable, [],
             "Spiegelbeeld van de domain-kant hierboven: dezelfde label-loze ref-match maakt ook de "
-            + "gedeclareerde range [Concept, Card] onafdwingbaar.", "#296"),
+            + "gedeclareerde range [Concept, Card] onafdwingbaar.", "#317"),
     ];
 
     /// <summary>De erkende, gedocumenteerde verschillen tussen projectie en register.

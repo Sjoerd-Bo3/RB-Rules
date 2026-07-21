@@ -647,11 +647,25 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             MERGE (ix)-[:REQUIRES_CONDITION]->(c)
             """,
             new Dictionary<string, object> { ["rows"] = interactionRows.ConditionNodes });
+        // HAS_ROLE per filler-soort (#304), zoals ABOUT dat per doelsoort doet: de
+        // gedeclareerde range (Card/Mechanic) wordt zo door het statement zélf
+        // afgedwongen i.p.v. door een label-loze ref-match "gehoopt". Beide
+        // statements krijgen dezelfde rijen; een rij bindt alleen in het statement
+        // waarvan het label bij zijn ref-soort hoort (de andere MATCH vindt niets —
+        // hetzelfde stille-wees-gedrag als een ref zonder knoop, zie ABOUT).
         await tx.RunAsync(
             """
             UNWIND $rows AS row
             MATCH (ix:Interaction {ref: row.interaction})
-            MATCH (f {ref: row.filler})
+            MATCH (f:Card {ref: row.filler})
+            MERGE (ix)-[r:HAS_ROLE {role: row.role}]->(f)
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.RoleEdges });
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (ix:Interaction {ref: row.interaction})
+            MATCH (f:Mechanic {ref: row.filler})
             MERGE (ix)-[r:HAS_ROLE {role: row.role}]->(f)
             """,
             new Dictionary<string, object> { ["rows"] = interactionRows.RoleEdges });

@@ -157,8 +157,8 @@ public static class OntologyValidationService
     /// gereïficeerde, gekwalificeerde <c>Interaction</c> i.p.v. een kale triple.
     /// Dwingt af (a) dat <paramref name="kind"/> een gereïficeerd-VERPLICHTE
     /// relatie is (COUNTERS/MODIFIES/GRANTS/REQUIRES) — een niet-gekwalificeerde
-    /// relatie hoort NIET via een Interaction; (b) dat agent én patient een Card
-    /// of Keyword zijn (de HAS_ROLE-range van §2.3); en (c) dat elke conditie op
+    /// relatie hoort NIET via een Interaction; (b) dat agent én patient binnen de
+    /// gedeclareerde HAS_ROLE-range vallen (Card/Mechanic, #304); en (c) dat elke conditie op
     /// een geldig concept-type (Window/Status/Cost) slaat. Bewust de tegenpool van
     /// de kale-edge-poort: <see cref="ValidateTriple(EntityType,RelationType,EntityType,TripleContext)"/>
     /// weigert een kale COUNTERS-edge, deze keurt de gereïficeerde vorm ervan goed.</summary>
@@ -183,13 +183,19 @@ public static class OntologyValidationService
                 $"{relation.EdgeName} is geen gekwalificeerde relatie en hoort niet via een " +
                 "Interaction gereïficeerd te worden; gebruik de kale edge."));
 
-        // (b) HAS_ROLE-range (§2.3): agent en patient zijn een Card of Keyword.
+        // (b) HAS_ROLE-range: agent en patient zijn een Card of Mechanic. Tot #304
+        // stond hier Card/Keyword — een range die de relatie zelf niet eens
+        // declareerde (HAS_ROLE was geen geregistreerd RelationType) én die de
+        // meting weersprak: de live graaf telt 492 × Card en 274 × Mechanic als
+        // filler, nul × Keyword. De range komt nu uit het register, dus poort en
+        // declaratie kunnen niet meer uiteenlopen.
+        var roleRange = OntologySchema.Relations[RelationType.HasRole].Range;
         if (!IsRoleFiller(agentType))
             violations.Add(new(OntologyViolationCode.RangeMismatch,
-                $"Agent-rol {agentType} valt buiten de HAS_ROLE-range (Card/Keyword)."));
+                $"Agent-rol {agentType} valt buiten de HAS_ROLE-range ({string.Join("/", roleRange)})."));
         if (!IsRoleFiller(patientType))
             violations.Add(new(OntologyViolationCode.RangeMismatch,
-                $"Patient-rol {patientType} valt buiten de HAS_ROLE-range (Card/Keyword)."));
+                $"Patient-rol {patientType} valt buiten de HAS_ROLE-range ({string.Join("/", roleRange)})."));
 
         // (c) Condities slaan op een gesloten concept-lexicon (Window/Status/Cost).
         foreach (var c in conditions ?? [])
@@ -201,10 +207,12 @@ public static class OntologyValidationService
         return Result(violations);
     }
 
-    /// <summary>Een geldige HAS_ROLE-filler (§2.3): een Card (elke kaartsubklasse)
-    /// of een Keyword.</summary>
+    /// <summary>Een geldige HAS_ROLE-filler: valt (subclass-polymorf) binnen de
+    /// gedeclareerde HAS_ROLE-range — sinds #304 Card/Mechanic, uit het register
+    /// zelf gelezen zodat deze poort en de declaratie één bron delen.</summary>
     private static bool IsRoleFiller(EntityType type) =>
-        OntologySchema.IsA(type, EntityType.Card) || OntologySchema.IsA(type, EntityType.Keyword);
+        OntologySchema.Relations[RelationType.HasRole].Range
+            .Any(r => OntologySchema.IsA(type, r));
 
     /// <summary>Valideert de labels op één knoop (multi-label in Neo4j): geen
     /// twee (effectief) disjuncte klassen tegelijk. Vangt bv. een knoop die

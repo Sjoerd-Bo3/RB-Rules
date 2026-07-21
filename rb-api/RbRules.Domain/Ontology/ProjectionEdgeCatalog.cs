@@ -79,19 +79,13 @@ public sealed record ProjectionEdge(
 /// PROJECTIE doet. Ze horen apart te kunnen bewegen — anders zou het opruimen van
 /// projectie-schuld een schema-versiebump forceren. En deze catalogus toetst
 /// uitsluitend NAMEN: of een geprojecteerde edge ook domain/range-conform is
-/// (<c>(:Erratum)-[:SUPERSEDES]->(:Card)</c> voldoet bijvoorbeeld níet aan de
-/// gedeclareerde range <c>NormativeSource</c>) is een aparte vraag, met sinds
-/// #289 PR 2 een eigen register en eigen guard: zie
+/// (tot #296 voldeed <c>(:Erratum)-[:SUPERSEDES]->(:Card)</c> bijvoorbeeld níet
+/// aan de toen gedeclareerde range <c>NormativeSource</c>) is een aparte vraag,
+/// met sinds #289 PR 2 een eigen register en eigen guard: zie
 /// <see cref="ProjectionEdgeShapeCatalog"/>. Die twee horen bij elkaar — élke
 /// naam hier heeft daar minstens één knooplabel-vorm, en omgekeerd (check L0).</summary>
 public static class ProjectionEdgeCatalog
 {
-    /// <summary>Het spoor waar de erkende domeinschuld wordt opgelost. Bewust NIET
-    /// #289 zelf (#289-review, F8): dat issue sluit met deze guard, en dan wijst elke
-    /// schuld-entry naar een gesloten issue terwijl de schuld nog leeft — een adres
-    /// dat stil verloopt is geen adres.</summary>
-    private const string SchuldSpoor = "#304";
-
     private static readonly ProjectionEdge[] EdgeList =
     [
         // ── InSchema: geregistreerde domeinrelaties ──────────────────────────
@@ -101,57 +95,52 @@ public static class ProjectionEdgeCatalog
             "Kaart → mechaniek. Sinds #274 uit het register afgeleid (FacetMergeClause)."),
         new("GOVERNED_BY", ProjectionEdgeStance.InSchema,
             "Gereïficeerde Interaction → de normatieve RuleSection die haar verankert."),
-        // LET OP: deze twee dragen een OPEN defect (#296). De naam staat in het
-        // register — daarom InSchema — maar de declaratie eromheen klopt niet met
-        // wat de projectie schrijft. Een naam-guard vangt dat per constructie niet.
         new("SUPERSEDES", ProjectionEdgeStance.InSchema,
-            "Erratum → de kaart waarvan het de gedrukte tekst vervangt. DEFECT (#296): het "
-            + "register declareert range NormativeSource, maar Card is dat niet — de "
-            + "gedeclareerde range is onwaar over de graaf die we bouwen. Nog te beslissen of "
-            + "de declaratie verruimd moet worden of de projectie fout is; #270-les: meet "
-            + "eerst op de live graaf.", "#296"),
+            "Erratum → de kaart waarvan het de gedrukte tekst vervangt. Droeg tot #296 een "
+            + "declaratie (range NormativeSource) die onwaar was over de graaf; sindsdien "
+            + "volgt het register de meting (Erratum → Card) en dwingt de projectie de "
+            + "range met knooplabels af — de bijbehorende waiver is opgeruimd."),
+        // LET OP: deze draagt een OPEN defect (#317, afgesplitst uit #296). De naam
+        // staat in het register — daarom InSchema — maar de label-loze ref-match maakt
+        // de gedeclareerde domain/range onafdwingbaar. Een naam-guard vangt dat niet.
         new("RELATES_TO", ProjectionEdgeStance.InSchema,
             "Gedenormaliseerde retrieval-projectie met kind als property (#116/#226). DEFECT "
-            + "(#296): de projectie matcht label-loos op ref (MATCH (a {ref: …})), dus de "
-            + "gedeclareerde domain/range is per constructie NIET afdwingbaar — wat er ook aan "
-            + "die ref hangt, de edge wordt geschreven.", "#296"),
+            + "(#317, uit #296): de projectie matcht label-loos op ref (MATCH (a {ref: …})), "
+            + "dus de gedeclareerde domain/range is per constructie NIET afdwingbaar — wat er "
+            + "ook aan die ref hangt, de edge wordt geschreven.", "#317"),
 
-        // ── Domein, nog niet gedeclareerd (erkende schuld, #289 stap 1) ──────
-        new("ABOUT", ProjectionEdgeStance.DomeinNogNietGedeclareerd,
-            "Claim/Ruling → het onderwerp waarover zij iets beweren. Een inhoudelijke "
-            + "kennisrelatie: zonder haar is niet uitdrukbaar waar een community-lezing "
-            + "of officiële ruling over gaat. Vraagt om domain [Claim, Ruling] en een "
-            + "range die Card/Mechanic/RuleSection/Concept omvat.", SchuldSpoor),
-        new("PART_OF", ProjectionEdgeStance.DomeinNogNietGedeclareerd,
-            "RuleSection → dichtstbijzijnde bestaande ouder-sectie binnen dezelfde bron. "
-            + "Mereologie over de normatieve tak; transitief en acyclisch, dus een echte "
-            + "TBox-relatie met logische eigenschappen die nu nergens vastliggen.", SchuldSpoor),
-        new("EXPLAINS", ProjectionEdgeStance.DomeinNogNietGedeclareerd,
-            "Concept (primer-doc) → de RuleSection(s) waarop het gebaseerd is. De "
-            + "kennispiramide-brug tussen afgeleide uitleg en officiële tekst — precies "
-            + "het soort relatie waarvoor de ontologie bestaat.", SchuldSpoor),
-        new("FROM_SET", ProjectionEdgeStance.DomeinNogNietGedeclareerd,
-            "Kaart → de set waarin zij verscheen. Het register kent hiervoor al "
-            + "INTRODUCED_IN (Card/Keyword/Mechanic → Set, functioneel), maar de "
-            + "projectie schrijft FROM_SET. Spiegelbeeld van de HAS_MECHANIC-tweespalt "
-            + "uit #274: één relatie, twee namen — alleen loopt de breuk hier tussen een "
-            + "DODE declaratie en een levende projectie.", SchuldSpoor),
-        new("HAS_TAG", ProjectionEdgeStance.DomeinNogNietGedeclareerd,
-            "Kaart → factie/tribe. Er is geen EntityType.Tag, dus dit vraagt eerst een "
-            + "klasse-beslissing (Tag als eigen Concept-subklasse?) vóór de relatie "
-            + "gedeclareerd kan worden.", SchuldSpoor),
-        new("HAS_ROLE", ProjectionEdgeStance.DomeinNogNietGedeclareerd,
-            "Interaction → rol-filler, met de rol als edge-property. Het scherpste geval "
-            + "uit #289: OntologyValidationService.ValidateReifiedInteraction VALIDEERT "
-            + "deze rolstructuur al, terwijl de relatie zelf geen geregistreerd "
-            + "RelationType is — de poort beroept zich op iets wat het schema niet kent.",
-            SchuldSpoor),
-        new("REQUIRES_CONDITION", ProjectionEdgeStance.DomeinNogNietGedeclareerd,
-            "Interaction → gereïficeerde Condition. Beide EINDPUNTEN zijn wél "
-            + "gedeclareerde klassen (Interaction, Condition); alleen de kant ertussen "
-            + "ontbreekt. Let op de valstrik: REQUIRES bestaat wel als relatie, maar dat "
-            + "is de gekwalificeerde (reïficatie-plichtige) relatie — een ander ding.",
-            SchuldSpoor),
+        // ── Sinds #304 gedeclareerd: de zeven voormalige schuld-edges ────────
+        // De domain/range-beslissingen (mét de metingen waarop ze rusten) staan
+        // bij de declaraties in OntologySchema; hier alleen de stand.
+        new("ABOUT", ProjectionEdgeStance.InSchema,
+            "Claim/Ruling → het onderwerp waarover zij iets beweren (#304): domain "
+            + "[Claim, Ruling], range Card/Mechanic/RuleSection/Concept — het gemeten "
+            + "2×4-vierkant van vormen."),
+        new("PART_OF", ProjectionEdgeStance.InSchema,
+            "RuleSection → dichtstbijzijnde bestaande ouder-sectie binnen dezelfde bron "
+            + "(#304). Mereologie over de normatieve tak: transitief, acyclisch, 0..1 "
+            + "directe ouder."),
+        new("EXPLAINS", ProjectionEdgeStance.InSchema,
+            "Concept (primer-doc) → de RuleSection(s) waarop het gebaseerd is (#304). De "
+            + "kennispiramide-brug tussen afgeleide uitleg en officiële tekst."),
+        new("FROM_SET", ProjectionEdgeStance.InSchema,
+            "Kaart → de set waarin zij verscheen (#304). De dode INTRODUCED_IN-declaratie "
+            + "is hernoemd naar de naam die de projectie al jaren schrijft — zelfde "
+            + "beslissing als HAS_MECHANIC in #274: de naam volgt de projectie."),
+        new("HAS_TAG", ProjectionEdgeStance.InSchema,
+            "Kaart → factie/tribe (#304). De klasse-beslissing is genomen: Tag is een "
+            + "eigen EntityType direct onder Thing (geen Concept — een tag draagt geen "
+            + "regels, en Tag ⊑ Concept zou een dode HAS_TAG ∘ GOVERNED_BY-reasonerketen "
+            + "genereren)."),
+        new("HAS_ROLE", ProjectionEdgeStance.InSchema,
+            "Interaction → rol-filler met de rol als edge-parameter (#304). Range is de "
+            + "METING (Card/Mechanic, nooit Keyword) en wordt sinds #304 door twee "
+            + "label-gebonden statements afgedwongen; ValidateReifiedInteraction leest "
+            + "de range nu uit het register i.p.v. een eigen (onjuiste) lijst."),
+        new("REQUIRES_CONDITION", ProjectionEdgeStance.InSchema,
+            "Interaction → gereïficeerde Condition (#304). Domain is wat het statement "
+            + "afdwingt (:Interaction). Niet verwarren met REQUIRES, de gekwalificeerde "
+            + "(reïficatie-plichtige) relatie — een ander ding."),
 
         // ── Provenance: bewust buiten de TBox ────────────────────────────────
         new("WAS_GENERATED_BY", ProjectionEdgeStance.Provenance,

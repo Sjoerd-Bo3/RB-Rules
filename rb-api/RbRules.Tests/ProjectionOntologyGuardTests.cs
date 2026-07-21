@@ -146,7 +146,10 @@ public class ProjectionOntologyGuardTests
     // achter een conditie verdwijnt (env-vlag, ManagedSettings-toggle, #254) stil weg
     // uit het corpus: G4a ziet dat niet, want de conditie is in BEIDE DB-standen
     // hetzelfde (#289-review, F1).
-    private const int GraphSyncStatements = 41;
+    // 41 → 42 in #304: het label-loze HAS_ROLE-statement is gesplitst in twee
+    // label-gebonden statements (Card- en Mechanic-fillers), zodat de projectie de
+    // gedeclareerde range zelf afdwingt.
+    private const int GraphSyncStatements = 42;
     private const int BreinProjectieStatements = 12;
 
     [Theory]

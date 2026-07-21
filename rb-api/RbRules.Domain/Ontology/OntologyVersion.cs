@@ -152,19 +152,25 @@ public static class OntologyBaseline
 {
     /// <summary>De laatst vastgelegde ontologie-versie.
     ///
-    /// 2.0.0 (#274) — MAJOR, want structuurbrekend: de kaart→mechaniek-relatie is
-    /// hernoemd van HAS_KEYWORD naar HAS_MECHANIC (met range Keyword → Mechanic) en
-    /// de kaart→domein-relatie van IN_DOMAIN naar HAS_DOMAIN, zodat het schema de
-    /// relaties beschrijft die <c>GraphSyncService</c> écht projecteert. Een
-    /// hernoemde/versmalde relatie classificeert <see cref="OntologyBumpClassifier"/>
-    /// als Major (de oude structuur-regel is geen deelverzameling meer). Geen
-    /// data-migratie nodig: de graaf droeg deze namen al, en afgeleide edges zijn
-    /// per definitie herbouwbaar (job <c>graph</c> → <c>reason</c>).</summary>
-    public static readonly SemVer Version = new(2, 0, 0);
+    /// 3.0.0 (#304/#296) — MAJOR, door <see cref="OntologyBumpClassifier"/> zo
+    /// geclassificeerd omdat twee bestaande structuur-regels verdwenen/veranderden
+    /// (de oude structuur is geen deelverzameling meer): INTRODUCED_IN is hernoemd
+    /// naar FROM_SET mét het gemeten domein (alleen Card — zelfde beslissing als
+    /// HAS_KEYWORD → HAS_MECHANIC in 2.0.0), en SUPERSEDES is van het onware
+    /// NormativeSource → NormativeSource naar het gemeten Erratum → Card gebracht
+    /// (#296). Daarnaast additief: de klasse Tag en de zes relaties ABOUT, PART_OF,
+    /// EXPLAINS, HAS_TAG, HAS_ROLE en REQUIRES_CONDITION (#304). Geen
+    /// data-migratie nodig: de graaf droeg al deze vormen al — het schema
+    /// beschrijft nu pas wat er staat.
+    ///
+    /// 2.0.0 (#274) — MAJOR: HAS_KEYWORD → HAS_MECHANIC (range Keyword → Mechanic)
+    /// en IN_DOMAIN → HAS_DOMAIN, zodat het schema de relaties beschrijft die
+    /// <c>GraphSyncService</c> écht projecteert.</summary>
+    public static readonly SemVer Version = new(3, 0, 0);
 
     /// <summary>SHA-256-vingerafdruk van de structuur bij <see cref="Version"/>.
     /// Bijwerken is een BEWUSTE handeling samen met een versie-bump.</summary>
-    public const string Fingerprint = "49a5fe3c0c4e91e9052c780a4c069f7abb7d29436ebc24919a70322f22af09e3";
+    public const string Fingerprint = "dadbc3602360f98aaa3cffb78d3507de89aec588933e0c80b88bd549f797d3a6";
 }
 
 /// <summary>De has-pending-ontology-changes-poort (fase 6, #230) — puur, €0, geen
