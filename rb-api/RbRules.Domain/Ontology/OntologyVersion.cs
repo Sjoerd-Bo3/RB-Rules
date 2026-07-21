@@ -152,6 +152,18 @@ public static class OntologyBaseline
 {
     /// <summary>De laatst vastgelegde ontologie-versie.
     ///
+    /// 4.0.0 (#317) — MAJOR, door <see cref="OntologyBumpClassifier"/> zo
+    /// geclassificeerd (vastgepind in
+    /// <c>Bump_VerbredeDomainRange_IsMajor_WantDeOudeRegelVerdwijnt</c>):
+    /// RELATES_TO's domain/range is van het te smalle [Concept, Card] verbreed
+    /// naar de vijf GEMETEN knoopsoorten (Card, Mechanic, Concept, RuleSection,
+    /// Claim — twaalf levende label-combinaties op de live graaf). Een verbreding
+    /// voelt additief, maar de bestaande structuur-regel is herschreven en de
+    /// oude structuur is dus geen deelverzameling meer — zelfde classificatie
+    /// als de SUPERSEDES-herdeclaratie in 3.0.0. Geen data-migratie nodig: de
+    /// graaf droeg deze breedte al; het schema beschrijft nu pas wat er staat,
+    /// en de projectie dwingt haar sindsdien af (WHERE-label-disjunctie).
+    ///
     /// 3.0.0 (#304/#296) — MAJOR, door <see cref="OntologyBumpClassifier"/> zo
     /// geclassificeerd omdat twee bestaande structuur-regels verdwenen/veranderden
     /// (de oude structuur is geen deelverzameling meer): INTRODUCED_IN is hernoemd
@@ -166,11 +178,11 @@ public static class OntologyBaseline
     /// 2.0.0 (#274) — MAJOR: HAS_KEYWORD → HAS_MECHANIC (range Keyword → Mechanic)
     /// en IN_DOMAIN → HAS_DOMAIN, zodat het schema de relaties beschrijft die
     /// <c>GraphSyncService</c> écht projecteert.</summary>
-    public static readonly SemVer Version = new(3, 0, 0);
+    public static readonly SemVer Version = new(4, 0, 0);
 
     /// <summary>SHA-256-vingerafdruk van de structuur bij <see cref="Version"/>.
     /// Bijwerken is een BEWUSTE handeling samen met een versie-bump.</summary>
-    public const string Fingerprint = "dadbc3602360f98aaa3cffb78d3507de89aec588933e0c80b88bd549f797d3a6";
+    public const string Fingerprint = "a267762c4b7401f5a00235cd06ff3ec7cd0425b6c5f142c545c9380af21d4006";
 }
 
 /// <summary>De has-pending-ontology-changes-poort (fase 6, #230) — puur, €0, geen

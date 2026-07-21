@@ -84,6 +84,29 @@ public class OntologyGovernanceTests
     }
 
     [Fact]
+    public void Bump_VerbredeDomainRange_IsMajor_WantDeOudeRegelVerdwijnt()
+    {
+        // De #317-overgang, met de 3.0.0-regel als UITGESCHREVEN literal (geen
+        // herberekening uit de huidige code — dan zou de test meeschuiven met wat
+        // hij bewaakt): RELATES_TO ging van [Concept, Card] naar de gemeten vijf
+        // soorten. Een verbreding VOELT additief (elke oude edge blijft geldig),
+        // maar de classifier vergelijkt structuur-REGELS als verzameling: de oude
+        // regel bestaat niet meer, dus de oude structuur is geen deelverzameling
+        // meer → major. Zelfde uitkomst als de SUPERSEDES-herdeclaratie in 3.0.0.
+        var current = OntologySnapshot.Capture();
+        var previous = current with
+        {
+            Relations = current.Relations
+                .Select(r => r.StartsWith("RELATES_TO:", StringComparison.Ordinal)
+                    ? "RELATES_TO:Card,Concept>Card,Concept:0..*:None:[actor_status,cost_delta,kind,tier,window]"
+                    : r)
+                .ToList(),
+        };
+
+        Assert.Equal(OntologyBumpKind.Major, OntologyBumpClassifier.Classify(previous, current));
+    }
+
+    [Fact]
     public void Bump_VerwijderdeKlasse_IsMajor()
     {
         var prev = OntologySnapshot.Capture();

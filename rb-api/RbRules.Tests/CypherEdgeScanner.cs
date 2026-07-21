@@ -49,20 +49,49 @@ namespace RbRules.Tests;
 ///   <c>:Card</c> in de kaart-projectie en <c>:Condition</c> in de
 ///   conditie-projectie, en die twee mogen elkaar niet raken.</item>
 /// <item>Een alias zonder label is ONBEPAALD, geen fout: <c>MATCH (a {ref: …})</c>
-///   levert een lege labellijst. Dat is precies wat <c>RELATES_TO</c> doet, en de
+///   levert een lege labellijst. Dat is precies wat <c>DERIVED_FROM</c> doet, en de
 ///   guard registreert het als "niet te garanderen" in plaats van als schending.</item>
 /// <item>Aliassen worden over het statement heen GEUNIEERD, niet overschreven —
 ///   anders zou de latere, label-loze vermelding in
 ///   <c>MERGE (c)-[:FROM_SET]-&gt;(s)</c> de eerdere binding wissen.</item>
 /// </list>
-/// Alleen patronen in KETEN-positie tellen mee voor de binding. Een haakjes-groep
-/// in een predicaat (<c>WHERE (n:Set OR n:Domain)</c>) wordt dus niet gelezen als
-/// knooppatroon: de walker begint bij een keyword en volgt van daaraf alleen
-/// <c>-[…]-</c>-verbindingen.</summary>
+/// Alleen patronen in KETEN-positie tellen mee voor de patroon-binding. Een
+/// haakjes-groep in een predicaat (<c>WHERE (n:Set OR n:Domain)</c>) wordt dus niet
+/// gelezen als knooppatroon: de walker begint bij een keyword en volgt van daaraf
+/// alleen <c>-[…]-</c>-verbindingen.
+///
+/// WHERE-LABEL-DISJUNCTIES (#317). Een label-loze ref-match kán wel degelijk labels
+/// afdwingen — via het predicaat: <c>MATCH (a {ref: row.from})
+/// WHERE (a:Card OR a:Mechanic OR …)</c> garandeert dat <c>a</c> ÉÉN van die
+/// soorten is. Dat is een wezenlijk andere bewering dan een multi-label patroon
+/// (dat ÁLLE labels garandeert), dus zo'n binding komt als DISJUNCTIEF terug
+/// (<see cref="ProjectionEdgeShape.FromDisjunctive"/>). De lezing is bewust strikt,
+/// want een te gulle lezing verzint garanties die het statement niet geeft:
+/// een WHERE-lichaam wordt op topniveau over <c>AND</c> gesplitst, en een term
+/// bindt alléén als hij (na het strippen van omsluitende haakjes, recursief over
+/// <c>OR</c>) volledig bestaat uit <c>alias:Label</c>-atomen over ÉÉN alias. Zit er
+/// iets anders tussen (een property-vergelijking, een <c>NOT</c>, een tweede alias
+/// in dezelfde OR-groep), dan bindt die term niets — de andere termen nog wél.
+/// Patroon-labels winnen bij het oplossen van een disjunctie: <c>MATCH (a:Card …)</c>
+/// garandeert al meer dan elke disjunctie erbovenop.</summary>
 internal static class CypherEdgeScanner
 {
     private static readonly string[] WriteKeywords = ["MERGE", "CREATE"];
     private static readonly string[] PatternKeywords = ["MATCH", "MERGE", "CREATE"];
+    private static readonly string[] WhereKeyword = ["WHERE"];
+    private static readonly string[] AndKeyword = ["AND"];
+    private static readonly string[] OrKeyword = ["OR"];
+
+    /// <summary>De clausule-keywords waarop een WHERE-lichaam eindigt. Ruim
+    /// genomen: een woord dat hier ten onrechte in staat kapt het lichaam alleen
+    /// maar eerder af (en een afgekapte term bindt niets), terwijl een ontbrekend
+    /// woord Cypher uit de VOLGENDE clausule als predicaat zou laten meelezen.</summary>
+    private static readonly string[] ClauseKeywords =
+    [
+        "MATCH", "OPTIONAL", "MERGE", "CREATE", "WITH", "RETURN", "UNWIND", "SET",
+        "REMOVE", "DELETE", "DETACH", "FOREACH", "CALL", "UNION", "ORDER", "SKIP",
+        "LIMIT", "ON", "WHERE",
+    ];
 
     /// <summary>Elke geschreven edge-naam, in voorkomen-volgorde (duplicaten
     /// behouden — de aanroeper bepaalt zelf of hij als verzameling telt).</summary>
@@ -183,30 +212,52 @@ internal static class CypherEdgeScanner
 
     // ── Pass 1: alias → labels ────────────────────────────────────────────────
 
+    /// <summary>De twee soorten binding die één statement kan geven:
+    /// <see cref="Certain"/> uit knooppatronen (de knoop DRAAGT die labels) en
+    /// <see cref="Disjunctive"/> uit een WHERE-label-disjunctie (de knoop is ÉÉN
+    /// van die labels, #317). Ze mogen niet op één hoop: de guard toetst ze
+    /// verschillend (één-past vs. álle-passen).</summary>
+    private sealed record AliasBindings(
+        Dictionary<string, List<string>> Certain,
+        Dictionary<string, List<string>> Disjunctive);
+
     /// <summary>Bindt élke alias in het statement aan de labels waarmee hij érgens
     /// in datzelfde statement voorkomt. Bewust een UNIE: dezelfde alias komt in een
     /// schrijf-clausule vaak label-loos terug
     /// (<c>MERGE (c:Card …) … MERGE (c)-[:FROM_SET]-&gt;(s)</c>), en die tweede
-    /// vermelding mag de eerste niet uitwissen.</summary>
-    private static Dictionary<string, List<string>> BindAliases(string s)
+    /// vermelding mag de eerste niet uitwissen. Daarnaast de WHERE-disjuncties;
+    /// twee disjuncties op dezelfde alias uniëren óók — een unie is een ruimere
+    /// "één van deze"-bewering, dus de toets wordt er hooguit strenger van, nooit
+    /// milder.</summary>
+    private static AliasBindings BindAliases(string s)
     {
-        var bound = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var certain = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (nodes, _) in Chains(s, PatternKeywords))
             foreach (var node in nodes)
             {
                 if (node.Alias is not { } alias || node.Labels.Count == 0) continue;
-                if (!bound.TryGetValue(alias, out var labels))
-                    bound[alias] = labels = [];
-                foreach (var label in node.Labels)
-                    if (!labels.Contains(label, StringComparer.Ordinal)) labels.Add(label);
+                Union(certain, alias, node.Labels);
             }
-        return bound;
+
+        var disjunctive = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var (alias, labels) in WhereDisjunctions(s))
+            Union(disjunctive, alias, labels);
+
+        return new AliasBindings(certain, disjunctive);
+    }
+
+    private static void Union(
+        Dictionary<string, List<string>> bound, string alias, IReadOnlyList<string> add)
+    {
+        if (!bound.TryGetValue(alias, out var labels))
+            bound[alias] = labels = [];
+        foreach (var label in add)
+            if (!labels.Contains(label, StringComparer.Ordinal)) labels.Add(label);
     }
 
     // ── Pass 2: de geschreven edges met hun opgeloste eindpunten ──────────────
 
-    private static List<ProjectionEdgeShape> ScanWrites(
-        string s, Dictionary<string, List<string>> aliases)
+    private static List<ProjectionEdgeShape> ScanWrites(string s, AliasBindings aliases)
     {
         var shapes = new List<ProjectionEdgeShape>();
         foreach (var (nodes, links) in Chains(s, WriteKeywords))
@@ -216,19 +267,185 @@ internal static class CypherEdgeScanner
                 var right = Resolve(nodes[n + 1], aliases);
                 var (from, to) = links[n].Reversed ? (right, left) : (left, right);
                 foreach (var type in links[n].Types)
-                    shapes.Add(new ProjectionEdgeShape(type, from, to));
+                    shapes.Add(new ProjectionEdgeShape(type, from.Labels, to.Labels)
+                    {
+                        FromDisjunctive = from.Disjunctive,
+                        ToDisjunctive = to.Disjunctive,
+                    });
             }
         return shapes;
     }
 
-    private static IReadOnlyList<string> Resolve(
-        ChainNode node, Dictionary<string, List<string>> aliases)
+    /// <summary>Patroon-labels (eigen + gebonden) winnen: die zijn een hardere
+    /// garantie dan elke disjunctie erbovenop. Pas als een knoop nérgens een
+    /// patroon-label heeft, telt zijn WHERE-disjunctie als eindpunt-binding.</summary>
+    private static (IReadOnlyList<string> Labels, bool Disjunctive) Resolve(
+        ChainNode node, AliasBindings aliases)
     {
         var labels = new List<string>(node.Labels);
-        if (node.Alias is { } alias && aliases.TryGetValue(alias, out var bound))
+        if (node.Alias is { } alias && aliases.Certain.TryGetValue(alias, out var bound))
             foreach (var label in bound)
                 if (!labels.Contains(label, StringComparer.Ordinal)) labels.Add(label);
-        return labels;
+        if (labels.Count > 0) return (labels, false);
+
+        if (node.Alias is { } a && aliases.Disjunctive.TryGetValue(a, out var options)
+            && options.Count > 0)
+            return (new List<string>(options), true);
+
+        return (labels, false);
+    }
+
+    // ── WHERE-label-disjuncties (#317) ────────────────────────────────────────
+
+    /// <summary>Elke (alias, labels)-binding die een WHERE-predicaat in dit
+    /// statement afdwingt. Eén binding per AND-term die volledig uit
+    /// <c>alias:Label</c>-atomen over één alias bestaat; alle andere termen binden
+    /// niets (strikt, want een verzonnen garantie is erger dan een gemiste — een
+    /// gemiste komt als "niet te garanderen" terug, luidruchtig genoeg).</summary>
+    private static IEnumerable<(string Alias, IReadOnlyList<string> Labels)> WhereDisjunctions(string s)
+    {
+        var i = 0;
+        while (i < s.Length)
+        {
+            if (!IsKeywordAt(s, i, WhereKeyword, out var afterKeyword)) { i++; continue; }
+
+            var end = WhereBodyEnd(s, afterKeyword);
+            foreach (var term in SplitTopLevel(s[afterKeyword..end], AndKeyword))
+            {
+                var atoms = new List<(string Alias, string Label)>();
+                if (!TryLabelAtoms(term, atoms) || atoms.Count == 0) continue;
+
+                // Eén disjunctie over TWEE aliassen ((a:Card OR b:Tag)) dwingt
+                // geen van beide af — de knoop mag immers de "andere" tak zijn.
+                var alias = atoms[0].Alias;
+                if (atoms.Any(a => !string.Equals(a.Alias, alias, StringComparison.Ordinal)))
+                    continue;
+
+                yield return (alias,
+                    atoms.Select(a => a.Label).Distinct(StringComparer.Ordinal).ToList());
+            }
+            i = end;
+        }
+    }
+
+    /// <summary>Het einde van een WHERE-lichaam: het eerstvolgende clausule-keyword
+    /// op haakjes-diepte 0, of de omsluitende sluithaak (een WHERE ín een
+    /// <c>FOREACH (…)</c> eindigt bij diens haak).</summary>
+    private static int WhereBodyEnd(string s, int afterKeyword)
+    {
+        var i = SkipWs(s, afterKeyword);
+        var depth = 0;
+        while (i < s.Length)
+        {
+            var c = s[i];
+            if (c is '(' or '[' or '{') depth++;
+            else if (c is ')' or ']' or '}')
+            {
+                if (depth == 0) break;
+                depth--;
+            }
+            else if (depth == 0 && !InLabelOfPropertyPositie(s, i)
+                     && IsKeywordAt(s, i, ClauseKeywords, out _))
+                break;
+            i++;
+        }
+        return i;
+    }
+
+    /// <summary>Splitst een expressie op topniveau (buiten élke haak) op het
+    /// gegeven keyword. Levert de segmenten ertussen, in volgorde.</summary>
+    private static List<string> SplitTopLevel(string expr, string[] keyword)
+    {
+        var parts = new List<string>();
+        var depth = 0;
+        var segStart = 0;
+        var i = 0;
+        while (i < expr.Length)
+        {
+            var c = expr[i];
+            if (c is '(' or '[' or '{') { depth++; i++; }
+            else if (c is ')' or ']' or '}') { depth--; i++; }
+            else if (depth == 0 && !InLabelOfPropertyPositie(expr, i)
+                     && IsKeywordAt(expr, i, keyword, out var after))
+            {
+                parts.Add(expr[segStart..i]);
+                segStart = after;
+                i = after;
+            }
+            else i++;
+        }
+        parts.Add(expr[segStart..]);
+        return parts;
+    }
+
+    /// <summary>Een woord dat direct na <c>:</c> (label) of <c>.</c> (property)
+    /// staat is een NAAM, geen keyword — <c>n:Set</c> bevat het label Set, niet de
+    /// SET-clausule, en <c>a.limit</c> is een property. Zonder deze uitzondering
+    /// zou het WHERE-lichaam midden in <c>n:Set OR …</c> afkappen en de hele
+    /// disjunctie stil laten vallen (gevonden doordat de Set-knopen van de
+    /// kaart-projectie precies zo heten).</summary>
+    private static bool InLabelOfPropertyPositie(string s, int i)
+    {
+        var j = i - 1;
+        while (j >= 0 && char.IsWhiteSpace(s[j])) j--;
+        return j >= 0 && (s[j] == ':' || s[j] == '.');
+    }
+
+    /// <summary>Strip omsluitende haakjes zolang ze de HELE (getrimde) term
+    /// omvatten: <c>((a:Card OR a:Tag))</c> → <c>a:Card OR a:Tag</c>. Een haak die
+    /// niet alles omsluit ((a:Card) OR x.y) blijft staan — die is structuur, geen
+    /// verpakking.</summary>
+    private static string TrimOuterParens(string term)
+    {
+        var t = term.Trim();
+        while (t.Length >= 2 && t[0] == '(' && SkipBalanced(t, 0, '(', ')') == t.Length)
+            t = t[1..^1].Trim();
+        return t;
+    }
+
+    /// <summary>Recursief over de OR-boom: waar is dit een zuivere
+    /// label-disjunctie? Elke tak moet zelf weer een zuivere disjunctie of een
+    /// kaal <c>alias:Label</c>-atoom zijn; één vreemde tak (property-vergelijking,
+    /// NOT, functie-aanroep) maakt de hele term onbruikbaar als garantie.</summary>
+    private static bool TryLabelAtoms(string term, List<(string Alias, string Label)> atoms)
+    {
+        var t = TrimOuterParens(term);
+        if (t.Length == 0) return false;
+
+        var parts = SplitTopLevel(t, OrKeyword);
+        if (parts.Count > 1)
+        {
+            foreach (var part in parts)
+                if (!TryLabelAtoms(part, atoms)) return false;
+            return true;
+        }
+
+        return TryParseLabelAtom(t, atoms);
+    }
+
+    /// <summary>Exact <c>alias:Label</c>, niets ervoor of erna. Bewust ook GEEN
+    /// tweede label (<c>a:Card:Token</c> is een conjunctie bínnen een disjunctie —
+    /// dat kan de platte labellijst niet dragen, dus die term bindt niets).</summary>
+    private static bool TryParseLabelAtom(string t, List<(string Alias, string Label)> atoms)
+    {
+        var i = SkipWs(t, 0);
+        var aliasStart = i;
+        while (i < t.Length && IsWordChar(t[i])) i++;
+        if (i == aliasStart) return false;
+        var alias = t[aliasStart..i];
+
+        i = SkipWs(t, i);
+        if (i >= t.Length || t[i] != ':') return false;
+        i = SkipWs(t, i + 1);
+
+        var labelStart = i;
+        while (i < t.Length && IsWordChar(t[i])) i++;
+        if (i == labelStart) return false;
+        var label = t[labelStart..i];
+
+        if (SkipWs(t, i) != t.Length) return false;
+        atoms.Add((alias, label));
+        return true;
     }
 
     // ── De tokenizer ──────────────────────────────────────────────────────────
@@ -338,6 +555,14 @@ internal static class CypherEdgeScanner
             labels.Add(s[from..j]);
             j = SkipWs(s, j);
         }
+
+        // Na de labels mag alleen nog een property-map of het sluithaakje komen.
+        // Staat er iets anders — een label-EXPRESSIE als (a:Card|Mechanic), of een
+        // inline WHERE — dan garandeert het patroon die labels NIET conjunctief;
+        // lees ze dan als onbepaald in plaats van als valse garantie. Onbepaald is
+        // luidruchtig (de guard meldt "niet te garanderen"), een valse garantie is
+        // stil — en stil is precies wat deze scanner moet voorkomen.
+        if (j < close && s[j] != '{') labels.Clear();
 
         node = new ChainNode(alias, labels);
         after = end;

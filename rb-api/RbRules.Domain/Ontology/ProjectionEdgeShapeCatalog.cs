@@ -39,26 +39,53 @@ public enum ProjectionLabelVerdict
 /// <c>:Interaction:Concept</c> (de live graaf meet daarom bij
 /// <c>REQUIRES_CONDITION</c> beide labels als domain). Dat is bewust: de guard
 /// toetst wat de query afdwingt, want dát is wat een latere wijziging kan
-/// breken.</summary>
+/// breken.
+///
+/// Sinds #317 kan een kant DISJUNCTIEF zijn: een WHERE-label-disjunctie
+/// (<c>MATCH (a {ref: …}) WHERE (a:Card OR a:Mechanic OR …)</c>) garandeert dat de
+/// knoop ÉÉN van de genoemde soorten is — wezenlijk iets anders dan een
+/// multi-label patroon (<c>:Interaction:Concept</c>), waar de knoop ÁLLE labels
+/// draagt. Het verschil bepaalt de toets (zie <see cref="ProjectionLabelCheck"/>):
+/// conjunctief volstaat één passend label, disjunctief moet élke soort binnen de
+/// declaratie vallen — anders laat de disjunctie een niet-conforme knoop door.</summary>
 public sealed record ProjectionEdgeShape(
     string EdgeName,
     IReadOnlyList<string> FromLabels,
     IReadOnlyList<string> ToLabels)
 {
+    /// <summary>De from-kant is een label-disjunctie (WHERE <c>a:X OR a:Y</c>)
+    /// in plaats van een multi-label garantie.</summary>
+    public bool FromDisjunctive { get; init; }
+
+    /// <summary>Spiegelbeeld voor de to-kant.</summary>
+    public bool ToDisjunctive { get; init; }
+
     /// <summary>Labels van één kant, of <c>null</c> voor een onbekende kant.</summary>
     public IReadOnlyList<string> Labels(EdgeEndpoint side) =>
         side == EdgeEndpoint.From ? FromLabels : ToLabels;
+
+    /// <summary>Is de gegeven kant disjunctief gebonden?</summary>
+    public bool Disjunctive(EdgeEndpoint side) =>
+        side == EdgeEndpoint.From ? FromDisjunctive : ToDisjunctive;
 
     /// <summary>Cypher-achtige weergave, gebruikt als vergelijkings- én
     /// foutmeldingssleutel: <c>(:Claim)-[:ABOUT]-&gt;(:Card)</c>, en
     /// <c>()-[:RELATES_TO]-&gt;()</c> voor een label-loze kant. Labels worden
     /// gesorteerd zodat de volgorde waarin ze in de Cypher staan geen contract
-    /// is — een multi-label knoop is een verzameling, geen lijst.</summary>
+    /// is — een multi-label knoop is een verzameling, geen lijst. Een disjunctieve
+    /// kant rendert met <c>|</c> (Cypher's eigen label-expressiesyntaxis):
+    /// <c>(:Card|Concept)</c> is een ándere bewering dan <c>(:Card:Concept)</c>
+    /// en moet dus ook een andere sleutel opleveren.</summary>
     public string Format() =>
-        $"({LabelText(FromLabels)})-[:{EdgeName}]->({LabelText(ToLabels)})";
+        $"({LabelText(FromLabels, FromDisjunctive)})-[:{EdgeName}]->({LabelText(ToLabels, ToDisjunctive)})";
 
     public static string LabelText(IReadOnlyList<string> labels) =>
-        labels.Count == 0 ? "" : ":" + string.Join(":", labels.Order(StringComparer.Ordinal));
+        LabelText(labels, disjunctive: false);
+
+    public static string LabelText(IReadOnlyList<string> labels, bool disjunctive) =>
+        labels.Count == 0
+            ? ""
+            : ":" + string.Join(disjunctive ? "|" : ":", labels.Order(StringComparer.Ordinal));
 }
 
 /// <summary>Eén bevinding over één kant van één vorm. <see cref="Key"/> is de
@@ -67,9 +94,10 @@ public sealed record ProjectionLabelFinding(
     string EdgeName,
     EdgeEndpoint Side,
     ProjectionLabelVerdict Verdict,
-    IReadOnlyList<string> Labels)
+    IReadOnlyList<string> Labels,
+    bool Disjunctive = false)
 {
-    public string Key => $"{EdgeName}|{Side}|{Verdict}|{ProjectionEdgeShape.LabelText(Labels)}";
+    public string Key => $"{EdgeName}|{Side}|{Verdict}|{ProjectionEdgeShape.LabelText(Labels, Disjunctive)}";
 }
 
 /// <summary>Een BEKEND, gedocumenteerd verschil tussen wat de projectie schrijft en
@@ -91,9 +119,10 @@ public sealed record KnownLabelDefect(
     ProjectionLabelVerdict Verdict,
     IReadOnlyList<string> Labels,
     string Reason,
-    string Issue)
+    string Issue,
+    bool Disjunctive = false)
 {
-    public string Key => $"{EdgeName}|{Side}|{Verdict}|{ProjectionEdgeShape.LabelText(Labels)}";
+    public string Key => $"{EdgeName}|{Side}|{Verdict}|{ProjectionEdgeShape.LabelText(Labels, Disjunctive)}";
 }
 
 /// <summary>De pure toets: voldoen de knooplabels die de projectie schrijft aan de
@@ -128,6 +157,7 @@ public static class ProjectionLabelCheck
         IReadOnlyList<EntityType> declared)
     {
         var labels = shape.Labels(side);
+        var disjunctive = shape.Disjunctive(side);
 
         // EERST de sterkste uitspraak. Een gekwalificeerde relatie (COUNTERS,
         // MODIFIES, GRANTS, REQUIRES) is VERBODEN als kale edge — ze hoort via een
@@ -140,7 +170,7 @@ public static class ProjectionLabelCheck
         // zijn — en de volgorde bepaalt hóe luid.
         if (relation.MustReify || declared.Count == 0)
         {
-            findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Violates, labels));
+            findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Violates, labels, disjunctive));
             return;
         }
 
@@ -148,20 +178,28 @@ public static class ProjectionLabelCheck
         // ongegarandeerd — en dus een expliciete beslissing waard.
         if (labels.Count == 0)
         {
-            findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Unenforceable, labels));
+            findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Unenforceable, labels, disjunctive));
             return;
         }
 
-        // Een knoop DRÁÁGT al zijn labels, dus het is genoeg als ÉÉN ervan binnen de
-        // gedeclareerde klassen valt (subklasse-polymorf: een Unit voldoet aan een
-        // Object-domein). Een label dat de ontologie niet kent voldoet nooit.
-        var satisfied = labels.Any(label =>
-            OntologySchema.ParseEntityType(label) is { } type &&
-            declared.Any(d => OntologySchema.IsA(type, d)));
+        // Conjunctief (een knoop DRÁÁGT al zijn labels): één label binnen de
+        // gedeclareerde klassen volstaat (subklasse-polymorf: een Unit voldoet aan
+        // een Object-domein). Disjunctief (WHERE a:X OR a:Y, #317): de knoop is
+        // slechts ÉÉN van de soorten, dus élke soort moet binnen de declaratie
+        // vallen — anders laat het statement een knoop door die de declaratie
+        // schendt, en is de declaratie dus smaller dan wat er afgedwongen wordt.
+        // Een label dat de ontologie niet kent voldoet nooit.
+        var satisfied = disjunctive
+            ? labels.All(label => Satisfies(label, declared))
+            : labels.Any(label => Satisfies(label, declared));
 
         if (!satisfied)
-            findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Violates, labels));
+            findings.Add(new(shape.EdgeName, side, ProjectionLabelVerdict.Violates, labels, disjunctive));
     }
+
+    private static bool Satisfies(string label, IReadOnlyList<EntityType> declared) =>
+        OntologySchema.ParseEntityType(label) is { } type &&
+        declared.Any(d => OntologySchema.IsA(type, d));
 }
 
 /// <summary>Het register van de knooplabel-VORMEN waarin de twee volledige
@@ -249,10 +287,18 @@ public static class ProjectionEdgeShapeCatalog
         new("DERIVED_FROM", ["Assertion"], []),
 
         // ── Reïficatie-tak (#226) ────────────────────────────────────────────
-        // Beide kanten label-loos: de gedenormaliseerde retrieval-projectie matcht
-        // uitsluitend op ref. Twee statements schrijven deze vorm (de #116-relaties
-        // en de qualifier-cache); dat is dezelfde vorm, dus één regel. #317.
-        new("RELATES_TO", [], []),
+        // RELATES_TO (#317): beide kanten disjunctief gebonden op de vijf GEMETEN
+        // knoopsoorten — de live graaf droeg twaalf label-combinaties, allemaal
+        // binnen Card/Mechanic/Concept/RuleSection/Claim (grootste: Card→Mechanic
+        // 201). Twee statements schrijven deze vorm (de #116-relaties en de
+        // qualifier-cache) met elk één WHERE-label-disjunctie per kant — bewust
+        // GEEN 5×5 aan per-soort-statements: RELATES_TO is de gedenormaliseerde
+        // elk-naar-elk-link. Een ref naar een knoop buiten de vijf wordt bewust
+        // NIET geschreven; dat ís de afdwinging.
+        new("RELATES_TO",
+            ["Card", "Mechanic", "Concept", "RuleSection", "Claim"],
+            ["Card", "Mechanic", "Concept", "RuleSection", "Claim"])
+        { FromDisjunctive = true, ToDisjunctive = true },
         new("REQUIRES_CONDITION", ["Interaction"], ["Condition"]),
         // Sinds #304 per filler-soort label-gebonden (zoals ABOUT per doelsoort):
         // de gedeclareerde range Card/Mechanic wordt door het statement afgedwongen.
@@ -274,23 +320,14 @@ public static class ProjectionEdgeShapeCatalog
     public static IEnumerable<ProjectionEdgeShape> For(string edgeName) =>
         ShapeList.Where(s => string.Equals(s.EdgeName, edgeName, StringComparison.OrdinalIgnoreCase));
 
-    // De SUPERSEDES-waiver (#296) is opgeruimd: het register declareert sinds die
-    // fix de gemeten vorm (Erratum → Card), dus de vorm is conform en L4 zou een
-    // achtergebleven waiver terecht rood zetten — een waiver die zijn eigen defect
-    // overleeft dekt vanaf dat moment stil iets anders af.
-    private static readonly KnownLabelDefect[] DefectList =
-    [
-        new("RELATES_TO", EdgeEndpoint.From, ProjectionLabelVerdict.Unenforceable, [],
-            "De projectie matcht beide eindpunten label-loos op ref (MATCH (a {ref: …})) omdat een "
-            + "RELATES_TO tussen élke twee knoopsoorten kan lopen. De gedeclareerde domain "
-            + "[Concept, Card] is daarmee per constructie niet afdwingbaar: wat er ook aan die ref "
-            + "hangt, de edge wordt geschreven. Óf de declaratie moet de werkelijke breedte "
-            + "beschrijven, óf de projectie moet per doelsoort een eigen statement krijgen "
-            + "(zoals ABOUT en sinds #304 ook HAS_ROLE dat wél doen).", "#317"),
-        new("RELATES_TO", EdgeEndpoint.To, ProjectionLabelVerdict.Unenforceable, [],
-            "Spiegelbeeld van de domain-kant hierboven: dezelfde label-loze ref-match maakt ook de "
-            + "gedeclareerde range [Concept, Card] onafdwingbaar.", "#317"),
-    ];
+    // LEEG sinds #317, en dat is een mijlpaal: élke geprojecteerde vorm is nu
+    // conform de gedeclareerde domain/range. De twee RELATES_TO-waivers zijn
+    // opgeruimd toen de WHERE-label-disjunctie de gemeten breedte afdwingbaar
+    // maakte (de declaratie is tegelijk op diezelfde meting gebracht); de
+    // SUPERSEDES-waiver was al bij #296 opgeruimd. L4 houdt dit eerlijk: een
+    // waiver die hier terugkeert zonder levende bevinding gaat rood — een waiver
+    // die zijn eigen defect overleeft dekt vanaf dat moment stil iets anders af.
+    private static readonly KnownLabelDefect[] DefectList = [];
 
     /// <summary>De erkende, gedocumenteerde verschillen tussen projectie en register.
     /// Elke regel hier moet een bevinding hébben (anders is het defect weg en hoort de

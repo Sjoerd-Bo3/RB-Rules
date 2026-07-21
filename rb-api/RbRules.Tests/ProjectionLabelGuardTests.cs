@@ -1,3 +1,4 @@
+using RbRules.Domain;
 using RbRules.Domain.Ontology;
 using RbRules.Infrastructure;
 
@@ -163,12 +164,48 @@ public class ProjectionLabelGuardTests
                 + "geregistreerde knooplabel-vorm");
     }
 
+    // ── De afdwinging laat vandaag niets vallen (#317) ────────────────────────
+
+    [Fact]
+    public async Task RelatesToRijen_InDeFixture_WijzenAlleenNaarDeVijfAfgedwongenSoorten()
+    {
+        // De WHERE-disjunctie laat een ref naar een knoop búíten de vijf gemeten
+        // soorten bewust NIET schrijven — dat ís de afdwinging, geen bug. Deze
+        // meting bewaakt het spiegelbeeld: de rijen die de twee RELATES_TO-
+        // statements voeden (de #116-relaties en de agent/patient-refs van de
+        // qualifier-cache) wijzen in de representatieve fixture allemaal binnen
+        // die vijf, dus de rebuild verliest er geen enkele bestaande edge door
+        // (de live meting op het issue: twaalf combinaties, alle twaalf binnen de
+        // vijf). Komt hier ooit een zesde soort binnen, dan hoort dat een bewuste
+        // beslissing te zijn: declaratie verbreden (dat is een versie-bump) én de
+        // disjunctie in beide statements mee — niet een ref die stil verdampt.
+        await using var db = TestGraphDb.New();
+        await ProjectieCorpus.VulAsync(db);
+
+        var refs = db.Relations.AsEnumerable().SelectMany(r => new[] { r.FromRef, r.ToRef })
+            .Concat(db.Interactions.AsEnumerable().SelectMany(i => new[] { i.AgentRef, i.PatientRef }))
+            .ToList();
+
+        Assert.NotEmpty(refs);
+        foreach (var text in refs)
+        {
+            Assert.True(BrainRef.TryParse(text, out var parsed),
+                $"fixture-ref '{text}' parset niet als BrainRef");
+            var label = BrainQuery.GraphLabel(parsed.Kind);
+            Assert.True(label is "Card" or "Mechanic" or "Concept" or "RuleSection" or "Claim",
+                $"fixture-ref '{text}' wijst naar knoopsoort '{label}', buiten de vijf die de "
+                + "WHERE-disjunctie toelaat — die edge zou bij de rebuild stil verdwijnen. "
+                + "Is dat de bedoeling, verbreed dan declaratie én disjunctie samen (#317).");
+        }
+    }
+
     // ── Opname ────────────────────────────────────────────────────────────────
 
     /// <summary>Élke onderscheiden vorm die de twee projecties schrijven. Duplicaten
     /// vouwen samen: twee statements die dezelfde vorm schrijven (de #116-relaties en
-    /// de qualifier-cache schrijven allebei <c>()-[:RELATES_TO]-&gt;()</c>) zijn één
-    /// bewering over de graaf.</summary>
+    /// de qualifier-cache schrijven sinds #317 allebei de disjunctieve
+    /// <c>(:Card|Claim|Concept|Mechanic|RuleSection)</c>-vorm) zijn één bewering
+    /// over de graaf.</summary>
     private static async Task<IReadOnlyList<ProjectionEdgeShape>> ObservedShapesAsync(
         bool filled = false)
     {
@@ -286,15 +323,77 @@ public class ProjectionLabelCheckTests
     [Fact]
     public void LabelLozeKant_IsOnbepaald_GeenSchending()
     {
-        // RELATES_TO matcht op ref zonder label. Dat is geen fout maar een
+        // Een label-loze ref-match legt niets op. Dat is geen fout maar een
         // niet-afdwingbare declaratie: rood zou hier onterecht zijn, stil doorlaten
-        // net zo goed.
+        // net zo goed. (Tot #317 was dit de levende RELATES_TO-vorm, gedekt door
+        // twee waivers; sindsdien dwingt de projectie de vijf soorten af met een
+        // WHERE-disjunctie en is dit het oordeel dat L3 rood maakt zodra iemand
+        // die disjunctie weer sloopt — er is geen waiver meer die het dekt.)
         var findings = Check("RELATES_TO", [], []);
 
         Assert.Equal(2, findings.Count);
         Assert.All(findings, f => Assert.Equal(ProjectionLabelVerdict.Unenforceable, f.Verdict));
         Assert.Equal([EdgeEndpoint.From, EdgeEndpoint.To], findings.Select(f => f.Side));
     }
+
+    // ── Disjunctieve kanten (#317) ────────────────────────────────────────────
+
+    [Fact]
+    public void RelatesTo_DeGemetenVijfDisjunctief_IsConform()
+    {
+        // De #317-vorm als literals: beide kanten disjunctief op de vijf gemeten
+        // soorten, exact wat de twee WHERE-disjuncties afdwingen. Mutatie-pin (c):
+        // haal één van de vijf (behalve Mechanic — die dekt Concept al via
+        // Mechanic ⊑ Concept) uit de RELATES_TO-declaratie in OntologySchema en
+        // deze toets gaat rood, samen met L3 op de echte projectie.
+        var shape = new ProjectionEdgeShape("RELATES_TO",
+            ["Card", "Mechanic", "Concept", "RuleSection", "Claim"],
+            ["Card", "Mechanic", "Concept", "RuleSection", "Claim"])
+        { FromDisjunctive = true, ToDisjunctive = true };
+
+        Assert.Empty(ProjectionLabelCheck.Findings(shape));
+    }
+
+    [Fact]
+    public void DisjunctieMetEenSoortBuitenDeDeclaratie_IsEenSchending()
+    {
+        // Disjunctief moet ÉLKE soort binnen de declaratie vallen: de knoop is er
+        // maar één, dus één buiten-declaratie-soort betekent dat het statement een
+        // niet-conforme edge kan schrijven. Source staat niet in de
+        // RELATES_TO-declaratie → Violates.
+        var shape = new ProjectionEdgeShape("RELATES_TO", ["Card", "Source"], ["Card"])
+        { FromDisjunctive = true };
+
+        var finding = Assert.Single(ProjectionLabelCheck.Findings(shape));
+        Assert.Equal(EdgeEndpoint.From, finding.Side);
+        Assert.Equal(ProjectionLabelVerdict.Violates, finding.Verdict);
+        Assert.True(finding.Disjunctive);
+        // De sleutel draagt de disjunctie (":Card|Source", niet ":Card:Source"):
+        // een waiver voor een multi-label vorm mag nooit stil een disjunctieve
+        // vorm dekken, of andersom.
+        Assert.Equal("RELATES_TO|From|Violates|:Card|Source", finding.Key);
+    }
+
+    [Fact]
+    public void ZelfdeLabels_ConjunctiefConform_DisjunctiefEenSchending()
+    {
+        // Het hart van het onderscheid. Conjunctief DRAAGT de knoop alle labels:
+        // één passende (Card) volstaat, ook al is Source er geen. Disjunctief is
+        // de knoop er maar één van — en dan is Source precies het gat.
+        Assert.Empty(ProjectionLabelCheck.Findings(
+            new ProjectionEdgeShape("RELATES_TO", ["Card", "Source"], ["Card"])));
+        Assert.Single(ProjectionLabelCheck.Findings(
+            new ProjectionEdgeShape("RELATES_TO", ["Card", "Source"], ["Card"])
+            { FromDisjunctive = true }));
+    }
+
+    [Fact]
+    public void DisjunctieveSoort_MagOokEenSubklasseZijn() =>
+        // Subklasse-polymorfie geldt per disjunct: Unit ⊑ Card, dus een disjunctie
+        // die Unit toelaat valt binnen een declaratie die Card noemt.
+        Assert.Empty(ProjectionLabelCheck.Findings(
+            new ProjectionEdgeShape("RELATES_TO", ["Unit", "Concept"], ["Card"])
+            { FromDisjunctive = true }));
 
     [Fact]
     public void GekwalificeerdeRelatie_IsAltijdEenSchending_OokLabelLoos()

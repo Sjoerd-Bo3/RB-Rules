@@ -231,12 +231,21 @@ public class CypherEdgeShapeScannerTests
             "MERGE (child {norm: toLower(p.child)})-[:PART_OF]->(parent {n: coalesce(a, b)})"));
 
     [Fact]
-    public void PredicaatTussenHaakjes_BindtGeenAlias() =>
-        // `WHERE (n:Set OR n:Tag)` is een expressie, geen knooppatroon. Zou de scanner
-        // hem binden, dan kreeg `n` een label dat de MATCH helemaal niet afdwingt —
-        // een schending die er niet is, oftewel vals alarm.
-        Assert.Equal(["()-[:X]->()"], Shapes(
+    public void PredicaatTussenHaakjes_IsGeenKnooppatroon_MaarWelEenDisjunctie()
+    {
+        // `WHERE (n:Set OR n:Tag)` is geen knooppatroon (de haakjes-groep mag geen
+        // nep-alias binden via de keten-walker), maar het IS sinds #317 een
+        // label-disjunctie: de MATCH dwingt af dat n een Set óf een Tag is. Dat
+        // komt disjunctief terug (`|`), niet als multi-label garantie (`:Set:Tag`).
+        Assert.Equal(["(:Set|Tag)-[:X]->()"], Shapes(
             "MATCH (n) WHERE (n:Set OR n:Tag) MATCH (m) MERGE (n)-[:X]->(m)"));
+
+        // Een predicaat dat GEEN zuivere label-disjunctie is, bindt niets — anders
+        // kreeg `n` een garantie die de MATCH helemaal niet afdwingt (vals alarm de
+        // ene kant op, valse geruststelling de andere).
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (n) WHERE (n.rank > 1 OR n.rank IS NULL) MATCH (m) MERGE (n)-[:X]->(m)"));
+    }
 
     [Fact]
     public void LabelsUitCommentaarEnLiteralen_TellenNietMee()
@@ -249,4 +258,171 @@ public class CypherEdgeShapeScannerTests
     [Fact]
     public void MatchClausules_SchrijvenNiets() =>
         Assert.Empty(Shapes("MATCH (:CanonicalEntity)-[r:MERGED_INTO]->() DELETE r"));
+
+    [Fact]
+    public void LabelExpressieInEenPatroon_IsGeenConjunctieveGarantie() =>
+        // Cypher's (a:Card|Mechanic) betekent "Card OF Mechanic". De oude lezer las
+        // daar `Card` uit — een valse conjunctieve garantie, precies de stille
+        // dekkingsfout die deze guard moet betrappen. Onbepaald is de eerlijke
+        // lezing: de guard meldt dan "niet te garanderen" in plaats van te zwijgen.
+        Assert.Equal(["()-[:X]->(:Tag)"], Shapes(
+            "MERGE (a:Card|Mechanic)-[:X]->(t:Tag)"));
+}
+
+/// <summary>De WHERE-label-disjunctie (#317): <c>MATCH (a {ref: …})
+/// WHERE (a:Card OR a:Mechanic OR …)</c> dwingt wél labels af — de knoop is één
+/// van de soorten — en moet dus als DISJUNCTIEF eindpunt binden. Strikt: alles wat
+/// geen zuivere label-disjunctie over één alias is, bindt niets.</summary>
+public class CypherWhereDisjunctionScannerTests
+{
+    private static string[] Shapes(string cypher) =>
+        [.. CypherEdgeScanner.WrittenEdgeShapes(cypher).Select(s => s.Format())];
+
+    /// <summary>De letterlijke #317-vorm zoals GraphSyncService hem schrijft:
+    /// beide eindpunten label-loos gematcht op ref, beide kanten door één
+    /// WHERE-disjunctie gebonden.</summary>
+    private const string RelatesToStatement =
+        """
+        UNWIND $rows AS row
+        MATCH (a {ref: row.from})
+        MATCH (b {ref: row.to})
+        WHERE (a:Card OR a:Mechanic OR a:Concept OR a:RuleSection OR a:Claim)
+          AND (b:Card OR b:Mechanic OR b:Concept OR b:RuleSection OR b:Claim)
+        MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)
+          SET r.trust = row.trust
+        """;
+
+    private const string RelatesToShape =
+        "(:Card|Claim|Concept|Mechanic|RuleSection)-[:RELATES_TO]->(:Card|Claim|Concept|Mechanic|RuleSection)";
+
+    [Fact]
+    public void WhereDisjunctie_BindtBeideEindpunten() =>
+        Assert.Equal([RelatesToShape], Shapes(RelatesToStatement));
+
+    [Fact]
+    public void DisjunctieveVorm_MeldtZichDisjunctief()
+    {
+        // Niet alleen de labels maar ook de AARD van de binding moet kloppen: een
+        // disjunctie als multi-label lezen zou de alle-soorten-moeten-passen-toets
+        // (ProjectionLabelCheck) stil terugzetten naar één-past-is-genoeg.
+        var shape = Assert.Single(CypherEdgeScanner.WrittenEdgeShapes(RelatesToStatement));
+        Assert.True(shape.FromDisjunctive);
+        Assert.True(shape.ToDisjunctive);
+        Assert.Equal(["Card", "Mechanic", "Concept", "RuleSection", "Claim"], shape.FromLabels);
+        Assert.Equal(["Card", "Mechanic", "Concept", "RuleSection", "Claim"], shape.ToLabels);
+    }
+
+    [Fact]
+    public void OpmaakIsGeenContract()
+    {
+        // Dezelfde niet-mutaties als bij de patroon-scanner: herformatteren, alias
+        // hernoemen, kleine letters, haakjes om elk atoom — geen gedragsverschil.
+        foreach (var variant in (string[])
+                 [
+                     "MATCH (x {ref: row.from}) MATCH (y {ref: row.to}) "
+                     + "WHERE (x:Card OR x:Mechanic OR x:Concept OR x:RuleSection OR x:Claim) "
+                     + "AND (y:Card OR y:Mechanic OR y:Concept OR y:RuleSection OR y:Claim) "
+                     + "MERGE (x)-[r:RELATES_TO {kind: row.kind}]->(y)",
+
+                     "MATCH (a {ref: row.from})\nMATCH (b {ref: row.to})\nwhere\n"
+                     + "  (a:Card or a:Mechanic or a:Concept or a:RuleSection or a:Claim)\n"
+                     + "  and (b:Card or b:Mechanic or b:Concept or b:RuleSection or b:Claim)\n"
+                     + "MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)",
+
+                     "MATCH (a {ref: row.from}) MATCH (b {ref: row.to}) "
+                     + "WHERE ((a:Card) OR (a:Mechanic) OR (a:Concept) OR (a:RuleSection) OR (a:Claim)) "
+                     + "AND ((b:Card) OR (b:Mechanic) OR (b:Concept) OR (b:RuleSection) OR (b:Claim)) "
+                     + "MERGE (a)-[:RELATES_TO]->(b)",
+                 ])
+            Assert.Equal([RelatesToShape], Shapes(variant));
+    }
+
+    [Fact]
+    public void DisjunctieZonderHaakjes_BindtOok() =>
+        Assert.Equal(["(:Mechanic|Set)-[:X]->()"], Shapes(
+            "MATCH (n {ref: r.x}) WHERE n:Set OR n:Mechanic MATCH (m {ref: r.y}) MERGE (n)-[:X]->(m)"));
+
+    [Fact]
+    public void EnkelvoudigLabelPredicaat_BindtAlsEnkeleSoort() =>
+        // `WHERE a:Card` is een disjunctie van één: dezelfde garantie als :Card.
+        Assert.Equal(["(:Card)-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) WHERE a:Card MATCH (b {ref: r.y}) MERGE (a)-[:X]->(b)"));
+
+    [Fact]
+    public void PatroonLabelWint_VanDeDisjunctie() =>
+        // MATCH (a:Card …) garandeert al méér dan elke disjunctie erbovenop; de
+        // disjunctie mag die hardere garantie niet verwateren tot "één van".
+        Assert.Equal(["(:Card)-[:X]->()"], Shapes(
+            "MATCH (a:Card {ref: r.x}) WHERE (a:Card OR a:Mechanic) MERGE (a)-[:X]->(b)"));
+
+    // ── Wat NIET mag binden: een verzonnen garantie is erger dan een gemiste ──
+
+    [Fact]
+    public void GemengdeAliassenInEenGroep_BindenNiets() =>
+        // (a:Card OR b:Tag) dwingt geen van beide af: de knoop mag de andere tak zijn.
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) MATCH (b {ref: r.y}) WHERE (a:Card OR b:Tag) MERGE (a)-[:X]->(b)"));
+
+    [Fact]
+    public void VreemdeTermInDeGroep_MaaktDeGroepOnbruikbaar()
+    {
+        // Een property-vergelijking in de OR-groep betekent dat de knoop óók zonder
+        // enig label door de poort kan.
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) WHERE (a:Card OR a.rank > 1) MERGE (a)-[:X]->(b)"));
+        // Ook op topniveau: (a:Card OR a:Mechanic) OR a.rank > 1 is één OR-boom
+        // met een vreemde tak — de haakjes maken dat niet ineens een garantie.
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) WHERE (a:Card OR a:Mechanic) OR a.rank > 1 MERGE (a)-[:X]->(b)"));
+    }
+
+    [Fact]
+    public void NotVoorDeGroep_BindtNiets() =>
+        // NOT (a:Card OR a:Mechanic) garandeert juist dat het GEEN van beide is.
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) WHERE NOT (a:Card OR a:Mechanic) MERGE (a)-[:X]->(b)"));
+
+    [Fact]
+    public void AndereTermenBlijvenWerken_NaastEenOnbruikbareTerm() =>
+        // De AND-termen zijn onafhankelijk: één onbruikbare term (NOT (a)--())
+        // mag de disjunctie-term ernaast niet meesleuren.
+        Assert.Equal(["(:Domain|Mechanic|Set|Tag)-[:X]->()"], Shapes(
+            "MATCH (n {ref: r.x}) WHERE (n:Set OR n:Domain OR n:Tag OR n:Mechanic) "
+            + "AND NOT (n)--() MERGE (n)-[:X]->(m)"));
+
+    [Fact]
+    public void MultiLabelAtoomInDeDisjunctie_BindtNiets() =>
+        // (a:Card:Token OR a:Mechanic) is een conjunctie bínnen een disjunctie;
+        // dat kan de platte labellijst niet eerlijk dragen, dus liever onbepaald.
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) WHERE (a:Card:Token OR a:Mechanic) MERGE (a)-[:X]->(b)"));
+
+    [Fact]
+    public void WhereLichaamStopt_BijDeVolgendeClausule()
+    {
+        // Het WHERE-lichaam eindigt bij MERGE: het knooppatroon (a:Card) in de
+        // schrijf-clausule is patroon-binding, geen predicaat — en andersom mag
+        // de disjunctie-lezer niet over de MERGE heen doorlezen.
+        Assert.Equal(["(:Card)-[:Y]->(:Mechanic|Set)"], Shapes(
+            "MATCH (m {ref: r.y}) WHERE m:Set OR m:Mechanic MERGE (a:Card {id: r.x})-[:Y]->(m)"));
+
+        // En een WITH … WHERE op een rij-property bindt niets (het #116-statement
+        // in de kaart-projectie heeft precies zo'n WHERE row.set IS NOT NULL).
+        Assert.Equal(["(:Card)-[:FROM_SET]->(:Set)"], Shapes(
+            """
+            MERGE (c:Card {id: row.id}) SET c.ref = row.ref
+            WITH c, row WHERE row.set IS NOT NULL
+            MERGE (s:Set {id: row.set})
+            MERGE (c)-[:FROM_SET]->(s)
+            """));
+    }
+
+    [Fact]
+    public void DisjunctieUitCommentaarOfLiteral_TeltNietMee()
+    {
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) // WHERE (a:Card OR a:Mechanic)\nMERGE (a)-[:X]->(b)"));
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {note: 'WHERE (a:Card OR a:Mechanic)'}) MERGE (a)-[:X]->(b)"));
+    }
 }

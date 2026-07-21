@@ -35,12 +35,12 @@ public enum ProjectionEdgeStance
 ///
 /// Dat laatste is een correctie uit de #289-review: de eerste versie verbood een
 /// issue-referentie buiten die ene stand, waardoor juist de twee edges met een
-/// OPEN defect-issue (#296: <c>SUPERSEDES</c> declareert een range die de
-/// projectie schendt, <c>RELATES_TO</c> matcht label-loos) als schone beslissing
-/// geboekt stonden. Een catalogus met als motto "geen edge zonder beslissing" mag
-/// een bekend defect niet stil wegpoetsen omdat de relatie toevallig wél
-/// geregistreerd is: <c>InSchema</c> zegt "de NAAM staat in het register", niet
-/// "er is niets aan de hand".</summary>
+/// OPEN defect-issue (#296: <c>SUPERSEDES</c> declareerde een range die de
+/// projectie schond, <c>RELATES_TO</c> matchte label-loos — beide inmiddels
+/// opgelost, #296 resp. #317) als schone beslissing geboekt stonden. Een catalogus
+/// met als motto "geen edge zonder beslissing" mag een bekend defect niet stil
+/// wegpoetsen omdat de relatie toevallig wél geregistreerd is: <c>InSchema</c>
+/// zegt "de NAAM staat in het register", niet "er is niets aan de hand".</summary>
 public sealed record ProjectionEdge(
     string EdgeName,
     ProjectionEdgeStance Stance,
@@ -100,14 +100,12 @@ public static class ProjectionEdgeCatalog
             + "declaratie (range NormativeSource) die onwaar was over de graaf; sindsdien "
             + "volgt het register de meting (Erratum → Card) en dwingt de projectie de "
             + "range met knooplabels af — de bijbehorende waiver is opgeruimd."),
-        // LET OP: deze draagt een OPEN defect (#317, afgesplitst uit #296). De naam
-        // staat in het register — daarom InSchema — maar de label-loze ref-match maakt
-        // de gedeclareerde domain/range onafdwingbaar. Een naam-guard vangt dat niet.
         new("RELATES_TO", ProjectionEdgeStance.InSchema,
-            "Gedenormaliseerde retrieval-projectie met kind als property (#116/#226). DEFECT "
-            + "(#317, uit #296): de projectie matcht label-loos op ref (MATCH (a {ref: …})), "
-            + "dus de gedeclareerde domain/range is per constructie NIET afdwingbaar — wat er "
-            + "ook aan die ref hangt, de edge wordt geschreven.", "#317"),
+            "Gedenormaliseerde retrieval-projectie met kind als property (#116/#226). Droeg "
+            + "tot #317 een open defect (label-loze ref-match, domain/range onafdwingbaar); "
+            + "sindsdien declareert het register de vijf GEMETEN eindpunt-soorten "
+            + "(Card/Mechanic/Concept/RuleSection/Claim) en dwingen beide statements ze af "
+            + "met één WHERE-label-disjunctie per kant — de twee waivers zijn opgeruimd."),
 
         // ── Sinds #304 gedeclareerd: de zeven voormalige schuld-edges ────────
         // De domain/range-beslissingen (mét de metingen waarop ze rusten) staan

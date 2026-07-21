@@ -294,9 +294,25 @@ public static class OntologySchema
             Parameters: ["status"]),                           // candidate|verified|promoted
 
         // Gedenormaliseerde retrieval-projectie (nooit bron van waarheid).
+        // Domain/range is de METING op de live graaf (#317): twaalf levende
+        // label-combinaties, allemaal binnen precies vijf knoopsoorten aan beide
+        // kanten — Card, Mechanic, Concept, RuleSection, Claim (grootste:
+        // Card→Mechanic 201; kleinste: Claim→Concept 2 en Card→Card 2). De oude
+        // [Concept, Card] was dus niet alleen onafdwingbaar maar ook onwaar:
+        // RuleSection en Claim droegen samen een flink deel van de edges.
+        // Mechanic staat er EXPLICIET in hoewel Mechanic ⊑ Concept hem al zou
+        // dekken: de declaratie spiegelt de meting én de WHERE-disjunctie in de
+        // projectie één-op-één, zodat je niet eerst de klassenhiërarchie hoeft na
+        // te lopen om te zien wat er afgedwongen wordt. De projectie dwingt deze
+        // breedte sinds #317 af met één WHERE-label-disjunctie per kant (geen 5×5
+        // aan per-soort-statements — RELATES_TO is bewust de gedenormaliseerde
+        // elk-naar-elk-link); een ref naar een knoop buiten de vijf wordt bewust
+        // NIET geschreven.
         new(RelationType.RelatesTo, "RELATES_TO",
-            Domain: [EntityType.Concept, EntityType.Card],
-            Range: [EntityType.Concept, EntityType.Card],
+            Domain: [EntityType.Concept, EntityType.Card, EntityType.Mechanic,
+                     EntityType.RuleSection, EntityType.Claim],
+            Range: [EntityType.Concept, EntityType.Card, EntityType.Mechanic,
+                    EntityType.RuleSection, EntityType.Claim],
             MinCardinality: 0, MaxCardinality: null,
             Traits: RelationTraits.None,
             Parameters: ["kind", "window", "actor_status", "cost_delta", "tier"]),
