@@ -1479,7 +1479,20 @@ Kernpunten (`AskService.cs`):
    beslist `AgenticGate.Decide` of de vraag mag door-redeneren over het
    brein (flag `ASK_AGENTIC` = off/auto/force). Faalt de agent → **vangnet**:
    de klassieke single-pass draait alsnog. De agent kan ontdekte verbanden als
-   relatievoorstel achterlaten (#120, `AgenticRelationService`).
+   relatievoorstel achterlaten (#120, `AgenticRelationService`). Die oogst
+   kent sinds #321 twee poorten met elk een eigen teller en reden: het
+   hallucinatie-weer (bestaat de knoop in het brein?) én de projectie-spiegel
+   — een kandidaat-ref waarvan de soort nooit als `RELATES_TO`-eindpunt
+   projecteert (alles buiten Card/Mechanic/Concept/RuleSection/Claim) wordt
+   geweigerd mét reden in de trace-regel en run_log, in plaats van als rij te
+   landen die sinds #317/#320 elke rebuild stil zou verdampen.
+   `BrainService.NodeAsync` resolvet immers óók `ruling:`/`source:`/
+   `erratum:`/`change:`/`set:`/`domain:`/`tag:`. De vijf soorten staan niet
+   als kopie in de poort: `RelationProjection.CanBeEndpoint` leest de
+   `RELATES_TO`-vorm uit `ProjectionEdgeShapeCatalog` — dezelfde bron die de
+   knooplabel-guard (§6.3) in beide richtingen tegen de uitgevoerde Cypher
+   houdt — en een spiegel-test pint dat poort en projectie niet uiteen kunnen
+   lopen zonder rode test.
    De **aanpak-keuze** (#153) voedt dezelfde beslissing: een ingelogde vrager
    kiest per vraag Auto (gate beslist), Snel (nooit escaleren) of Grondig
    (agent forceren). Server-authoritatief: het `approach`-request-veld wordt
@@ -1828,6 +1841,27 @@ telt niet als conjunctieve garantie maar als onbepaald. Beide
 naar een knoop búíten die vijf wordt bewust NIET geschreven — dat ís de
 afdwinging, en `RelatesToRijen_InDeFixture_WijzenAlleenNaarDeVijfAfgedwongenSoorten`
 bewaakt dat de fixture (en daarmee het gedekte gedrag) er niets door verliest.
+
+**Eerlijke RELATES_TO-telling (#321, ADR-20-klasse).** "Bewust niet geschreven"
+mag niet "stil en ongeteld" betekenen. Beide `RELATES_TO`-statements sluiten
+daarom af met `RETURN count(r)`, en `GraphSyncResult.Relations` meldt sinds #321
+wat Neo4j wérkelijk schreef in plaats van het te-doen-aantal (`relationRows
+.Count` — precies de run-die-liegt-klasse van #282). Het verschil met het
+aanbod staat per oorzaak in `RelatesToWriteTally` (Domain, puur getest): het
+*buiten-de-projectie*-deel is deterministisch uit de rijen zelf bekend
+(`RelationProjection.CanBeEndpoint` per kant, uit dezelfde catalogus-bron als
+de disjunctie), de rest van het gat zijn *refs zonder knoop* (verdwenen
+mechaniek, verwijderd doc). Bij verlies schrijft de **pijplijn zelf** een
+`warn`-regel in run_log (kind `graph`, ref `relates-to`) — #282b: de
+scheduler-aanroep gooit het resultaat weg, dus alleen zo is de uitval langs
+élke route zichtbaar — en dragen `JobCatalog`, `SetReleaseService` en het
+admin-endpoint de `RelationsDropNote` in hun eigen samenvatting mee
+(#282-review: een resultaat-record met de uitval erin helpt niets als de
+aanroeper hem negeert). Tegen een opnemende test-driver zonder count-rij valt
+de telling terug op het deterministische deel; de count-lezing zelf is met een
+`SingleCountCursor`-fake gepind (mutatie "terug naar rows.Count" is rood).
+Aan de bron is het pad waarlangs zo'n zesde-soort-ref als rij kon landen
+gedicht: de agentic voorstellen-poort spiegelt de projectie (zie §6.1 punt 7).
 
 `ProjectionLabelGuardTests` draait, net als G1-G5, op de UITGEVOERDE Cypher:
 
@@ -3967,7 +4001,13 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   levende label-combinaties, baseline **4.0.0**, major), dwingen beide
   statements ze af met één WHERE-label-disjunctie per kant (§6.3) en zijn de
   waivers opgeruimd — een ref naar een knoop búíten de vijf wordt bewust NIET
-  geschreven. Restpunten die hier bewust blijven staan: (a) `DERIVED_FROM`
+  geschreven. Sinds #321 is dat niet-schrijven ook geteld (beide statements
+  `RETURN count(r)`, verschil per oorzaak in run_log, §6.3) en is het enige
+  pad dat zo'n zesde-soort-ref als geldige rij kon laten landen — de agentic
+  voorstellen-poort, die via `BrainService.NodeAsync` óók ruling/source/
+  erratum/change/set/domain/tag resolveerde — begrensd op de vijf, lezend uit
+  dezelfde catalogus-bron (§6.1 punt 7). Restpunten die hier bewust blijven
+  staan: (a) `DERIVED_FROM`
   matcht nog wél label-loos op `ref` — provenance, buiten de TBox, heterogene
   doelen; er is geen declaratie om af te dwingen; (b) `Mechanic` in de
   RELATES_TO-declaratie is redundant (Mechanic ⊑ Concept dekt hem al), dus
