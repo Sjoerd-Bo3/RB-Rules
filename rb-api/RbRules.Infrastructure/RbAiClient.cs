@@ -71,12 +71,33 @@ public record AiStreamFrame(
     }
 }
 
+/// <summary>Eén heartbeat-frame uit de batch-stream (#323): kaart <paramref name="Code"/>
+/// is de <paramref name="Done"/>-de gevangen kaart van <paramref name="Total"/>.
+/// Voedt de job-voortgang in beheer — zonder levensteken lijkt een sessie van
+/// uren bevroren.</summary>
+public sealed record BatchCardHeartbeat(string Code, int Done, int Total);
+
 /// <summary>Client voor de rb-ai sidecar (Claude Agent SDK op abonnement).
-/// Best-effort: AI-uitval mag een scan nooit breken.</summary>
-public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
+/// Best-effort: AI-uitval mag een scan nooit breken.
+///
+/// <paramref name="httpFactory"/> (#323) levert de aparte named client voor de
+/// batch-extractie (<see cref="BatchClientName"/>, oneindige client-timeout +
+/// verplicht per-call-budget): een batch van K=250 kan vele uren duren en past
+/// per constructie niet onder de 6-minuten-timeout van de gewone client.
+/// Optioneel (null in unit-tests): zonder factory valt de batch-call terug op
+/// de gewone client — dan begrenst díéns timeout, wat in tests prima is.</summary>
+public class RbAiClient(
+    HttpClient http, ILogger<RbAiClient> logger, IHttpClientFactory? httpFactory = null)
 {
     /// <summary>Gedeelde fallback-tekst bij AI-uitval (één plek, #44).</summary>
     public const string UnavailableAnswer = "AI is niet beschikbaar — probeer het later opnieuw.";
+
+    /// <summary>Named-client voor de batch-extractie (#323) — geregistreerd in
+    /// Program.cs met <c>Timeout.InfiniteTimeSpan</c>; het echte budget is de
+    /// VERPLICHTE timeout-parameter van
+    /// <see cref="ExtractInteractionsBatchAsync"/>, berekend uit de rb-ai-keten
+    /// (#281-les: de client-timeout moet ruimer zijn dan de keten eronder).</summary>
+    public const string BatchClientName = "rb-ai-batch";
 
     public record AiImage(string MediaType, string Data);
 
@@ -230,6 +251,114 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
                     path, status, error.Reason ?? "onbekend", error.Detail ?? "-");
                 return new(null, outcome, status, Distinct(outcome, error.Reason));
             }
+        }
+    }
+
+    /// <summary>Batch-extractie (#323): POST naar
+    /// <c>/extract/interactions/batch</c> en lees de NDJSON-stream — per
+    /// gevangen kaart een heartbeat-frame (→ <paramref name="onCard"/>, voedt de
+    /// job-voortgang), afgesloten met een done-frame waarvan de rauwe JSON als
+    /// <see cref="AiExtraction.Raw"/> terugkomt (de Domain-parser
+    /// <see cref="InteractionBatchExtraction"/> is de tweede muur).
+    ///
+    /// <paramref name="timeout"/> is VERPLICHT en hoort uit
+    /// <see cref="BreinExtractSettings.BatchCallTimeout"/> te komen: ruimer dan
+    /// rb-ai's eigen keten (#281-les — een timeout korter dan de keten eronder
+    /// verkleedt elke fout als "traag"). De named client heeft daarom een
+    /// oneindige eigen timeout; dit budget is de enige grens.
+    ///
+    /// Bewust GEEN automatische retry zoals op het losse pad: een batch is uren
+    /// werk, en de kaarten zonder watermark komen de volgende run vanzelf terug —
+    /// een tweede poging binnen dezelfde run zou het nachtvenster kunnen
+    /// opsouperen.</summary>
+    public async Task<AiExtraction> ExtractInteractionsBatchAsync(
+        object payload, TimeSpan timeout, Action<BatchCardHeartbeat>? onCard = null,
+        CancellationToken ct = default)
+    {
+        const string path = "/extract/interactions/batch";
+        var client = httpFactory?.CreateClient(BatchClientName) ?? http;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, path)
+            {
+                Content = JsonContent.Create(payload),
+            };
+            // ResponseHeadersRead: de heartbeat-frames moeten binnenkomen zodra
+            // rb-ai ze schrijft, niet pas als de sessie (uren later) klaar is.
+            using var res = await client.SendAsync(
+                req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+
+            var status = (int)res.StatusCode;
+            if (!res.IsSuccessStatusCode)
+            {
+                var outcome = Classify(res.StatusCode);
+                var error = await ReadErrorAsync(res, cts.Token);
+                if (outcome == AiCallOutcome.RateLimited && error.Code == ConcurrencyLimitCode)
+                    outcome = AiCallOutcome.ConcurrencyLimited;
+                logger.LogWarning(
+                    "rb-ai {Path} gaf {Status} (reden={Reason}: {Detail})",
+                    path, status, error.Reason ?? "onbekend", error.Detail ?? "-");
+                return new(null, outcome, status, Distinct(outcome, error.Reason));
+            }
+
+            using var reader = new StreamReader(
+                await res.Content.ReadAsStreamAsync(cts.Token));
+            while (await reader.ReadLineAsync(cts.Token) is { } line)
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var frame = ParseBatchFrame(line);
+                if (frame.Heartbeat is { } hb) onCard?.Invoke(hb);
+                // Het done-frame ís het resultaat: rauw teruggeven, de
+                // Domain-parser valideert de envelop als tweede muur.
+                if (frame.Done) return new(line, AiCallOutcome.Ok, status);
+            }
+            // Stream eindigde zonder done-frame: een halverwege gestorven
+            // verbinding of container — uitval, geen leeg resultaat.
+            logger.LogWarning("rb-ai {Path} stream eindigde zonder done-frame", path);
+            return new(null, AiCallOutcome.Unparseable, status);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Ons eigen budget verliep (de linked CTS), niet de aanroeper: als
+            // timeout tellen — zelfde onderscheid als op het losse pad.
+            logger.LogWarning(
+                "rb-ai {Path} verlopen op het batch-budget van {Seconds}s",
+                path, timeout.TotalSeconds);
+            return new(null, AiCallOutcome.Timeout, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "rb-ai-batchaanroep mislukt (path={Path})", path);
+            return new(null, AiCallOutcome.Transport, null);
+        }
+    }
+
+    /// <summary>Eén NDJSON-regel van de batch-stream lezen: heartbeat, done of
+    /// ruis (genegeerd — kapotte frames zijn gedegradeerd gedrag, geen crash).</summary>
+    private static (BatchCardHeartbeat? Heartbeat, bool Done) ParseBatchFrame(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return (null, false);
+            var type = root.TryGetProperty("type", out var t)
+                && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+            if (type == "done") return (null, true);
+            if (type != "card") return (null, false);
+            var code = root.TryGetProperty("code", out var c)
+                && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+            var done = root.TryGetProperty("done", out var d)
+                && d.ValueKind == JsonValueKind.Number && d.TryGetInt32(out var dv) ? dv : 0;
+            var total = root.TryGetProperty("total", out var tt)
+                && tt.ValueKind == JsonValueKind.Number && tt.TryGetInt32(out var tv) ? tv : 0;
+            return (code is null ? null : new BatchCardHeartbeat(code, done, total), false);
+        }
+        catch (JsonException)
+        {
+            return (null, false);
         }
     }
 

@@ -142,6 +142,19 @@ services:
       # correcties) kunnen llama-server niet meer omver duwen.
       EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-8}
       EMBED_BATCH_CHARS: ${EMBED_BATCH_CHARS:-6000}
+      # Brein-extractie (#323). BREIN_EXTRACT_MODEL/BATCH_K zijn BOOTSTRAP-
+      # DEFAULTS voor de beheerde instellingen (beheer → Brein wint, tabel
+      # `setting`); de twee AI_EXTRACT_*-spiegels delen bewust dezelfde
+      # .env-variabelen als rb-ai hieronder, zodat rb-api's batch-callbudget
+      # (BreinExtractSettings.BatchCallTimeout = basis + (K−1)×per-kaart +
+      # marge) per constructie RUIMER blijft dan rb-ai's eigen keten — een
+      # rb-api-timeout korter dan de keten eronder verkleedt elke fout als
+      # "traag" (#281). Verzet je één van de twee in de .env, dan bereiken ze
+      # BEIDE containers.
+      BREIN_EXTRACT_MODEL: ${BREIN_EXTRACT_MODEL:-fable}
+      BREIN_EXTRACT_BATCH_K: ${BREIN_EXTRACT_BATCH_K:-50}
+      AI_EXTRACT_TIMEOUT_MS: ${AI_EXTRACT_TIMEOUT_MS:-90000}
+      AI_EXTRACT_PER_CARD_MS: ${AI_EXTRACT_PER_CARD_MS:-180000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -232,6 +245,14 @@ services:
       # wandkloktijd per mislukte kaart in de nachtrun — een run met 22
       # uitvallen betaalt 22× deze waarde.
       AI_EXTRACT_TIMEOUT_MS: ${AI_EXTRACT_TIMEOUT_MS:-90000}
+      # Batch-extractie (#323): extra tijdsbudget per EXTRA kaart in een sessie
+      # (effectieve timeout = AI_EXTRACT_TIMEOUT_MS + (K−1) × deze waarde).
+      # Default 180 s: ruim boven de gemeten sonnet-generatie per kaart
+      # (147-163 s). Zelfde .env-variabele wordt aan rb-api gespiegeld
+      # (hierboven) voor het batch-callbudget — verzet ze dus nooit los van
+      # elkaar, en nooit zonder deze regel: een waarde die alleen in de VM-.env
+      # staat bereikt de container niet (#268-les).
+      AI_EXTRACT_PER_CARD_MS: ${AI_EXTRACT_PER_CARD_MS:-180000}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

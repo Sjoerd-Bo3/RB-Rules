@@ -18,7 +18,9 @@ public sealed record BreinInteractionMiningResult(
     int FocusCards, int Extracted, int Promoted, int Candidates,
     int Hypothesized, int Rejected, int Failed, bool CapHit,
     int SkippedKnown = 0, string? FailureDetail = null,
-    int MechanicSubjects = 0, string? CallMetrics = null)
+    int MechanicSubjects = 0, string? CallMetrics = null,
+    string? ModelAlias = null, int BatchK = 1, int BatchSessions = 0,
+    int UnknownCode = 0, long? InputTokens = null, long? OutputTokens = null)
 {
     public string Summary =>
         $"{MechanicSubjects} mechanics + {FocusCards} kaarten, {Extracted} kandidaten geëxtraheerd → " +
@@ -26,7 +28,17 @@ public sealed record BreinInteractionMiningResult(
         $"{Rejected} verworpen, {SkippedKnown} al-bekend (kaart↔eigen-keyword), " +
         $"{Failed} rb-ai-uitval" +
         (string.IsNullOrEmpty(FailureDetail) ? "" : $" ({FailureDetail})") +
-        (string.IsNullOrEmpty(CallMetrics) ? "" : $"; {CallMetrics}");
+        (string.IsNullOrEmpty(CallMetrics) ? "" : $"; {CallMetrics}") +
+        // #323: model-alias + K horen in élk run-detail — zonder die twee is een
+        // vergelijking tussen runs (sonnet vs fable, K=1 vs K=50) niet te maken.
+        // Alleen wanneer de beheerde instelling meedeed (ModelAlias gezet); het
+        // legacy-pad (tests zonder settings) houdt de bestaande tekst byte-gelijk.
+        (ModelAlias is null ? "" : $"; model {ModelAlias}, K={BatchK}" +
+            (BatchSessions > 0 ? $", {BatchSessions} batch-sessies" : "") +
+            (UnknownCode > 0 ? $", unknown_code×{UnknownCode}" : "") +
+            (InputTokens is not null || OutputTokens is not null
+                ? $", tokens {InputTokens?.ToString() ?? "?"} in / {OutputTokens?.ToString() ?? "?"} uit"
+                : ""));
 }
 
 /// <summary>Brein-mining-orkestratie voor gekwalificeerde interacties (#226, §3.1 +
@@ -132,7 +144,8 @@ public class BreinInteractionMiningService(
     RbRulesDbContext db, RbAiClient ai, EntityResolutionService entityResolution,
     InteractionPromotionService promotion,
     IDbContextFactory<RbRulesDbContext>? dbFactory = null,
-    BreinMiningSettings? settings = null)
+    BreinMiningSettings? settings = null,
+    ManagedSettingsService? managedSettings = null)
 {
     private const int DefaultMaxFocusCards = 40;
     private const int DefaultMaxPartners = 3;
@@ -158,8 +171,16 @@ public class BreinInteractionMiningService(
     /// v3 (#286): begrensde, relevantie-gestuurde aanbieding, een mechanic-niveau-pass
     /// en een governed_by-vraag in dezelfde aanroep. v4 (#324): de bewijstier-eis —
     /// de prompt zegt expliciet dat een mechanic↔mechanic-claim alleen op regel-/
-    /// definitietekst telt, en de poort dwingt dat deterministisch af.</summary>
-    public const string PromptVersion = "breinmine-interactions-v4";
+    /// definitietekst telt, en de poort dwingt dat deterministisch af. v5 (#323):
+    /// instelbaar model (beheerde alias, default fable) en batch-sessies — K kaarten
+    /// per rb-ai-aanroep, elk met eigen vocabulaire en een kaartcode-gebonden
+    /// tool-call; partial salvage bij een omgevallen sessie.</summary>
+    public const string PromptVersion = "breinmine-interactions-v5";
+
+    /// <summary>Het model van vóór #323 — de provenance-waarde op het legacy-pad
+    /// (geen <see cref="ManagedSettingsService"/> geïnjecteerd, zoals in de
+    /// bestaande unit-tests): dan draait de extractie op rb-ai's cheap-default.</summary>
+    private const string LegacyModelId = "claude-sonnet-4-6";
 
     public async Task<BreinInteractionMiningResult> RunAsync(
         int maxFocusCards = DefaultMaxFocusCards, int maxPartners = DefaultMaxPartners,
@@ -169,6 +190,19 @@ public class BreinInteractionMiningService(
     {
         var windowLexicon = InteractionQualifierLexicon.Windows;
         var statusLexicon = InteractionQualifierLexicon.Statuses;
+
+        // Extractie-instellingen (#323) op het GEBRUIKSMOMENT — per run, niet
+        // gecachet over de job: een toggle in beheer werkt zo bij de
+        // eerstvolgende run zonder herstart. Zonder settings-service (de
+        // bestaande unit-tests) geldt het LEGACY-pad: K=1, geen model-veld —
+        // gedragsgelijk aan vóór #323, zelfde patroon als `dbFactory is null`.
+        var extract = managedSettings is null
+            ? null
+            : await managedSettings.BreinExtractAsync(ct);
+        var batchK = extract is null
+            ? 1
+            : Math.Clamp(extract.BatchK, 1, BreinExtractSettings.MaxBatchK);
+        var modelId = BreinExtractModels.ModelId(extract?.ModelAlias) ?? LegacyModelId;
 
         // Voortgangs-watermark (#226-review defect 1/2; herzien in #249-review).
         //
@@ -261,7 +295,7 @@ public class BreinInteractionMiningService(
             .Select(c => new SectionLite(c.SourceId, c.SectionCode, c.Text))
             .ToListAsync(ct);
 
-        var run = await StartRunAsync(windowLexicon, statusLexicon, ct);
+        var run = await StartRunAsync(windowLexicon, statusLexicon, modelId, ct);
 
         var tally = new RunTally();
         // Schrijf-slot om de promotie-poort (#279): zie de klasse-samenvatting —
@@ -274,10 +308,13 @@ public class BreinInteractionMiningService(
 
         var context = new PassContext(
             run.Id, cardPool, ruleSections, vocabulary, windowLexicon, statusLexicon,
-            tally, gate, labelCache);
+            tally, gate, labelCache,
+            extract?.ModelAlias, modelId, extract, progress, focus.Count);
 
         // FASE 1 — mechanic-niveau. Bewust eerst: klein van payload, en de mech↔mech-
         // kennis die hij oplevert hoeft de kaart-pass daarna niet meer te ontdekken.
+        // Blijft per subject één losse aanroep: subjecten zijn met tientallen en hun
+        // aanbieding is klein — batching lost daar niets op (#323).
         await RunPhaseAsync(
             subjects.Count, deadline,
             (index, ctx, resolution, gatekeeper, token) => MineMechanicAsync(
@@ -285,18 +322,28 @@ public class BreinInteractionMiningService(
             i => progress?.Invoke($"mechanic-interacties extraheren via rb-ai: {i}/{subjects.Count}"),
             tally.CountMechanic, tally, ct);
 
-        // FASE 2 — kaart-niveau, met de begrensde aanbieding.
+        // FASE 2 — kaart-niveau, met de begrensde aanbieding. Sinds #323 in groepen
+        // van K: één groep = één rb-ai-sessie = één werkitem = één achtergrond-permit.
+        // K=1 (het legacy-pad, en de beheerde ondergrens) doorloopt per constructie
+        // exact het losse pad van vóór #323.
         var limits = OfferingLimits.Card with { MaxPartnerCards = Math.Max(0, maxPartners) };
+        var groups = focus.Chunk(batchK).Select(g => (IReadOnlyList<Card>)[.. g]).ToList();
         await RunPhaseAsync(
-            focus.Count, deadline,
-            (index, ctx, resolution, gatekeeper, token) => MineCardAsync(
-                focus[index], ctx, resolution, gatekeeper, context, limits, token),
-            i => progress?.Invoke($"interacties extraheren via rb-ai: {i}/{focus.Count}"),
-            tally.CountCard, tally, ct);
+            groups.Count, deadline,
+            (index, ctx, resolution, gatekeeper, token) => MineCardGroupAsync(
+                groups[index], ctx, resolution, gatekeeper, context, limits, token),
+            // Voortgang wordt PER KAART gemeld vanuit de groep (en per heartbeat
+            // tijdens de batch-call) — een groepsteller zou hier het aantal
+            // verwerkte kaarten verminken.
+            _ => { }, () => 0, tally, ct);
 
         run.Candidates = tally.Extracted;
         run.Verified = tally.Promoted;
         run.Rejected = tally.Rejected;
+        // Token-metering op de run-rij (#323): opgeteld over de batch-sessies die
+        // usage meldden; null = geen enkele meldde iets (onbekend, niet 0).
+        run.InputTokens = tally.InputTokens;
+        run.OutputTokens = tally.OutputTokens;
         run.CompletedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
 
@@ -307,7 +354,9 @@ public class BreinInteractionMiningService(
             tally.Hypothesized, tally.Rejected, tally.Failed,
             cardCapHit || mechanicCapHit || tally.DeadlineHit,
             tally.SkippedKnown, tally.FailureDetail,
-            tally.MechanicsProcessed, tally.CallMetrics);
+            tally.MechanicsProcessed, tally.CallMetrics,
+            extract?.ModelAlias, batchK, tally.BatchSessions,
+            tally.UnknownCode, tally.InputTokens, tally.OutputTokens);
     }
 
     /// <summary>De worker-lus, één keer geschreven voor beide passes (#286). Workers
@@ -428,7 +477,7 @@ public class BreinInteractionMiningService(
         var succeeded = await ExtractAndPromoteAsync(
             offer, BrainRef.Mechanic(label).Format(), MiningPhase.Mechanic,
             ownKeywordRefs: new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal),
-            gatekeeper, context, ct);
+            gatekeeper, context, ctx, batchPosition: 1, ct);
 
         if (succeeded) await MarkEntityMinedAsync(ctx, subject, context.RunId, ct);
     }
@@ -439,9 +488,61 @@ public class BreinInteractionMiningService(
     /// Draait op <paramref name="ctx"/> (eigen context per kaart in de parallelle
     /// stand) met de services die dáárop staan; raakt de gedeelde scoped context nooit
     /// aan.</summary>
-    private async Task MineCardAsync(
-        Card card, RbRulesDbContext ctx, EntityResolutionService resolution,
+    /// <summary>Eén groep van K focus-kaarten (#323): per kaart de aanbieding
+    /// bouwen (exact het voorwerk van vóór #323), en dan — afhankelijk van hoeveel
+    /// kaarten daadwerkelijk iets aan te bieden hebben — het losse pad (1) of één
+    /// batch-sessie (≥2). Kaarten zonder aanbiedbaar paar worden direct
+    /// gewatermarkt (deterministisch, geen uitval), precies zoals voorheen.</summary>
+    private async Task MineCardGroupAsync(
+        IReadOnlyList<Card> cards, RbRulesDbContext ctx, EntityResolutionService resolution,
         InteractionPromotionService gatekeeper, PassContext context,
+        OfferingLimits limits, CancellationToken ct)
+    {
+        var prepared = new List<PreparedCard>();
+        foreach (var card in cards)
+        {
+            var n = context.Tally.CountCard();
+            context.Progress?.Invoke($"interacties extraheren via rb-ai: {n}/{context.FocusTotal}");
+            var prep = await PrepareCardOfferAsync(card, resolution, context, limits, ct);
+            if (prep is null)
+            {
+                // Niets zinnigs om over te redeneren — deterministisch, geen
+                // uitval. Wel markeren (#249-review).
+                await MarkCardMinedAsync(ctx, card, context.RunId, ct);
+                continue;
+            }
+            prepared.Add(prep);
+        }
+        if (prepared.Count == 0) return;
+
+        if (prepared.Count == 1)
+        {
+            // K=1, of een groep waarvan maar één kaart iets aanbiedt: het losse
+            // pad — byte-gelijk aan het gedrag van vóór #323 (plus het
+            // model-veld wanneer de beheerde instelling meedoet).
+            var p = prepared[0];
+            var succeeded = await ExtractAndPromoteAsync(
+                p.Offer, p.FocusRef, MiningPhase.Card, p.OwnKeywordRefs,
+                gatekeeper, context, ctx, batchPosition: 1, ct);
+
+            // Het watermark hoort bij "deze kaart is aangeboden en beantwoord",
+            // niet bij "deze kaart leverde een feit op" (#249-review) — maar
+            // NOOIT bij rb-ai-uitval of een kapotte envelop: die kaart moet
+            // juist terugkomen.
+            if (succeeded) await MarkCardMinedAsync(ctx, p.Card, context.RunId, ct);
+            return;
+        }
+
+        await ExtractBatchAndPromoteAsync(prepared, ctx, gatekeeper, context, ct);
+    }
+
+    /// <summary>Het voorwerk van één focus-kaart: labels resolven, partner-buurt en
+    /// secties kiezen, de begrensde aanbieding plannen. Null wanneer er geen paar
+    /// aan te bieden valt (&lt; 2 refs). Dit was de kop van het oude MineCardAsync;
+    /// het is nu een eigen stap zodat losse en batch-aanroepen gegarandeerd
+    /// hetzelfde vocabulaire aanbieden.</summary>
+    private async Task<PreparedCard?> PrepareCardOfferAsync(
+        Card card, EntityResolutionService resolution, PassContext context,
         OfferingLimits limits, CancellationToken ct)
     {
         var focusRef = BrainRef.Card(card.RiftboundId).Format();
@@ -483,33 +584,135 @@ public class BreinInteractionMiningService(
                 card.TextPlain ?? "", focusLabels),
             partners, sections, context.Vocabulary, limits);
 
-        if (plan.Refs.Count < 2)
+        if (plan.Refs.Count < 2) return null;
+
+        return new PreparedCard(card, focusRef, BuildOffer(plan), ownKeywordRefs);
+    }
+
+    /// <summary>Eén batch-sessie voor ≥2 voorbereide kaarten (#323): één
+    /// rb-ai-aanroep (één achtergrond-permit) met per kaart een eigen
+    /// vocabulaire; de heartbeat-frames voeden de job-voortgang, en de uitkomst
+    /// wordt PER KAART afgehandeld — partial salvage: geslaagde kaarten worden
+    /// gepromoveerd én gewatermarkt, gefaalde geteld per oorzaak en NIET
+    /// gewatermarkt (die komen de volgende run terug; ADR-20: tel wat er echt
+    /// gelukt is, meld nooit K als resultaat).</summary>
+    private async Task ExtractBatchAndPromoteAsync(
+        IReadOnlyList<PreparedCard> prepared, RbRulesDbContext ctx,
+        InteractionPromotionService gatekeeper, PassContext context, CancellationToken ct)
+    {
+        var payload = new
         {
-            // Niets zinnigs om over te redeneren — deterministisch, geen uitval. Wel
-            // markeren (#249-review).
-            await MarkCardMinedAsync(ctx, card, context.RunId, ct);
+            system = InteractionExtraction.SystemPrompt,
+            // De ALIAS reist; rb-ai vertaalt hem tegen zijn eigen gesloten map
+            // en weigert onbekend met 400 (#323) — nooit een vrije string.
+            model = context.ModelAlias,
+            kinds = InteractionKinds.All,
+            conditionKinds = InteractionConditionKinds.All,
+            roles = InteractionRoles.All,
+            windowLexicon = context.WindowLexicon,
+            statusLexicon = context.StatusLexicon,
+            cards = prepared.Select(p => new
+            {
+                code = p.Card.RiftboundId,
+                text = p.Offer.PromptText,
+                refs = p.Offer.Plan.Refs.Select(r => new { r.Ref, r.Label }),
+                sections = p.Offer.SectionRefs,
+            }),
+        };
+
+        // Het rb-api-budget is per constructie RUIMER dan rb-ai's eigen keten
+        // (basis + (K−1)×per-kaart + marge, BreinExtractSettings.BatchCallTimeout)
+        // — een timeout korter dan de keten eronder verkleedt elke fout als
+        // "traag" (#281).
+        var extract = context.Extract ?? BreinExtractSettings.Default;
+        var timeout = extract.BatchCallTimeout(prepared.Count);
+        var totalRefs = prepared.Sum(p => p.Offer.Plan.Refs.Count);
+
+        var clock = Stopwatch.StartNew();
+        var call = await ai.ExtractInteractionsBatchAsync(
+            payload, timeout,
+            hb => context.Progress?.Invoke(
+                $"batch-sessie: kaart {hb.Code} binnen ({hb.Done}/{hb.Total})"),
+            ct);
+        clock.Stop();
+        context.Tally.BatchCall(clock.ElapsedMilliseconds, totalRefs, prepared.Count);
+
+        if (call.Raw is null)
+        {
+            // Hele sessie leverde niets (5xx/504/transport): élke kaart telt als
+            // uitval met de HTTP-laag-oorzaak, en geen enkele krijgt een
+            // watermark — de blast radius van een omgevallen sessie is K
+            // kaarten opnieuw, en dat hoort zichtbaar in het run-detail (#323).
+            for (var i = 0; i < prepared.Count; i++)
+                context.Tally.Fail(call.Outcome, call.Reason);
             return;
         }
 
-        var offer = BuildOffer(plan);
-        var succeeded = await ExtractAndPromoteAsync(
-            offer, focusRef, MiningPhase.Card, ownKeywordRefs, gatekeeper, context, ct);
+        var envelope = InteractionBatchExtraction.Parse(call.Raw);
+        if (envelope is null)
+        {
+            // Kapotte envelop is UITVAL, geen leeg resultaat (#251-review) —
+            // zelfde regel als op het losse pad, en dus ook: geen watermark.
+            for (var i = 0; i < prepared.Count; i++)
+                context.Tally.Fail(AiCallOutcome.Unparseable);
+            return;
+        }
+        context.Tally.NoteBatchEnvelope(
+            envelope.UnknownCode, envelope.InputTokens, envelope.OutputTokens);
 
-        // Het watermark hoort bij "deze kaart is aangeboden en beantwoord", niet bij
-        // "deze kaart leverde een feit op" (#249-review) — maar NOOIT bij rb-ai-uitval
-        // of een kapotte envelop: die kaart moet juist terugkomen.
-        if (succeeded) await MarkCardMinedAsync(ctx, card, context.RunId, ct);
+        var byCode = envelope.Results
+            .GroupBy(r => r.Code, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var position = 0;
+        foreach (var p in prepared)
+        {
+            position += 1;
+            byCode.TryGetValue(p.Card.RiftboundId, out var cardResult);
+            if (cardResult is not { Ok: true })
+            {
+                // Per-kaart-uitval binnen een (deels) geslaagde sessie: tel de
+                // reden die rb-ai meldde (timeout / no_tool_call / …) en zet
+                // GEEN watermark — deze kaart komt de volgende run terug. Een
+                // reden die niets aan de uitkomst toevoegt blijft weg (zelfde
+                // cosmetische regel als RbAiClient.Distinct, #281).
+                var reason = cardResult?.Reason;
+                var isTimeout = string.Equals(
+                    reason, "timeout", StringComparison.OrdinalIgnoreCase);
+                context.Tally.Fail(
+                    isTimeout ? AiCallOutcome.Timeout : AiCallOutcome.ServerError,
+                    isTimeout ? null : reason ?? "ontbrak in batch-antwoord");
+                continue;
+            }
+
+            var vocab = new ExtractionVocab(
+                p.Offer.Plan.Refs.Select(r => new OfferedRef(r.Ref, r.Label, r.Type)).ToList(),
+                context.WindowLexicon, context.StatusLexicon, p.Offer.SectionRefs);
+            var parsed = InteractionExtraction.ParseDetailed(cardResult.RawInteractions, vocab);
+            if (parsed.Malformed)
+            {
+                context.Tally.Fail(AiCallOutcome.Unparseable);
+                continue;
+            }
+            context.Tally.Ai(parsed.Items.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
+
+            await PromoteParsedAsync(
+                parsed.Items, p.Offer, p.FocusRef, p.OwnKeywordRefs,
+                gatekeeper, context, ctx, position, ct);
+            await MarkCardMinedAsync(ctx, p.Card, context.RunId, ct);
+        }
     }
 
     // ── Gedeelde kern: aanroep → parse → poort ───────────────────────────────
 
     /// <summary>De rb-ai-call en alles erna, identiek voor beide passes. Geeft terug of
     /// de EXTRACTIE geslaagd is (rb-ai antwoordde én de envelop parseerde) — de
-    /// aanroeper hangt daar zijn watermark aan.</summary>
+    /// aanroeper hangt daar zijn watermark aan. <paramref name="batchPosition"/> is de
+    /// rij-provenance (#323): 1 op dit losse pad (sessie van één kaart).</summary>
     private async Task<bool> ExtractAndPromoteAsync(
         Offer offer, string derivedFromRef, MiningPhase phase,
         IReadOnlyDictionary<string, IReadOnlySet<string>> ownKeywordRefs,
-        InteractionPromotionService gatekeeper, PassContext context, CancellationToken ct)
+        InteractionPromotionService gatekeeper, PassContext context,
+        RbRulesDbContext ctx, int batchPosition, CancellationToken ct)
     {
         var vocab = new ExtractionVocab(
             offer.Plan.Refs.Select(r => new OfferedRef(r.Ref, r.Label, r.Type)).ToList(),
@@ -533,7 +736,6 @@ public class BreinInteractionMiningService(
             return false;
         }
 
-        var byRef = offer.Plan.Refs.ToDictionary(r => r.Ref, StringComparer.Ordinal);
         var parsed = InteractionExtraction.ParseDetailed(call.Raw, vocab);
         if (parsed.Malformed)
         {
@@ -547,7 +749,23 @@ public class BreinInteractionMiningService(
         // geteld zodat "rb-ai gaf niets" en "rb-ai wist niets" niet op één hoop komen.
         context.Tally.Ai(parsed.Items.Count == 0 ? AiCallOutcome.Empty : AiCallOutcome.Ok);
 
-        foreach (var ix in parsed.Items)
+        await PromoteParsedAsync(
+            parsed.Items, offer, derivedFromRef, ownKeywordRefs, gatekeeper, context,
+            ctx, batchPosition, ct);
+        return true;
+    }
+
+    /// <summary>De promotie-lus over geparste items — gedeeld door het losse en het
+    /// batch-pad (#323), zodat de tautologie-poort, de bewijstier-eis (#324) en de
+    /// rij-provenance per constructie niet uiteen kunnen lopen.</summary>
+    private static async Task PromoteParsedAsync(
+        IReadOnlyList<ExtractedInteraction> items, Offer offer, string derivedFromRef,
+        IReadOnlyDictionary<string, IReadOnlySet<string>> ownKeywordRefs,
+        InteractionPromotionService gatekeeper, PassContext context,
+        RbRulesDbContext ctx, int batchPosition, CancellationToken ct)
+    {
+        var byRef = offer.Plan.Refs.ToDictionary(r => r.Ref, StringComparer.Ordinal);
+        foreach (var ix in items)
         {
             if (!byRef.TryGetValue(ix.FromRef, out var from)
                 || !byRef.TryGetValue(ix.ToRef, out var to))
@@ -601,6 +819,25 @@ public class BreinInteractionMiningService(
             try
             {
                 result = await gatekeeper.PromoteAsync(request, context.RunId, ct: ct);
+
+                // Provenance op de RIJ (#323, #299-les): welk model en welke
+                // batch-positie deze interactie het laatst aandroegen. Bij ELKE
+                // (her)extractie geschreven — ook over een bestaande rij heen,
+                // want de kolom beantwoordt "uit welke extractie stamt de
+                // huidige aandraging", niet "wie zag dit ooit als eerste" (dat
+                // is de Assertion-keten). Binnen het gate-slot: de rij is zojuist
+                // door de poort geschreven/gevonden op dezelfde context.
+                if (result.InteractionId is { } interactionId)
+                {
+                    var row = await ctx.Interactions
+                        .FirstOrDefaultAsync(i => i.Id == interactionId, ct);
+                    if (row is not null)
+                    {
+                        row.ExtractModel = context.ExtractModelId;
+                        row.ExtractBatchPosition = batchPosition;
+                        await ctx.SaveChangesAsync(ct);
+                    }
+                }
             }
             finally
             {
@@ -608,8 +845,6 @@ public class BreinInteractionMiningService(
             }
             context.Tally.Gate(result.Outcome);
         }
-
-        return true;
     }
 
     // ── Aanbieding → prompt ──────────────────────────────────────────────────
@@ -746,13 +981,16 @@ public class BreinInteractionMiningService(
         labels.Select(l => BrainRef.Mechanic(l).Format()).ToHashSet(StringComparer.Ordinal);
 
     private async Task<MiningRun> StartRunAsync(
-        IReadOnlyList<string> windows, IReadOnlyList<string> statuses, CancellationToken ct)
+        IReadOnlyList<string> windows, IReadOnlyList<string> statuses, string modelId,
+        CancellationToken ct)
     {
         var run = new MiningRun
         {
             Id = Ulid.NewUlid(),
             Kind = FactKinds.Interaction,
-            LlmModel = "claude-sonnet-4-6",
+            // Sinds #323 het ECHT gebruikte model (beheerde alias → model-ID);
+            // het legacy-pad zonder settings-service blijft het cheap-default.
+            LlmModel = modelId,
             PromptVersion = PromptVersion,
             VocabSnapshot = TextUtils.Sha256(string.Join('|',
                 InteractionKinds.All.Concat(windows).Concat(statuses))),
@@ -791,6 +1029,18 @@ public class BreinInteractionMiningService(
 
     /// <summary>Alles wat beide passes delen en dat per run één keer wordt
     /// klaargezet.</summary>
+    /// <param name="ModelAlias">De beheerde model-alias (#323) die als
+    /// <c>model</c>-veld in élke rb-ai-payload reist; null op het legacy-pad
+    /// (geen settings-service) — dan blijft het veld weg en geldt rb-ai's
+    /// cheap-default, exact het gedrag van vóór #323.</param>
+    /// <param name="ExtractModelId">Het model-ID voor de rij-provenance
+    /// (<see cref="Interaction.ExtractModel"/>).</param>
+    /// <param name="Extract">De volledige extract-instellingen (timeout-spiegels
+    /// voor het batch-budget); null op het legacy-pad.</param>
+    /// <param name="Progress">De voortgangscallback van de job — in de groep per
+    /// kaart en per heartbeat aangeroepen (#323).</param>
+    /// <param name="FocusTotal">Totaal aantal focus-kaarten deze run (voor de
+    /// voortgangsmelding).</param>
     private sealed record PassContext(
         string RunId,
         IReadOnlyList<CardLite> CardPool,
@@ -800,7 +1050,12 @@ public class BreinInteractionMiningService(
         IReadOnlyList<string> StatusLexicon,
         RunTally Tally,
         SemaphoreSlim Gate,
-        ConcurrentDictionary<string, string> LabelCache)
+        ConcurrentDictionary<string, string> LabelCache,
+        string? ModelAlias,
+        string ExtractModelId,
+        BreinExtractSettings? Extract,
+        Action<string>? Progress,
+        int FocusTotal)
     {
         /// <summary>De rb-ai-aanroep zelf, op één plek zodat beide passes gegarandeerd
         /// dezelfde payload-vorm sturen.</summary>
@@ -811,6 +1066,10 @@ public class BreinInteractionMiningService(
                 new
                 {
                     system = InteractionExtraction.SystemPrompt,
+                    // #323: de beheerde alias — System.Text.Json serialiseert een
+                    // null gewoon mee en rb-ai's parser leest dat als "geen
+                    // override", dus het legacy-pad blijft byte-compatibel.
+                    model = ModelAlias,
                     text = offer.PromptText,
                     refs = offer.Plan.Refs.Select(r => new { r.Ref, r.Label }),
                     sections = offer.SectionRefs,
@@ -821,6 +1080,13 @@ public class BreinInteractionMiningService(
                     statusLexicon = StatusLexicon,
                 }, ct);
     }
+
+    /// <summary>Eén voorbereide focus-kaart (#323): de aanbieding plus alles wat
+    /// de promotie-lus nodig heeft — zodat het losse en het batch-pad exact
+    /// hetzelfde voorwerk delen.</summary>
+    private sealed record PreparedCard(
+        Card Card, string FocusRef, Offer Offer,
+        IReadOnlyDictionary<string, IReadOnlySet<string>> OwnKeywordRefs);
 
     /// <summary>Eén uitgewerkte aanbieding: het plan plus de daaruit afgeleide
     /// prompt-tekst, bewijs-eenheden en citeerbare sectie-refs.</summary>
@@ -867,6 +1133,16 @@ public class BreinInteractionMiningService(
             public long Refs;
         }
 
+        // Batch-meting (#323): sessies, opgetelde kaarten per sessie, en de
+        // sessie-brede maten (geweigerde onbekende codes; token-usage).
+        private int _batchSessions;
+        private long _batchCards;
+        private long _batchMillis;
+        private long _batchRefs;
+        private int _unknownCode;
+        private long? _inputTokens;
+        private long? _outputTokens;
+
         /// <summary>Het volgnummer voor de voortgangsmelding. Bij meerdere workers is
         /// dit "de zoveelste die is opgepakt", niet "de zoveelste die klaar is" —
         /// items ronden immers door elkaar af.</summary>
@@ -885,6 +1161,33 @@ public class BreinInteractionMiningService(
         }
 
         public void Ai(AiCallOutcome outcome) { lock (_gate) _ai.Add(outcome); }
+
+        /// <summary>Eén batch-sessie geteld (#323): wandklok, totaal aangeboden
+        /// refs en het aantal kaarten in de sessie.</summary>
+        public void BatchCall(long millis, int refs, int cards)
+        {
+            lock (_gate)
+            {
+                _batchSessions++;
+                _batchMillis += millis;
+                _batchRefs += refs;
+                _batchCards += cards;
+            }
+        }
+
+        /// <summary>Sessie-brede maten uit het batch-done-frame (#323):
+        /// geweigerde onbekende kaartcodes en token-usage. Usage telt alleen op
+        /// wanneer rb-ai iets meldde — null blijft "onbekend", nooit 0
+        /// (ADR-20-discipline).</summary>
+        public void NoteBatchEnvelope(int unknownCode, long? inputTokens, long? outputTokens)
+        {
+            lock (_gate)
+            {
+                _unknownCode += unknownCode;
+                if (inputTokens is { } i) _inputTokens = (_inputTokens ?? 0) + i;
+                if (outputTokens is { } o) _outputTokens = (_outputTokens ?? 0) + o;
+            }
+        }
 
         /// <summary>Telt één uitval, met de fijnmazige reden die rb-ai meestuurde
         /// (#281) — zo staat er "5xx×22 (max_turns×14, spawn×8)" in het run-detail
@@ -922,6 +1225,10 @@ public class BreinInteractionMiningService(
         public int Failed { get { lock (_gate) return _failed; } }
         public int SkippedKnown { get { lock (_gate) return _skippedKnown; } }
         public bool DeadlineHit { get { lock (_gate) return _deadlineHit; } }
+        public int BatchSessions { get { lock (_gate) return _batchSessions; } }
+        public int UnknownCode { get { lock (_gate) return _unknownCode; } }
+        public long? InputTokens { get { lock (_gate) return _inputTokens; } }
+        public long? OutputTokens { get { lock (_gate) return _outputTokens; } }
 
         public string? FailureDetail
         {
@@ -952,6 +1259,19 @@ public class BreinInteractionMiningService(
                             CultureInfo.InvariantCulture,
                             "{0} {1}× (gem. {2:0.0}s wandklok, {3:0.0} refs)",
                             name, s.Count, seconds, refs));
+                    }
+                    // Batch-sessies (#323) als eigen meetregel: gemiddelde duur,
+                    // refs én kaarten per sessie — de amortisatie-vraag ("wat
+                    // levert K op?") is anders niet te beantwoorden.
+                    if (_batchSessions > 0)
+                    {
+                        parts.Add(string.Format(
+                            CultureInfo.InvariantCulture,
+                            "batch {0}× (gem. {1:0.0}s wandklok, {2:0.0} refs, {3:0.0} kaarten/sessie)",
+                            _batchSessions,
+                            _batchMillis / 1000.0 / _batchSessions,
+                            (double)_batchRefs / _batchSessions,
+                            (double)_batchCards / _batchSessions));
                     }
                     return parts.Count == 0 ? null : "meting: " + string.Join(", ", parts);
                 }

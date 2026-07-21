@@ -943,3 +943,42 @@ test("stderrDigestLine redacteert zelf — een derde afnemer erft de poort", () 
   assert.ok(line.includes("Failed to spawn"), line);
   assert.ok(line.includes("ENOMEM"), line);
 });
+
+// ── #323: model_unavailable — een geweigerde model(-variant) is een eigen knop ─
+
+test("resultFailure: model-weigering → model_unavailable, niet api_error", () => {
+  // Gesimuleerd weiger-result (1M-variant niet op het abonnement): de reden
+  // moet beheer naar de model-keuze sturen, niet naar "de dienst is stuk".
+  const f = resultFailure({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    api_error_status: 404,
+    errors: ["model claude-fable-5[1m] not found or you do not have access to it"],
+  });
+  assert.equal(f?.reason, "model_unavailable");
+  assert.match(f!.detail, /api_status=404/);
+});
+
+test("resultFailure: kale 404 zonder model-tekst blijft api_error", () => {
+  // De classifier eist het woord model mét een weiger-woord in de buurt — een
+  // generieke 404 mag niet ineens naar de model-knop wijzen.
+  const f = resultFailure({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    api_error_status: 404,
+    errors: ["requested resource does not exist"],
+  });
+  assert.equal(f?.reason, "api_error");
+});
+
+test("resultFailure: 'unknown model'-vorm zonder statuscode → model_unavailable", () => {
+  const f = resultFailure({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["API error: unknown or invalid model: claude-sonnet-4-6[1m]"],
+  });
+  assert.equal(f?.reason, "model_unavailable");
+});
