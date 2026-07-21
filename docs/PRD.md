@@ -797,6 +797,10 @@ de globale duur-vangrail).
 - **Dynamische relaties** — één generiek edge-type `RELATES_TO {kind, trust,
   explanation, status}` met een open, gereviewd vocabulaire; LLM-relaties gaan
   nooit rechtstreeks de graph in (Postgres is de bron, projectie na review).
+  Sinds #317 zijn de eindpunten begrensd op de vijf gemeten knoopsoorten
+  (Card/Mechanic/Concept/RuleSection/Claim): een gereviewde relatie waarvan een
+  ref naar een andere knoopsoort wijst, wordt bij de rebuild bewust niet als
+  edge geprojecteerd (de relatie zelf blijft in Postgres staan).
 - **Rulings in de graph** (#191) — geverifieerde rulings/clarificaties krijgen
   een `Ruling`-knoop (alleen `status=verified`; een `kind`-property
   onderscheidt clarify-mining/chat-ruling/review-note) met dezelfde

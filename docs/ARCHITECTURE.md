@@ -350,6 +350,15 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   Keyword; 492/274/0 op de live graaf): `ValidateReifiedInteraction` leest de
   rol-range sindsdien uit het register, en de projectie dwingt haar per
   filler-soort af.
+  **Sinds #317 (baseline 4.0.0, major, classifier-geverifieerd)** is ook
+  `RELATES_TO` op de meting gebracht: domain/range is verbreed van het te smalle
+  `[Concept, Card]` naar de vijf gemeten eindpunt-soorten (Card, Mechanic,
+  Concept, RuleSection, Claim — twaalf levende label-combinaties op de live
+  graaf), en de projectie dwingt die breedte af met één WHERE-label-disjunctie
+  per kant (§6.3). Een verbreding voelt additief, maar de classifier vergelijkt
+  structuur-regels als verzameling: de bestaande regel is herschreven, dus major
+  — zelfde uitkomst als de SUPERSEDES-herdeclaratie in 3.0.0, vastgepind in
+  `Bump_VerbredeDomainRange_IsMajor_WantDeOudeRegelVerdwijnt`.
 - **`RbRules.Domain/Provenance.cs` + `ProvenanceAuditService` — provenance-
   ruggengraat (fase 0a, #233).** Versla faalmodus #4 (ontbrekende provenance)
   als schema-invariant, niet als discipline. Twee nieuwe entiteiten (Postgres,
@@ -1705,8 +1714,11 @@ toekomstige achtste), `Provenance` (herkomsttrail, bewust buiten de TBox —
 `PRECEDES`). Een lijst "bewust niet-ontologisch" is óók een beslissing; dat is
 precies waarom ze hier staat.
 Een `Issue`-referentie mag bij **elke** stand: `InSchema` zegt "de NAAM staat in
-het register", niet "er is niets aan de hand" — `RELATES_TO` draagt daarom zijn
-open defect #317 mee (de label-loze match, afgesplitst uit #296; zie §11).
+het register", niet "er is niets aan de hand" — zo droeg `RELATES_TO` tot #317
+zijn open defect mee (de label-loze match, afgesplitst uit #296). Sinds #317 is
+dat opgelost: de declaratie staat op de vijf gemeten eindpunt-soorten en beide
+statements dwingen ze af met een WHERE-label-disjunctie (zie de knooplabel-guard
+hieronder); er is op dit moment geen entry met een open defect meer.
 
 `ProjectionOntologyGuardTests` houdt die catalogus eerlijk door beide projecties
 tegen een opnemende Neo4j-driver te draaien en de **uitgevoerde** Cypher te
@@ -1772,13 +1784,14 @@ NAMEN, en een naam-guard ziet per constructie niet dat een edge de verkeerde
 KLASSEN verbindt. `ProjectionEdgeShapeCatalog` (Domain) registreert daarom de
 **29 knooplabel-vormen** waarin de twee projecties hun edges schrijven —
 `(:Claim)-[:ABOUT]->(:Card)`, `(:Erratum)-[:SUPERSEDES]->(:Card)`,
-`()-[:RELATES_TO]->()`, … — en `ProjectionLabelCheck` houdt elke vorm
-subklasse-polymorf (`OntologySchema.IsA`) tegen de gedeclareerde domain/range.
-Een LEGE labellijst betekent "de projectie legt hier geen label op"; die staat
-expliciet in het register, want een stille overgang van gebonden naar label-loos
-is precies het dekkingsverlies dat de guard moet betrappen. De vormen zijn tegen
-de live graaf gehouden en komen daar één-op-één uit (`PART_OF` 2139, `HAS_TAG`
-982, `FROM_SET` 963, `EXPLAINS` 101, `ABOUT` 77 rijen).
+`(:Card|Claim|Concept|Mechanic|RuleSection)-[:RELATES_TO]->(…)`, … — en
+`ProjectionLabelCheck` houdt elke vorm subklasse-polymorf (`OntologySchema.IsA`)
+tegen de gedeclareerde domain/range. Een LEGE labellijst betekent "de projectie
+legt hier geen label op"; die staat expliciet in het register, want een stille
+overgang van gebonden naar label-loos is precies het dekkingsverlies dat de
+guard moet betrappen. De vormen zijn tegen de live graaf gehouden en komen daar
+één-op-één uit (`PART_OF` 2139, `HAS_TAG` 982, `FROM_SET` 963, `EXPLAINS` 101,
+`ABOUT` 77 rijen).
 
 De labels komen uit dezelfde tokenizer, uitgebreid met **alias-binding per
 statement**: in `MERGE (c)-[:HAS_TAG]->(t)` staat het label van `c` in een
@@ -1788,12 +1801,33 @@ gestripte tekst, met drie regels. (a) De binding is **statement-scoped** — `c`
 twee mogen elkaar niet raken. (b) Een alias zonder label is **onbepaald**, geen
 fout. (c) Bindingen worden **geunieerd**, niet overschreven, anders wist de
 latere label-loze vermelding in `MERGE (c)-[:FROM_SET]->(s)` de eerdere. Alleen
-patronen in keten-positie tellen mee, zodat een predicaat
-(`WHERE (n:Set OR n:Domain)`) geen nep-binding oplevert — dat zou vals alarm
-geven. De labels zijn die welke het STATEMENT afdwingt, niet elk label dat de
-knoop toevallig draagt: `MATCH (ix:Interaction {ref: …})` levert `Interaction`,
-ook al meet de live graaf bij `REQUIRES_CONDITION` óók `Concept` (de knoop is
-`:Interaction:Concept`).
+patronen in keten-positie tellen mee als knooppatroon, zodat een haakjes-groep in
+een predicaat geen nep-alias oplevert. De labels zijn die welke het STATEMENT
+afdwingt, niet elk label dat de knoop toevallig draagt:
+`MATCH (ix:Interaction {ref: …})` levert `Interaction`, ook al meet de live graaf
+bij `REQUIRES_CONDITION` óók `Concept` (de knoop is `:Interaction:Concept`).
+
+**WHERE-label-disjuncties (#317).** Een label-loze ref-match kan zijn labels ook
+via het predicaat afdwingen: `MATCH (a {ref: …}) WHERE (a:Card OR a:Mechanic OR
+…)` garandeert dat de knoop ÉÉN van de soorten is. De scanner leest zo'n
+disjunctie en bindt haar als **disjunctief** eindpunt — een wezenlijk andere
+bewering dan een multi-label patroon (dat ÁLLE labels garandeert), met een eigen
+toets: conjunctief volstaat één passend label, disjunctief moet élke soort
+binnen de declaratie vallen, anders kan het statement een niet-conforme edge
+schrijven (declaratie smaller dan afgedwongen → `Violates`). De lezing is bewust
+strikt — alleen zuivere `alias:Label`-OR-groepen over één alias binden;
+AND-termen zijn onafhankelijk; `NOT`, property-vergelijkingen en gemengde
+aliassen binden niets (een verzonnen garantie is stil, een gemiste komt
+luidruchtig terug als "niet te garanderen"). Twee scherpe randen uit het bouwen:
+een label direct na `:` of `.` is een NAAM, geen clausule-keyword (`n:Set` bevat
+het label Set, niet de SET-clausule — anders kapte het WHERE-lichaam af midden
+in de disjunctie), en een label-EXPRESSIE in een patroon (`(a:Card|Mechanic)`)
+telt niet als conjunctieve garantie maar als onbepaald. Beide
+`RELATES_TO`-statements (de #116-relaties en de qualifier-cache) dragen sinds
+#317 zo'n disjunctie op beide kanten, exact de vijf gemeten soorten; een ref
+naar een knoop búíten die vijf wordt bewust NIET geschreven — dat ís de
+afdwinging, en `RelatesToRijen_InDeFixture_WijzenAlleenNaarDeVijfAfgedwongenSoorten`
+bewaakt dat de fixture (en daarmee het gedekte gedrag) er niets door verliest.
 
 `ProjectionLabelGuardTests` draait, net als G1-G5, op de UITGEVOERDE Cypher:
 
@@ -1802,19 +1836,22 @@ ook al meet de live graaf bij `REQUIRES_CONDITION` óók `Concept` (de knoop is
 - **L3** — elke schending van de gedeclareerde domain/range is gedekt door een
   erkend, gedocumenteerd `KnownLabelDefect` mét issue-referentie.
 - **L4** — elk erkend defect bestaat nog écht. Dít onderscheidt een waiver van
-  een mute-knop: wordt #317 gerepareerd, of verandert het van vorm, dan gaat de
-  waiver rood met de opdracht hem op te ruimen. Zonder deze kant blijft een
-  opgelost defect als open schuld geboekt staan én dekt de waiver vanaf dat
-  moment stil iets ánders af dan waarvoor hij is aangenomen. Precies zo is de
-  `SUPERSEDES`-waiver bij #296 opgeruimd: de range werd op de meting gebracht en
-  L4 zou een achterblijvende waiver rood hebben gezet.
+  een mute-knop: wordt een defect gerepareerd, of verandert het van vorm, dan
+  gaat de waiver rood met de opdracht hem op te ruimen. Zonder deze kant blijft
+  een opgelost defect als open schuld geboekt staan én dekt de waiver vanaf dat
+  moment stil iets ánders af dan waarvoor hij is aangenomen. Precies zo zijn de
+  `SUPERSEDES`-waiver (#296) en de twee `RELATES_TO`-waivers (#317) opgeruimd:
+  de declaraties werden op de meting gebracht (en bij RELATES_TO de projectie
+  afdwingbaar gemaakt), waarna L4 een achterblijvende waiver rood zou zetten —
+  geverifieerd met de mutatie die een waiver terugzet terwijl het defect weg is.
 - **L5/L0** — de vormen zijn rij-onafhankelijk, en de twee registers dekken
   elkaar (elke naam heeft een vorm, elke vorm een geclassificeerde naam).
 
-Vandaag dekken twee `KnownLabelDefect`s precies twee bevindingen af, beide
-#317: de label-loze kanten van `RELATES_TO`. De derde (de `SUPERSEDES`-range,
-#296) is opgelost door de declaratie op de gemeten werkelijkheid te brengen —
-Erratum → Card — waarna de waiver weg móest (L4).
+Sinds #317 is het defectregister voor het eerst **leeg**: élke geprojecteerde
+vorm is conform de gedeclareerde domain/range. De laatste twee waivers (de
+label-loze `RELATES_TO`-kanten) verdwenen toen de WHERE-label-disjunctie de
+gemeten vijf soorten afdwingbaar maakte; de `SUPERSEDES`-waiver was al bij #296
+opgeruimd (declaratie op de meting: Erratum → Card).
 
 **Wat de knooplabel-guard niet ziet.** G5 (bron ⊆ uitgevoerd) is bewust NIET
 herhaald op vormen. Een heel bronbestand is geen statement: de aliassen van álle
@@ -1891,7 +1928,10 @@ wezenlijk. De NAAM-guard vraagt "kent het register deze edge?"; de
 KNOOPLABEL-guard (§6.3) vraagt "verbindt hij de klassen die het register
 belooft?". Alleen die tweede vraag betrapt `(:Erratum)-[:SUPERSEDES]->(:Card)`
 tegen een gedeclareerde range `NormativeSource` — de naam klopt daar namelijk
-perfect. Een derde vraag blijft open en hoort NIET bij deze guards: of de
+perfect. Sinds #317 leest die knooplabel-guard afdwinging ook uit
+WHERE-label-disjuncties (disjunctieve eindpunten, met de omgekeerde toets:
+élke soort moet binnen de declaratie vallen), zodat ook `RELATES_TO` — bewust
+één statement over heterogene eindpunten — een afdwingbare declaratie heeft. Een derde vraag blijft open en hoort NIET bij deze guards: of de
 KARDINALITEIT en de logische eigenschappen (functioneel, transitief, acyclisch)
 kloppen met wat de projectie bouwt. `SUPERSEDES` is bijvoorbeeld gedeclareerd
 als `0..1` én acyclisch (sinds #296 zonder de transitive-trait: Erratum → Card
@@ -1930,9 +1970,12 @@ Postgres blijft.
 (`entity:` / `predicate:` / `ontologyversion:`) die NIET in het `BrainRef`-alfabet
 zit, en de projectie linkt NIET naar GraphSyncService-eigen knopen
 (Card/Mechanic/MiningRun/…). Dat is bewust en dubbel gemotiveerd: (a)
-GraphSyncService matcht `DERIVED_FROM`/`RELATES_TO` label-LOOS op `ref` — zou een
-brein-knoop de `mechanic:`-ref van een bestaande `:Mechanic`-knoop delen, dan werd
-zo'n match ambigu en maakte hij dubbele edges; (b) GraphSyncService `DETACH
+GraphSyncService matcht `DERIVED_FROM` label-LOOS op `ref` (en `RELATES_TO` op
+`ref` met sinds #317 een label-disjunctie erbovenop — die disjunctie sluit een
+`:CanonicalEntity`-knoop wél uit, maar de ambiguïteit van de ref-match zelf
+blijft het argument) — zou een brein-knoop de `mechanic:`-ref van een bestaande
+`:Mechanic`-knoop delen, dan werd zo'n match ambigu en maakte hij dubbele
+edges; (b) GraphSyncService `DETACH
 DELETE`t + `CREATE`t zijn eigen labels (MiningRun/Assertion/Interaction) elke
 rebuild — een edge daarheen zou een latere `graph`-run weer weggooien. Provenance
 rijdt daarom als `createdByRun`-property mee, niet als edge; de BrainRef-vorm
@@ -3915,22 +3958,31 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   chains) bron-edges/class-anchor-labels die `GraphSyncService` nog niet
   materialiseert; die projectie-uitbreiding + een integratietest tegen een echte
   Neo4j is de openstaande follow-up (`ReasoningService`, `InferenceRuleRegistry`).
-- **`RELATES_TO` blijft label-loos en dus niet-afdwingbaar (#317, uit #296).**
-  De projectie matcht beide eindpunten op `ref` zonder label
-  (`MATCH (a {ref: …})`) omdat een `RELATES_TO` tussen élke twee knoopsoorten kan
-  lopen; de gedeclareerde domain/range `[Concept, Card]` is daarmee per
-  constructie niet afdwingbaar. De knooplabel-guard (§6.3) houdt dit zichtbaar
-  als twee `KnownLabelDefect`-waivers (L3/L4). De rest van #296 en heel #304 is
-  opgelost: de zeven voormalige `DomeinNogNietGedeclareerd`-edges zijn
-  gedeclareerd op de gemeten domain/range (baseline **3.0.0**, major), de dode
-  `INTRODUCED_IN`-declaratie is hernoemd naar `FROM_SET`, `SUPERSEDES` declareert
-  het gemeten `Erratum → Card`, en de drie plekken die `Keyword` als
-  HAS_ROLE-filler beweerden (validator, miner, deze documentatie) zijn op de
-  meting gebracht (492 × Card, 274 × Mechanic, nul × Keyword). Wat níet
-  meeverhuisde: de canonieke entiteit-laag registreert gedrukte keywords nog
-  steeds als kind `keyword` terwijl de projectie er `:Mechanic`-knopen van maakt —
-  de #274-kanttekening (a) in `OntologySchema`, ontwerpschuld van het samenvoegen
-  van die twee lagen, niet van deze declaratieronde.
+- **`RELATES_TO` is sinds #317 afdwingbaar; het waiver-register is leeg.**
+  Tot #317 matchte de projectie beide eindpunten op `ref` zonder label
+  (`MATCH (a {ref: …})`) en was de gedeclareerde domain/range `[Concept, Card]`
+  per constructie niet afdwingbaar (én gemeten onwaar) — zichtbaar gehouden als
+  twee `KnownLabelDefect`-waivers. Sindsdien declareert het register de vijf
+  GEMETEN eindpunt-soorten (Card, Mechanic, Concept, RuleSection, Claim; twaalf
+  levende label-combinaties, baseline **4.0.0**, major), dwingen beide
+  statements ze af met één WHERE-label-disjunctie per kant (§6.3) en zijn de
+  waivers opgeruimd — een ref naar een knoop búíten de vijf wordt bewust NIET
+  geschreven. Restpunten die hier bewust blijven staan: (a) `DERIVED_FROM`
+  matcht nog wél label-loos op `ref` — provenance, buiten de TBox, heterogene
+  doelen; er is geen declaratie om af te dwingen; (b) `Mechanic` in de
+  RELATES_TO-declaratie is redundant (Mechanic ⊑ Concept dekt hem al), dus
+  alléén Mechanic eruit halen maakt de label-guard niet rood — de
+  has-pending-gate wel. De rest van #296 en heel #304 was al opgelost: de zeven
+  voormalige `DomeinNogNietGedeclareerd`-edges zijn gedeclareerd op de gemeten
+  domain/range (3.0.0), de dode `INTRODUCED_IN`-declaratie is hernoemd naar
+  `FROM_SET`, `SUPERSEDES` declareert het gemeten `Erratum → Card`, en de drie
+  plekken die `Keyword` als HAS_ROLE-filler beweerden (validator, miner, deze
+  documentatie) zijn op de meting gebracht (492 × Card, 274 × Mechanic, nul ×
+  Keyword). Wat níet meeverhuisde: de canonieke entiteit-laag registreert
+  gedrukte keywords nog steeds als kind `keyword` terwijl de projectie er
+  `:Mechanic`-knopen van maakt — de #274-kanttekening (a) in `OntologySchema`,
+  ontwerpschuld van het samenvoegen van die twee lagen, niet van deze
+  declaratieronde.
 - **`BrainQuery.EdgeTypes` blijft handwerk.** Sinds #304 staan 10 van de 12
   whitelist-entries in de TBox, maar `SUPPORTED_BY` en `AFFECTS` horen er bewust
   niet in (Provenance-stand) — mechanisch afleiden uit `OntologySchema` zou die

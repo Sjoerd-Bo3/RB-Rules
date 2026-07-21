@@ -18,9 +18,10 @@ namespace RbRules.Domain;
 /// KRITIEK — ref-namespace-scheiding. De owned-node-refs dragen een EIGEN prefix
 /// (<c>entity:</c>/<c>predicate:</c>/<c>ontologyversion:</c>) die NIET in het
 /// <see cref="BrainRef"/>-alfabet zit. Dat is bewust: GraphSyncService matcht
-/// DERIVED_FROM/RELATES_TO label-LOOS op <c>ref</c>; zou een brein-node de
+/// DERIVED_FROM label-LOOS op <c>ref</c> (en RELATES_TO op <c>ref</c> met sinds
+/// #317 een label-disjunctie erbovenop); zou een brein-node de
 /// <c>mechanic:</c>-ref van een bestaande <c>:Mechanic</c>-knoop delen, dan werd zo'n
-/// label-loze match ambigu en zou hij dubbele edges maken. De eigen prefix sluit dat
+/// ref-match ambigu en zou hij dubbele edges maken. De eigen prefix sluit dat
 /// uit, en de projectie linkt daarom NIET naar GraphSyncService-eigen knopen
 /// (Card/Mechanic/MiningRun/…) — provenance rijdt als <c>createdByRun</c>-property mee,
 /// niet als edge naar een knoop die een latere graph-rebuild weer weggooit.</summary>

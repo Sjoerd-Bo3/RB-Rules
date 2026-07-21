@@ -71,7 +71,9 @@ public class BrainProjectionTests
     {
         // Alle DRIE de owned-node-prefixes (entity:/predicate:/ontologyversion:)
         // moeten disjunct blijven van het BrainRef-alfabet — anders wordt een
-        // label-loze DERIVED_FROM/RELATES_TO-match in GraphSyncService ambigu.
+        // ref-match in GraphSyncService ambigu (DERIVED_FROM matcht label-loos;
+        // RELATES_TO matcht op ref met sinds #317 een label-disjunctie erbovenop,
+        // maar de ambiguïteit van de ref-match zelf blijft het argument).
         // Eén entiteit als subject zodat het predicaat óók een node oplevert.
         var rows = BrainProjection.Build(
             [Entity(1, CanonicalEntityKinds.Mechanic, "Deflect")],
