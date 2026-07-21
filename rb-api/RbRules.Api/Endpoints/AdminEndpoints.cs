@@ -86,10 +86,14 @@ public static class AdminEndpoints
             try
             {
                 var r = await graph.SyncAsync();
+                // De pijplijn schreef bij verlies zelf al een warn-regel (#321);
+                // deze ok-regel draagt de note mee zodat de twee elkaar niet
+                // tegenspreken in het run_log-overzicht.
                 db.RunLogs.Add(new RunLog
                 {
                     Kind = "graph", Ref = null, Status = "ok",
-                    Detail = $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics",
+                    Detail = $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics"
+                        + (r.RelationsDropNote is { } note ? $" — {note}" : ""),
                 });
                 await db.SaveChangesAsync();
                 return Results.Ok(r);

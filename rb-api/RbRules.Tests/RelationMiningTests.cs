@@ -238,4 +238,112 @@ public class RelationMiningTests
         var kinds = RelationProjection.AcceptedKindSet(["Unlocks"]);
         Assert.True(RelationProjection.ShouldProject("accepted", "unlocks", kinds));
     }
+
+    // ── RELATES_TO-eindpunt-poort (#321) ───────────────────────────────
+
+    [Fact]
+    public void CanBeEndpoint_PreciesDeVijfProjecteerbareSoorten()
+    {
+        // LITERALS, geen afleiding uit de catalogus die de poort zelf leest
+        // (#286d/#293b: een assertie tegen de constante die ze bewaakt schuift
+        // mee). Verandert de gemeten projectie-breedte, dan hoort deze test
+        // bewust rood te gaan — samen met declaratie én disjunctie (#317).
+        BrainRefKind[] projecteerbaar =
+        [
+            BrainRefKind.Card, BrainRefKind.Mechanic, BrainRefKind.Concept,
+            BrainRefKind.Section, BrainRefKind.Claim,
+        ];
+
+        foreach (var kind in Enum.GetValues<BrainRefKind>())
+            Assert.Equal(projecteerbaar.Contains(kind), RelationProjection.CanBeEndpoint(kind));
+    }
+
+    [Fact]
+    public void CanBeEndpoint_LeestDeCatalogus_GeenTweedeKopie()
+    {
+        // De kern van #321: poort en projectie lezen dezelfde bron
+        // (ProjectionEdgeShapeCatalog, die ProjectionLabelGuardTests in beide
+        // richtingen tegen de uitgevoerde Cypher houdt). Zou iemand de poort
+        // ooit op een eigen lijst zetten, dan gaat deze spiegel rood zodra de
+        // catalogus beweegt — precies de drift die een kopie stil maakt.
+        var shapes = RbRules.Domain.Ontology.ProjectionEdgeShapeCatalog
+            .For(RelationProjection.RelatesToEdgeName)
+            .ToList();
+        Assert.NotEmpty(shapes);
+
+        foreach (var kind in Enum.GetValues<BrainRefKind>())
+        {
+            var label = BrainQuery.GraphLabel(kind);
+            var verwacht = label is not null && shapes.Any(s =>
+                s.FromLabels.Contains(label, StringComparer.Ordinal) ||
+                s.ToLabels.Contains(label, StringComparer.Ordinal));
+            Assert.Equal(verwacht, RelationProjection.CanBeEndpoint(kind));
+        }
+    }
+
+    [Fact]
+    public void RelatesToVorm_IsSymmetrisch_AndersPoortZijdeBewustMaken()
+    {
+        // De agentic poort toetst kandidaat-refs zijde-loos (een kandidaat is
+        // nog niet aan een van/naar-kant gebonden). Dat is alleen correct
+        // zolang beide kanten dezelfde soorten dragen — lopen ze uiteen, dan
+        // moet de poort per voorstel-kant gaan toetsen i.p.v. per kandidaat.
+        foreach (var shape in RbRules.Domain.Ontology.ProjectionEdgeShapeCatalog
+                     .For(RelationProjection.RelatesToEdgeName))
+            Assert.True(
+                shape.FromLabels.Order(StringComparer.Ordinal)
+                    .SequenceEqual(shape.ToLabels.Order(StringComparer.Ordinal)),
+                $"RELATES_TO-vorm {shape.Format()} is asymmetrisch geworden — maak "
+                + "RelationProjection.CanBeEndpoint(kind) en de agentic poort zijde-bewust");
+    }
+
+    [Fact]
+    public void CanBeEndpoint_RefTekst_OnparseerbaarOfBreinNamespace_TeltAlsBuiten()
+    {
+        // entity:/predicate:-refs (brein-namespace, geen BrainRef-alfabet)
+        // kunnen per constructie nooit als eindpunt landen.
+        Assert.False(RelationProjection.CanBeEndpoint(
+            "entity:12", RbRules.Domain.Ontology.EdgeEndpoint.From));
+        Assert.False(RelationProjection.CanBeEndpoint(
+            (string?)null, RbRules.Domain.Ontology.EdgeEndpoint.From));
+        Assert.True(RelationProjection.CanBeEndpoint(
+            "card:ogn-011-298", RbRules.Domain.Ontology.EdgeEndpoint.To));
+    }
+
+    // ── Eerlijke RELATES_TO-telling (#321, ADR-20) ─────────────────────
+
+    [Fact]
+    public void RelatesToWriteTally_SplitsHetGatPerOorzaak()
+    {
+        var tally = RelatesToWriteTally.Create(offered: 5, written: 2, outsideProjection: 2);
+
+        Assert.Equal(5, tally.Offered);
+        Assert.Equal(2, tally.Written);
+        Assert.Equal(3, tally.Dropped);
+        Assert.Equal(2, tally.OutsideProjection);
+        Assert.Equal(1, tally.MissingNode);
+        Assert.Equal("2 eindpunt-soort buiten de projectie, 1 ref zonder knoop",
+            tally.OorzaakTekst());
+    }
+
+    [Fact]
+    public void RelatesToWriteTally_ZonderMeting_RekentAlleenHetDeterministischeDeelAf()
+    {
+        // Geen count(r)-rij (opnemende test-driver): het buiten-de-projectie-
+        // deel is tóch bekend — de WHERE weigert het per constructie — en telt
+        // dus mee; over de rest is niets gemeten en die geldt als geschreven.
+        var tally = RelatesToWriteTally.Create(offered: 4, written: null, outsideProjection: 1);
+
+        Assert.Equal(3, tally.Written);
+        Assert.Equal(1, tally.OutsideProjection);
+        Assert.Equal(0, tally.MissingNode);
+        Assert.Equal(1, tally.Dropped);
+    }
+
+    [Fact]
+    public void RelatesToWriteTally_AllesGeland_GeenGat()
+    {
+        var tally = RelatesToWriteTally.Create(offered: 3, written: 3, outsideProjection: 0);
+        Assert.Equal(0, tally.Dropped);
+    }
 }

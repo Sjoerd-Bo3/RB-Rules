@@ -5,9 +5,13 @@ namespace RbRules.Infrastructure;
 
 /// <summary>Uitkomst van één voorstellen-oogst (#120), met een compacte
 /// trace-regel voor AskTrace.BrainSteps — de teller die de beheerder in de
-/// vraag-trace ziet.</summary>
+/// vraag-trace ziet. <see cref="OutsideProjection"/> (#321): kandidaat-refs
+/// die als knoop bestáán maar waarvan de soort nooit als RELATES_TO-eindpunt
+/// projecteert — geweigerd mét reden i.p.v. opgeslagen-en-elke-rebuild-stil-
+/// verdampt.</summary>
 public record AgenticRelationResult(
-    int Stored, int Blocked, int Duplicates, int NewKinds, string TraceLine);
+    int Stored, int Blocked, int Duplicates, int NewKinds,
+    int OutsideProjection, string TraceLine);
 
 /// <summary>Agentic-terugkoppeling (#120): het relatievoorstellen-blok dat
 /// de ask-agent na zijn antwoord achterliet parseren, valideren en als
@@ -58,22 +62,42 @@ public class AgenticRelationService(RbRulesDbContext db, BrainService brain)
                          + $"Blok (afgekapt): {LlmJson.Snippet(rawProposals, ResponseSnippetLength)}",
             });
             await db.SaveChangesAsync(ct);
-            return new(0, 0, 0, 0,
+            return new(0, 0, 0, 0, 0,
                 "[relatievoorstellen: blok onparseerbaar — genegeerd, zie run_log]");
         }
 
-        // Hallucinatie-weer: alleen refs die als knoop in het brein bestaan.
-        // De agent kreeg zijn refs uit de tool-resultaten en die komen uit
-        // ditzelfde brein — een ref die hier niet resolvet is per definitie
-        // verzonnen (of inmiddels verdwenen) en komt de database nooit in.
+        // Twee poorten, elk met een eigen teller en reden (#321):
+        // 1. De poort spiegelt de projectie (#286a-les): een ref-soort die de
+        //    RELATES_TO-projectie nooit als eindpunt schrijft (alles buiten
+        //    Card/Mechanic/Concept/RuleSection/Claim — de lijst komt uit de
+        //    catalogus, niet uit een kopie hier) wordt geweigerd mét reden.
+        //    Zonder deze poort landt zo'n voorstel als geldige rij die sinds
+        //    #320 elke rebuild stil verdampt: BrainService.NodeAsync resolvet
+        //    immers óók ruling:/source:/erratum:/change:/set:/domain:/tag:.
+        // 2. Hallucinatie-weer: alleen refs die als knoop in het brein bestaan.
+        //    De agent kreeg zijn refs uit de tool-resultaten en die komen uit
+        //    ditzelfde brein — een ref die hier niet resolvet is per definitie
+        //    verzonnen (of inmiddels verdwenen) en komt de database nooit in.
         var canonicalByOffered = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var outsideProjection = 0;
+        var refusedKinds = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var candidate in candidates)
         {
             if (!BrainRef.TryParse(candidate, out var parsed)) continue;
+            if (!RelationProjection.CanBeEndpoint(parsed.Kind))
+            {
+                outsideProjection++;
+                refusedKinds.Add(RefKindLabel(parsed));
+                continue;
+            }
             if (await brain.NodeAsync(parsed, ct) is { } node)
                 canonicalByOffered[candidate] = node.Ref;
         }
-        var blocked = candidates.Count - canonicalByOffered.Count;
+        var blocked = candidates.Count - outsideProjection - canonicalByOffered.Count;
+        var refusalNote = outsideProjection > 0
+            ? $", {outsideProjection} geweigerd (eindpunt-soort projecteert niet: "
+              + $"{string.Join(", ", refusedKinds)})"
+            : "";
 
         // Zelfde parser als de mining (gedeelde LlmJson): normalisatie, caps,
         // zelf-relaties en dedupe binnen het blok. offeredRefs is hier de
@@ -158,14 +182,24 @@ public class AgenticRelationService(RbRulesDbContext db, BrainService brain)
             Kind = "relations", Ref = ProvenancePrefix, Status = "ok",
             Detail = $"{stored} relatievoorstellen uit agentic ask, {blocked} geweerd "
                      + $"(onbekende ref), {duplicates} al bekend"
+                     + refusalNote
                      + (newKinds > 0 ? $", {newKinds} nieuwe kind-kandidaten" : "")
                      + $" — vraag: {questionSnippet}",
         });
         await db.SaveChangesAsync(ct);
 
-        return new(stored, blocked, duplicates, newKinds,
+        return new(stored, blocked, duplicates, newKinds, outsideProjection,
             $"[relatievoorstellen: {stored} opgeslagen, {blocked} geweerd (onbekende ref), "
             + $"{duplicates} al bekend"
+            + refusalNote
             + (newKinds > 0 ? $", {newKinds} nieuwe kind-kandidaten" : "") + "]");
+    }
+
+    /// <summary>Het ref-prefix ("ruling", "source") als soortnaam in de
+    /// weiger-reden — dezelfde spelling die de agent zelf aanbood.</summary>
+    private static string RefKindLabel(BrainRef parsed)
+    {
+        var formatted = parsed.Format();
+        return formatted[..formatted.IndexOf(':')];
     }
 }

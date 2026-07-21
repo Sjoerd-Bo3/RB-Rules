@@ -800,7 +800,12 @@ de globale duur-vangrail).
   Sinds #317 zijn de eindpunten begrensd op de vijf gemeten knoopsoorten
   (Card/Mechanic/Concept/RuleSection/Claim): een gereviewde relatie waarvan een
   ref naar een andere knoopsoort wijst, wordt bij de rebuild bewust niet als
-  edge geprojecteerd (de relatie zelf blijft in Postgres staan).
+  edge geprojecteerd (de relatie zelf blijft in Postgres staan). Sinds #321 is
+  dat niet-projecteren nooit stil: de rebuild telt wat Neo4j wérkelijk schreef
+  en meldt het verschil met het aanbod per oorzaak (eindpunt-soort buiten de
+  projectie vs. ref zonder knoop) als warn-regel in run_log en in het
+  job-detail; de agentic voorstellen-poort weigert een eindpunt buiten de vijf
+  bovendien al aan de bron, mét reden in de terugkoppeling.
 - **Rulings in de graph** (#191) — geverifieerde rulings/clarificaties krijgen
   een `Ruling`-knoop (alleen `status=verified`; een `kind`-property
   onderscheidt clarify-mining/chat-ruling/review-note) met dezelfde

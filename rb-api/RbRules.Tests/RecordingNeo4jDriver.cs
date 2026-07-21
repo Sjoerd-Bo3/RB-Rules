@@ -31,7 +31,7 @@ internal sealed record RecordedStatement(string Cypher, IReadOnlyDictionary<stri
         .FirstOrDefault();
 }
 
-internal sealed class RecordingDriver : IDriver
+internal sealed class RecordingDriver(Func<string, long?>? resultCount = null) : IDriver
 {
     private readonly List<RecordedStatement> _statements = [];
 
@@ -42,7 +42,7 @@ internal sealed class RecordingDriver : IDriver
     /// <summary>Alleen de query-teksten.</summary>
     public IReadOnlyList<string> Queries => [.. _statements.Select(s => s.Cypher)];
 
-    public IAsyncSession AsyncSession() => new RecordingSession(_statements);
+    public IAsyncSession AsyncSession() => new RecordingSession(_statements, resultCount);
     public IAsyncSession AsyncSession(Action<SessionConfigBuilder> action) => AsyncSession();
 
     public Config Config => throw new NotSupportedException();
@@ -63,10 +63,11 @@ internal sealed class RecordingDriver : IDriver
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-internal sealed class RecordingSession(List<RecordedStatement> queries) : IAsyncSession
+internal sealed class RecordingSession(
+    List<RecordedStatement> queries, Func<string, long?>? resultCount = null) : IAsyncSession
 {
     public Task<IAsyncTransaction> BeginTransactionAsync() =>
-        Task.FromResult<IAsyncTransaction>(new RecordingTransaction(queries));
+        Task.FromResult<IAsyncTransaction>(new RecordingTransaction(queries, resultCount));
     public Task<IAsyncTransaction> BeginTransactionAsync(Action<TransactionConfigBuilder> action) =>
         BeginTransactionAsync();
     public Task<IAsyncTransaction> BeginTransactionAsync(AccessMode mode) =>
@@ -97,29 +98,30 @@ internal sealed class RecordingSession(List<RecordedStatement> queries) : IAsync
     public Bookmarks LastBookmarks => throw new NotSupportedException();
     public SessionConfig SessionConfig => throw new NotSupportedException();
 
-    public Task<T> ReadTransactionAsync<T>(Func<IAsyncTransaction, Task<T>> work) => work(new RecordingTransaction(queries));
-    public Task<T> ReadTransactionAsync<T>(Func<IAsyncTransaction, Task<T>> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries));
-    public Task ReadTransactionAsync(Func<IAsyncTransaction, Task> work) => work(new RecordingTransaction(queries));
-    public Task ReadTransactionAsync(Func<IAsyncTransaction, Task> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries));
-    public Task<T> WriteTransactionAsync<T>(Func<IAsyncTransaction, Task<T>> work) => work(new RecordingTransaction(queries));
-    public Task<T> WriteTransactionAsync<T>(Func<IAsyncTransaction, Task<T>> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries));
-    public Task WriteTransactionAsync(Func<IAsyncTransaction, Task> work) => work(new RecordingTransaction(queries));
-    public Task WriteTransactionAsync(Func<IAsyncTransaction, Task> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries));
-    public Task<T> ExecuteReadAsync<T>(Func<IAsyncQueryRunner, Task<T>> work) => work(new RecordingTransaction(queries));
-    public Task<T> ExecuteReadAsync<T>(Func<IAsyncQueryRunner, Task<T>> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries));
-    public Task ExecuteReadAsync(Func<IAsyncQueryRunner, Task> work) => work(new RecordingTransaction(queries));
-    public Task ExecuteReadAsync(Func<IAsyncQueryRunner, Task> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries));
-    public Task<T> ExecuteWriteAsync<T>(Func<IAsyncQueryRunner, Task<T>> work) => work(new RecordingTransaction(queries));
-    public Task<T> ExecuteWriteAsync<T>(Func<IAsyncQueryRunner, Task<T>> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries));
-    public Task ExecuteWriteAsync(Func<IAsyncQueryRunner, Task> work) => work(new RecordingTransaction(queries));
-    public Task ExecuteWriteAsync(Func<IAsyncQueryRunner, Task> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries));
+    public Task<T> ReadTransactionAsync<T>(Func<IAsyncTransaction, Task<T>> work) => work(new RecordingTransaction(queries, resultCount));
+    public Task<T> ReadTransactionAsync<T>(Func<IAsyncTransaction, Task<T>> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries, resultCount));
+    public Task ReadTransactionAsync(Func<IAsyncTransaction, Task> work) => work(new RecordingTransaction(queries, resultCount));
+    public Task ReadTransactionAsync(Func<IAsyncTransaction, Task> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries, resultCount));
+    public Task<T> WriteTransactionAsync<T>(Func<IAsyncTransaction, Task<T>> work) => work(new RecordingTransaction(queries, resultCount));
+    public Task<T> WriteTransactionAsync<T>(Func<IAsyncTransaction, Task<T>> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries, resultCount));
+    public Task WriteTransactionAsync(Func<IAsyncTransaction, Task> work) => work(new RecordingTransaction(queries, resultCount));
+    public Task WriteTransactionAsync(Func<IAsyncTransaction, Task> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries, resultCount));
+    public Task<T> ExecuteReadAsync<T>(Func<IAsyncQueryRunner, Task<T>> work) => work(new RecordingTransaction(queries, resultCount));
+    public Task<T> ExecuteReadAsync<T>(Func<IAsyncQueryRunner, Task<T>> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries, resultCount));
+    public Task ExecuteReadAsync(Func<IAsyncQueryRunner, Task> work) => work(new RecordingTransaction(queries, resultCount));
+    public Task ExecuteReadAsync(Func<IAsyncQueryRunner, Task> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries, resultCount));
+    public Task<T> ExecuteWriteAsync<T>(Func<IAsyncQueryRunner, Task<T>> work) => work(new RecordingTransaction(queries, resultCount));
+    public Task<T> ExecuteWriteAsync<T>(Func<IAsyncQueryRunner, Task<T>> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries, resultCount));
+    public Task ExecuteWriteAsync(Func<IAsyncQueryRunner, Task> work) => work(new RecordingTransaction(queries, resultCount));
+    public Task ExecuteWriteAsync(Func<IAsyncQueryRunner, Task> work, Action<TransactionConfigBuilder> action) => work(new RecordingTransaction(queries, resultCount));
 
     public Task CloseAsync() => Task.CompletedTask;
     public void Dispose() { }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-internal sealed class RecordingTransaction(List<RecordedStatement> queries) : IAsyncTransaction
+internal sealed class RecordingTransaction(
+    List<RecordedStatement> queries, Func<string, long?>? resultCount = null) : IAsyncTransaction
 {
     public Task<IResultCursor> RunAsync(string query) => Record(query, null);
     public Task<IResultCursor> RunAsync(string query, object parameters) => Record(query, null);
@@ -131,7 +133,14 @@ internal sealed class RecordingTransaction(List<RecordedStatement> queries) : IA
     {
         queries.Add(new RecordedStatement(
             query, parameters is null ? null : new Dictionary<string, object>(parameters)));
-        return Task.FromResult<IResultCursor>(new EmptyCursor());
+        // Sinds #321 lezen de RELATES_TO-statements een count(r)-rij terug; een
+        // test die dat leespad wil voeden geeft de driver een resultCount-functie
+        // mee (query-tekst → telling). Zonder functie (of bij null) blijft het
+        // gedrag van vóór #321: een lege cursor, alsof er niets te lezen valt.
+        return Task.FromResult<IResultCursor>(
+            resultCount?.Invoke(query) is { } written
+                ? new SingleCountCursor(written)
+                : new EmptyCursor());
     }
 
     public TransactionConfig TransactionConfig => throw new NotSupportedException();
@@ -157,6 +166,75 @@ internal sealed class EmptyCursor : IResultCursor
         await Task.CompletedTask;
         yield break;
     }
+}
+
+/// <summary>Cursor met precies één <c>{written: n}</c>-rij — de vorm die een
+/// echt <c>RETURN count(r) AS written</c> oplevert (#321).</summary>
+internal sealed class SingleCountCursor(long written) : IResultCursor
+{
+    private bool _fetched;
+
+    public Task<string[]> KeysAsync() => Task.FromResult(new[] { "written" });
+    public Task<IResultSummary> ConsumeAsync() => throw new NotSupportedException();
+    public Task<IRecord> PeekAsync() =>
+        Task.FromResult<IRecord>(_fetched ? null! : new CountRecord(written));
+
+    public Task<bool> FetchAsync()
+    {
+        if (_fetched) return Task.FromResult(false);
+        _fetched = true;
+        return Task.FromResult(true);
+    }
+
+    public IRecord Current => _fetched
+        ? new CountRecord(written)
+        : throw new InvalidOperationException("eerst FetchAsync");
+
+    public bool IsOpen => !_fetched;
+
+    public async IAsyncEnumerator<IRecord> GetAsyncEnumerator(
+        CancellationToken cancellationToken = default)
+    {
+        await Task.CompletedTask;
+        if (_fetched) yield break;
+        _fetched = true;
+        yield return new CountRecord(written);
+    }
+}
+
+/// <summary>Eén record met alleen <c>written</c> (long, zoals Neo4j een count
+/// teruggeeft).</summary>
+internal sealed class CountRecord(long written) : IRecord
+{
+    private readonly Dictionary<string, object> _values = new() { ["written"] = written };
+
+    public object this[int index] => index == 0
+        ? written
+        : throw new ArgumentOutOfRangeException(nameof(index));
+
+    public object this[string key] => _values[key];
+    IReadOnlyDictionary<string, object> IRecord.Values => _values;
+    IReadOnlyList<string> IRecord.Keys => ["written"];
+    public T Get<T>(string key) => (T)Convert.ChangeType(_values[key], typeof(T));
+
+    public bool TryGet<T>(string key, out T value)
+    {
+        if (_values.ContainsKey(key)) { value = Get<T>(key); return true; }
+        value = default!;
+        return false;
+    }
+
+    public T GetCaseInsensitive<T>(string key) => Get<T>(key.ToLowerInvariant());
+    public bool TryGetCaseInsensitive<T>(string key, out T value) =>
+        TryGet(key.ToLowerInvariant(), out value);
+
+    public int Count => _values.Count;
+    public bool ContainsKey(string key) => _values.ContainsKey(key);
+    public bool TryGetValue(string key, out object value) => _values.TryGetValue(key, out value!);
+    IEnumerable<string> IReadOnlyDictionary<string, object>.Keys => _values.Keys;
+    IEnumerable<object> IReadOnlyDictionary<string, object>.Values => _values.Values;
+    public IEnumerator<KeyValuePair<string, object>> GetEnumerator() => _values.GetEnumerator();
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 }
 
 /// <summary>Een schone in-memory <see cref="RbRulesDbContext"/> voor de

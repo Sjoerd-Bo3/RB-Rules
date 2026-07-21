@@ -363,10 +363,15 @@ public static class JobCatalog
     {
         report("kaarten + facetten én de kennislagen (secties, concepten, claims, bronnen, errata, changes, relaties) naar Neo4j projecteren");
         var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
+        // Relations = wat Neo4j werkelijk schreef (#321, ADR-20); de drop-note
+        // draagt het verschil met het aanbod per oorzaak — negeren zou de
+        // #282-review-fout herhalen (aanroeper bouwt eigen samenvatting en
+        // meldt een omgevallen stap als ok).
         return new($"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics, "
             + $"{r.Sections} secties, {r.Concepts} concepten, {r.Claims} claims, "
             + $"{r.Sources} bronnen, {r.Errata} errata, {r.Changes} changes, "
-            + $"{r.Relations} relaties, {r.MiningRuns} runs, {r.Assertions} assertions");
+            + $"{r.Relations} relaties, {r.MiningRuns} runs, {r.Assertions} assertions"
+            + (r.RelationsDropNote is { } note ? $" — {note}" : ""));
     }
 
     private static async Task<JobOutcome> BreinProjectionAsync(
