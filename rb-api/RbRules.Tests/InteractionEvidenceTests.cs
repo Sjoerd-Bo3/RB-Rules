@@ -1,14 +1,17 @@
 using RbRules.Domain;
+using RbRules.Domain.Ontology;
 
 namespace RbRules.Tests;
 
-/// <summary>De pure bouwstenen van de verscherpte bewijs-/tautologie-poort (#249):
-/// wanneer drukt bewijs een RELATIE uit, en wanneer is een rollenpaar niets meer dan
-/// een kaart met haar eigen keyword (al deterministisch bekend uit
-/// <c>Card.Mechanics</c> → HAS_MECHANIC in de graph)?</summary>
+/// <summary>De pure bouwstenen van de verscherpte bewijs-/tautologie-poort
+/// (#249/#324): wanneer drukt bewijs een RELATIE uit die het ook mag DRAGEN, en
+/// wanneer is een rollenpaar niets meer dan een kaart met haar eigen keyword (al
+/// deterministisch bekend uit <c>Card.Mechanics</c> → HAS_MECHANIC in de graph)?</summary>
 public class InteractionEvidenceTests
 {
-    // ── ExpressesRelation ────────────────────────────────────────────────────
+    // ── ExpressesRelation: de anker-dimensie (#249) ──────────────────────────
+    // Op regel-/definitietekst tussen twee mechanics, zodat de bewijstier (#324)
+    // hier per constructie draagt en alleen de ankers het oordeel bepalen.
 
     [Fact]
     public void ExpressesRelation_BeideTextueel_IsBewijs()
@@ -16,18 +19,22 @@ public class InteractionEvidenceTests
         // De klassieke bewijszin: "Deflect prevents Assault damage" — beide labels
         // staan letterlijk in één bron.
         Assert.True(InteractionEvidence.ExpressesRelation(
-            EvidenceAnchor.Textual, EvidenceAnchor.Textual));
+            EvidenceAnchor.Textual, EvidenceAnchor.Textual,
+            EvidenceSourceKind.RuleText, EntityType.Mechanic, EntityType.Mechanic));
     }
 
     [Fact]
     public void ExpressesRelation_IdentiteitPlusTextueel_IsBewijs()
     {
         // Een kaart die een ANDER keyword in haar tekst noemt: de kaart is zichzelf
-        // (identity), het keyword staat er letterlijk (textueel).
+        // (identity), het keyword staat er letterlijk (textueel). Kaarttekst draagt
+        // dit card↔mechanic-niveau gewoon (#324).
         Assert.True(InteractionEvidence.ExpressesRelation(
-            EvidenceAnchor.Identity, EvidenceAnchor.Textual));
+            EvidenceAnchor.Identity, EvidenceAnchor.Textual,
+            EvidenceSourceKind.CardText, EntityType.Unit, EntityType.Mechanic));
         Assert.True(InteractionEvidence.ExpressesRelation(
-            EvidenceAnchor.Textual, EvidenceAnchor.Identity));
+            EvidenceAnchor.Textual, EvidenceAnchor.Identity,
+            EvidenceSourceKind.CardText, EntityType.Mechanic, EntityType.Unit));
     }
 
     [Fact]
@@ -35,7 +42,8 @@ public class InteractionEvidenceTests
     {
         // Kern van #249: "deze kaart is deze kaart" zegt niets over een relatie.
         Assert.False(InteractionEvidence.ExpressesRelation(
-            EvidenceAnchor.Identity, EvidenceAnchor.Identity));
+            EvidenceAnchor.Identity, EvidenceAnchor.Identity,
+            EvidenceSourceKind.CardText, EntityType.Unit, EntityType.Unit));
     }
 
     [Theory]
@@ -44,7 +52,57 @@ public class InteractionEvidenceTests
     [InlineData(EvidenceAnchor.None, EvidenceAnchor.None)]
     [InlineData(EvidenceAnchor.None, EvidenceAnchor.Identity)]
     public void ExpressesRelation_OnverankerdeRol_IsGeenBewijs(EvidenceAnchor a, EvidenceAnchor b) =>
-        Assert.False(InteractionEvidence.ExpressesRelation(a, b));
+        Assert.False(InteractionEvidence.ExpressesRelation(
+            a, b, EvidenceSourceKind.RuleText, EntityType.Mechanic, EntityType.Mechanic));
+
+    // ── ExpressesRelation: de bewijstier-dimensie (#324) ─────────────────────
+
+    [Fact]
+    public void ExpressesRelation_MechMechOpKaarttekst_IsGeenBewijs()
+    {
+        // De audit-faalklasse van #324 in pure vorm: "mechanic:Stun GRANTS
+        // mechanic:Ready" op de kaarttekst van Eclipse Herald — beide termen staan
+        // er textueel, maar een kaart-specifiek effect is geen eigenschap van de
+        // mechanieken. Perfecte ankers, verkeerd bewijsniveau.
+        Assert.False(InteractionEvidence.ExpressesRelation(
+            EvidenceAnchor.Textual, EvidenceAnchor.Textual,
+            EvidenceSourceKind.CardText, EntityType.Mechanic, EntityType.Mechanic));
+    }
+
+    [Fact]
+    public void ExpressesRelation_MechMechOpRegeltekst_BlijftBewijs()
+    {
+        Assert.True(InteractionEvidence.ExpressesRelation(
+            EvidenceAnchor.Textual, EvidenceAnchor.Textual,
+            EvidenceSourceKind.RuleText, EntityType.Mechanic, EntityType.Mechanic));
+    }
+
+    [Fact]
+    public void ExpressesRelation_KaartttekstMetKaartRol_BlijftBewijs()
+    {
+        // card↔X is precies het niveau waarover een kaarttekst wél iets bewijst —
+        // de poort mag niet doorslaan (#249: kaart↔andermans-keyword is echte kennis).
+        // Ook een Card-SUBtype (Unit/Gear/…) telt als kaart-rol.
+        Assert.True(InteractionEvidence.ExpressesRelation(
+            EvidenceAnchor.Identity, EvidenceAnchor.Textual,
+            EvidenceSourceKind.CardText, EntityType.Gear, EntityType.Mechanic));
+        Assert.True(InteractionEvidence.ExpressesRelation(
+            EvidenceAnchor.Identity, EvidenceAnchor.Textual,
+            EvidenceSourceKind.CardText, EntityType.Card, EntityType.Card));
+    }
+
+    [Fact]
+    public void CarriesClaimLevel_RegeltekstDraagtAlles_KaarttekstAlleenMetKaartRol()
+    {
+        Assert.True(InteractionEvidence.CarriesClaimLevel(
+            EvidenceSourceKind.RuleText, EntityType.Mechanic, EntityType.Mechanic));
+        Assert.True(InteractionEvidence.CarriesClaimLevel(
+            EvidenceSourceKind.CardText, EntityType.Unit, EntityType.Mechanic));
+        Assert.True(InteractionEvidence.CarriesClaimLevel(
+            EvidenceSourceKind.CardText, EntityType.Mechanic, EntityType.Unit));
+        Assert.False(InteractionEvidence.CarriesClaimLevel(
+            EvidenceSourceKind.CardText, EntityType.Mechanic, EntityType.Mechanic));
+    }
 
     // ── IsCardOwnKeywordPair ─────────────────────────────────────────────────
 

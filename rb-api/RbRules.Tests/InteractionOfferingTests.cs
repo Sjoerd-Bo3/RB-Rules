@@ -236,9 +236,13 @@ public class InteractionOfferingTests
         var carrier = new OfferingCard(
             "card:a", "Alpha", EntityType.Card,
             "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+        var section = new OfferingSection(
+            "section:core-rules-pdf/704.2", "core-rules-pdf §704.2",
+            "Tank reduces incoming damage before Assault applies.");
 
         var plan = InteractionOffering.ForMechanic(
-            "Tank", ["Tank", "Assault", "Recycle"], [carrier], [], OfferingLimits.Mechanic);
+            "Tank", ["Tank", "Assault", "Recycle"], [carrier], [section],
+            OfferingLimits.Mechanic);
 
         Assert.All(plan.Refs, r => Assert.StartsWith("mechanic:", r.Ref));
         Assert.Contains("mechanic:Tank", plan.Refs.Select(r => r.Ref));
@@ -246,6 +250,28 @@ public class InteractionOfferingTests
         // Recycle komt in geen bewijstekst voor.
         Assert.DoesNotContain("mechanic:Recycle", plan.Refs.Select(r => r.Ref));
         // De kaart gaat wél mee als bewijs.
+        Assert.Equal([carrier], plan.Cards);
+    }
+
+    /// <summary>#324 — de spiegel van de bewijstier-eis. Elk paar op mechanic-niveau
+    /// is mechanic↔mechanic, en dat claim-niveau draagt kaarttekst niet: een buur die
+    /// ALLEEN in een carrier-kaarttekst naast het subject staat (het Eclipse
+    /// Herald-geval: "Stun … Ready" in één kaart-specifiek effect) kan per
+    /// constructie nooit promoveren — hem aanbieden is de ref-verspilling van #286a.
+    /// De aanroeper ziet dan &lt; 2 refs en slaat de LLM-call deterministisch over.</summary>
+    [Fact]
+    public void ForMechanic_BuurAlleenInCarrierKaarttekst_WordtNietAangeboden()
+    {
+        var carrier = new OfferingCard(
+            "card:eclipse-herald", "Eclipse Herald", EntityType.Unit,
+            "When this unit applies Stun to an enemy, Ready it.", ["Stun"]);
+
+        var plan = InteractionOffering.ForMechanic(
+            "Stun", ["Stun", "Ready"], [carrier], [], OfferingLimits.Mechanic);
+
+        Assert.DoesNotContain("mechanic:Ready", plan.Refs.Select(r => r.Ref));
+        Assert.Single(plan.Refs); // alleen het anker: niets om over te redeneren
+        // De carrier blijft wel bewijs (context voor het verdict), geen buur-bron.
         Assert.Equal([carrier], plan.Cards);
     }
 
@@ -268,7 +294,9 @@ public class InteractionOfferingTests
     }
 
     /// <summary>Ook mechanic-niveau blijft begrensd: het vocabulaire groeit met elke
-    /// set, dus "alle buren" is geen optie — de sterkste co-occurrences winnen.</summary>
+    /// set, dus "alle buren" is geen optie — de sterkste co-occurrences winnen. De
+    /// co-occurrence staat hier in de DEFINITIE (regeltekst): sinds #324 is dat, naast
+    /// secties, de enige bron waar buren uit mogen komen.</summary>
     [Fact]
     public void ForMechanic_VeelBuren_BlijftBinnenDeBegroting()
     {
@@ -281,9 +309,11 @@ public class InteractionOfferingTests
             .ToList();
 
         var plan = InteractionOffering.ForMechanic(
-            "Tank", vocabulary, carriers, [], OfferingLimits.Mechanic);
+            "Tank", vocabulary, carriers, [], OfferingLimits.Mechanic,
+            definition: "Tank " + string.Join(" ", Enumerable.Range(1, 40).Select(k => $"Kw{k}")));
 
         Assert.True(plan.Refs.Count <= OfferingLimits.Mechanic.MaxRefs);
+        Assert.True(plan.Refs.Count > 1, "geen enkele buur uit de definitie gekozen");
         Assert.True(plan.Cards.Count <= OfferingLimits.Mechanic.MaxEvidenceCards);
     }
 

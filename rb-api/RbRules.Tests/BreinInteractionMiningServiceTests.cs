@@ -28,6 +28,10 @@ public class BreinInteractionMiningServiceTests
         await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
             "Deflect prevents Assault damage during a Showdown. Assault deals damage.",
             ["Deflect", "Assault"]);
+        // Sinds #324 draagt kaarttekst een mech↔mech-claim niet meer; de officiële
+        // regelsectie is hier de dragende bewijszin.
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.9",
+            "Deflect prevents Assault damage during a Showdown.");
 
         var svc = Service(db, () => Interactions(new
         {
@@ -340,8 +344,16 @@ public class BreinInteractionMiningServiceTests
     // een partner viel buiten de enum en het model kón het paar niet noemen (live:
     // mech↔mech was 5 van 383). Nu draagt de aanbieding de keywords van de hele
     // gedeelde-mechaniek-buurt.
+    //
+    // #324 — DE regressietest op de audit-faalklasse (mutatie-eis a): beide labels
+    // staan in de tekst van de focus-kaart, maar dat is een kaart-specifiek effect —
+    // kaarttekst draagt een mech↔mech-claim niet. Het paar wordt dus wél geëxtraheerd
+    // en NIET stil weggegooid, maar landt als kandidaat in de reviewqueue (wacht op
+    // regel-/definitietekst-bewijs of corroboratie) in plaats van als gepromoveerd
+    // feit. Vóór #324 promoveerde dit — precies zoals mechanic:Stun -[GRANTS]->
+    // mechanic:Ready op het kaart-specifieke effect van Eclipse Herald.
     [Fact]
-    public async Task RunAsync_BiedtBuurtKeywordsAan_MechMechParenZijnMogelijk()
+    public async Task RunAsync_MechMechOpAlleenKaarttekst_WordtKandidaat_NietGepromoveerd()
     {
         using var db = NewDb();
         await SeedCardAsync(db, "ogn-050", "Alpha", "Unit",
@@ -357,11 +369,13 @@ public class BreinInteractionMiningServiceTests
 
         var r = await svc.RunAsync(maxFocusCards: 1);
 
-        // Beide labels staan in de tekst van de focus-kaart ⇒ relatie-bewijs.
-        Assert.Equal(1, r.Promoted);
+        Assert.Equal(1, r.Extracted);     // de aanbieding maakte het paar mogelijk …
+        Assert.Equal(0, r.Promoted);      // … maar kaarttekst promoveert het niet (#324)
+        Assert.Equal(1, r.Candidates);
         var ix = await db.Interactions.SingleAsync();
         Assert.Equal("mechanic:Tank", ix.AgentRef);
         Assert.Equal("mechanic:Assault", ix.PatientRef);
+        Assert.Equal(InteractionStatus.Candidate, ix.Status);
     }
 
     // ── #249: een regelsectie is bewijs voor een mech↔mech-relatie ───────────────
@@ -419,10 +433,14 @@ public class BreinInteractionMiningServiceTests
         using var db = NewDb();
         await SeedCardAsync(db, "ogn-050", "Alpha", "Unit",
             "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+        // De dragende bewijszin moet sinds #324 uit regeltekst komen — ook voor de
+        // tombstone-vraag, want die rust op dezelfde deterministische steun.
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.8",
+            "Deflect prevents Assault damage.");
 
-        // interacts=false + beide termen letterlijk in één kaart (deterministische
-        // steun) ⇒ de poort weigert duurzaam (tombstone), maar legt GEEN interactie-
-        // knoop aan — alleen een beslissings-memo.
+        // interacts=false + beide termen letterlijk in één dragende bewijs-eenheid
+        // (deterministische steun) ⇒ de poort weigert duurzaam (tombstone), maar legt
+        // GEEN interactie-knoop aan — alleen een beslissings-memo.
         var svc = Service(db, () => Interactions(new
         {
             from = "mechanic:Deflect", to = "mechanic:Assault", kind = "COUNTERS", interacts = false,
@@ -443,6 +461,31 @@ public class BreinInteractionMiningServiceTests
         Assert.False(tomb.Lifted);
         var run = await db.MiningRuns.SingleAsync();
         Assert.Equal(1, run.Rejected);
+    }
+
+    // ── #324, spiegelbeeld: op het verkeerde bewijsniveau is een weigering NIET
+    // duurzaam. Kaarttekst-co-occurrence is voor een mech↔mech-paar geen
+    // deterministische steun, dus een negatief verdict staat dan alleen — en een
+    // losstaand LLM-verdict mag geen blijvende, destructieve actie dragen (#236):
+    // soft-reject, géén grafsteen. Anders zou dezelfde bewijstier die niet mag
+    // promoveren wél permanent mogen sluiten.
+    [Fact]
+    public async Task RunAsync_NegatiefVerdict_MechMechOpKaarttekst_GeenGrafsteen()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-050", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Deflect", to = "mechanic:Assault", kind = "COUNTERS", interacts = false,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 1);
+
+        Assert.Equal(1, r.Rejected);
+        Assert.Empty(await db.RejectionTombstones.ToListAsync());
     }
 
     // ── AI staat aan maar levert geen kandidaten (200 + lege lijst) ≠ uitval (#226) ─
@@ -608,6 +651,8 @@ public class BreinInteractionMiningServiceTests
         using var db = NewDb();
         await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
             "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.8",
+            "Deflect prevents Assault damage."); // regeltekst draagt mech↔mech (#324)
 
         var down = Service(db, () => null); // 500 → RbAiClient geeft null
         var r1 = await down.RunAsync(maxFocusCards: 1);
@@ -853,9 +898,12 @@ public class BreinInteractionMiningServiceTests
         var r = await svc.RunAsync(maxFocusCards: 1);
 
         // Assault co-occurreert met Tank in de focus-tekst; de ruis-keywords doen dat
-        // alleen in hun eigen kaart. Het paar overleeft de begroting en promoveert.
+        // alleen in hun eigen kaart. Het paar overleeft de begroting en wordt
+        // geëxtraheerd — als kandidaat, want kaarttekst draagt een mech↔mech-claim
+        // sinds #324 niet meer (regeltekst-bewijs zou het promoveren).
         Assert.Contains("mechanic:Assault", OfferedRefs(Assert.Single(bodies)));
-        Assert.Equal(1, r.Promoted);
+        Assert.Equal(1, r.Extracted);
+        Assert.Equal(1, r.Candidates);
     }
 
     /// <summary>De mechanic-niveau-vraag (#286): 38 mechanics tegenover 1311 kaarten,
@@ -870,6 +918,9 @@ public class BreinInteractionMiningServiceTests
         await SeedEntityAsync(db, "Assault");
         await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
             "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+        // Sinds #324 komt de buur (en de dragende bewijszin) uit regeltekst.
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.4",
+            "Tank reduces the damage that Assault would deal.");
 
         var svc = Service(db, () => Interactions(new
         {
@@ -914,6 +965,8 @@ public class BreinInteractionMiningServiceTests
         await SeedEntityAsync(db, "Assault");
         await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
             "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.4",
+            "Tank reduces the damage that Assault would deal.");
 
         var down = Service(db, () => null); // 500 → RbAiClient geeft null
         var r1 = await down.RunAsync(maxFocusCards: 0, maxMechanicSubjects: 1);
@@ -947,6 +1000,8 @@ public class BreinInteractionMiningServiceTests
         await SeedEntityAsync(db, "Assault");
         await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
             "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.4",
+            "Tank reduces the damage that Assault would deal.");
 
         var svc = Service(db, () => "{\"interactions\":\"none\"}");
 
@@ -968,6 +1023,8 @@ public class BreinInteractionMiningServiceTests
         await SeedEntityAsync(db, "Assault");
         await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
             "Tank reduces the damage that Assault would deal.", ["Tank", "Assault"]);
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.4",
+            "Tank reduces the damage that Assault would deal.");
 
         var bodies = new List<string>();
         var svc = CapturingService(db, bodies, () => Interactions());
@@ -977,6 +1034,59 @@ public class BreinInteractionMiningServiceTests
         var refs = OfferedRefs(Assert.Single(bodies));
         Assert.All(refs, r => Assert.StartsWith("mechanic:", r));
         Assert.True(refs.Count <= OfferingLimits.Mechanic.MaxRefs);
+    }
+
+    /// <summary>#324, de aanbieding-kant aan de naad: een buur die alléén in een
+    /// carrier-KAARTTEKST naast het subject staat wordt niet meer aangeboden — dat
+    /// paar kan per constructie niet promoveren (kaarttekst draagt mech↔mech niet),
+    /// dus een ref (en een LLM-call van tientallen seconden) eraan uitgeven is de
+    /// #286a-verspilling. Het subject wordt wél gemarkeerd: "niets om over te
+    /// redeneren" is een deterministische uitkomst, geen uitval.</summary>
+    [Fact]
+    public async Task RunAsync_MechanicPass_BuurAlleenInKaarttekst_SlaatDeCallOver_MetWatermark()
+    {
+        using var db = NewDb();
+        await SeedEntityAsync(db, "Stun");
+        await SeedEntityAsync(db, "Ready");
+        // Het Eclipse Herald-geval: een kaart-specifiek effect verbindt twee
+        // keywords in kaarttekst — de enige plek waar ze samen staan.
+        await SeedCardAsync(db, "ogn-100", "Eclipse Herald", "Unit",
+            "When this unit applies Stun to an enemy, Ready it.", ["Stun"]);
+
+        var bodies = new List<string>();
+        var svc = CapturingService(db, bodies, () => Interactions());
+
+        var r = await svc.RunAsync(maxFocusCards: 0, maxMechanicSubjects: 2);
+
+        Assert.Empty(bodies);            // geen enkele rb-ai-call uitgegeven
+        Assert.Equal(0, r.Failed);
+        Assert.All(await db.CanonicalEntities.ToListAsync(),
+            e => Assert.NotNull(e.InteractionsMinedAt));
+    }
+
+    /// <summary>#324, mutatie-eis (b) op de naad: de officiële keyword-DEFINITIE is
+    /// trust-tier-1-regeltekst en draagt een mech↔mech-claim dus wél — het paar
+    /// promoveert, ook zonder carrier-kaart of regelsectie.</summary>
+    [Fact]
+    public async Task RunAsync_MechanicNiveau_DefinitieAlsBewijs_PromoveertMechMech()
+    {
+        using var db = NewDb();
+        await SeedEntityAsync(db, "Tank",
+            definition: "Tank reduces the damage that Assault would deal.");
+        await SeedEntityAsync(db, "Assault");
+
+        var svc = Service(db, () => Interactions(new
+        {
+            from = "mechanic:Tank", to = "mechanic:Assault", kind = "COUNTERS", interacts = true,
+            conditions = Array.Empty<object>(),
+        }));
+
+        var r = await svc.RunAsync(maxFocusCards: 0, maxMechanicSubjects: 1);
+
+        Assert.Equal(1, r.Promoted);
+        Assert.Equal(0, r.Candidates);
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Promoted, ix.Status);
     }
 
     /// <summary>Dekking, expliciet (#286): wat de mechanic-pass per constructie NIET
@@ -1066,6 +1176,10 @@ public class BreinInteractionMiningServiceTests
         await SeedEntityAsync(db, "Assault");
         await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
             "Tank reduces the damage that Assault would deal.", ["Tank"]);
+        // Regeltekst-buur voor de mechanic-pass (#324): zonder tier-1-bewijs biedt
+        // die pass geen paar aan en is er geen mechanic-call om te meten.
+        await SeedRuleSectionAsync(db, "core-rules-pdf", "704.4",
+            "Tank reduces the damage that Assault would deal.");
 
         var svc = Service(db, () => Interactions());
 
@@ -1100,12 +1214,15 @@ public class BreinInteractionMiningServiceTests
     }
 
     /// <summary>Een levende canonieke keyword-entiteit — het subject van de
-    /// mechanic-niveau-pass (#286).</summary>
-    private static async Task SeedEntityAsync(RbRulesDbContext db, string label)
+    /// mechanic-niveau-pass (#286). <paramref name="definition"/> is de officiële
+    /// trust-tier-1-definitiezin (#291/#324): regeltekst-bewijs, geen kaarttekst.</summary>
+    private static async Task SeedEntityAsync(
+        RbRulesDbContext db, string label, string? definition = null)
     {
         db.CanonicalEntities.Add(new CanonicalEntity
         {
             Kind = CanonicalEntityKinds.Keyword, CanonicalLabel = label,
+            Definition = definition,
             Status = CanonicalEntityStatus.Canonical, CreatedByRunId = Ulid.NewUlid(),
         });
         await db.SaveChangesAsync();

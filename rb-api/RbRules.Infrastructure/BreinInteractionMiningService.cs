@@ -108,6 +108,21 @@ public sealed record BreinInteractionMiningResult(
 /// geen gedeelde regelsectie — wordt door geen van beide passes aangeboden. Dat paar
 /// was voorheen alleen bij toeval bereikbaar en had per definitie geen bewijs.
 ///
+/// <b>Bewijstier-eis sinds #324.</b> De eerste steekproef-audit (#255) keurde 9 van
+/// 10 gepromoveerde interacties af, en één faalklasse was een ontwerpfout: de
+/// mechanic-pass stelt de vraag op mechanic-niveau maar bood kaartteksten als bewijs
+/// aan, en de lexicale poort beloonde dat (mechanic:Stun -[GRANTS]-> mechanic:Ready,
+/// gepromoveerd op het kaart-specifieke effect van Eclipse Herald). Nu draagt elke
+/// bewijs-eenheid haar SOORT (<see cref="EvidenceSourceKind"/>) en eist de poort dat
+/// die soort het claim-niveau draagt (<see cref="InteractionEvidence.CarriesClaimLevel"/>):
+/// mech↔mech promoveert alleen op regel-/definitietekst, card↔X blijft promoveerbaar
+/// op de eigen kaarttekst. De prompt zégt dat ook (anders extraheert het model
+/// kandidaten die de poort weggooit, #286a), en de buur-regel van de mechanic-pass
+/// spiegelt het (<see cref="InteractionOffering.ForMechanic"/> weegt buren alleen nog
+/// in regel-/definitietekst). Bestaande interacties degraderen NIET automatisch — een
+/// oordeel draagt geen actie alleen; de volledige audit levert de lijst en de
+/// reviewqueue de beslissing.
+///
 /// <b>Meten, niet gokken</b> (acceptatiecriterium #286): elke rb-ai-call wordt geteld
 /// mét zijn wandkloktijd en het aantal aangeboden refs, per fase, en dat komt als
 /// <see cref="BreinInteractionMiningResult.CallMetrics"/> in het run-detail. Let op de
@@ -141,8 +156,10 @@ public class BreinInteractionMiningService(
     /// <summary>De prompt-versie-stempel op de <see cref="MiningRun"/> — bump bij een
     /// wijziging aan de extractie-prompt/vorm (stale-conditie voor her-mining, §3.5).
     /// v3 (#286): begrensde, relevantie-gestuurde aanbieding, een mechanic-niveau-pass
-    /// en een governed_by-vraag in dezelfde aanroep.</summary>
-    public const string PromptVersion = "breinmine-interactions-v3";
+    /// en een governed_by-vraag in dezelfde aanroep. v4 (#324): de bewijstier-eis —
+    /// de prompt zegt expliciet dat een mechanic↔mechanic-claim alleen op regel-/
+    /// definitietekst telt, en de poort dwingt dat deterministisch af.</summary>
+    public const string PromptVersion = "breinmine-interactions-v4";
 
     public async Task<BreinInteractionMiningResult> RunAsync(
         int maxFocusCards = DefaultMaxFocusCards, int maxPartners = DefaultMaxPartners,
@@ -358,6 +375,11 @@ public class BreinInteractionMiningService(
     /// tautologie die #249 uitroeide — de tautologie-poort heeft hier per constructie
     /// niets te doen.
     ///
+    /// Sinds #324 dragen de carrier-KAARTTEKSTEN de mech↔mech-claim niet meer: ze
+    /// gaan nog mee als context voor het verdict, maar de buren komen alleen nog uit
+    /// regel-/definitietekst (de spiegel van de promotie-poort) en de lexicale steun
+    /// telt kaarttekst voor dit claim-niveau niet.
+    ///
     /// Geen entity-resolutie nodig: het subject ÍS een canonieke entiteit (fase 1 is
     /// hier al gebeurd), en de buren komen uit datzelfde canonieke vocabulaire.</summary>
     private async Task MineMechanicAsync(
@@ -547,13 +569,17 @@ public class BreinInteractionMiningService(
                 .Select(c => new InteractionConditionInput(c.OnKind, c.SubjectRole, c.Value, c.Operator))
                 .ToList();
 
-            // Lexicale steun (§3.4, verscherpt in #249): bestaat er ÉÉN bewijs-eenheid —
-            // een aangeboden kaart óf een regelsectie — die een RELATIE tussen beide
-            // rollen uitdrukt? Beide rollen verankerd binnen één eenheid (geen
-            // cross-card-toeval) én minstens één van beide TEXTUEEL: een kaart die
-            // alleen zichzelf verankert bewijst niets over een relatie.
+            // Lexicale steun (§3.4, verscherpt in #249 en #324): bestaat er ÉÉN
+            // bewijs-eenheid — een aangeboden kaart óf een regelsectie — die een
+            // RELATIE tussen beide rollen uitdrukt ÉN het niveau van de claim draagt?
+            // Beide rollen verankerd binnen één eenheid (geen cross-card-toeval),
+            // minstens één van beide TEXTUEEL (een kaart die alleen zichzelf verankert
+            // bewijst niets over een relatie), en de bewijsSOORT past bij het
+            // claim-niveau (#324): mechanic↔mechanic telt alleen op regel-/
+            // definitietekst — een kaarttekst waarin beide termen staan bewijst een
+            // kaart-specifiek effect, geen eigenschap van de mechanieken.
             var lexical = offer.Evidence.Any(unit => InteractionEvidence.ExpressesRelation(
-                Anchor(unit, from), Anchor(unit, to)));
+                Anchor(unit, from), Anchor(unit, to), unit.Source, from.Type, to.Type));
 
             var request = new InteractionPromotionRequest(
                 AgentRef: from.Ref, AgentType: from.Type,
@@ -603,10 +629,13 @@ public class BreinInteractionMiningService(
         var promptParts = new List<string>();
         var evidence = new List<EvidenceUnit>();
 
+        // De bewijsSOORT reist mee (#324): de definitie en de regelsecties zijn
+        // trust-tier-1-regeltekst, elke kaarttekst — rol of niet — is en blijft
+        // kaarttekst. De promotie-poort filtert daar per claim-niveau op.
         if (!string.IsNullOrWhiteSpace(plan.Definition))
         {
             promptParts.Add($"[definitie] {plan.Definition}");
-            evidence.Add(new(CardRef: null, plan.Definition!));
+            evidence.Add(new(CardRef: null, plan.Definition!, EvidenceSourceKind.RuleText));
         }
 
         foreach (var c in plan.Cards)
@@ -615,14 +644,14 @@ public class BreinInteractionMiningService(
             promptParts.Add(isRole
                 ? $"[{c.Ref} — {c.Name}] {c.Text}"
                 : $"[kaart {c.Name}] {c.Text}");
-            evidence.Add(new(isRole ? c.Ref : null, c.Text));
+            evidence.Add(new(isRole ? c.Ref : null, c.Text, EvidenceSourceKind.CardText));
         }
 
         var sectionRefs = new List<string>();
         foreach (var s in plan.Sections)
         {
             promptParts.Add($"[regels {s.Label}] {s.Text}");
-            evidence.Add(new(CardRef: null, s.Text));
+            evidence.Add(new(CardRef: null, s.Text, EvidenceSourceKind.RuleText));
             if (s.Ref is { Length: > 0 } r) sectionRefs.Add(r);
         }
 
@@ -802,8 +831,10 @@ public class BreinInteractionMiningService(
     /// <summary>Eén bewijs-eenheid voor de lexicale poort: een kaarttekst
     /// (<paramref name="CardRef"/> gezet — die kaart is dan zijn eigen identiteits-
     /// anker) of tekst zonder rol (regelsectie, definitie, of een kaart die alleen
-    /// bewijs is).</summary>
-    private sealed record EvidenceUnit(string? CardRef, string Text);
+    /// bewijs is). <paramref name="Source"/> is de bewijsSOORT (#324): de poort laat
+    /// een eenheid alleen meetellen voor claim-niveaus die die soort kan dragen —
+    /// kaarttekst draagt card↔X, alleen regel-/definitietekst draagt mech↔mech.</summary>
+    private sealed record EvidenceUnit(string? CardRef, string Text, EvidenceSourceKind Source);
 
     private sealed record CardLite(
         string RiftboundId, string Name, string? Type, string[]? Mechanics, string? TextPlain);
