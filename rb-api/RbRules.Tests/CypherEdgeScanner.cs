@@ -67,11 +67,14 @@ namespace RbRules.Tests;
 /// (dat ÁLLE labels garandeert), dus zo'n binding komt als DISJUNCTIEF terug
 /// (<see cref="ProjectionEdgeShape.FromDisjunctive"/>). De lezing is bewust strikt,
 /// want een te gulle lezing verzint garanties die het statement niet geeft:
-/// een WHERE-lichaam wordt op topniveau over <c>AND</c> gesplitst, en een term
-/// bindt alléén als hij (na het strippen van omsluitende haakjes, recursief over
-/// <c>OR</c>) volledig bestaat uit <c>alias:Label</c>-atomen over ÉÉN alias. Zit er
-/// iets anders tussen (een property-vergelijking, een <c>NOT</c>, een tweede alias
-/// in dezelfde OR-groep), dan bindt die term niets — de andere termen nog wél.
+/// een WHERE-lichaam zonder topniveau-<c>OR</c> wordt over <c>AND</c> gesplitst
+/// (échte conjuncten — in Cypher bindt AND sterker dan OR, zie
+/// <see cref="WhereDisjunctions"/>); mét een topniveau-OR is het hele lichaam één
+/// OR-boom. Een term bindt alléén als hij (na het strippen van omsluitende
+/// haakjes, recursief over <c>OR</c>) volledig bestaat uit
+/// <c>alias:Label</c>-atomen over ÉÉN alias. Zit er iets anders tussen (een
+/// property-vergelijking, een <c>NOT</c>, een tweede alias in dezelfde OR-groep),
+/// dan bindt die term niets — de andere conjuncten nog wél.
 /// Patroon-labels winnen bij het oplossen van een disjunctie: <c>MATCH (a:Card …)</c>
 /// garandeert al meer dan elke disjunctie erbovenop.</summary>
 internal static class CypherEdgeScanner
@@ -298,10 +301,20 @@ internal static class CypherEdgeScanner
     // ── WHERE-label-disjuncties (#317) ────────────────────────────────────────
 
     /// <summary>Elke (alias, labels)-binding die een WHERE-predicaat in dit
-    /// statement afdwingt. Eén binding per AND-term die volledig uit
+    /// statement afdwingt. Eén binding per conjunct die volledig uit
     /// <c>alias:Label</c>-atomen over één alias bestaat; alle andere termen binden
     /// niets (strikt, want een verzonnen garantie is erger dan een gemiste — een
-    /// gemiste komt als "niet te garanderen" terug, luidruchtig genoeg).</summary>
+    /// gemiste komt als "niet te garanderen" terug, luidruchtig genoeg).
+    ///
+    /// PRECEDENTIE (review PR #320): in Cypher bindt <c>AND</c> stérker dan
+    /// <c>OR</c> — <c>P OR Q AND R</c> is <c>P OR (Q AND R)</c>. De AND-segmenten
+    /// zijn dus alléén zelfstandige conjuncten als het lichaam GEEN topniveau-OR
+    /// heeft. Staat er wél een topniveau-OR, dan is het hele lichaam één OR-boom
+    /// en bindt hij alleen als élke tak zuiver is (<see cref="TryLabelAtoms"/>) —
+    /// één onzuivere tak vergiftigt het geheel. De eerste versie splitste eerst op
+    /// AND en bond bij <c>a:Card OR x.flag = true AND a:Mechanic</c> een verzonnen
+    /// <c>:Mechanic</c>-garantie, terwijl die WHERE een kale <c>:Card</c>-knoop
+    /// gewoon doorlaat.</summary>
     private static IEnumerable<(string Alias, IReadOnlyList<string> Labels)> WhereDisjunctions(string s)
     {
         var i = 0;
@@ -310,7 +323,11 @@ internal static class CypherEdgeScanner
             if (!IsKeywordAt(s, i, WhereKeyword, out var afterKeyword)) { i++; continue; }
 
             var end = WhereBodyEnd(s, afterKeyword);
-            foreach (var term in SplitTopLevel(s[afterKeyword..end], AndKeyword))
+            var body = s[afterKeyword..end];
+            var terms = SplitTopLevel(body, OrKeyword).Count > 1
+                ? new List<string> { body }
+                : SplitTopLevel(body, AndKeyword);
+            foreach (var term in terms)
             {
                 var atoms = new List<(string Alias, string Label)>();
                 if (!TryLabelAtoms(term, atoms) || atoms.Count == 0) continue;

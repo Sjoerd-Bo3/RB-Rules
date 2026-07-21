@@ -380,6 +380,45 @@ public class CypherWhereDisjunctionScannerTests
     }
 
     [Fact]
+    public void AndBindtSterkerDanOr_GeenVerzonnenGarantie()
+    {
+        // Review PR #320: Cypher-precedentie is P OR (Q AND R). Een AND-eerst-
+        // splitsing las hier "… AND a:Mechanic" als zelfstandig conjunct en bond
+        // een verzonnen (:Mechanic)-garantie — terwijl deze WHERE een kale
+        // :Card-knoop gewoon doorlaat via de eerste OR-tak.
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) WHERE a:Card OR x.flag = true AND a:Mechanic MERGE (a)-[:X]->(b)"));
+
+        // Spiegelbeeld met de disjunctie achteraan: zelfde precedentie-val.
+        Assert.Equal(["()-[:X]->()"], Shapes(
+            "MATCH (a {ref: r.x}) WHERE a:Card AND x.flag = true OR a:Mechanic MERGE (a)-[:X]->(b)"));
+
+        // Zónder topniveau-OR zijn de AND-segmenten wél echte conjuncten: beide
+        // kanten blijven gewoon binden. Dit pint dat de fix niet doorschiet.
+        Assert.Equal(["(:Card)-[:X]->(:Mechanic)"], Shapes(
+            "MATCH (a {ref: r.x}) MATCH (b {ref: r.y}) WHERE a:Card AND b:Mechanic MERGE (a)-[:X]->(b)"));
+    }
+
+    [Fact]
+    public void ParenlozeHerformattering_MetGemengdePrecedentie_BindtNiets()
+    {
+        // Review PR #320, corpus-bewijs: haal de haakjes om de bron-groep weg en
+        // de doel-disjunctie geldt (Cypher-precedentie!) nog maar op één van de
+        // vijf takken — bron:Claim OR … OR (bron:Card AND (doel:…)). Vóór de fix
+        // bleef de guard hier groen; nu bindt de scanner niets en komt de vorm
+        // als label-loos terug, waarop L1/L3 rood gaan.
+        Assert.Equal(["()-[:RELATES_TO]->()"], Shapes(
+            """
+            UNWIND $rows AS row
+            MATCH (bron {ref: row.from})
+            MATCH (doel {ref: row.to})
+            where bron:Claim or bron:RuleSection or bron:Concept or bron:Mechanic or bron:Card
+              and (doel:Card or doel:Mechanic or doel:Concept or doel:RuleSection or doel:Claim)
+            MERGE (bron)-[r:RELATES_TO {kind: row.kind}]->(doel)
+            """));
+    }
+
+    [Fact]
     public void NotVoorDeGroep_BindtNiets() =>
         // NOT (a:Card OR a:Mechanic) garandeert juist dat het GEEN van beide is.
         Assert.Equal(["()-[:X]->()"], Shapes(
