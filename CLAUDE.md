@@ -577,9 +577,22 @@ met quota en rate-limiting.
   (c) **Toets wat het statement AFDWINGT, niet wat de graaf toevallig bevat.**
   `MATCH (ix:Interaction {ref: …})` levert `Interaction`, ook al draagt die knoop
   in productie `:Interaction:Concept` — de guard bewaakt de belofte van de query,
-  want dát is wat een latere wijziging kan breken. En een label-loze match
-  (`RELATES_TO`) is géén schending maar "niet te garanderen": rood zou daar
-  onterecht zijn, stil doorlaten net zo goed.
+  want dát is wat een latere wijziging kan breken. En een label-loze match is
+  géén schending maar "niet te garanderen": rood zou daar onterecht zijn, stil
+  doorlaten net zo goed. (Sinds #317 dwingt `RELATES_TO` zijn vijf gemeten
+  eindpunt-soorten af met een WHERE-label-disjunctie; alleen `DERIVED_FROM`
+  matcht nog label-loos, bewust — provenance zonder declaratie.)
+  (d) **Wie een predicaat naleest, moet de operator-PRECEDENTIE van de brontaal
+  volgen** (#317-review, bijna duur betaald). In Cypher bindt `AND` sterker dan
+  `OR`: `P OR Q AND R` is `P OR (Q AND R)`. De eerste WHERE-disjunctie-lezer
+  splitste éérst op topniveau-AND en bond bij `a:Card OR x.flag = true AND
+  a:Mechanic` een VERZONNEN `:Mechanic`-garantie — terwijl een kale `:Card`-knoop
+  die WHERE gewoon passeert; een parenloze herformattering van het echte
+  statement sloopte zo de afdwinging met een groene guard. Regel: met een
+  topniveau-OR is het hele lichaam één OR-boom (die alleen bindt als élke tak
+  zuiver is); alleen zónder topniveau-OR zijn AND-segmenten echte conjuncten.
+  Bij twijfel niets binden: een verzonnen garantie is stil, een gemiste komt
+  luidruchtig terug als "niet te garanderen".
 - **Test-fixtures buiten de `rb-api/`-Docker-context breken pas de publish,
   niet de CI-testgate** (#238) — de CI-`test`-job draait `dotnet test` búiten
   Docker, dus een csproj-`<None Include>` die naar een pad búiten `rb-api/`

@@ -572,7 +572,11 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         // Provenance-knopen (fase 0a, #233): eerst de MiningRun-activities, dan
         // de Assertions met hun WAS_GENERATED_BY- en DERIVED_FROM-edges. De
         // DERIVED_FROM-doelen (Source/RuleSection/Card/…) bestaan op dit punt al,
-        // dus een label-loze ref-match resolveert (zelfde patroon als RELATES_TO).
+        // dus een label-loze ref-match resolveert. Dit is sinds #317 de ENIGE
+        // label-loze ref-match die overblijft: bewust, want DERIVED_FROM is
+        // provenance (buiten de TBox) met heterogene doelen — RELATES_TO draagt
+        // zijn WHERE-label-disjunctie hieronder wél, omdat dáár een declaratie
+        // tegenover staat.
         await RunRowsAsync(tx,
             """
             CREATE (r:MiningRun {ref: row.ref, id: row.id, kind: row.kind,
@@ -605,19 +609,27 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             """,
             new Dictionary<string, object> { ["rows"] = assertionRows });
 
-        // RELATES_TO als laatste: beide eindpunten kunnen elke knoopsoort
-        // zijn, dus pas nadat álle knopen bestaan. Match op de ref-property
-        // (per constructie globaal uniek, §2.1) zonder label — een label-loze
-        // property-match is een scan, maar de aantallen zijn klein (§2.2) en
-        // de rebuild draait toch al batched. MERGE op kind: twee kinds tussen
-        // hetzelfde paar zijn twee edges. Refs zonder knoop (verdwenen
-        // mechaniek, verwijderd doc) vallen stil weg — knoop zonder edge is
-        // het bestaande ABOUT-gedrag.
+        // RELATES_TO als laatste: beide eindpunten kunnen elke van de vijf
+        // gemeten knoopsoorten zijn, dus pas nadat álle knopen bestaan. Match op
+        // de ref-property (per constructie globaal uniek, §2.1) — een label-loze
+        // property-match is een scan, maar de aantallen zijn klein (§2.2) en de
+        // rebuild draait toch al batched. De WHERE-label-disjunctie (#317) dwingt
+        // de gedeclareerde domain/range af: de live graaf droeg twaalf
+        // label-combinaties, allemaal binnen Card/Mechanic/Concept/RuleSection/
+        // Claim, en een ref die naar een knoop búíten die vijf wijst wordt bewust
+        // NIET geschreven — dat ís de afdwinging (één disjunctie per kant, geen
+        // 5×5 aan per-soort-statements: RELATES_TO is de gedenormaliseerde
+        // elk-naar-elk-link). MERGE op kind: twee kinds tussen hetzelfde paar
+        // zijn twee edges. Refs zonder knoop (verdwenen mechaniek, verwijderd
+        // doc) vallen stil weg — knoop zonder edge is het bestaande
+        // ABOUT-gedrag.
         await tx.RunAsync(
             """
             UNWIND $rows AS row
             MATCH (a {ref: row.from})
             MATCH (b {ref: row.to})
+            WHERE (a:Card OR a:Mechanic OR a:Concept OR a:RuleSection OR a:Claim)
+              AND (b:Card OR b:Mechanic OR b:Concept OR b:RuleSection OR b:Claim)
             MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)
               SET r.trust = row.trust, r.explanation = row.explanation,
                   r.status = row.status
@@ -677,11 +689,17 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             MERGE (ix)-[:GOVERNED_BY]->(s)
             """,
             new Dictionary<string, object> { ["rows"] = interactionRows.GovernedByEdges });
+        // Zelfde WHERE-label-disjunctie als het #116-statement hierboven (#317):
+        // de cache-edge is dezelfde RELATES_TO-bewering en draagt dus dezelfde
+        // afdwinging. Agent/patient-refs zijn in de praktijk card:/mechanic:,
+        // maar de poort is de declaratie, niet de gewoonte.
         await tx.RunAsync(
             """
             UNWIND $rows AS row
             MATCH (a {ref: row.from})
             MATCH (b {ref: row.to})
+            WHERE (a:Card OR a:Mechanic OR a:Concept OR a:RuleSection OR a:Claim)
+              AND (b:Card OR b:Mechanic OR b:Concept OR b:RuleSection OR b:Claim)
             MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)
               SET r.window = row.window, r.actorStatus = row.actorStatus,
                   r.costDelta = row.costDelta, r.tier = row.tier,
