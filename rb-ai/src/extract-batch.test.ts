@@ -18,7 +18,9 @@ import {
   captureBatchToolCall,
   decideBatchExtractOutcome,
   extractBatchWithTool,
+  extractWithTool,
   scaledExtractTimeoutMs,
+  type BatchCaptureResult,
   type BatchCaptureState,
   type QueryRunner,
 } from "./ai.js";
@@ -229,4 +231,67 @@ test("usage uit het result-bericht reist mee in de batch-uitkomst", async () => 
     yield { type: "result", subtype: "success", is_error: false, result: "klaar" };
   }) as unknown as QueryRunner);
   assert.equal(zonder.usage, null, "geen usage = onbekend (null), nooit 0");
+});
+
+test("wiring LOSSE pad: model-override bereikt de SDK-options (#329-review)", async () => {
+  // Reviewer-probe: `model: model ?? MODEL[task]` in extractWithTool muteren
+  // naar `model: MODEL[task]` (override stil negeren) liet de hele suite groen
+  // — de options-assert bestond alleen voor de batchvorm, en de server-tests
+  // stubben deps.extractWithTool. Gevolg zou zijn: mechanic-pass en K=1 stil op
+  // het cheap-default terwijl de rij-provenance "claude-fable-5" schrijft.
+  // Deze spy sluit dat gat; de mutatie maakt de eerste assert rood.
+  let seen: { model?: string } = {};
+  const spy = (async function* (arg: { options: { model?: string } }) {
+    seen = arg.options;
+    yield { type: "result", subtype: "success", is_error: false, result: "klaar" };
+  }) as unknown as QueryRunner;
+  const single = (model?: string) =>
+    extractWithTool({
+      toolName: "emit_interactions",
+      description: "test",
+      schema: {} as never,
+      resultKey: "interactions",
+      addendum: "test",
+      text: "kaarttekst",
+      ...(model ? { model } : {}),
+      runQuery: spy,
+    });
+
+  await single("claude-fable-5");
+  assert.equal(seen.model, "claude-fable-5");
+  await single();
+  assert.equal(seen.model, "claude-sonnet-4-6", "zonder override: het bestaande cheap-model");
+});
+
+test("oogst-pad: runQuery gooit mid-sessie → de al-gevangen kaarten overleven (#329-review)", async () => {
+  // Reviewer-probe: de catch in extractBatchWithTool vervangen door een kale
+  // rethrow bleef groen — geen test combineerde een gevulde vangst met een
+  // gooiende run. Via de captureProbe-seam vuurt deze test de ECHTE
+  // vang-functie (dezelfde `fire` als de tool-handler) en gooit dan; de m
+  // resultaten moeten geoogst worden, niet mee het graf in.
+  let fire: ((args: Record<string, unknown>) => BatchCaptureResult) | undefined;
+  const o = await extractBatchWithTool({
+    toolName: "emit_interactions",
+    description: "test",
+    schema: {} as never,
+    keyField: "card",
+    resultKey: "interactions",
+    keys: ["ogn-001", "ogn-002", "ogn-003"],
+    addendum: "test",
+    text: "kaartteksten",
+    captureProbe: (f) => { fire = f; },
+    runQuery: (async function* () {
+      fire!({ card: "ogn-001", interactions: [{ from: "a" }] });
+      fire!({ card: "ogn-002", interactions: [] });
+      throw new Error("subprocess viel om mid-sessie");
+      yield undefined as never; // eslint-hint: generator-vorm
+    }) as unknown as QueryRunner,
+  });
+
+  // Mutatie-anker: een kale rethrow laat deze aanroep GOOIEN i.p.v. oogsten.
+  assert.equal(o.perKey.size, 2, "de 2 al-gevangen kaarten horen geoogst te worden");
+  assert.deepEqual(o.perKey.get("ogn-001"), [{ from: "a" }]);
+  assert.equal(o.failure?.reason, "unknown", "de geworpen fout blijft de gemelde reden");
+  assert.match(o.failure!.detail, /mid-sessie/);
+  assert.equal(o.timedOut, undefined);
 });

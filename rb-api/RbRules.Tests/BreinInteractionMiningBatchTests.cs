@@ -58,11 +58,17 @@ public class BreinInteractionMiningBatchTests
         Assert.Equal(1, r.UnknownCode);
         Assert.Contains("model fable, K=3", r.Summary);
 
-        // De payload draagt de ALIAS (rb-ai vertaalt) en per kaart een eigen
-        // refs-vocabulaire.
+        // De payload draagt de ALIAS (rb-ai vertaalt), per kaart een eigen
+        // refs-vocabulaire, én de system-prompt (#329-review: system → null
+        // bleef onopgemerkt groen — zonder system-prompt extraheert het model
+        // zonder de bewijstier-instructie en zonder de tool-discipline). De
+        // BEWIJSNIVEAU-passage (#324) is de inhoudelijke ankertekst.
         using var payload = JsonDocument.Parse(body);
         Assert.Equal("fable", payload.RootElement.GetProperty("model").GetString());
         Assert.Equal(3, payload.RootElement.GetProperty("cards").GetArrayLength());
+        var system = payload.RootElement.GetProperty("system").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(system));
+        Assert.Contains("BEWIJSNIVEAU", system);
 
         // Watermark ALLEEN op de geslaagde kaarten — de derde komt terug
         // (mutatie-anker: wie de hele groep watermarkt, maakt dit rood).
@@ -124,6 +130,44 @@ public class BreinInteractionMiningBatchTests
         Assert.Equal("card:ogn-002", assertion.DerivedFromRef);
         // Beide kaarten gaven een geldig antwoord → beide gewatermarkt.
         Assert.NotNull((await Card(db, "ogn-001")).InteractionsMinedAt);
+        Assert.NotNull((await Card(db, "ogn-002")).InteractionsMinedAt);
+    }
+
+    // ── #329-review: positie = plek in de SESSIE, ook als een eerdere kaart faalt ─
+
+    [Fact]
+    public async Task Batch_EersteKaartFaalt_TweedeHoudtPositie2()
+    {
+        using var db = NewDb();
+        // Disjuncte vocabulaires zodat elke kaart alleen haar eigen paar kan dragen.
+        await SeedCardAsync(db, "ogn-001", "Alpha", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+        await SeedCardAsync(db, "ogn-002", "Beta", "Unit",
+            "Tank reduces Snipe damage.", ["Tank", "Snipe"]);
+
+        var requests = new List<(string Path, string Body)>();
+        var svc = Service(db, requests, batchK: 2, alias: "fable", _ => Ndjson(
+            """
+            {"type":"done","results":[
+              {"code":"ogn-001","ok":false,"reason":"no_tool_call"},
+              {"code":"ogn-002","ok":true,"interactions":[{"from":"mechanic:Tank","to":"mechanic:Snipe","kind":"COUNTERS","interacts":true}]}
+            ]}
+            """));
+
+        var r = await svc.RunAsync(maxFocusCards: 2, maxMechanicSubjects: 0);
+
+        // Reviewer-probe (#329): de positie-increment verplaatsen naar ná de
+        // ok-check bleef groen omdat in de eerdere fixtures alleen de LAATSTE
+        // kaart faalde. Hier faalt kaart 1: de geslaagde kaart 2 moet positie 2
+        // houden — positie is de plek in de sessie (het meetkanaal voor
+        // aandachts-verval per positie, #313), niet de rang onder de geslaagden.
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal(2, ix.ExtractBatchPosition);
+        Assert.Equal("claude-fable-5", ix.ExtractModel);
+
+        Assert.Equal(1, r.Failed);
+        Assert.Equal("5xx×1 (no_tool_call×1)", r.FailureDetail);
+        Assert.Null((await Card(db, "ogn-001")).InteractionsMinedAt);
         Assert.NotNull((await Card(db, "ogn-002")).InteractionsMinedAt);
     }
 
@@ -208,6 +252,10 @@ public class BreinInteractionMiningBatchTests
         Assert.Equal("/extract/interactions", path);
         using var payload = JsonDocument.Parse(body);
         Assert.Equal("opus", payload.RootElement.GetProperty("model").GetString());
+        // Zelfde system-prompt-anker als op het batch-pad (#329-review).
+        var system = payload.RootElement.GetProperty("system").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(system));
+        Assert.Contains("BEWIJSNIVEAU", system);
         Assert.Equal(0, r.BatchSessions);
         Assert.Equal(1, r.BatchK);
 

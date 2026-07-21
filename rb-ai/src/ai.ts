@@ -650,11 +650,19 @@ export async function extractBatchWithTool(opts: {
    * NDJSON-frame op uit zodat rb-api de job-voortgang per kaart kan tonen —
    * zonder levensteken lijkt een sessie van uren bevroren. */
   onCapture?: (key: string, done: number, total: number) => void;
+  /** Test-seam (#329-review): krijgt exact de vang-functie die de echte
+   * tool-handler gebruikt (gedeelde `fire` — seam en productie kunnen per
+   * constructie niet uiteenlopen). Zonder deze naad is het OOGST-pad — de
+   * catch die een geworpen fout omzet in een uitkomst mét de al-gevangen
+   * kaarten — alleen met een echt SDK-subprocess te raken: de reviewer-probe
+   * "vervang de catch door een kale rethrow" bleef groen omdat geen test een
+   * gevulde vangst met een gooiende run kon combineren (#292-klasse). */
+  captureProbe?: (fire: (args: Record<string, unknown>) => BatchCaptureResult) => void;
   runQuery?: QueryRunner;
 }): Promise<BatchExtractOutcome> {
   const {
     toolName, description, schema, keyField, resultKey, keys, system, addendum, text,
-    signal, task = "cheap", model, onCapture,
+    signal, task = "cheap", model, onCapture, captureProbe,
     runQuery = query as unknown as QueryRunner,
   } = opts;
   const serverName = "extract";
@@ -662,18 +670,26 @@ export async function extractBatchWithTool(opts: {
   const timeoutMs = scaledExtractTimeoutMs(keys.length, EXTRACT_TIMEOUT_MS, EXTRACT_PER_CARD_MS);
 
   const state: BatchCaptureState = { perKey: new Map(), unknownKeys: 0 };
+  /** Eén vang-functie voor de echte handler ÉN de test-seam: de
+   * kruisbesmettings- en vangstregels staan in de pure poort
+   * {@link captureBatchToolCall}, de heartbeat hangt eraan vast. */
+  const fire = (args: Record<string, unknown>): BatchCaptureResult => {
+    const r = captureBatchToolCall(state, keySet, keyField, resultKey, args);
+    if (r.accepted) onCapture?.(r.accepted, state.perKey.size, keys.length);
+    return r;
+  };
+  captureProbe?.(fire);
   const extractServer = createSdkMcpServer({
     name: serverName,
     version: "1.0.0",
     tools: [
-      // Dunne bedrading om de pure poort {@link captureBatchToolCall} — de
-      // kruisbesmettings- en vangstregels staan dáár, gedragsgetest.
-      tool(toolName, description, schema, async (args) => {
-        const r = captureBatchToolCall(
-          state, keySet, keyField, resultKey, args as Record<string, unknown>);
-        if (r.accepted) onCapture?.(r.accepted, state.perKey.size, keys.length);
-        return { content: [{ type: "text" as const, text: r.ack }] };
-      }),
+      // Dunne bedrading om de gedeelde vang-functie hierboven.
+      tool(toolName, description, schema, async (args) => ({
+        content: [{
+          type: "text" as const,
+          text: fire(args as Record<string, unknown>).ack,
+        }],
+      })),
     ],
   });
 

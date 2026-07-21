@@ -2823,7 +2823,14 @@ per permit stijgt juist. rb-api's callbudget (`BreinExtractSettings.
 BatchCallTimeout` = dezelfde keten + 120 s marge, op een named client zónder
 eigen timeout — `rb-ai-batch`) is per constructie ruimer dan de keten eronder
 (#281-les); de twee `AI_EXTRACT_*`-envs worden daartoe aan béíde containers
-gespiegeld vanuit dezelfde .env-variabelen (compose).
+gespiegeld vanuit dezelfde .env-variabelen (compose). **Kanttekening bij de
+nachtrun-deadline (#245):** die wordt alleen tússen werkitems getoetst, en één
+werkitem is sinds #323 een hele groep — een sessie die vlak vóór het
+venster-einde start loopt in het slechtste geval haar volledige budget door
+(± 2,6 h bij K=50, ± 12,5 h bij K=250; de `BatchCallTimeout`-formule). Bewust
+geaccepteerd en in de helptekst van `brein.extract.batch_k` vermeld; een
+deadline-bewuste groepsgrootte (de laatste groep vóór venster-einde inkorten)
+is een nette vervolgstap, geen voorwaarde.
 
 **Provenance en metering (#323).** Elke (her)extractie schrijft op de
 `interaction`-RIJ het gebruikte `extract_model` (model-ID) en de 1-based

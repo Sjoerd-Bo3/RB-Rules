@@ -1318,7 +1318,11 @@ de globale duur-vangrail).
   oorzaak én de echte token-kosten; elke interactie-rij draagt voortaan het
   extractie-model en de batch-positie, zodat de audit (#313) modellen en
   posities eerlijk kan vergelijken. Weigert het abonnement een modelvariant,
-  dan meldt het run-detail `model_unavailable` — terugzetten is de fix.
+  dan meldt het run-detail `model_unavailable` — terugzetten is de fix. Let op
+  bij grote K: de nachtrun-deadline wordt alleen tussen sessies getoetst, dus
+  een sessie die vlak voor het venster-einde start kan haar volledige budget
+  doorlopen (± 2,6 uur bij K=50, ± 12,5 uur bij K=250) — dat staat ook in de
+  helptekst van de instelling.
 - **Brein-mining draait parallel** (#279) — de extractie kostte ~40 s per kaart
   en liep één kaart tegelijk: 40 kaarten was een half uur, een ongecapte
   nachtrun (~900 kaarten) tien uur. De kaart- en subject-lus verwerken nu

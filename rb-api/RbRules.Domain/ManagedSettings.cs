@@ -116,7 +116,10 @@ public static class ManagedSettingsCatalog
             + "amortiseert de vaste sessiekost. De timeout schaalt mee met K en een "
             + "omgevallen sessie behoudt de al-gevangen kaarten (partial salvage), maar "
             + "de niet-gevangen rest komt de volgende run terug — grotere K = grotere "
-            + "blast radius per sessie.",
+            + "blast radius per sessie. Let op het nachtvenster: de deadline wordt "
+            + "alleen tússen sessies getoetst, dus een sessie die vlak voor het "
+            + "venster-einde start loopt in het slechtste geval haar hele budget door "
+            + "(± 2,6 uur bij K=50, ± 12,5 uur bij K=250).",
             Min: 1, Max: 250),
         new(SettingKeys.NightlyEnabled, SettingKind.Bool, "nachtrun",
             "Automatische nachtrun",
