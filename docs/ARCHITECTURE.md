@@ -2696,6 +2696,59 @@ nachtrun:
   onder `breinmine-interactions-v4` naast die van v3 (de precisie-tabel splitst
   al per promptversie, §6.7).
 
+  **Herijkt in #330 — het bewijs moet ook de SOORT van de claim dragen.** De
+  opus-audit op de eerste fable-batch (2026-07-22: 23 promoties, 9 geauditeerd,
+  2 bevestigd, 7 betwist) legde de vólgende faalklasse bloot, ná #324: alle
+  zeven betwiste paren droegen keurig regel-/definitietekst-bewijs (het juiste
+  NIVEAU), maar het model overclaimde de relatieSOORT op co-occurrence —
+  "[Reaction] — Add [1]" werd COUNTERS, twee Dependent Keywords naast elkaar
+  (§727.1.b) werden MODIFIES, "you may recycle it" (een werkwoord!) werd GRANTS
+  [Recycle], en §805.6.a zegt nota bene expliciet dat Accelerate níét
+  interacteert. Twee deterministische soort-poorten op de bestaande
+  promotielaag, beide gekalibreerd op die negen echte paren (meet eerst, #211):
+  19. **Poort A — het kind-anker** (`InteractionKindAnchors`, catalogus als
+     DATA). Per relatiesoort een gesloten set lexicale ankers waarvan er
+     minstens één in een DRAGENDE bewijs-eenheid moet staan (dezelfde eenheid
+     die de lexicale steun levert — een "modified" in §465.2.c.4.a mag een
+     Tank↔Backline-claim niet redden wanneer alleen §465.2.c.6 beide keywords
+     noemt). Kalibratie-dwang uit de fixtures: `gains` en `become(s)` zijn
+     bewust GEEN GRANTS-ankers ("my controller gains X XP" en "become ready"
+     zíjn de gemeten overclaims), `has/have/give` wél (de gemeten
+     drukconventie: "Friendly units have [Deflect]"). Gevolg: een echte grant
+     die met "gains" geformuleerd is degradeert naar Candidate — aanvaard, de
+     poort is een noodzakelijke voorwaarde, geen voldoende.
+  20. **Poort B — de woordvormpoort** (`KeywordWordForm`). Een GRANTS-claim met
+     een mechanic-patient eist dat het doel in KEYWORD-vorm in het dragende
+     bewijs staat: gebracket (`[Recycle]`, de #211-meting hergebruikt als
+     poort) of als hoofdletter-term buiten het zinsbegin ("gains X XP" → XP
+     telt). Kleine letter midden in de zin is de werkwoordvorm en telt niet —
+     "You may recycle it" kent geen keyword [Recycle] toe. In de gate wordt B
+     vóór A gelezen: bij een dubbele misser is de woordvorm de specifiekere
+     diagnose en wint die de status_reason.
+  21. **Stranden = degraderen, nooit stil, nooit terugwerkend.** Zelfde
+     soft-pad als de bewijstier (punt 16): Candidate (reviewqueue) met de
+     poortnaam in `status_reason` (`kind_anchor` / `word_form`,
+     `InteractionGatePorts`), geen tombstone, en het run-detail telt per poort
+     (`(poorten: kind_anchor×N, word_form×M)`, ADR-20 — alleen getoond als er
+     iets te melden valt, #302). De tombstone-symmetrie van punt 16 geldt ook
+     hier: een negatief verdict op bewijs dat de soort niet draagt is een
+     soft-reject zonder grafsteen. En invariant #313 is in `AcceptAsync`
+     afgedwongen: strandt een re-mine-voorstel op een soort-poort terwijl de
+     rij al `promoted` is, dan blijft de rij ongemoeid en wordt alleen een
+     `InteractionDecision`-memo geschreven — de audit + reviewqueue leveren
+     degradaties, nooit de poort zelf.
+  *Wat de soort-poorten NIET garanderen* (restrisico's, bewust aanvaard en in
+  de code gedocumenteerd): een anker-woord elders in dezelfde dragende eenheid
+  over iets ánders passeert poort A ("has" in een voorbeeldzin die een
+  kaarttekst citeert); Riot kapitaliseert spelwerkwoorden ook midden in een zin
+  ("whether or not to Recycle it", §436.1) en die vorm passeert poort B; en de
+  signalen zijn gate-defaults `true` voor paden zonder tekstbewijs (de
+  hypothese-motor) — de afdwinging zit op `InteractionPromotionRequest`, waar
+  beide velden VERPLICHT zijn (#300-les: de typechecker is de enige poort die
+  een refactor overleeft). Noodzakelijke voorwaarden dus, geen voldoende; het
+  meetpunt is de volgende fable-run + audit, waar deze betwist-klasse ~0 hoort
+  te zijn.
+
   **`PromptVersion` is een stempel, geen stale-conditie** (#286-review). De bump naar
   `breinmine-interactions-v3` (en die naar v4, #324) legt in de `mining_run`-provenance
   vast wélke vraagvorm een feit voortbracht, maar NIETS leest hem als her-mine-trigger:

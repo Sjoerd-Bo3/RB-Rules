@@ -1323,6 +1323,24 @@ de globale duur-vangrail).
   een sessie die vlak voor het venster-einde start kan haar volledige budget
   doorlopen (± 2,6 uur bij K=50, ± 12,5 uur bij K=250) — dat staat ook in de
   helptekst van de instelling.
+- **Het bewijs moet ook de relatieSOORT dragen** (#330) — de opus-audit op de
+  eerste fable-batch (23 promoties, 9 geauditeerd, 7 betwist) toonde de volgende
+  faalklasse ná de bewijstier: alle betwiste paren droegen bewijs van het juiste
+  niveau, maar het model overclaimde de sóórt op co-occurrence ("[Reaction] —
+  Add [1]" werd COUNTERS; "you may recycle it" — een werkwoord — werd GRANTS
+  [Recycle]). Twee deterministische poorten op de promotielaag dichten dat:
+  een gesloten kind-anker-catalogus per relatiesoort (het dragende bewijs moet
+  de soort ook uitdrukken: prevent/counter voor COUNTERS, pay/cost/must voor
+  REQUIRES, enz.) en een woordvormpoort voor toekennende claims (een toegekend
+  keyword staat gebracket of als hoofdletter-term in het bewijs, niet als
+  werkwoord). Gekalibreerd op de negen echte audit-paren: de zeven betwiste
+  stranden, de twee bevestigde promoveren ongewijzigd. Stranden betekent
+  kandidaat in de reviewqueue (nooit stil weg), met de poortnaam als reden en
+  per poort geteld in het run-detail; de soort-poorten demoveren nooit een
+  bestaande promotie — strandt een her-voorstel op een poort terwijl de rij al
+  gepromoveerd is, dan blijft de rij staan en wordt alleen een beslissings-memo
+  geschreven. Meetpunt: de volgende fable-run + audit hoort deze
+  betwist-klasse naar ~0 te brengen.
 - **Brein-mining draait parallel** (#279) — de extractie kostte ~40 s per kaart
   en liep één kaart tegelijk: 40 kaarten was een half uur, een ongecapte
   nachtrun (~900 kaarten) tien uur. De kaart- en subject-lus verwerken nu

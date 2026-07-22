@@ -805,9 +805,13 @@ public class BreinInteractionMiningServiceTests
         for (var i = 1; i <= 3; i++)
             await SeedRuleSectionAsync(db, "core-rules-pdf", $"70{i}.1",
                 "Tank reduces the damage that Snipe assigns.", chunkIndex: i);
-        // … en pas dáárna de sectie die Vision↔Barrier beschrijft.
+        // … en pas dáárna de sectie die Vision↔Barrier beschrijft. "blocks" i.p.v.
+        // het eerdere "hides" (#330): de bewijszin moet sinds de kind_anchor-poort
+        // óók de relatieSOORT dragen, en "hide" staat bewust niet in de gesloten
+        // COUNTERS-catalogus — deze test gaat over de bewijs-begroting, niet over
+        // de ankerkeuze, dus de zin draagt nu een gemeten counter-anker.
         await SeedRuleSectionAsync(db, "core-rules-pdf", "704.1",
-            "Barrier hides a unit from Vision until the end of the turn.", chunkIndex: 4);
+            "Barrier blocks a unit from Vision until the end of the turn.", chunkIndex: 4);
 
         var svc = Service(db, () => Interactions(new
         {

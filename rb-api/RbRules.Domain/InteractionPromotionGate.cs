@@ -49,6 +49,17 @@ public enum InteractionGateOutcome
 /// (#249)? Dat feit komt al deterministisch uit <c>Card.Mechanics[]</c> via de
 /// graph-projectie (HAS_MECHANIC) en hoort geen tweede, LLM-afgeleid bestaan als
 /// <see cref="Interaction"/> te krijgen.</param>
+/// <param name="KindAnchorSupport">Poort A (#330): draagt een dragende
+/// bewijs-eenheid een lexicaal anker van de geclaimde relatieSOORT
+/// (<see cref="InteractionKindAnchors"/>)? Default true = niet van toepassing
+/// (paden zonder tekstbewijs, zoals de hypothese-motor); het evidence-dragende
+/// pad berekent hem VERPLICHT — <c>InteractionPromotionRequest</c> heeft er geen
+/// default voor, zodat de typechecker afdwingt dat geen aanroeper de poort
+/// stilzwijgend overslaat (#300-les).</param>
+/// <param name="PatientWordFormSupport">Poort B (#330): staat het keyword-doel
+/// van een toekennende claim in keyword-VORM in het bewijs
+/// (<see cref="KeywordWordForm"/>)? Default true = niet van toepassing; zelfde
+/// verplichting op het request als bij <paramref name="KindAnchorSupport"/>.</param>
 public sealed record InteractionGateSignals(
     bool SchemaValid,
     string? SchemaReason,
@@ -59,11 +70,25 @@ public sealed record InteractionGateSignals(
     bool IsEmergentCardCardPair,
     bool HasBlockingTombstone,
     bool RolesDistinct = true,
-    bool IsCardOwnKeywordPair = false)
+    bool IsCardOwnKeywordPair = false,
+    bool KindAnchorSupport = true,
+    bool PatientWordFormSupport = true)
 {
     /// <summary>Is er deterministische steun náást het verdict?</summary>
     public bool HasDeterministicSupport =>
         LexicalSupport || (ConsensusThreshold > 0 && ConsensusCount >= ConsensusThreshold);
+}
+
+/// <summary>Machine-leesbare namen van de soort-poorten (#330) — de waarde van
+/// <see cref="InteractionGateResult.DegradedBy"/> en het label in run-detail en
+/// status_reason. Bewust korte, stabiele tokens: beheer telt erop.</summary>
+public static class InteractionGatePorts
+{
+    /// <summary>Poort A: kind-anker ontbreekt in het dragende bewijs.</summary>
+    public const string KindAnchor = "kind_anchor";
+
+    /// <summary>Poort B: keyword-doel staat alleen in werkwoord-/prozavorm.</summary>
+    public const string WordForm = "word_form";
 }
 
 /// <summary>De poort-beslissing: de tier + een memo die zégt welke poort
@@ -75,8 +100,12 @@ public sealed record InteractionGateSignals(
 /// verdienen géén grafsteen: die zou een legitieme interactie permanent onderdrukken
 /// en botst met de rode draad (#236) dat een LLM-oordeel alléén nooit een
 /// destructieve/blijvende actie draagt.</summary>
+/// <param name="DegradedBy">Wélke soort-poort (#330) een zou-promoveren-claim
+/// naar Candidate degradeerde (<see cref="InteractionGatePorts"/>), of null als
+/// er geen poort vuurde. Run-detail telt hierop (ADR-20: nooit stil).</param>
 public sealed record InteractionGateResult(
-    InteractionGateOutcome Outcome, string StatusReason, bool WritesTombstone = false)
+    InteractionGateOutcome Outcome, string StatusReason, bool WritesTombstone = false,
+    string? DegradedBy = null)
 {
     /// <summary>De bijbehorende <see cref="InteractionStatus"/>-tier-string.</summary>
     public string Status => Outcome switch
@@ -155,16 +184,41 @@ public static class InteractionPromotionGate
         //    consensus) náást het verdict staat, is de verwerping duurzaam gegrond en
         //    verdient ze flip-flop-suppressie. Een kaal false-verdict → soft-reject,
         //    geen grafsteen, zodat een LLM-false-negative de sleutel niet permanent sluit.
+        //    Sinds #330 wegen de soort-poorten hier symmetrisch mee (de #324b-spiegel:
+        //    dezelfde steun, dezelfde grens) — bewijs dat de relatieSOORT niet draagt is
+        //    niet sterk genoeg om te promoveren, dus óók niet om permanent te sluiten.
         if (!s.LlmVerdictInteracts)
+        {
+            var durable = s.HasDeterministicSupport
+                && s.KindAnchorSupport && s.PatientWordFormSupport;
             return new(InteractionGateOutcome.Rejected,
                 s.HasDeterministicSupport
                     ? "LLM-verdict: geen noemenswaardige interactie (ondanks deterministische steun)"
                     : "LLM-verdict: geen noemenswaardige interactie",
-                WritesTombstone: s.HasDeterministicSupport);
+                WritesTombstone: durable);
+        }
 
-        // 4. Verdict positief + deterministische steun → promoveren.
+        // 4. Verdict positief + deterministische steun → promoveren, TENZIJ een
+        //    soort-poort (#330) strandt: dan Candidate (reviewqueue), nooit stil weg —
+        //    zelfde soft-pad als de #324-bewijstier. Volgorde is bewust B vóór A: de
+        //    woordvormpoort is de specifiekere diagnose ("recycle is hier een
+        //    werkwoord, geen toegekend keyword") en wint daarom de status_reason
+        //    wanneer een claim op allebei strandt.
         if (s.HasDeterministicSupport)
         {
+            if (!s.PatientWordFormSupport)
+                return new(InteractionGateOutcome.Candidate,
+                    "word_form-poort (#330): het keyword-doel staat alleen als werkwoord/" +
+                    "prozavorm in het bewijs, niet in keyword-vorm ([…] of hoofdletter-term " +
+                    "buiten zinsbegin) — kandidaat, wacht op review",
+                    DegradedBy: InteractionGatePorts.WordForm);
+            if (!s.KindAnchorSupport)
+                return new(InteractionGateOutcome.Candidate,
+                    "kind_anchor-poort (#330): het dragende bewijs bevat geen lexicaal anker " +
+                    "voor deze relatiesoort — co-occurrence zegt niet wélke relatie; " +
+                    "kandidaat, wacht op review",
+                    DegradedBy: InteractionGatePorts.KindAnchor);
+
             var support = s.LexicalSupport
                 ? "bewijszin gevonden"
                 : $"consensus {s.ConsensusCount}/{s.ConsensusThreshold}";
