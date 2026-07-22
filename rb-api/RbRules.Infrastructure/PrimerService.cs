@@ -44,6 +44,14 @@ public class PrimerService(
     public async Task<PrimerResult> GenerateAsync(
         bool force = false, Action<string>? progress = null, CancellationToken ct = default)
     {
+        // Kosten-grootboek (#328): tokens optellen over álle LLM-calls van
+        // deze run (genereren + vertalen); null zolang geen enkele call usage
+        // meldde — onbekend is niet 0.
+        var runStart = DateTimeOffset.UtcNow;
+        AiUsage? runUsage = null;
+        void Tally(AiUsage? u) => runUsage = u is null ? runUsage
+            : runUsage is null ? u
+            : new AiUsage(runUsage.InputTokens + u.InputTokens, runUsage.OutputTokens + u.OutputTokens);
         var written = 0;
         var skipped = 0;
         var failed = 0;
@@ -73,15 +81,17 @@ public class PrimerService(
             if (chunks.Count == 0) { failed++; continue; }
 
             var context = string.Join("\n\n", chunks.Select(c => $"§{c.SectionCode}: {c.Text}"));
-            var body = await ai.AskAsync(
+            var answer = await ai.AskWithUsageAsync(
                 $"Concept: {topic.Title}\n\nOfficiële regelsecties:\n{context}",
                 SystemPrompt, ct: ct);
+            Tally(answer?.Usage);
+            var body = answer?.Answer;
             if (string.IsNullOrWhiteSpace(body)) { failed++; continue; }
 
             // Nederlandse weergave (#266) meteen bij de generatie, zodat ze
             // onderdeel is van de draft die de beheerder goedkeurt.
             progress?.Invoke($"primer {n}/{PrimerTopics.All.Count}: {topic.Title} — vertalen");
-            var bodyNl = await TranslateAsync(body, ct);
+            var bodyNl = await TranslateAsync(body, ct, Tally);
             if (bodyNl is null) untranslated++;
 
             var refs = string.Join(", ", chunks.Select(c => c.SectionCode));
@@ -112,6 +122,22 @@ public class PrimerService(
             await db.SaveChangesAsync(ct);
             written++;
         }
+        // Eén platform-regel per run in het kosten-grootboek (#328) —
+        // best-effort: een mislukte boeking mag de geschreven drafts niet raken.
+        try
+        {
+            db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
+                db, AiUsageEvent.OriginPlatform, "primer",
+                AskPathModels.Resolve("cheap"), userId: null,
+                runUsage?.InputTokens, runUsage?.OutputTokens,
+                (int)Math.Min((long)(DateTimeOffset.UtcNow - runStart).TotalMilliseconds, int.MaxValue),
+                ok: failed == 0, ct));
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "primer-run niet geboekt in ai_usage_event");
+        }
         return new(written, skipped, failed, untranslated);
     }
 
@@ -121,9 +147,12 @@ public class PrimerService(
     /// (null) — de pagina toont dan de canonieke Engelse tekst. Liever het
     /// Engels dan een "slagveld" naast een §-citaat. AI-uitval is hetzelfde
     /// pad: null, geen crash.</summary>
-    public async Task<string?> TranslateAsync(string body, CancellationToken ct = default)
+    public async Task<string?> TranslateAsync(
+        string body, CancellationToken ct = default, Action<AiUsage?>? onUsage = null)
     {
-        var dutch = await ai.AskAsync(body, PrimerTranslation.SystemPrompt, ct: ct);
+        var res = await ai.AskWithUsageAsync(body, PrimerTranslation.SystemPrompt, ct: ct);
+        onUsage?.Invoke(res?.Usage);
+        var dutch = res?.Answer;
         if (string.IsNullOrWhiteSpace(dutch)) return null;
 
         var leaks = PrimerTranslation.Leaks(body, dutch);

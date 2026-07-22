@@ -27,6 +27,11 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     public DbSet<CardInteraction> CardInteractions => Set<CardInteraction>();
     public DbSet<SimilarityExplanation> SimilarityExplanations => Set<SimilarityExplanation>();
     public DbSet<AskMetric> AskMetrics => Set<AskMetric>();
+    /// <summary>Kosten-grootboek (#328): AI-verbruik per gebruiker/job × model,
+    /// met de tariefversie voor reproduceerbare schaduwkosten.</summary>
+    public DbSet<AiUsageEvent> AiUsageEvents => Set<AiUsageEvent>();
+    /// <summary>Schaduwtarieven (#328), append-only met ingangsdatum.</summary>
+    public DbSet<AiTariff> AiTariffs => Set<AiTariff>();
     public DbSet<AskTrace> AskTraces => Set<AskTrace>();
     public DbSet<KnowledgeDoc> KnowledgeDocs => Set<KnowledgeDoc>();
     public DbSet<Claim> Claims => Set<Claim>();
@@ -225,6 +230,21 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.HasIndex(x => x.CreatedAt);
             // Quota-teller (#42): "vragen van gebruiker X vandaag".
             e.HasIndex(x => new { x.UserId, x.CreatedAt });
+        });
+
+        b.Entity<AiUsageEvent>(e =>
+        {
+            e.ToTable("ai_usage_event");
+            // Paneel-queries (#328): periode-venster + top-gebruikers.
+            e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
+        });
+
+        b.Entity<AiTariff>(e =>
+        {
+            e.ToTable("ai_tariff");
+            // Tariefresolutie: recentste ingangsdatum ≤ nu per model.
+            e.HasIndex(x => new { x.Model, x.EffectiveFrom });
         });
 
         b.Entity<AskTrace>(e =>

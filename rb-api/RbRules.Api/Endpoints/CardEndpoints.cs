@@ -146,7 +146,8 @@ public static class CardEndpoints
             if (result.Explanation is null)
                 return Results.Problem(title: "AI niet beschikbaar", statusCode: 503);
             return Results.Ok(new { explanation = result.Explanation, cached = result.Cached });
-        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>()
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>(); // #328: LLM-pad
 
         // Graph-verkenner (#29): buren van een kaart via gedeelde mechanieken,
         // domeinen en geverifieerde interacties.

@@ -363,6 +363,16 @@ public class BreinInteractionMiningService(
         run.InputTokens = tally.InputTokens;
         run.OutputTokens = tally.OutputTokens;
         run.CompletedAt = DateTimeOffset.UtcNow;
+        // Kosten-grootboek (#328): dezelfde run-totalen als platform-regel,
+        // mét tariefstempel — zo telt de nachtelijke mining mee in het
+        // beheer-paneel naast het gebruikers-verbruik. Best-effort binnen
+        // dezelfde save: de run-rij zelf is al de bron van waarheid.
+        db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
+            db, AiUsageEvent.OriginPlatform, "mining",
+            run.LlmModel ?? "onbekend", userId: null,
+            tally.InputTokens, tally.OutputTokens,
+            (int)Math.Min((long)(run.CompletedAt.Value - run.StartedAt).TotalMilliseconds, int.MaxValue),
+            ok: tally.Failed == 0, ct));
         await db.SaveChangesAsync(ct);
 
         // FocusCards/MechanicSubjects = daadwerkelijk verwerkt (bij een deadline-stop

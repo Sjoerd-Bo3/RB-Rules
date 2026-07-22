@@ -65,9 +65,12 @@
 		},
 		{ href: '/admin#bronnen', label: 'Bronnen', badge: sourceBadge, active: false },
 		{
-			href: '/admin/overview/gebruikers',
+			// #328: het live kosten-paneel (verbruik + schaduwkosten per
+			// gebruiker en per job-soort); het oude gebruikers-overzicht
+			// (quota/blokkade) blijft bereikbaar via de tegels op /admin.
+			href: '/admin/kosten',
 			label: 'Kosten',
-			active: path.startsWith('/admin/overview/gebruikers')
+			active: path.startsWith('/admin/kosten')
 		},
 		{ href: '/admin#traces', label: 'Vraag-traces', active: false },
 		{ href: '/admin#gevarenzone', label: 'Gevarenzone', danger: true, active: false }

@@ -180,6 +180,14 @@ public class BreinInteractionAuditService(
         run.Verified = sound;
         run.Rejected = disputed;
         run.CompletedAt = DateTimeOffset.UtcNow;
+        // Kosten-grootboek (#328): de audit als platform-regel. Tokens zijn op
+        // dit pad nog ONBEKEND (rb-ai's losse extract-endpoints geven geen
+        // usage terug) — dus null, geen nul: het paneel toont "geen meting".
+        db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
+            db, AiUsageEvent.OriginPlatform, "audit", AuditModel, userId: null,
+            inputTokens: null, outputTokens: null,
+            (int)Math.Min((long)(run.CompletedAt.Value - run.StartedAt).TotalMilliseconds, int.MaxValue),
+            ok: failed == 0, ct));
         await db.SaveChangesAsync(ct);
 
         return new(audited, sound, disputed, failed,

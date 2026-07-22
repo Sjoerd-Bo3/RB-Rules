@@ -610,6 +610,16 @@ de globale duur-vangrail).
 
 ### 4.3 De vraagbaak (`/ask`)
 
+- **Alleen voor ingelogde spelers (#328)** — elke vraag kost echte
+  AI-rekentijd, dus alle AI-paden (vraag, doorvragen, board-foto, de
+  similarity-uitleg op de kaartpagina, `/api/resolve`) zitten achter het
+  bestaande accountsysteem (magic-link + passkeys, dagquota). Anoniem toont
+  `/ask` een nette uitleg-staat (waarom inloggen, wat gratis open blijft,
+  login-knop naar `/account`) in plaats van een kale 401; de poort zelf is
+  server-side en drielaags (rb-web-action/proxy's én
+  `UserQuotaFilter.RequireUser` in rb-api). De rest van de site — regels,
+  kaarten, rulings, zoeken, wijzigingen — blijft zonder account werken;
+  voorlezen is client-side (speechSynthesis) en heeft geen server-AI-pad.
 - **Vraag-router** — classificeert de vraag (Ruling / Definitie / Kaart /
   Legaliteit / Toernooi) en kiest per type de antwoordstructuur en de
   bronnen-bias.
@@ -1185,6 +1195,25 @@ de globale duur-vangrail).
   de vraag-traces dragen dezelfde attributie als badge ("agentic (gate)" /
   "agentic (gebruiker)"). Quota per account (vragen/foto's/Grondig) zijn in
   het gebruikersoverzicht per rij bij te stellen.
+- **Kosten per gebruiker & schaduwkosten, live (#328)** — elke gemeterde
+  AI-gebeurtenis wordt óók een rij in het kosten-grootboek
+  (`ai_usage_event`): user-id (ask, resolve en de similarity-uitleg-vulling)
+  of job-soort (mining/audit/primer),
+  model-ID, tokens, duur, uitkomst en de **tariefversie** van dat moment.
+  Tarieven (`ai_tariff`, USD per miljoen tokens mét ingangsdatum) zijn
+  append-only en zonder deploy bij te werken; bedragen worden op leesmoment
+  gereproduceerd als rij × gestempeld tarief en overal gelabeld als
+  **schaduwkosten** (we betalen abonnement — inzicht, geen factuur). Het
+  paneel `/admin/kosten` toont totalen vandaag/7d/30d, gebruikers- vs
+  platform-veroorzaakt, top-gebruikers, per model en platform per job-soort,
+  live via dezelfde poll-aanpak als de job-voortgang. Embeddings staan er
+  expliciet als "lokaal (Ollama), geen API-kosten"; audit-runs zonder
+  token-meting als "geen meting" — nooit stiekem $0. Het paneel benoemt zelf
+  wélke paden boeken en dat elk totaal een **ondergrens** is zolang de
+  overige platform-LLM-callers nog niet boeken. Privacy: uitsluitend
+  maten, aantallen en bedragen — nooit vraaginhoud.
+  *Route* `/admin/kosten` · *endpoints* `/api/admin/costs`,
+  `/api/admin/tariffs`.
 - **Periodieke zelfverrijking** — relatie-mining nachtelijk, de
   bronnen-scout wekelijks en de Piltover-decks-verversing elke 3 uur (#15
   fase 3, spoor C: de eenmalige ~10k-deck-backfill loopt zo in enkele
@@ -1545,6 +1574,9 @@ de globale duur-vangrail).
   `/api/push/subscribe`, `/api/push/unsubscribe`.
 - **Accounts** — login via e-mail (magic-link-verificatie) met per-gebruiker
   quota/kosteninzicht als basis; per-IP rate-limiting op de dure endpoints.
+  Sinds #328 is een account ook de **toegangspoort tot alle AI-paden**
+  (§4.3): de per-IP-limiet blijft bestaan als tweede rem, maar anoniem komt
+  niet meer bij een LLM-call.
   Drie dagquota per account (UTC-dag, geteld uit `ask_metric`): vragen,
   foto-vragen en zelf geforceerde Grondig-vragen (#153) — de accountpagina
   toont het verbruik en resterend tegoed van alle drie.
@@ -1720,6 +1752,17 @@ Uit de openstaande GitHub-issues, gegroepeerd op thema. **In-flight** =
 openstaande PR.
 
 **Ops & platform**
+- **#328** Kosten per gebruiker live in beheer — *in-flight*: de login-poort
+  op /ask, het kosten-grootboek met tariefversies en het live
+  `/admin/kosten`-paneel staan in §4.3/§4.5. Open restpunten binnen het
+  issue: usage-doorvoer op rb-ai's losse extract-pad (de audit meet nu
+  runs/duur; tokens staan er eerlijk als "geen meting"); rb-ai het gebruikte
+  model-ID laten terugsturen in de ask-response zodat de
+  `AskPathModels`-spiegel van rb-ai's MODEL-map kan vervallen (nu bewaakt
+  door literal-tests; rb-ai is bevroren voor het parallelle #325-spoor); de
+  overige platform-LLM-callers laten boeken (het paneel benoemt zelf dat elk
+  totaal een ondergrens is); en de provider-dimensie zodra #325 landt
+  (BYO-AI-gebruikers, #327, verschijnen dan als "eigen tegoed").
 - **#258** Jobs & paden opschonen — *in-flight*, zie §4.5. Eén ketenmechanisme:
   "Alles bijwerken" en de nachtrun zijn dunne aliassen op een `PathDefinition`
   geworden, de padenstructuur volgt de vier fases (ingest/kaart/kennis/brein),

@@ -25,7 +25,8 @@ public record ResolveResult(string Answer, IReadOnlyList<Citation> Citations);
 /// zijn antwoord uit kaartteksten, errata en regelsecties); /api/resolve raakt
 /// dus geen van beide lagen en had aan deze migratie niets te doen.</summary>
 public class InteractionService(
-    RbRulesDbContext db, RbAiClient ai, EmbeddingService embeddings, IDriver driver)
+    RbRulesDbContext db, RbAiClient ai, EmbeddingService embeddings, IDriver driver,
+    RequestUserContext? userContext = null)
 {
     private const int VerifyBatch = 6;
 
@@ -277,7 +278,8 @@ public class InteractionService(
         var context = string.Join("\n\n", chunks.Select((c, i) =>
             $"[{i + 1}] ({c.Name}{(c.SectionCode is null ? "" : $", §{c.SectionCode}")})\n{c.Text}"));
 
-        var answer = await ai.AskAsync(
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var res = await ai.AskWithUsageAsync(
             $"Kaarten:\n{cardBlock}\n\nRelevante regelsecties:\n{context}\n\n" +
             "Vraag: hoe werken deze kaarten op elkaar in? Loop de interactie " +
             "stap voor stap door en citeer per stap de relevante regelsectie met [n]/§.",
@@ -287,9 +289,28 @@ public class InteractionService(
             Gebruik de effectieve (post-errata) kaartteksten. Als de regels geen
             uitsluitsel geven, zeg dat eerlijk. Antwoord in het Nederlands.
             """,
-            task: "hard", ct: ct)
-            ?? RbAiClient.UnavailableAnswer;
+            task: "hard", ct: ct);
+        sw.Stop();
 
-        return new(answer, citations);
+        // Kosten-grootboek (#328, review): /api/resolve is een gebruikers-
+        // veroorzaakte, ongecachte hard-model-call en hoort dus geboekt —
+        // mét user-attributie (sinds de login-poort is er altijd een account).
+        // Best-effort: de boekhouding mag het antwoord nooit blokkeren.
+        try
+        {
+            db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
+                db, AiUsageEvent.OriginUser, "resolve", AskPathModels.Resolve("hard"),
+                userContext?.User?.Id, res?.Usage?.InputTokens, res?.Usage?.OutputTokens,
+                (int)Math.Min(sw.ElapsedMilliseconds, int.MaxValue), ok: res?.Answer != null, ct));
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            foreach (var entry in db.ChangeTracker.Entries<AiUsageEvent>()
+                         .Where(e => e.State == EntityState.Added).ToList())
+                entry.State = EntityState.Detached;
+        }
+
+        return new(res?.Answer ?? RbAiClient.UnavailableAnswer, citations);
     }
 }
