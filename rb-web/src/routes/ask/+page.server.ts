@@ -57,10 +57,15 @@ export interface AskHistoryItem {
 
 export const load: PageServerLoad = async ({ cookies, getClientAddress }) => {
 	// Voorverwarmsignaal (#154), fire-and-forget: mag het renderen nooit
-	// vertragen of laten falen ($lib/prewarm slikt alles).
-	firePrewarm(() =>
-		api('/api/ask/prewarm', { method: 'POST', headers: { 'x-client-ip': getClientAddress() } })
-	);
+	// vertragen of laten falen ($lib/prewarm slikt alles). Sinds de
+	// login-poort (#328) alleen voor ingelogde bezoekers — een anonieme
+	// paginalaad kan toch geen vraag meer stellen en hoeft dus geen
+	// SDK-subprocess op de VM te booten.
+	if (cookies.get(USER_COOKIE)) {
+		firePrewarm(() =>
+			api('/api/ask/prewarm', { method: 'POST', headers: { 'x-client-ip': getClientAddress() } })
+		);
+	}
 	const userAuthHeaders = userHeaders(cookies);
 	const headers = { 'x-client-ip': getClientAddress(), ...userAuthHeaders };
 	// Duurstatistiek en eigen geschiedenis (#157) parallel — beide best-effort.
@@ -95,6 +100,13 @@ export const load: PageServerLoad = async ({ cookies, getClientAddress }) => {
 
 export const actions: Actions = {
 	ask: async ({ request, getClientAddress, cookies }) => {
+		// Login-poort (#328), server-side: anoniem komt hier niet langs — ook
+		// niet met een gemanipuleerde store of een handgemaakte POST. rb-api
+		// heeft dezelfde poort (defense-in-depth); dit is de laag die de
+		// bezoeker een nette Nederlandse melding geeft.
+		if (!cookies.get(USER_COOKIE)) {
+			return fail(401, { error: 'Log in om de vraagbaak te gebruiken.' });
+		}
 		const form = await request.formData();
 		const question = String(form.get('question') ?? '').trim();
 		if (!question) return fail(400, { error: 'Stel eerst een vraag.' });

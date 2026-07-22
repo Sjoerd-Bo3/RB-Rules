@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { API_BASE } from '$lib/api';
-import { userHeaders } from '$lib/server/user';
+import { USER_COOKIE, userHeaders } from '$lib/server/user';
 
 // Streaming-proxy (#31): de browser praat nooit rechtstreeks met rb-api —
 // deze route geeft de NDJSON-stream van POST /api/ask/stream 1-op-1 door.
@@ -10,6 +10,13 @@ import { userHeaders } from '$lib/server/user';
 // account-quota (#42) — daarom reist het sessietoken hier net als bij de
 // niet-streamende action mee.
 export const POST: RequestHandler = async ({ request, getClientAddress, cookies }) => {
+	// Login-poort (#328), server-side: het streamingpad is hetzelfde AI-pad
+	// als de action — anoniem wordt hier geweigerd vóór er iets naar rb-api
+	// gaat (die dezelfde poort heeft; dit scheelt de round-trip en geeft een
+	// nette melding). De uitleg-staat op /ask is alleen presentatie.
+	if (!cookies.get(USER_COOKIE)) {
+		return json({ error: 'Log in om de vraagbaak te gebruiken.' }, { status: 401 });
+	}
 	let upstream: Response;
 	try {
 		upstream = await fetch(`${API_BASE}/api/ask/stream`, {

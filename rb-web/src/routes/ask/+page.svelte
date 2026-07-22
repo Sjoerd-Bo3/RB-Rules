@@ -227,6 +227,30 @@
 	<h1>Vraag een <span>ruling</span></h1>
 	<p class="subtitle">Antwoord met exacte §-citaten uit de officiële regels.</p>
 
+	{#if !data.loggedIn}
+		<!-- Login-poort (#328): de vraagbaak is alleen voor accounts. Dit blok
+		     is presentatie — de echte poort zit server-side (de ask-action, de
+		     /ask/stream-proxy en rb-api zelf weigeren anoniem alle drie). -->
+		<section class="panel login-gate">
+			<p class="gate-status"><span class="dot" aria-hidden="true"></span>Alleen voor ingelogde spelers</p>
+			<h2>Log in om vragen te stellen</h2>
+			<p>
+				Elke vraag draait een echt AI-model en kost dus rekentijd. Om dat
+				eerlijk te verdelen is de vraagbaak gekoppeld aan een gratis account
+				met een dagtegoed — inloggen kan met een magic-link per e-mail of met
+				een passkey, zonder wachtwoord.
+			</p>
+			<p>
+				De rest van Poracle blijft gewoon open zonder account: de regels met
+				§-permalinks, de kaartbrowser, de rulings-databank, de wijzigingen-feed
+				en het zoeken.
+			</p>
+			<a class="gate-login" href="/account">Log in of maak een account</a>
+			<p class="meta small">
+				Na het inloggen kom je hier terug en stel je direct je eerste vraag.
+			</p>
+		</section>
+	{:else}
 	<div class="examples">
 		{#each EXAMPLES as ex (ex)}
 			<button type="button" class="chip" onclick={() => (askSession.draft = ex)}>{ex}</button>
@@ -322,6 +346,7 @@
 			<p class="meta small">De foto gaat mee als board state — de ruling benoemt eerst wat er zichtbaar is.</p>
 		{/if}
 	</form>
+	{/if}
 
 	{#if busy && !live?.answer}
 		<div class="panel waiting">
@@ -624,7 +649,7 @@
 		</article>
 	{/if}
 
-	{#if current && !current.interrupted && !busy && !live}
+	{#if current && !current.interrupted && !busy && !live && data.loggedIn}
 		<!-- Doorvragen (#41): bouwt voort op het gesprek, met alle context. Op een
 		     onderbroken (onvolledig) antwoord bouw je niet verder — dat zou een
 		     half antwoord als context meesturen. -->
@@ -684,6 +709,22 @@
 		text-align: left;
 	}
 	.chip:hover { color: var(--text); border-color: var(--border-strong); }
+	/* Login-poort (#328): status = kleur + tekst, geen emoji's. */
+	.login-gate { padding: 20px; margin: 14px 0 16px; }
+	.login-gate h2 { margin: 8px 0 6px; }
+	.login-gate p { margin: 8px 0; }
+	.gate-status {
+		display: inline-flex; align-items: center; gap: 8px; margin: 0;
+		font-size: 0.85rem; font-weight: 600; color: var(--accent);
+	}
+	.gate-status .dot {
+		width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+	}
+	.gate-login {
+		display: inline-block; margin-top: 6px; background: var(--accent);
+		color: var(--accent-ink); border-radius: 8px; padding: 9px 18px;
+		font-weight: 600; text-decoration: none;
+	}
 	.form { padding: 16px; margin-bottom: 16px; }
 	textarea {
 		width: 100%; background: var(--surface-deep); color: var(--text);
