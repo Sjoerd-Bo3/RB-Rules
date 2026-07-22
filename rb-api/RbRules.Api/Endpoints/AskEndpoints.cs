@@ -24,7 +24,10 @@ public static class AskEndpoints
                 history.Count > 0 ? history : null,
                 AgenticGate.ParseApproach(req.Approach));
             return Results.Ok(result);
-        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>()
+            // #328: /ask is alleen nog voor ingelogde bezoekers — de filter
+            // draait NA UserQuotaFilter (die resolvet het sessietoken).
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>();
 
         // ── Streamende variant (#31): NDJSON-frames ────────────────────
         // meta (citaties/claims vóór het antwoord) → delta* → final|error.
@@ -41,7 +44,8 @@ public static class AskEndpoints
                     ask, req.Question.Trim(), images, history,
                     AgenticGate.ParseApproach(req.Approach), http, body),
                 "application/x-ndjson");
-        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>()
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>(); // #328: zie /api/ask
 
         // ── Eigen ask-geschiedenis (#157): laatste 20 eigen vragen — de
         // filter zet zowel User als IpHash op RequestUserContext (ook
@@ -118,7 +122,8 @@ public static class AskEndpoints
             return result is null
                 ? Results.BadRequest(new { error = "kaarten niet gevonden" })
                 : Results.Ok(result);
-        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>()
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>(); // #328: LLM-pad
 
         // ── Feedback op antwoorden (self-learning, #24) ────────────────
         app.MapPost("/api/corrections", async (CorrectionSubmit body, RbRulesDbContext db) =>

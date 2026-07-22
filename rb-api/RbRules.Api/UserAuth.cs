@@ -13,6 +13,32 @@ public class UserQuotaFilter : IEndpointFilter
 {
     public const string TokenHeader = "X-User-Token";
 
+    /// <summary>Login-poort op de AI-paden (#328): NA de quota-filter (die zet
+    /// RequestUserContext.User uit een geldig sessietoken) weigert deze filter
+    /// elk request zonder ingelogde gebruiker. Sinds #328 zijn álle routes die
+    /// een LLM-call kunnen veroorzaken (/api/ask, /api/ask/stream, /api/resolve,
+    /// de similarity-explain) alleen nog voor accounts — de rest van de site
+    /// blijft open. De machine-leesbare <c>code</c> laat rb-web het onderscheid
+    /// maken tussen "log in" (deze poort) en "sessie verlopen" (UserQuotaFilter,
+    /// zelfde 401 maar zónder code). Server-authoritatief: rb-web toont alleen
+    /// de nette uitleg-staat, deze filter is de echte poort.</summary>
+    public class RequireUser : IEndpointFilter
+    {
+        public const string Code = "login_required";
+
+        public async ValueTask<object?> InvokeAsync(
+            EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            var userContext = context.HttpContext.RequestServices
+                .GetRequiredService<RequestUserContext>();
+            if (userContext.User is null)
+                return Results.Json(
+                    new { error = "log in om de AI-vraagbaak te gebruiken", code = Code },
+                    statusCode: StatusCodes.Status401Unauthorized);
+            return await next(context);
+        }
+    }
+
     public async ValueTask<object?> InvokeAsync(
         EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
