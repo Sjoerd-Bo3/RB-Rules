@@ -61,13 +61,13 @@ export const load: PageServerLoad = async ({ cookies, getClientAddress }) => {
 	// login-poort (#328) alleen voor ingelogde bezoekers — een anonieme
 	// paginalaad kan toch geen vraag meer stellen en hoeft dus geen
 	// SDK-subprocess op de VM te booten.
-	if (cookies.get(USER_COOKIE)) {
-		firePrewarm(() =>
-			api('/api/ask/prewarm', { method: 'POST', headers: { 'x-client-ip': getClientAddress() } })
-		);
-	}
 	const userAuthHeaders = userHeaders(cookies);
 	const headers = { 'x-client-ip': getClientAddress(), ...userAuthHeaders };
+	if (cookies.get(USER_COOKIE)) {
+		// Sessietoken mee: rb-api gate't prewarm sinds de review óók
+		// server-side (zelfde login-poort als de AI-paden).
+		firePrewarm(() => api('/api/ask/prewarm', { method: 'POST', headers }));
+	}
 	// Duurstatistiek en eigen geschiedenis (#157) parallel — beide best-effort.
 	const [stats, askHistory] = await Promise.all([
 		api<AskStats>('/api/ask/stats').catch(() => ({ count: 0 }) as AskStats),

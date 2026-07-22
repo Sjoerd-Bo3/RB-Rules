@@ -96,6 +96,91 @@ public class AiUsageMeteringTests
         Assert.Null(evt.TariffVersion); // geen gok, het paneel toont "geen tarief"
     }
 
+    // ── Pad → model-spiegel van rb-ai's MODEL-map ───────────────────────
+
+    [Fact]
+    public void AskPathModels_SpiegeltDeRbAiMap_MetLiterals()
+    {
+        // UITGESCHREVEN literals, geen import van de map in de assert: dit is
+        // de drift-wacht op de spiegel van rb-ai/src/ai.ts (MODEL). Wijzigt
+        // rb-ai zijn map, dan hoort deze test bewust rood te gaan bij het
+        // meebewegen van AskPathModels — en betrapt hij elke stille wijziging.
+        Assert.Equal("claude-sonnet-4-6", AskPathModels.Resolve("cheap"));
+        Assert.Equal("claude-opus-4-8", AskPathModels.Resolve("hard"));
+        Assert.Equal("claude-sonnet-4-6", AskPathModels.Resolve("agentic"));
+        // Onbekend/legacy pad valt op het default-model terug, nooit een gok.
+        Assert.Equal("claude-sonnet-4-6", AskPathModels.Resolve(null));
+        Assert.Equal("claude-sonnet-4-6", AskPathModels.Resolve("iets-nieuws"));
+    }
+
+    // ── Resolve & explain: gebruikers-veroorzaakte LLM-paden boeken ─────
+
+    [Fact]
+    public async Task ResolveAsync_BoektUsageEventMetUserAttributie()
+    {
+        using var db = NewDb();
+        var tariff = new AiTariff
+        {
+            Model = "claude-opus-4-8", InputUsdPerMTok = 5m, OutputUsdPerMTok = 25m,
+            EffectiveFrom = DateTimeOffset.UtcNow.AddDays(-1),
+        };
+        db.AiTariffs.Add(tariff);
+        var user = new AppUser { Email = "speler@example.com" };
+        db.Users.Add(user);
+        db.Cards.AddRange(
+            new Card { RiftboundId = "ogn-1", Name = "Deflector", TextPlain = "Deflect." },
+            new Card { RiftboundId = "ogn-2", Name = "Sniper", TextPlain = "Choose a unit." });
+        await db.SaveChangesAsync();
+
+        var svc = new InteractionService(
+            db, SequenceAi(new { answer = "Stap 1: …", usage = new { inputTokens = 900, outputTokens = 120 } }),
+            WorkingEmbeddings(), new RecordingDriver(),
+            new RequestUserContext { User = user });
+
+        var result = await svc.ResolveAsync(["ogn-1", "ogn-2"]);
+
+        Assert.NotNull(result);
+        var evt = await db.AiUsageEvents.SingleAsync();
+        Assert.Equal(AiUsageEvent.OriginUser, evt.Origin);
+        Assert.Equal("resolve", evt.Kind);
+        // task "hard" → het opus-model uit de spiegel-map.
+        Assert.Equal("claude-opus-4-8", evt.Model);
+        Assert.Equal(user.Id, evt.UserId);
+        Assert.Equal(900, evt.InputTokens);
+        Assert.Equal(120, evt.OutputTokens);
+        Assert.Equal(tariff.Id, evt.TariffVersion);
+    }
+
+    [Fact]
+    public async Task ExplainAsync_BoektDeCacheVulling_EnDeCacheHitNiet()
+    {
+        using var db = NewDb();
+        var user = new AppUser { Email = "speler@example.com" };
+        db.Users.Add(user);
+        db.Cards.AddRange(
+            new Card { RiftboundId = "ogn-1", Name = "Deflector" },
+            new Card { RiftboundId = "ogn-2", Name = "Sniper" });
+        await db.SaveChangesAsync();
+
+        var svc = new SimilarityExplainService(
+            db, SequenceAi(new { answer = "Beide beschermen units.", usage = new { inputTokens = 300, outputTokens = 40 } }),
+            new RequestUserContext { User = user });
+
+        var first = await svc.ExplainAsync("ogn-1", "ogn-2");
+        Assert.False(first.Cached);
+        var evt = await db.AiUsageEvents.SingleAsync();
+        Assert.Equal("explain", evt.Kind);
+        Assert.Equal(AiUsageEvent.OriginUser, evt.Origin);
+        Assert.Equal("claude-sonnet-4-6", evt.Model); // task cheap
+        Assert.Equal(user.Id, evt.UserId);
+        Assert.Equal(300, evt.InputTokens);
+
+        // Cache-hit is geen LLM-call en boekt dus níets extra.
+        var second = await svc.ExplainAsync("ogn-1", "ogn-2");
+        Assert.True(second.Cached);
+        Assert.Equal(1, await db.AiUsageEvents.CountAsync());
+    }
+
     // ── Ask-pad: user-attributie + model + stempel ──────────────────────
 
     [Fact]
@@ -214,6 +299,11 @@ public class AiUsageMeteringTests
             r => r.Kind == "audit" && r.Usd == 0m && r.UnpricedCalls == 1);
         // Embeddings zijn lokaal: expliciet benoemd, geen stiekeme nul.
         Assert.Contains("lokaal", overview.EmbeddingsNote);
+        // Het paneel zegt ZELF dat het een ondergrens is (review #328) en
+        // welke paden boeken — content-literals, niet de constante zelf.
+        Assert.Contains("ondergrens", overview.MeteredNote);
+        Assert.Contains("resolve", overview.MeteredNote);
+        Assert.Contains("explain", overview.MeteredNote);
     }
 
     [Fact]
@@ -327,6 +417,16 @@ public class AiUsageMeteringTests
     private static EmbeddingService FailingEmbeddings() => new(
         new HttpClient(new StubHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.InternalServerError)))
+        { BaseAddress = new Uri("http://ollama.test") });
+
+    /// <summary>Embed-stub die één nul-vector per tekst teruggeeft — het
+    /// resolve-pad embedt de zoektekst vóór de LLM-call en mag daar niet op
+    /// stranden (de vector-query zelf blijft leeg: geen chunks geseed).</summary>
+    private static EmbeddingService WorkingEmbeddings() => new(
+        new HttpClient(new StubHandler(_ => JsonMessage(new
+        {
+            embeddings = new[] { Enumerable.Repeat(0f, 1024).ToArray() },
+        })))
         { BaseAddress = new Uri("http://ollama.test") });
 
     private static async Task SeedRulesAsync(RbRulesDbContext db)

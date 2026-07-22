@@ -38,7 +38,8 @@ public record CostsOverview(
     IReadOnlyList<CostKindRow> PlatformPerKind,
     IReadOnlyList<CostUserRow> TopUsers,
     IReadOnlyList<TariffRow> Tariffs,
-    string EmbeddingsNote);
+    string EmbeddingsNote,
+    string MeteredNote);
 
 /// <summary>Leest het kosten-grootboek voor het live beheer-paneel (#328).
 /// Bedragen worden op LEESmoment berekend uit rij × gestempeld tarief
@@ -51,6 +52,17 @@ public class AiUsageReportService(RbRulesDbContext db)
     public const string EmbeddingsNote =
         "Embeddings draaien lokaal (Ollama, bge-m3) op de VM en kosten geen "
         + "API-tegoed; ze staan daarom bewust niet als bedrag in dit overzicht.";
+
+    /// <summary>Het paneel moet ZELF zeggen wat het niet ziet (review #328):
+    /// er zijn meer platform-services die LLM-calls doen dan er boeken —
+    /// afwezig is afwezig, geen verzonnen nul, maar dat hoort de beheerder
+    /// in het paneel te lezen, niet in een PR-body.</summary>
+    public const string MeteredNote =
+        "Gemeterd worden: vragen (ask), kaart-interactie-uitleg (resolve), "
+        + "similarity-uitleg (explain), brein-mining, interactie-audit en "
+        + "primer-generatie. Andere platform-jobs (o.a. claim-/relatie-/"
+        + "mechanic-mining, triage, scout, classificatie) boeken nog geen "
+        + "grootboekrijen — elk totaal hier is dus een ondergrens.";
 
     private const int TopUserCount = 15;
 
@@ -158,6 +170,7 @@ public class AiUsageReportService(RbRulesDbContext db)
             perModel, perKind, topUsers,
             [.. tariffs.Select(t => new TariffRow(
                 t.Id, t.Model, t.InputUsdPerMTok, t.OutputUsdPerMTok, t.EffectiveFrom))],
-            EmbeddingsNote);
+            EmbeddingsNote,
+            MeteredNote);
     }
 }

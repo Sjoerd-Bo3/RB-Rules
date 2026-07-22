@@ -161,7 +161,9 @@ public class LoginGateTests
         var app = BuildApp(Guid.NewGuid().ToString());
         var (status, responseBody) = await InvokeAsync(app, method, pattern, body);
         Assert.Equal(StatusCodes.Status401Unauthorized, status);
-        Assert.Contains(UserQuotaFilter.RequireUser.Code, responseBody);
+        // Wire-waarde als LITERAL (#286-les): een assert tegen de
+        // productie-constante schuift mee met een hernoeming.
+        Assert.Contains("login_required", responseBody);
     }
 
     [Fact]
@@ -172,7 +174,7 @@ public class LoginGateTests
             app, "GET", "/api/cards/{id}/similar/{otherId}/explain",
             routeValues: new Dictionary<string, object?> { ["id"] = "a", ["otherId"] = "b" });
         Assert.Equal(StatusCodes.Status401Unauthorized, status);
-        Assert.Contains(UserQuotaFilter.RequireUser.Code, body);
+        Assert.Contains("login_required", body);
     }
 
     [Fact]
@@ -199,7 +201,28 @@ public class LoginGateTests
         var (status, body) = await InvokeAsync(
             app, "POST", "/api/ask", """{"question":"test"}""", userToken: "verlopen-token");
         Assert.Equal(StatusCodes.Status401Unauthorized, status);
-        Assert.DoesNotContain(UserQuotaFilter.RequireUser.Code, body);
+        Assert.DoesNotContain("login_required", body);
+    }
+
+    [Fact]
+    public async Task Anoniem_prewarm_wordt_geweigerd()
+    {
+        // Review #328: prewarm boot een SDK-subprocess op de VM; anoniem kan
+        // toch geen vraag meer stellen, dus ook dit pad zit achter de poort —
+        // server-side, niet alleen de rb-web-conditie.
+        var app = BuildApp(Guid.NewGuid().ToString());
+        var (status, body) = await InvokeAsync(app, "POST", "/api/ask/prewarm");
+        Assert.Equal(StatusCodes.Status401Unauthorized, status);
+        Assert.Contains("login_required", body);
+    }
+
+    [Fact]
+    public async Task Ingelogd_prewarm_blijft_werken()
+    {
+        var app = BuildApp(Guid.NewGuid().ToString());
+        var token = await SeedLoggedInUserAsync(app);
+        var (status, _) = await InvokeAsync(app, "POST", "/api/ask/prewarm", userToken: token);
+        Assert.Equal(StatusCodes.Status202Accepted, status);
     }
 
     [Fact]

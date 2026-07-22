@@ -111,7 +111,14 @@ public static class AskEndpoints
         {
             await ai.PrewarmAsync();
             return Results.Accepted();
-        }).RequireRateLimiting("prewarm");
+        }).RequireRateLimiting("prewarm")
+            // #328 (review): het signaal boot een SDK-subprocess op de VM en
+            // anoniem kan toch geen vraag meer stellen — dus dezelfde
+            // login-poort als de AI-paden, server-authoritatief (de rb-web-
+            // conditie is alleen de nette kant). Geen quota-effect: prewarm
+            // draagt geen AskRequest, dus UserQuotaFilter telt hem niet mee.
+            .AddEndpointFilter<UserQuotaFilter>()
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>();
 
         // ── Interacties (S3) ───────────────────────────────────────────
         app.MapPost("/api/resolve", async (ResolveRequest req, InteractionService interactions) =>

@@ -33,6 +33,7 @@
 		topUsers: UserRow[];
 		tariffs: Tariff[];
 		embeddingsNote: string;
+		meteredNote: string;
 	}
 
 	// SSR rendert de server-load; de poll hieronder legt er verse data
@@ -117,6 +118,10 @@
 	</p>
 
 	{#if costs}
+		<!-- Ondergrens-regel (review #328): het paneel zegt zelf wat het niet
+		     ziet — welke paden boeken en dat elk totaal een ondergrens is. -->
+		<p class="meta metered">{costs.meteredNote}</p>
+
 		<section class="totals">
 			{#each [
 				{ label: 'Vandaag', t: costs.today },
@@ -205,7 +210,7 @@
 		<section class="panel">
 			<h2>Platform per job-soort <span class="meta">({PERIOD_LABELS[period]})</span></h2>
 			{#if costs.platformPerKind.length === 0}
-				<p class="meta">Nog geen platform-runs (mining, audit, primer) in deze periode.</p>
+				<p class="meta">Nog geen gemeterde platform-runs in deze periode — niet-gemeterde jobs verschijnen hier nooit (zie de ondergrens-regel bovenaan).</p>
 			{:else}
 				<div class="table-wrap">
 					<table>
@@ -283,6 +288,7 @@
 <style>
 	main { max-width: 980px; margin: 0 auto; padding: 24px 20px; }
 	.intro { max-width: 64ch; }
+	.metered { max-width: 80ch; font-size: 0.85rem; margin: 0 0 14px; }
 	.livebar {
 		display: inline-flex; align-items: center; gap: 8px;
 		font-size: 0.85rem; color: var(--muted); margin: 4px 0 14px;

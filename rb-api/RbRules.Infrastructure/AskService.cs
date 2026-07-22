@@ -1428,6 +1428,11 @@ public class AskService(
             // ai_usage_event — mét user-attributie, model-ID en de
             // tariefversie van dit moment (reproduceerbare schaduwkost).
             // Bewust in dezelfde save als de metric: één best-effort-blok.
+            // LET OP (review #328): de rij boekt de SOM van alle calls van de
+            // vraag tegen het model van het ANTWOORDpad — bij een foto-/hard-
+            // vraag rekent dat de (kleine) cheap-rewrite dus tegen het
+            // hard-tarief. Bewuste bovengrens: per-call-splitsen kost een
+            // tweede rij per vraag zonder dat het beeld verandert.
             var path = model ?? (images is { Count: > 0 } ? "hard" : "cheap");
             db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
                 db, AiUsageEvent.OriginUser, "ask", AskPathModels.Resolve(path),

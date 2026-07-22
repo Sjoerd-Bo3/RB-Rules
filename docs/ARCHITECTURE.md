@@ -704,7 +704,8 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `JobCatalog`/`JobPaths` + `ScanScheduler`; contracten in `ApiContracts.cs`;
   admin achter `AdminAuthFilter`, gebruikersquota via `UserQuotaFilter`.
   Sinds #328 dragen de AI-paden (`/api/ask`, `/api/ask/stream`,
-  `/api/resolve`, de similarity-explain) daarbovenop de **login-poort**
+  `/api/resolve`, de similarity-explain én `/api/ask/prewarm`) daarbovenop
+  de **login-poort**
   `UserQuotaFilter.RequireUser`: anoniem krijgt een 401 met machine-leesbare
   code `login_required` — het accountsysteem is de toegangspoort tot elke
   LLM-call; de rest van de API blijft open.
@@ -1405,6 +1406,12 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
   via `POST /api/admin/tariffs`). Bedragen worden nooit opgeslagen maar op
   leesmoment gereproduceerd als rij × gestempeld tarief (`ShadowCost`),
   overal gelabeld als schaduwkosten — we betalen abonnement, geen tokens.
+  Boekende paden: ask (som van alle calls van de vraag tegen het model van
+  het antwoordpad — een foto-/hard-vraag rekent de kleine cheap-rewrite dus
+  bewust tegen het hard-tarief, een bovengrens), resolve en de
+  similarity-uitleg-vulling (beide user-veroorzaakt, met attributie), plus
+  mining/audit/primer; het paneel meldt zelf dat de overige platform-callers
+  nog niet boeken en elk totaal dus een ondergrens is (`MeteredNote`).
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
@@ -3428,8 +3435,9 @@ kan rb-api eerder starten dan Postgres klaar is.
   per-account-dagquota via `UserQuotaFilter`. Sinds #328 zit vóór de quota
   nog de **login-poort**: de AI-paden weigeren anoniem in drie lagen
   (rb-web-action/proxy's → `UserQuotaFilter.RequireUser` in rb-api), zodat
-  een gemanipuleerde client-store nooit langs de server-poort komt; het
-  prewarm-signaal vuurt alleen nog voor ingelogde bezoekers. Het dure agent-pad heeft een
+  een gemanipuleerde client-store nooit langs de server-poort komt; ook
+  `/api/ask/prewarm` draagt de poort (het signaal boot een SDK-subprocess op
+  de VM), dus rb-web's ingelogd-conditie is presentatie, geen beveiliging. Het dure agent-pad heeft een
   eigen rem (#153): zelf geforceerde Grondig-vragen tellen tegen
   `DailyAgenticQuota` (default 5/dag, per account instelbaar in het beheer);
   gate-escalaties tellen niet mee. Het kostenoverzicht splitst het
