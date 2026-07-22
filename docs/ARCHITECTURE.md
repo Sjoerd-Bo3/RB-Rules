@@ -687,7 +687,10 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   aanroep en gebruikt door beide deck-services), `JobLedger`,
   `JobCatalog`/`JobPaths`/`PathRunner` (#190 — zie de eigen paragraaf
   hieronder), `PushService`,
-  `MailService`, `UserAccountService`, `PasskeyService`, en de migraties in
+  `MailService`, `UserAccountService`, `PasskeyService`, `AiUsageMeter` +
+  `AiUsageReportService` (#328 — het kosten-grootboek: rijen bouwen mét de
+  tariefversie van het schrijfmoment, en de paneel-aggregatie die bedragen
+  op leesmoment reproduceert als rij × gestempeld tarief), en de migraties in
   `Migrations/`.
 - **`RbRules.Api`** — compositie: `Program.cs` doet alleen DI-registratie,
   migratie/seed/graph-constraints bij opstart en de `MapXxxEndpoints()`-
@@ -695,9 +698,16 @@ Lagen (`docs/CONVENTIONS.md`, csproj-referenties):
   `CardEndpoints`, `DeckEndpoints`, `RuleEndpoints`, `KnowledgeEndpoints`,
   `BrainEndpoints`, `AskEndpoints`, `AuthEndpoints`, `FeedEndpoints`,
   `PushEndpoints`, `AdminEndpoints`, `BrainAdminEndpoints`,
-  `SettingsAdminEndpoints` (#254). Achtergrondwerk via `JobRunner` +
+  `SettingsAdminEndpoints` (#254), `CostAdminEndpoints` (#328 —
+  `GET /api/admin/costs` voor het live kosten-paneel en het append-only
+  `POST /api/admin/tariffs`). Achtergrondwerk via `JobRunner` +
   `JobCatalog`/`JobPaths` + `ScanScheduler`; contracten in `ApiContracts.cs`;
   admin achter `AdminAuthFilter`, gebruikersquota via `UserQuotaFilter`.
+  Sinds #328 dragen de AI-paden (`/api/ask`, `/api/ask/stream`,
+  `/api/resolve`, de similarity-explain) daarbovenop de **login-poort**
+  `UserQuotaFilter.RequireUser`: anoniem krijgt een 401 met machine-leesbare
+  code `login_required` — het accountsysteem is de toegangspoort tot elke
+  LLM-call; de rest van de API blijft open.
 
 **`JobCatalog`/`JobRunner`/`JobPaths`/`PathRunner` (achtergrondjobs + paden,
 #59/#122/#190).** `JobCatalog` (Infrastructure) is de vlakke catalogus van
@@ -1197,7 +1207,11 @@ de client-side knoop-proxy `/graph/node?ref=` — #252: hover-preview en het
 detailpaneel ónder de graaf halen daar hun knoopgegevens, kaarten via
 `/api/cards/{id}` (+ `/dossier`), overige refs via `/api/brain/node`),
 `/rulings`, `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
-`/admin/overview/[kind]`, en de read-only **Brein-verkenner** `/admin/brein`
+`/admin/kosten` — het live kosten-paneel (#328): server-load + eigen
+cookie-beveiligde poll-GET (zelfde aanpak als `/admin/status`), periode-chips
+vandaag/7d/30d, top-gebruikers, per model, platform per job-soort, embeddings
+expliciet als "lokaal, geen API-kosten", en een `tariff`-action voor nieuwe
+tariefrijen; `/admin/overview/[kind]`, en de read-only **Brein-verkenner** `/admin/brein`
 met sub-routes `entities`/`interactions`/`conflicts`/`answertrace`, #236 — eigen
 `+layout` met tab-nav + auth-guard, server-loads proxyen de `/api/admin/brein/*`-
 endpoints; de interacties- en answertrace-pagina laden hun provenance-keten
@@ -1383,6 +1397,14 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
   model per gepromoveerde interactie (correct/gedragen/motivering + model,
   promptversie en datum als rij-provenance; migratie `InteractionAudit255`) —
   puur meting, nooit een tier-bron (§6.7).
+  Sinds #328 `ai_usage_event` + `ai_tariff` (migratie `AiUsageMetering328`) —
+  het kosten-grootboek: per gemeterde AI-gebeurtenis origin (user/platform),
+  user-id, kind (ask/mining/audit/primer), model-ID, tokens, duur, uitkomst én
+  de **tariefversie** die bij het schrijven gold; `ai_tariff` is append-only
+  (prijs per model + ingangsdatum, geseed uit `AiTariffSeed`, daarna beheerd
+  via `POST /api/admin/tariffs`). Bedragen worden nooit opgeslagen maar op
+  leesmoment gereproduceerd als rij × gestempeld tarief (`ShadowCost`),
+  overal gelabeld als schaduwkosten — we betalen abonnement, geen tokens.
 - **Neo4j** — herbouwbare projectie van de kennislagen; getypeerde relaties,
   batched UNWIND, dictionaries-only params (`GraphSyncService`, `GraphSchema`).
 - **Ollama** — lokale embedding-service (bge-m3).
@@ -3403,7 +3425,11 @@ kan rb-api eerder starten dan Postgres klaar is.
   `AdminEndpoints`).
 - **Rate-limiting & quota** (#42) — policies `llm` (per client-IP of
   sessietoken), `auth`, `webauthn` en `prewarm` in `Program.cs`;
-  per-account-dagquota via `UserQuotaFilter`. Het dure agent-pad heeft een
+  per-account-dagquota via `UserQuotaFilter`. Sinds #328 zit vóór de quota
+  nog de **login-poort**: de AI-paden weigeren anoniem in drie lagen
+  (rb-web-action/proxy's → `UserQuotaFilter.RequireUser` in rb-api), zodat
+  een gemanipuleerde client-store nooit langs de server-poort komt; het
+  prewarm-signaal vuurt alleen nog voor ingelogde bezoekers. Het dure agent-pad heeft een
   eigen rem (#153): zelf geforceerde Grondig-vragen tellen tegen
   `DailyAgenticQuota` (default 5/dag, per account instelbaar in het beheer);
   gate-escalaties tellen niet mee. Het kostenoverzicht splitst het
