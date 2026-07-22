@@ -42,6 +42,11 @@ public class LoginGateTests
         }
     }
 
+    /// <summary>Zonder deze feature ziet minimal-API's request-delegate een
+    /// kale DefaultHttpContext als "kan geen body hebben" en eindigt élke
+    /// JSON-POST als bodyloze 400 — mét de filters gewoon uitgevoerd, dus een
+    /// anoniem-test blijft dan vals-groen op de verkeerde statuscode. De
+    /// feature expliciet zetten laat de body-binding echt draaien.</summary>
     private sealed class BodyDetection : Microsoft.AspNetCore.Http.Features.IHttpRequestBodyDetectionFeature
     {
         public bool CanHaveBody => true;
