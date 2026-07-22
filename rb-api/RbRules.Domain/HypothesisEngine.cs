@@ -265,15 +265,31 @@ public static class HypothesisPromotion
     /// berekenen, net als het mining-pad — zonder tekstbewijs (geen
     /// <paramref name="lexicalSupport"/>) is de poort niet van toepassing en geeft de
     /// aanroeper true door. De typechecker dwingt af dat niemand hem kan vergeten.</param>
-    /// <param name="patientWordFormSupport">Soort-poort B (#330): staat het
-    /// keyword-doel van een toekennende claim in keyword-VORM in de bewijszin
-    /// (<c>KeywordWordForm</c>)? Zelfde verplichting als
-    /// <paramref name="kindAnchorSupport"/>; true wanneer niet van toepassing.</param>
+    /// <param name="patientWordFormSupport">Soort-poort B (#330, verbreed in
+    /// #335): staat het keyword-doel van een toekennende/vereisende claim in
+    /// keyword-VORM in de bewijszin (<c>KeywordWordForm</c>)? Zelfde verplichting
+    /// als <paramref name="kindAnchorSupport"/>; true wanneer niet van
+    /// toepassing.</param>
+    /// <param name="endpointPresenceSupport">Klasse A (#335): staat een
+    /// mechanic-AGENT in keyword-gedaante in de bewijszin
+    /// (<c>InteractionEndpointPresence</c>)? Zelfde verplichting; true wanneer
+    /// niet van toepassing.</param>
+    /// <param name="requiresNotOptional">Klasse C2 (#335): draagt de bewijszin
+    /// van een REQUIRES-claim minstens één anker-zin zónder may/optional(ly)
+    /// (<c>RequiresOptionality</c>)? Zelfde verplichting; true wanneer niet van
+    /// toepassing.</param>
+    /// <param name="resourcePatientSupport">Klasse D (#335): draagt de bewijszin
+    /// van een GRANTS/MODIFIES-claim op een resource-patient
+    /// (<c>ResourceMechanics</c>) de gebrackete keyword-vorm? Zelfde
+    /// verplichting; true wanneer niet van toepassing.</param>
     public static InteractionGateSignals ToSignals(
         InteractionHypothesis hypothesis,
         bool llmVerdictInteracts,
         bool kindAnchorSupport,
         bool patientWordFormSupport,
+        bool endpointPresenceSupport,
+        bool requiresNotOptional,
+        bool resourcePatientSupport,
         bool schemaValid = true,
         string? schemaReason = null,
         bool lexicalSupport = false,
@@ -292,7 +308,10 @@ public static class HypothesisPromotion
             IsEmergentCardCardPair: hypothesis.IsEmergentCardCardPair,
             HasBlockingTombstone: hasBlockingTombstone,
             KindAnchorSupport: kindAnchorSupport,
-            PatientWordFormSupport: patientWordFormSupport);
+            PatientWordFormSupport: patientWordFormSupport,
+            EndpointPresenceSupport: endpointPresenceSupport,
+            RequiresNotOptional: requiresNotOptional,
+            ResourcePatientSupport: resourcePatientSupport);
     }
 
     // Spiegelt InteractionPromotionService.DefaultConsensusThreshold zonder de

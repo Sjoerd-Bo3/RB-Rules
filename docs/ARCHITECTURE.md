@@ -2767,6 +2767,74 @@ nachtrun:
   geen voldoende; het meetpunt is de volgende fable-run + audit, waar deze
   betwist-klasse ~0 hoort te zijn.
 
+  **Poorten-iteratie 2 (#335) — de vier rest-klassen uit de volledige
+  era-3-populatie-audit** (2026-07-22: 16 oordelen over de fable-mét-poorten-
+  populatie, 11 bevestigd, 5 afgekeurd; precisie-trap 16% → 27% → 55%). Elke
+  klasse is een eigen deterministische poort op dezelfde promotielaag, zelfde
+  soft-pad (Candidate met eigen status_reason en poort-token, geen tombstone —
+  ook niet bij een negatief verdict, de #324b-symmetrie strekt zich over alle
+  vijf de poort-signalen uit), zelfde scoping (berekend over de DRÁGENDE
+  bewijs-eenheden), zelfde afdwinging (verplichte parameters op
+  `InteractionPromotionRequest` én `HypothesisPromotion.ToSignals`, #300/#333),
+  en per poort geteld in het run-detail. De catalogi zijn DATA, gekalibreerd op
+  de 16 echte audit-rijen én een corpus-meting over de 1429 kaartteksten
+  (bracket/hoofdletter/kleine-letter-tellingen per keyword); de elf bevestigde
+  rijen staan als regressie-wachters in `InteractionPortIteration2Tests` en
+  betrappen aantoonbaar élke over-verbreding.
+  22. **Klasse A — `endpoint_presence`** (`InteractionEndpointPresence`): een
+     mechanic-AGENT moet in keyword-GEDAANTE (gebracket of met hoofdletter,
+     zins-initiaal toegestaan — aanwezigheid, milder dan de woordvormpoort) in
+     een dragende eenheid staan. `Burn MODIFIES Flow` promoveerde terwijl het
+     bewijs Burn nergens als keyword noemt: de hoofdletter-ongevoelige
+     woordmatch van het lexicale anker accepteerde een kleine-letter-prozavorm
+     (werkwoord of `:rb_…:`-token). De patient-kant heeft deze check bewust
+     niet (vorm is daar per soort geregeld) en een card-agent is
+     identiteits-verankerd (#249).
+  23. **Klasse B — de verb-like catalogus** (`KeywordWordForm.VerbLikeKeywords`):
+     voor werkwoord-achtige keywords telt in de woordvormpoort alléén de
+     gebrackete vorm. "Ready me" (Hungry Wolf) materialiseerde het
+     #331-restrisico (gekapitaliseerd spelwerkwoord midden in de zin). Inhoud
+     gemeten: Ready (0× gebracket / 28× hoofdletter / 180× kleine letter in het
+     corpus) en Recycle (0/26/51) — en NIET Channel (óók 0/10/30, maar een
+     bevestigde GRANTS op de hoofdlettervorm) of Disempower (bevestigde
+     REQUIRES-kost): de catalogus kalibreert op audit-oordelen, niet op de
+     bracket-telling alleen.
+  24. **Klasse C — de kind-omleiding**, drie helften. (C1) De woordvormpoort
+     geldt nu ook voor REQUIRES met een mechanic-patient: Predict↔Recycle
+     strandde als GRANTS en kwam als REQUIRES door de onbewaakte deur terug
+     ("may recycle it" — optioneel ≠ vereist). Bewust NIET voor
+     MODIFIES/COUNTERS: een MODIFIES-doel drukt legitiem in werkwoordsvorm
+     ("channel 1 rune exhausted", Siphoning Strike — bevestigd). (C2) Het
+     tegen-anker `optionality` (`RequiresOptionality`): staat élk
+     REQUIRES-anker in een zin met may/optional(ly), dan draagt het bewijs geen
+     vereiste — één schone anker-zin volstaat. (C3) Soort-wissel-TELEMETRIE: de
+     dedupe-sleutel bevat Kind, dus een her-voorstel onder een andere soort
+     omzeilt de upsert-historie van zijn gestrande broertje;
+     `InteractionPromotionResult.KindSwitchedFrom` meldt de broertjes-soort en
+     het run-detail telt `soort-wissels×N`. Bewust telemetrie en geen poort:
+     een soort-correctie is legitiem en de inhouds-poorten vangen de junk op
+     inhoud — maar de wissel is nooit meer stil (ADR-20). Een gepromoveerd
+     broertje telt niet als wissel-historie (twee soorten kunnen legitiem naast
+     elkaar bestaan).
+  25. **Klasse D — `resource_patient`** (`ResourceMechanics`): een
+     GRANTS/MODIFIES-claim met een resource-achtige mechanic als patient eist
+     de gebrackete keyword-vorm in het dragende bewijs. "spend 3 XP" werd
+     MODIFIES en "Gain 1 XP" werd GRANTS, maar XP is per definitie geen Game
+     Object en meet 0× gebracket / 84× hoeveelheids-taal — hoeveelheden
+     verbruiken of produceren de resource en zeggen niets over het mechanisme.
+     REQUIRES blijft erbuiten (drie bevestigde rijen: XP spenderen is er echt
+     van afhangen). Catalogus: XP; uitbreiden alleen op dezelfde twee gronden
+     (definitie zegt resource, corpus drukt in hoeveelheden).
+  *Restrisico's iteratie 2* (bewust aanvaard, in de code gedocumenteerd): het
+  optionality-tegen-anker werkt op ZIN-scope — een schoon anker elders in
+  dezelfde eenheid over iets ánders redt de claim (Safety Inspector draagt naast
+  "You may spend 3 XP…" een los "must kill…"); buiten de verb-like catalogus
+  passeert een gekapitaliseerd spelwerkwoord de woordvormpoort nog steeds; en de
+  endpoint-presence-check accepteert elke hoofdlettervorm, ook een
+  zins-initiële gebiedende wijs. Meetpunt: de volgende volle mine +
+  populatie-audit — de vier klassen verklaren 5 van de 9 era-3-afkeuringen,
+  doel is >75% precisie in het volgende tijdperk.
+
   **`PromptVersion` is een stempel, geen stale-conditie** (#286-review). De bump naar
   `breinmine-interactions-v3` (en die naar v4, #324) legt in de `mining_run`-provenance
   vast wélke vraagvorm een feit voortbracht, maar NIETS leest hem als her-mine-trigger:

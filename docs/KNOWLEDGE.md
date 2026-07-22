@@ -197,6 +197,20 @@ topic_type="tactic", en graph-edges Card—STAPLE_IN→Archetype.
   sluiten). Degradaties van promoties komen uit de audit + reviewqueue, nooit
   uit de poort zelf — al kan de reviewqueue die beslissing vandaag alleen nog
   tónen, niet uitvoeren (de uitvoerbare degradatie-actie is #338).
+- **Een woordmatch is nog geen keyword-vermelding** (#335, iteratie 2 op het
+  soort-principe, gekalibreerd op de volledige era-3-populatie-audit): gedrukte
+  teksten gebruiken dezelfde woorden als werkwoord ("Ready me", "may recycle
+  it", "you may burn…"), als hoeveelheids-taal over een resource ("spend 3
+  XP") én als echte keyword-vermelding ([Reaction], "has 3 XP" als
+  gedefinieerde term). Bewijs draagt een claim alleen in de passende GEDAANTE:
+  een mechanic-agent moet als keyword herkenbaar in het bewijs staan,
+  werkwoord-achtige keywords tellen alleen gebracket, een optionele kost is
+  geen vereiste (may/optionally ondermijnt het REQUIRES-anker), en
+  hoeveelheids-taal over een resource (XP is geen Game Object) draagt geen
+  GRANTS/MODIFIES-claim over het mechanisme. De catalogi zijn data en
+  kalibreren op audit-oordelen, niet op één corpus-telling — Channel meet net
+  als Ready 0× gebracket maar is een bevestigde grant. Zelfde soft-pad als
+  altijd: stranden is kandidaat worden, met de klasse als zichtbare reden.
 
 ## Evolutie-raamwerk: de bank groeit met het spel mee
 

@@ -171,7 +171,16 @@ met quota en rate-limiting.
   catalogus-DATA): het anker moet in de DRÁGENDE bewijs-eenheid staan (niet
   ergens in de aanbieding), en let bij kalibratie op de vals-vriendelijke
   werkwoorden — "gains"/"become" zijn bewust GEEN grants-ankers omdat de
-  gemeten overclaims er precies mee geformuleerd waren.
+  gemeten overclaims er precies mee geformuleerd waren. **Iteratie 2 (#335):
+  kalibreer een woordvorm-catalogus op AUDIT-OORDELEN, nooit op één
+  corpus-telling.** "0× gebracket in 1429 kaartteksten" leek het perfecte
+  criterium voor werkwoord-achtige keywords (Ready 0/28/180, Recycle 0/26/51)
+  — maar Channel meet óók 0/10/30 en is een BEVESTIGDE grant ("Channel 2 runes
+  exhausted"), en Disempower (0/25/5) een bevestigde REQUIRES-kost. Eén
+  telling, twee tegengestelde waarheden; alleen de audit-rijen scheiden ze. En
+  zet de bevestigde rijen als regressie-wachters in de tests, zodat een latere
+  over-verbreding van zo'n catalogus rood wordt in plaats van stil bevestigde
+  kennis te strandden.
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`
