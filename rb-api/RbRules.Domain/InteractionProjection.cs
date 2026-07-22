@@ -12,7 +12,8 @@ namespace RbRules.Domain;
 /// <param name="Window">De WINDOW-conditiewaarde (bv. "Showdown"), of null.</param>
 /// <param name="ActorStatus">De (agent-)STATUS-conditiewaarde, of null.</param>
 /// <param name="CostDelta">De COST-conditiewaarde, of null.</param>
-/// <param name="Tier">Retrieval-tier (1 = verankerd/promoted).</param>
+/// <param name="Tier">Retrieval-tier (1 = verankerd: promoted/verified —
+/// de #332-orde; al het overige 2).</param>
 /// <param name="ReifiedOnly">De platte cache kan het feit niet volledig dragen —
 /// raadpleeg de Interaction.</param>
 public sealed record RelatesToQualifiers(
@@ -63,7 +64,11 @@ public static class InteractionProjection
             Window: window,
             ActorStatus: status,
             CostDelta: cost,
-            Tier: interaction.Status == InteractionStatus.Promoted ? 1 : 2,
+            // Tier 1 = vastgesteld feit, op de canonieke #332-orde (verified staat
+            // BÓVEN promoted — beide verankerd). Vóór #337 kreeg een verified-rij
+            // hier tier 2, alsof ze zwakker was dan promoted.
+            Tier: InteractionStatus.Strength(interaction.Status)
+                >= InteractionStatus.Strength(InteractionStatus.Promoted) ? 1 : 2,
             ReifiedOnly: reifiedOnly);
     }
 

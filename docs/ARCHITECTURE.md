@@ -2689,8 +2689,9 @@ nachtrun:
      iets over die kaart zelf") — anders extraheert het model kandidaten die de
      poort daarna weggooit, de #286a-verspilling.
   Bestaande al-gepromoveerde interacties degraderen NIET automatisch (het
-  invariant: een oordeel draagt geen actie alleen) — de volledige audit
-  (`brein.audit.sample_n` staat al op 1) levert de lijst en de negatieve
+  invariant: een oordeel draagt geen actie alleen; sinds #332 deterministisch
+  afgedwongen in de poort voor élk her-mine-pad, zie punt 21) — de volledige
+  audit (`brein.audit.sample_n` staat al op 1) levert de lijst en de negatieve
   oordelen staan als `ReasoningConflict` in de reviewqueue; de beheerder
   beslist. Meetpunt vóór/na: de audit-precisie van nieuwe mech↔mech-promoties
   onder `breinmine-interactions-v4` naast die van v3 (de precisie-tabel splitst
@@ -2732,22 +2733,39 @@ nachtrun:
      (`(poorten: kind_anchor×N, word_form×M)`, ADR-20 — alleen getoond als er
      iets te melden valt, #302). De tombstone-symmetrie van punt 16 geldt ook
      hier: een negatief verdict op bewijs dat de soort niet draagt is een
-     soft-reject zonder grafsteen. En invariant #313 is in `AcceptAsync`
-     afgedwongen: strandt een re-mine-voorstel op een soort-poort terwijl de
-     rij al `promoted` is, dan blijft de rij ongemoeid en wordt alleen een
-     `InteractionDecision`-memo geschreven — de audit + reviewqueue leveren
-     degradaties, nooit de poort zelf.
+     soft-reject zonder grafsteen. En invariant #313 is sinds #332 vóór de
+     dispatch in `PromoteAsync` afgedwongen, op status-ORDE in plaats van een
+     hardcoded `== promoted` (`InteractionStatus.Strength`: verified >
+     promoted > werk-tiers): élke uitkomst die zwakker is dan de bestaande
+     status — kandidaat ("wacht op corroboratie"), hypothese óf verwerping
+     over een promoted-/verified-rij, en ook een zou-promoveren over een
+     verified-rij — laat de rij ongemoeid, schrijft alleen een
+     `InteractionDecision`-memo en zet géén tombstone (wat de rij niet mag
+     verlagen, mag haar sleutel ook niet duurzaam sluiten — de
+     #324b-symmetrie). De werk-tiers zijn in die orde bewust gelijk-zwak: een
+     candidate wordt bij een gegrond negatief verdict nog gewoon verworpen mét
+     grafsteen (flip-flop-suppressie), want dat is pipeline-verloop van een
+     voorstel, geen demotie van een vastgesteld feit. De audit + reviewqueue
+     leveren degradaties van promoties, nooit de poort zelf — al is dat kanaal
+     vandaag alleen nog kijkend: de conflicts-queue is GET-only en
+     `LiftTombstonesAsync` is onbedraad, dus de uitvoerbare degradatie-actie is
+     #338. En de audit-pool zelf (`BreinInteractionAuditService`) sampelt
+     vandaag alleen `promoted`-rijen — zodra er een verified-schrijver bestaat,
+     hoort de verified-tier in die pool mee.
   *Wat de soort-poorten NIET garanderen* (restrisico's, bewust aanvaard en in
   de code gedocumenteerd): een anker-woord elders in dezelfde dragende eenheid
   over iets ánders passeert poort A ("has" in een voorbeeldzin die een
   kaarttekst citeert); Riot kapitaliseert spelwerkwoorden ook midden in een zin
   ("whether or not to Recycle it", §436.1) en die vorm passeert poort B; en de
-  signalen zijn gate-defaults `true` voor paden zonder tekstbewijs (de
-  hypothese-motor) — de afdwinging zit op `InteractionPromotionRequest`, waar
-  beide velden VERPLICHT zijn (#300-les: de typechecker is de enige poort die
-  een refactor overleeft). Noodzakelijke voorwaarden dus, geen voldoende; het
-  meetpunt is de volgende fable-run + audit, waar deze betwist-klasse ~0 hoort
-  te zijn.
+  signalen zijn gate-defaults `true` voor paden zonder tekstbewijs — de
+  afdwinging zit op `InteractionPromotionRequest` én, sinds #333, op
+  `HypothesisPromotion.ToSignals`, waar beide poort-signalen VERPLICHTE
+  parameters zijn (#300-les: de typechecker is de enige poort die een refactor
+  overleeft); alleen het pure `InteractionGateSignals`-record houdt de
+  defaults, voor gate-tests en signal-constructie, en beide request-bouwers
+  kunnen er niet stilzwijgend op terugvallen. Noodzakelijke voorwaarden dus,
+  geen voldoende; het meetpunt is de volgende fable-run + audit, waar deze
+  betwist-klasse ~0 hoort te zijn.
 
   **`PromptVersion` is een stempel, geen stale-conditie** (#286-review). De bump naar
   `breinmine-interactions-v3` (en die naar v4, #324) legt in de `mining_run`-provenance

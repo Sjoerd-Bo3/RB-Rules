@@ -130,6 +130,39 @@ public class InteractionPromotionService(RbRulesDbContext db)
 
         var gate = InteractionPromotionGate.Evaluate(signals);
 
+        // ── Demotiegarantie (#313, verbreed in #332): géén her-mine-uitkomst die
+        // ZWAKKER is dan de bestaande status verlaagt die status automatisch — de
+        // uitkomst zegt iets over dít voorstel, niet over het eerder vastgestelde
+        // feit. Werkt op status-ORDE (InteractionStatus.Strength: verified >
+        // promoted > werk-tiers), niet op een hardcoded == promoted, zodat ook de
+        // toekomstige verified-tier elke poort-uitkomst overleeft, inclusief een
+        // zou-promoveren. Wel zichtbaar (ADR-20): een beslissings-memo — en géén
+        // tombstone, want een oordeel dat de rij niet mag verlagen mag haar
+        // sleutel ook niet duurzaam sluiten (#324b-symmetrie). Degradaties komen
+        // uit de audit + reviewqueue, nooit uit de poort zelf. De werk-tiers
+        // onderling volgen het normale verloop (Strength is daar gelijk): een
+        // candidate wordt bij een gegrond negatief verdict nog gewoon verworpen,
+        // mét flip-flop-suppressie.
+        var existing = await db.Interactions.AsNoTracking()
+            .Where(x => x.AgentRef == request.AgentRef
+                && x.PatientRef == request.PatientRef && x.Kind == (kind ?? request.Kind))
+            .Select(x => new { x.Id, x.Status })
+            .FirstOrDefaultAsync(ct);
+        if (existing is not null
+            && InteractionStatus.Strength(gate.Status) < InteractionStatus.Strength(existing.Status))
+        {
+            db.InteractionDecisions.Add(new InteractionDecision
+            {
+                InteractionId = existing.Id,
+                Outcome = gate.Status,
+                Memo = $"{gate.StatusReason} — bestaande {existing.Status}-rij NIET " +
+                    "gedemoveerd (invariant #313, verbreed in #332)",
+                RunId = runId,
+            });
+            await db.SaveChangesAsync(ct);
+            return new(gate.Outcome, gate.StatusReason, existing.Id, gate.DegradedBy);
+        }
+
         return gate.Outcome == InteractionGateOutcome.Rejected
             ? await RejectAsync(request, kind ?? request.Kind, dedupeKey, gate, runId, ct)
             : await AcceptAsync(request, kind!, conditions, gate, runId, ct);
@@ -147,9 +180,12 @@ public class InteractionPromotionService(RbRulesDbContext db)
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         // Bestaande interactie op deze sleutel demoten (status → rejected) zodat ze
-        // niet als graaf-knoop blijft hangen en de projectie ze overslaat; een
-        // gepromoveerde die nu valt verliest ook zijn PromotedAt (geen misleidende
-        // timestamp op een verworpen knoop). Nieuwe verwerping heeft er geen.
+        // niet als graaf-knoop blijft hangen en de projectie ze overslaat. Sinds
+        // #332 bereikt alleen een werk-tier-rij (candidate/hypothese/rejected, of
+        // een onbekende legacy-status) dit pad — een promoted/verified-rij is al
+        // door de demotiegarantie in PromoteAsync onderschept. PromotedAt wissen
+        // blijft als vangnet voor zo'n legacy-rij (geen misleidende timestamp op
+        // een verworpen knoop).
         var existing = await db.Interactions
             .FirstOrDefaultAsync(x => x.AgentRef == request.AgentRef
                 && x.PatientRef == request.PatientRef && x.Kind == kind, ct);
@@ -211,27 +247,9 @@ public class InteractionPromotionService(RbRulesDbContext db)
             .FirstOrDefaultAsync(x => x.AgentRef == request.AgentRef
                 && x.PatientRef == request.PatientRef && x.Kind == kind, ct);
 
-        // Invariant #313 (#330): een soort-poort-degradatie mag een BESTAANDE
-        // promotie nooit automatisch demoveren. Een re-mine wiens bewijs op
-        // kind_anchor/word_form strandt zegt iets over dít voorstel, niet over het
-        // eerder gepromoveerde feit — de audit + reviewqueue leveren de degradatie-
-        // beslissing, nooit de poort zelf. Wel zichtbaar: de beslissing wordt als
-        // memo vastgelegd (nooit stil, ADR-20), de rij blijft ongemoeid.
-        if (gate.DegradedBy is not null && interaction is not null
-            && interaction.Status == InteractionStatus.Promoted)
-        {
-            db.InteractionDecisions.Add(new InteractionDecision
-            {
-                InteractionId = interaction.Id,
-                Outcome = gate.Status,
-                Memo = $"{gate.StatusReason} — bestaande promotie NIET gedemoveerd (invariant #313)",
-                RunId = runId,
-            });
-            await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-            return new(gate.Outcome, gate.StatusReason, interaction.Id, gate.DegradedBy);
-        }
-
+        // De demotiegarantie (#313/#332) is al in PromoteAsync afgedwongen, vóór de
+        // dispatch: hier komt alleen een uitkomst binnen die de bestaande status
+        // niet verlaagt (gelijk of sterker) — of een nieuwe rij.
         if (interaction is null)
         {
             interaction = new Interaction

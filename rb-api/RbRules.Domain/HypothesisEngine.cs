@@ -246,7 +246,11 @@ public static class HypothesisEngine
 /// fase-2-poort: een positief LLM-verdict zonder onafhankelijke steun landt in
 /// <c>model_hypothesized_unruled</c> (cold-start, micro-review) — nooit stil weg, en
 /// nooit een stille promotie op enkel LLM+structuur (rode draad #236). Vindt de
-/// verificatie tóch een bewijszin of corroboratie, dan promoveert het paar regulier.</summary>
+/// verificatie tóch een bewijszin of corroboratie, dan promoveert het paar regulier —
+/// en dan gelden ook de soort-poorten (#330) over die bewijszin: sinds #333 zijn ze
+/// VERPLICHTE parameters op <see cref="ToSignals"/>, zodat de fase-5-bedrading ze
+/// niet kán overslaan (#300-patroon; de gate-defaults op
+/// <see cref="InteractionGateSignals"/> zijn hier dus bewust onbereikbaar).</summary>
 public static class HypothesisPromotion
 {
     /// <summary>Bouw de poort-signalen voor een hypothese + LLM-verdict. Het
@@ -254,9 +258,22 @@ public static class HypothesisPromotion
     /// memo, niet als promotie-dragend signaal. <paramref name="lexicalSupport"/>/
     /// <paramref name="consensusCount"/> zijn de eventuele ONAFHANKELIJKE steun die de
     /// gerichte verificatie alsnog vond (default: geen).</summary>
+    /// <param name="kindAnchorSupport">Soort-poort A (#330): draagt de gevonden
+    /// bewijszin een lexicaal anker van de geclaimde relatiesoort
+    /// (<c>InteractionKindAnchors</c>)? VERPLICHT zonder default (#333, #300-patroon):
+    /// de fase-5-verificatie die een bewijszin vindt moet de poort over díé zin
+    /// berekenen, net als het mining-pad — zonder tekstbewijs (geen
+    /// <paramref name="lexicalSupport"/>) is de poort niet van toepassing en geeft de
+    /// aanroeper true door. De typechecker dwingt af dat niemand hem kan vergeten.</param>
+    /// <param name="patientWordFormSupport">Soort-poort B (#330): staat het
+    /// keyword-doel van een toekennende claim in keyword-VORM in de bewijszin
+    /// (<c>KeywordWordForm</c>)? Zelfde verplichting als
+    /// <paramref name="kindAnchorSupport"/>; true wanneer niet van toepassing.</param>
     public static InteractionGateSignals ToSignals(
         InteractionHypothesis hypothesis,
         bool llmVerdictInteracts,
+        bool kindAnchorSupport,
+        bool patientWordFormSupport,
         bool schemaValid = true,
         string? schemaReason = null,
         bool lexicalSupport = false,
@@ -273,7 +290,9 @@ public static class HypothesisPromotion
             ConsensusThreshold: consensusThreshold,
             LlmVerdictInteracts: llmVerdictInteracts,
             IsEmergentCardCardPair: hypothesis.IsEmergentCardCardPair,
-            HasBlockingTombstone: hasBlockingTombstone);
+            HasBlockingTombstone: hasBlockingTombstone,
+            KindAnchorSupport: kindAnchorSupport,
+            PatientWordFormSupport: patientWordFormSupport);
     }
 
     // Spiegelt InteractionPromotionService.DefaultConsensusThreshold zonder de
