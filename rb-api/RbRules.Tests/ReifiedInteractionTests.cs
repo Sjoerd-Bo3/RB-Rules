@@ -635,37 +635,162 @@ public class ReifiedInteractionTests
         Assert.Equal("llm+consensus", assertion.Verifier);   // geen lexicale steun geclaimd
     }
 
-    // ── Demotie-tak van RejectAsync (#226-review #6) ──────────────────────────
+    // ── Demotiegarantie (#313, verbreed in #332): status-orde, alle paden ──────
 
     [Fact]
-    public async Task Service_RejectAfterPromotion_DemotesExistingNode_ClearsPromotedAt()
+    public async Task Service_RejectNaPromotie_BestaandePromotieBlijftStaan_GeenTombstone()
     {
+        // Vóór #332 demoveerde dit pad de bestaande promotie (status → rejected,
+        // PromotedAt gewist, grafsteen). De verbrede garantie: óók een verwerping
+        // is zwakker dan promoted, dus de rij blijft staan en er komt GEEN
+        // grafsteen — een oordeel dat de rij niet mag verlagen mag haar sleutel
+        // ook niet duurzaam sluiten (#324b-symmetrie). Wel zichtbaar: een
+        // beslissings-memo. Degradaties komen uit de audit + reviewqueue.
         await using var db = NewDb();
         var runId = await SeedRunAsync(db);
         var svc = new InteractionPromotionService(db);
 
-        // 1. Promoveer.
         var promoted = await svc.PromoteAsync(Req(lexical: true, verdict: true), runId);
         Assert.Equal(InteractionGateOutcome.Promoted, promoted.Outcome);
         var before = await db.Interactions.SingleAsync();
-        Assert.NotNull(before.PromotedAt);
+        var stamp = before.PromotedAt;
+        Assert.NotNull(stamp);
         var interactionId = before.Id;
 
-        // 2. Latere run met deterministische steun maar negatief verdict → verwerpen.
-        //    De bestaande knoop wordt gedemote (status → rejected, PromotedAt gewist)
-        //    en er verschijnt een grafsteen + beslissings-memo.
         var rejected = await svc.PromoteAsync(Req(lexical: true, verdict: false), runId);
-        Assert.Equal(InteractionGateOutcome.Rejected, rejected.Outcome);
+        Assert.Equal(InteractionGateOutcome.Rejected, rejected.Outcome);   // over dít voorstel
         Assert.Equal(interactionId, rejected.InteractionId);
 
         var after = await db.Interactions.SingleAsync();
-        Assert.Equal(InteractionStatus.Rejected, after.Status);
-        Assert.Null(after.PromotedAt);                        // geen misleidende timestamp
-        Assert.True(await db.RejectionTombstones.AnyAsync(t => !t.Lifted));
+        Assert.Equal(InteractionStatus.Promoted, after.Status);   // NIET gedemoveerd
+        Assert.Equal(stamp, after.PromotedAt);                    // timestamp intact
+        Assert.False(await db.RejectionTombstones.AnyAsync());    // sleutel niet duurzaam gesloten
 
-        var decisions = await db.InteractionDecisions
-            .Where(d => d.InteractionId == interactionId).ToListAsync();
-        Assert.Contains(decisions, d => d.Outcome == InteractionStatus.Rejected);
+        var memo = await db.InteractionDecisions
+            .Where(d => d.InteractionId == interactionId && d.Outcome == InteractionStatus.Rejected)
+            .SingleAsync();
+        Assert.Contains("#313", memo.Memo);                       // zichtbaar, nooit stil
+    }
+
+    [Fact]
+    public async Task Service_HerMineWachtOpCorroboratie_BestaandePromotieBlijftStaan()
+    {
+        // Het gemeten #332-gat (review PR #331): promoveer op steun, her-mine
+        // daarna mét positief verdict maar zónder steun → uitkomst Candidate
+        // "wacht op corroboratie", en die demoveerde de bestaande promotie wél
+        // (de oude guard keek alleen naar gate.DegradedBy). De garantie geldt
+        // voor élke her-mine-uitkomst die zwakker is dan de bestaande status.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var promoted = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault",
+            lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, promoted.Outcome);
+        var before = await db.Interactions.SingleAsync();
+        var stamp = before.PromotedAt;
+        var reason = before.StatusReason;
+
+        var degraded = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault",
+            lexical: false, consensus: 1, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Candidate, degraded.Outcome);
+        Assert.Null(degraded.DegradedBy);   // kale corroboratie-degradatie, geen soort-poort
+
+        var after = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Promoted, after.Status);   // NIET gedemoveerd
+        Assert.Equal(stamp, after.PromotedAt);
+        Assert.Equal(reason, after.StatusReason);                 // rij volledig ongemoeid
+        Assert.Equal(1, await db.Assertions.CountAsync());        // geen provenance voor een niet-geschreven staat
+        var memo = await db.InteractionDecisions
+            .Where(d => d.InteractionId == after.Id && d.Outcome == InteractionStatus.Candidate)
+            .SingleAsync();
+        Assert.Contains("#313", memo.Memo);
+    }
+
+    [Fact]
+    public async Task Service_HerMineColdStartHypothese_BestaandePromotieBlijftStaan()
+    {
+        // Zelfde garantie op het cold-start-pad: een card×card-her-mine zonder
+        // steun scoort ModelHypothesizedUnruled — óók zwakker dan promoted.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var promoted = await svc.PromoteAsync(Req(lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, promoted.Outcome);
+
+        var hypothesized = await svc.PromoteAsync(Req(lexical: false, consensus: 0, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.ModelHypothesizedUnruled, hypothesized.Outcome);
+
+        var after = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Promoted, after.Status);
+        var memo = await db.InteractionDecisions
+            .Where(d => d.InteractionId == after.Id
+                && d.Outcome == InteractionStatus.ModelHypothesizedUnruled)
+            .SingleAsync();
+        Assert.Contains("#313", memo.Memo);
+    }
+
+    [Fact]
+    public async Task Service_VerifiedRij_WordtOokDoorEenPromotedUitkomstNietVerlaagd()
+    {
+        // De guard werkt op status-ORDE, niet op een hardcoded == promoted: de
+        // verified-tier (bestaat in InteractionStatus, nog geen automatische
+        // schrijver — hier als fixture gezaaid) staat bóven promoted, dus zelfs
+        // een her-mine die op volle steun zou promoveren verlaagt de rij niet.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        db.Interactions.Add(new Interaction
+        {
+            AgentRef = "card:a",
+            PatientRef = "card:b",
+            Kind = "COUNTERS",
+            Status = InteractionStatus.Verified,
+            StatusReason = "geverifieerd (fixture voor de toekomstige verified-schrijver)",
+            CreatedByRunId = runId,
+        });
+        await db.SaveChangesAsync();
+        var svc = new InteractionPromotionService(db);
+
+        var r = await svc.PromoteAsync(Req(lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, r.Outcome);   // over dít voorstel
+
+        var after = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Verified, after.Status);     // orde: promoted < verified
+        var memo = await db.InteractionDecisions.SingleAsync(d => d.InteractionId == after.Id);
+        Assert.Contains("#313", memo.Memo);
+    }
+
+    [Fact]
+    public async Task Service_CandidateRij_WordtDoorGegrondeVerwerpingNogGewoonGedemoveerd()
+    {
+        // De garantie beschermt vastgestelde feiten (promoted/verified), niet de
+        // werk-tiers: een candidate die bij her-mine een gegrond negatief verdict
+        // krijgt wordt nog steeds verworpen, mét grafsteen — anders sterft de
+        // flip-flop-suppressie voor precies de ruisigste tier.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var candidate = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault",
+            lexical: false, consensus: 1, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Candidate, candidate.Outcome);
+
+        var rejected = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault",
+            lexical: true, verdict: false), runId);
+        Assert.Equal(InteractionGateOutcome.Rejected, rejected.Outcome);
+
+        var after = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Rejected, after.Status);
+        Assert.True(await db.RejectionTombstones.AnyAsync(t => !t.Lifted));
     }
 
     // ── Soort-poorten (#330): degradatie is zichtbaar en raakt promoties niet ──

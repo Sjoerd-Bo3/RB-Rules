@@ -188,10 +188,14 @@ topic_type="tactic", en graph-edges Card—STAPLE_IN→Archetype.
   echte audit-paren) en dat een toegekend keyword er in keyword-VORM staat
   (gebracket of hoofdletter-term — "you may recycle it" is het werkwoord, geen
   toekenning van [Recycle]). Zelfde soft-pad als het niveau-principe: stranden
-  is kandidaat worden, nooit stil verdwijnen, nooit een tombstone — en de
-  soort-poorten demoveren nooit een bestaande promotie (strandt een
-  her-voorstel op een poort terwijl de rij al gepromoveerd is, dan blijft de
-  rij staan en wordt alleen een beslissings-memo geschreven).
+  is kandidaat worden, nooit stil verdwijnen, nooit een tombstone — en
+  bestaande promoties degraderen nooit automatisch mee (#332, de brede
+  garantie): élke her-mine-uitkomst die zwakker is dan de bestaande status —
+  kandidaat, hypothese óf verwerping over een promoted- of verified-rij —
+  laat de rij ongemoeid en schrijft alleen een beslissings-memo, zonder
+  tombstone (wat de rij niet mag verlagen, mag haar sleutel ook niet duurzaam
+  sluiten). Degradaties van promoties komen uit de audit + reviewqueue, nooit
+  uit de poort zelf.
 
 ## Evolutie-raamwerk: de bank groeit met het spel mee
 

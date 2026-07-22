@@ -241,6 +241,24 @@ public static class InteractionStatus
         [Candidate, Verified, Promoted, Rejected, ModelHypothesizedUnruled];
 
     public static bool IsValid(string? status) => status is not null && All.Contains(status);
+
+    /// <summary>Sterkte-orde voor de demotiegarantie (#313, verbreed in #332):
+    /// <see cref="Verified"/> (menselijk/ruling-geverifieerd; nog geen automatische
+    /// schrijver) staat bóven <see cref="Promoted"/> (poort-promotie); alles
+    /// daaronder — <see cref="Candidate"/>, <see cref="ModelHypothesizedUnruled"/>,
+    /// <see cref="Rejected"/> — is een VOORSTEL-toestand en telt als gelijk-zwak.
+    /// De werk-tiers zijn onderling bewust NIET geordend: candidate ↔ hypothese ↔
+    /// verwerping is het normale pipeline-verloop (corroboratie, soft-rejects,
+    /// tombstones), geen demotie van een vastgesteld feit. De promotie-poort
+    /// gebruikt deze orde om een bestaande rij nooit automatisch te VERLAGEN —
+    /// degradaties komen uit de audit + reviewqueue, nooit uit de poort zelf.
+    /// Onbekend/null telt als zwakst (beschermt niets, kan zichzelf herstellen).</summary>
+    public static int Strength(string? status) => status switch
+    {
+        Verified => 2,
+        Promoted => 1,
+        _ => 0,
+    };
 }
 
 /// <summary>De conditie-assen (<see cref="InteractionCondition.OnKind"/>) — het

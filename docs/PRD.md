@@ -1336,11 +1336,26 @@ de globale duur-vangrail).
   werkwoord). Gekalibreerd op de negen echte audit-paren: de zeven betwiste
   stranden, de twee bevestigde promoveren ongewijzigd. Stranden betekent
   kandidaat in de reviewqueue (nooit stil weg), met de poortnaam als reden en
-  per poort geteld in het run-detail; de soort-poorten demoveren nooit een
-  bestaande promotie — strandt een her-voorstel op een poort terwijl de rij al
-  gepromoveerd is, dan blijft de rij staan en wordt alleen een beslissings-memo
-  geschreven. Meetpunt: de volgende fable-run + audit hoort deze
-  betwist-klasse naar ~0 te brengen.
+  per poort geteld in het run-detail; bestaande promoties degraderen nooit
+  automatisch mee (sinds #332 breed afgedwongen, zie de volgende bullet).
+  Meetpunt: de volgende fable-run + audit hoort deze betwist-klasse naar ~0 te
+  brengen.
+- **De demotiegarantie geldt voor élke her-mine-uitkomst** (#332, met #333) —
+  de adversariële review van PR #331 mat dat de garantie smaller was dan
+  gedocumenteerd: de guard beschermde een bestaande promotie alleen tegen de
+  soort-poorten, dus een her-mine met positief verdict maar zónder steun
+  ("wacht op corroboratie") demoveerde een gepromoveerde rij wél. De poort
+  weigert nu op status-orde (verified > promoted > werk-tiers) élke
+  automatische verlaging van een bestaande rij: een kandidaat-, hypothese- of
+  verwerpings-uitkomst over een promoted- of verified-rij laat de rij staan,
+  schrijft een beslissings-memo en zet géén grafsteen — wat de rij niet mag
+  verlagen, mag haar sleutel ook niet duurzaam sluiten. De werk-tiers onderling
+  volgen het normale verloop (een candidate wordt bij een gegrond negatief
+  verdict nog gewoon verworpen, mét flip-flop-suppressie); degradaties van
+  promoties komen uit de audit + reviewqueue, nooit uit de poort. Bijvangst
+  (#333): de hypothese-koppeling `ToSignals` kent de soort-poorten voortaan als
+  verplichte parameters, zodat de toekomstige fase-5-verificatie ze niet kán
+  overslaan — dezelfde typechecker-afdwinging als op het mining-pad.
 - **Brein-mining draait parallel** (#279) — de extractie kostte ~40 s per kaart
   en liep één kaart tegelijk: 40 kaarten was een half uur, een ongecapte
   nachtrun (~900 kaarten) tien uur. De kaart- en subject-lus verwerken nu
