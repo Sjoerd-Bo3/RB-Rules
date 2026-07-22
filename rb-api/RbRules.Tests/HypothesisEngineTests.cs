@@ -237,7 +237,8 @@ public class HypothesisEngineTests
 
         // Geen tekstbewijs → soort-poorten niet van toepassing (expliciet true, #333).
         var signals = HypothesisPromotion.ToSignals(hyp, llmVerdictInteracts: true,
-            kindAnchorSupport: true, patientWordFormSupport: true);
+            kindAnchorSupport: true, patientWordFormSupport: true,
+            endpointPresenceSupport: true, requiresNotOptional: true, resourcePatientSupport: true);
         var result = InteractionPromotionGate.Evaluate(signals);
 
         // Structureel + LLM samen dragen nooit een stille promotie — cold-start.
@@ -256,7 +257,8 @@ public class HypothesisEngineTests
         // De verificatie vond een bewijszin: dan zijn de soort-poorten over die
         // zin berekend — hier allebei gehaald.
         var signals = HypothesisPromotion.ToSignals(hyp, llmVerdictInteracts: true,
-            kindAnchorSupport: true, patientWordFormSupport: true, lexicalSupport: true);
+            kindAnchorSupport: true, patientWordFormSupport: true,
+            endpointPresenceSupport: true, requiresNotOptional: true, resourcePatientSupport: true, lexicalSupport: true);
         var result = InteractionPromotionGate.Evaluate(signals);
         Assert.Equal(InteractionGateOutcome.Promoted, result.Outcome);
     }
@@ -270,7 +272,8 @@ public class HypothesisEngineTests
         ]).Single();
 
         var signals = HypothesisPromotion.ToSignals(hyp, llmVerdictInteracts: false,
-            kindAnchorSupport: true, patientWordFormSupport: true);
+            kindAnchorSupport: true, patientWordFormSupport: true,
+            endpointPresenceSupport: true, requiresNotOptional: true, resourcePatientSupport: true);
         var result = InteractionPromotionGate.Evaluate(signals);
         Assert.Equal(InteractionGateOutcome.Rejected, result.Outcome);
         Assert.False(result.WritesTombstone); // een losstaand LLM-nee sluit de sleutel niet permanent
@@ -285,7 +288,8 @@ public class HypothesisEngineTests
         ]).Single();
 
         var signals = HypothesisPromotion.ToSignals(hyp, llmVerdictInteracts: true,
-            kindAnchorSupport: true, patientWordFormSupport: true, hasBlockingTombstone: true);
+            kindAnchorSupport: true, patientWordFormSupport: true,
+            endpointPresenceSupport: true, requiresNotOptional: true, resourcePatientSupport: true, hasBlockingTombstone: true);
         Assert.Equal(InteractionGateOutcome.Rejected, InteractionPromotionGate.Evaluate(signals).Outcome);
     }
 
@@ -303,7 +307,8 @@ public class HypothesisEngineTests
 
         var result = InteractionPromotionGate.Evaluate(
             HypothesisPromotion.ToSignals(hyp, llmVerdictInteracts: true,
-                kindAnchorSupport: true, patientWordFormSupport: true));
+                kindAnchorSupport: true, patientWordFormSupport: true,
+            endpointPresenceSupport: true, requiresNotOptional: true, resourcePatientSupport: true));
         Assert.Equal(InteractionGateOutcome.Candidate, result.Outcome);
     }
 
@@ -322,15 +327,46 @@ public class HypothesisEngineTests
 
         var anchorStranded = InteractionPromotionGate.Evaluate(HypothesisPromotion.ToSignals(
             hyp, llmVerdictInteracts: true,
-            kindAnchorSupport: false, patientWordFormSupport: true, lexicalSupport: true));
+            kindAnchorSupport: false, patientWordFormSupport: true,
+            endpointPresenceSupport: true, requiresNotOptional: true, resourcePatientSupport: true, lexicalSupport: true));
         Assert.Equal(InteractionGateOutcome.Candidate, anchorStranded.Outcome);
         Assert.Equal(InteractionGatePorts.KindAnchor, anchorStranded.DegradedBy);
 
         var wordFormStranded = InteractionPromotionGate.Evaluate(HypothesisPromotion.ToSignals(
             hyp, llmVerdictInteracts: true,
-            kindAnchorSupport: true, patientWordFormSupport: false, lexicalSupport: true));
+            kindAnchorSupport: true, patientWordFormSupport: false,
+            endpointPresenceSupport: true, requiresNotOptional: true, resourcePatientSupport: true, lexicalSupport: true));
         Assert.Equal(InteractionGateOutcome.Candidate, wordFormStranded.Outcome);
         Assert.Equal(InteractionGatePorts.WordForm, wordFormStranded.DegradedBy);
+    }
+
+    [Fact]
+    public void Coupling_Iteratie2PoortSignalen_StrandenNetAlsOpHetMiningPad()
+    {
+        // #335: ook de drie nieuwe poort-signalen zijn verplichte parameters op
+        // ToSignals (#333-patroon) — een gestrand signaal levert via de
+        // ongewijzigde fase-2-poort dezelfde degradatie als het mining-pad.
+        var hyp = HypothesisEngine.Generate([
+            Card("x", ["fury"], (MechanicPredicateKinds.TriggersOn, "exhaust")),
+            Card("y", ["fury"], (MechanicPredicateKinds.Prevents, "exhaust")),
+        ]).Single();
+
+        var expectations = new (bool Endpoint, bool NotOptional, bool Resource, string Port)[]
+        {
+            (false, true, true, InteractionGatePorts.EndpointPresence),
+            (true, false, true, InteractionGatePorts.Optionality),
+            (true, true, false, InteractionGatePorts.ResourcePatient),
+        };
+        foreach (var (endpoint, notOptional, resource, port) in expectations)
+        {
+            var r = InteractionPromotionGate.Evaluate(HypothesisPromotion.ToSignals(
+                hyp, llmVerdictInteracts: true,
+                kindAnchorSupport: true, patientWordFormSupport: true,
+                endpointPresenceSupport: endpoint, requiresNotOptional: notOptional,
+                resourcePatientSupport: resource, lexicalSupport: true));
+            Assert.Equal(InteractionGateOutcome.Candidate, r.Outcome);
+            Assert.Equal(port, r.DegradedBy);
+        }
     }
 
     // ── Residueel embedding-kanaal (begrensd) ──────────────────────────────────

@@ -150,48 +150,90 @@ public static class InteractionKindAnchors
         && anchors.Any(a => TermMatch.ContainsWord(evidenceText, a));
 }
 
-/// <summary>Poort B (#330) — de woordvormpoort voor keyword-doelen: een claim in
-/// een toekennende soort (GRANTS) met een MECHANIC als patient eist dat de
-/// patient-naam in KEYWORD-vorm in een dragende bewijs-eenheid staat. De gemeten
-/// drukconventie (#211: 31 keywords over 1429 kaartteksten, állemaal gebracket)
-/// is hier hergebruikt als poort: gebracket (<c>[Recycle]</c>) telt, en een
+/// <summary>Poort B (#330, verbreed in #335) — de woordvormpoort voor
+/// keyword-doelen: een claim in een toekennende of vereisende soort
+/// (GRANTS/REQUIRES) met een MECHANIC als patient eist dat de patient-naam in
+/// KEYWORD-vorm in een dragende bewijs-eenheid staat. De gemeten drukconventie
+/// (#211: 31 keywords over 1429 kaartteksten, állemaal gebracket) is hier
+/// hergebruikt als poort: gebracket (<c>[Recycle]</c>) telt, en een
 /// hoofdlettervorm die NIET aan een zinsbegin staat telt ("my controller gains X
 /// XP" — XP als gedefinieerde term). Een kleine letter midden in de zin is de
 /// werkwoord-/prozavorm en telt niet: "You may recycle it" (Vision/Predict) en
 /// "become ready" (Accelerate) waren precies de gemeten overclaims — het
 /// werkwoord recycle is geen toegekend keyword [Recycle].
 ///
+/// <b>Verscherpt in #335 (klasse B, gemeten op de era-3-audit):</b> voor de
+/// WERKWOORD-ACHTIGE keywords in <see cref="VerbLikeKeywords"/> telt alléén de
+/// gebrackete vorm. "Ready me" (Hungry Wolf) is de gebiedende wijs midden in een
+/// ability-zin en passeerde de hoofdletter-regel — het tot dan gedocumenteerde
+/// restrisico, nu gematerialiseerd en gedicht. En <b>verbreed (klasse C1)</b>
+/// naar REQUIRES: "may recycle it" strandde als GRANTS en kwam als REQUIRES
+/// door de onbewaakte deur terug. MODIFIES/COUNTERS blijven bewust buiten de
+/// poort: een MODIFIES-doel drukt legitiem in werkwoordsvorm ("channel 1 rune
+/// exhausted" — Siphoning Strike, bevestigde era-3-promotie) en een
+/// COUNTERS-doel in proza ("Deflect prevents Assault damage").
+///
 /// <b>Wat deze poort NIET garandeert.</b> Riot kapitaliseert ook spelwerkwoorden
-/// midden in een zin ("whether or not to Recycle it", §436.1) — die vorm komt
-/// erdoor. En een zins-initiële hoofdletter is ambigu en telt dáárom niet mee,
-/// ook als het wél een keyword is. Noodzakelijke voorwaarde, geen voldoende;
-/// stranden = Candidate, nooit stil weg.</summary>
+/// midden in een zin — buiten de verb-like catalogus komt die vorm erdoor. En een
+/// zins-initiële hoofdletter is ambigu en telt dáárom niet mee, ook als het wél
+/// een keyword is. Noodzakelijke voorwaarde, geen voldoende; stranden =
+/// Candidate, nooit stil weg.</summary>
 public static class KeywordWordForm
 {
-    /// <summary>Geldt de woordvormpoort voor deze claim? Alleen de toekennende
-    /// soort (GRANTS) met een mechanic-patient — sinds #304 zijn keyword-rollen
-    /// getypeerd als <see cref="EntityType.Mechanic"/>. Voor REQUIRES/COUNTERS/
-    /// MODIFIES is de patient-naam in prozavorm een normaal bewijs
-    /// ("Deflect prevents Assault damage").</summary>
+    /// <summary>De werkwoord-achtige keywords (klasse B, #335) — catalogus als
+    /// DATA, gekalibreerd op de audit-oordelen en de corpus-meting (1429
+    /// kaartteksten): Ready 0× gebracket / 28× hoofdletter / 180× kleine letter,
+    /// Recycle 0/26/51 — beide gemeten overclaims ("Ready me", "may recycle it" en
+    /// §436.1 "whether or not to Recycle it"). Let op bij uitbreiden: 0× gebracket
+    /// alléén is GEEN criterium — Channel meet óók 0/10/30 en is een BEVESTIGDE
+    /// GRANTS op de hoofdlettervorm (Baccai Witherclaw, "Channel 2 runes
+    /// exhausted"), en Disempower (0/25/5) is een bevestigde REQUIRES-kost
+    /// ("Disempower this"). Kalibreer op audit-oordelen, niet op de telling.</summary>
+    public static readonly IReadOnlySet<string> VerbLikeKeywords =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Ready", "Recycle" };
+
+    /// <summary>Geldt de woordvormpoort voor deze claim? De toekennende én
+    /// vereisende soorten (GRANTS/REQUIRES, #335-C1) met een mechanic-patient —
+    /// sinds #304 zijn keyword-rollen getypeerd als <see cref="EntityType.Mechanic"/>.
+    /// Voor COUNTERS/MODIFIES is de patient-naam in prozavorm een normaal bewijs
+    /// (zie de klasse-samenvatting; Siphoning Strike is de gemeten wachter).</summary>
     public static bool Applies(string? kind, EntityType patientType) =>
-        kind == InteractionKinds.Grants
+        (kind == InteractionKinds.Grants || kind == InteractionKinds.Requires)
         && OntologySchema.IsA(patientType, EntityType.Mechanic);
 
     /// <summary>Staat <paramref name="label"/> ergens in <paramref name="text"/>
     /// in keyword-vorm: direct gebracket (<c>[Label</c>, dekt ook magnitudes als
     /// <c>[Assault 2]</c>) of met hoofdletter op een niet-zins-initiële positie?
+    /// Voor de <see cref="VerbLikeKeywords"/> telt alléén de gebrackete vorm.
     /// Woordgrens-bewust (dezelfde grens als <see cref="TermMatch"/>).</summary>
     public static bool AppearsAsKeyword(string? text, string? label)
     {
         if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(label)) return false;
         var needle = label.Trim();
+        return VerbLikeKeywords.Contains(needle)
+            ? AppearsBracketed(text, needle)
+            : Scan(text, needle, static (t, at) => IsKeywordForm(t, at));
+    }
 
+    /// <summary>Staat <paramref name="label"/> ergens DIRECT GEBRACKET in
+    /// <paramref name="text"/> (<c>[Label</c>, dekt ook magnitudes)? De gemeten
+    /// drukconventie voor een echt toegekend/gedefinieerd keyword (#211) — de
+    /// enige vorm die telt voor verb-like keywords (klasse B) en voor
+    /// resource-patients (klasse D, <see cref="ResourceMechanics"/>).</summary>
+    public static bool AppearsBracketed(string? text, string? label)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(label)) return false;
+        return Scan(text, label.Trim(), static (t, at) => at > 0 && t[at - 1] == '[');
+    }
+
+    private static bool Scan(string text, string needle, Func<string, int, bool> accepts)
+    {
         var from = 0;
         while (from <= text.Length - needle.Length)
         {
             var at = text.IndexOf(needle, from, StringComparison.OrdinalIgnoreCase);
             if (at < 0) return false;
-            if (TermMatch.IsBoundary(text, at, needle.Length) && IsKeywordForm(text, at))
+            if (TermMatch.IsBoundary(text, at, needle.Length) && accepts(text, at))
                 return true;
             from = at + 1;
         }
@@ -210,7 +252,7 @@ public static class KeywordWordForm
         return !IsSentenceInitial(text, at);
     }
 
-    private static bool IsSentenceInitial(string text, int at)
+    internal static bool IsSentenceInitial(string text, int at)
     {
         var i = at - 1;
         while (i >= 0 && (char.IsWhiteSpace(text[i]) || IsQuote(text[i]))) i--;
@@ -218,6 +260,130 @@ public static class KeywordWordForm
     }
 
     private static bool IsQuote(char c) => c is '"' or '\'' or '“' or '”' or '‘' or '’';
+}
+
+/// <summary>Klasse A (#335) — eindpunt-aanwezigheid in keyword-gedaante: een claim
+/// met een MECHANIC als agent eist dat het agent-label in een dragende
+/// bewijs-eenheid in herkenbare keyword-gedaante staat — gebracket óf met
+/// hoofdletter (zins-initiaal toegestaan: dit is een AANWEZIGHEIDS-check, milder
+/// dan de woordvormpoort). De gemeten aanleiding: <c>Burn MODIFIES Flow</c>
+/// promoveerde terwijl de audit vaststelt "the evidence never mentions a 'Burn'
+/// keyword at all" — de hoofdletter-ongevoelige woordmatch van het lexicale anker
+/// accepteerde een kleine-letter-prozavorm (het werkwoord burn, of een
+/// <c>:rb_…:</c>-glyphtoken) als verankering van het keyword Burn.
+///
+/// De PATIENT-kant heeft deze check bewust NIET: haar aanwezigheid als woord is al
+/// afgedwongen (textueel anker), en haar VORM is per soort geregeld
+/// (<see cref="KeywordWordForm"/> voor GRANTS/REQUIRES,
+/// <see cref="ResourceMechanics"/> voor resources) — een MODIFIES-doel drukt
+/// legitiem in kleine-letter-werkwoordsvorm ("channel 1 rune exhausted",
+/// Siphoning Strike, bevestigde era-3-promotie). Een CARD-agent is uitgezonderd:
+/// die draagt zijn bewijs per identiteit in zijn eigen tekst (#249).</summary>
+public static class InteractionEndpointPresence
+{
+    /// <summary>Geldt de poort voor deze agent? Alleen mechanic-agents — een
+    /// kaart-agent is identiteits-verankerd en hoeft niet in zijn eigen tekst te
+    /// staan.</summary>
+    public static bool Applies(EntityType agentType) =>
+        OntologySchema.IsA(agentType, EntityType.Mechanic);
+
+    /// <summary>Staat <paramref name="label"/> ergens in <paramref name="text"/>
+    /// in keyword-GEDAANTE: gebracket of met een beginhoofdletter (zins-initiaal
+    /// toegestaan)? Kleine-letter-vormen (werkwoord, proza, glyphtoken) tellen
+    /// niet — dat is geen vermelding van het keyword.</summary>
+    public static bool MentionedAsKeyword(string? text, string? label)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(label)) return false;
+        var needle = label.Trim();
+
+        var from = 0;
+        while (from <= text.Length - needle.Length)
+        {
+            var at = text.IndexOf(needle, from, StringComparison.OrdinalIgnoreCase);
+            if (at < 0) return false;
+            if (TermMatch.IsBoundary(text, at, needle.Length)
+                && ((at > 0 && text[at - 1] == '[') || char.IsUpper(text[at])))
+                return true;
+            from = at + 1;
+        }
+        return false;
+    }
+}
+
+/// <summary>Klasse C2 (#335) — het tegen-anker voor REQUIRES: "may"/"optional(ly)"
+/// in dezelfde ZIN als het REQUIRES-anker ondermijnt de claim, want optioneel is
+/// geen vereiste. Gemeten aanleiding: <c>Predict REQUIRES Recycle</c> op "may
+/// recycle it" — hetzelfde paar strandde een dag eerder als GRANTS op de
+/// woordvormpoort en zocht de onbewaakte deur. De claim strandt alleen wanneer
+/// ÉLKE anker-dragende zin in het dragende bewijs ondermijnd is; één schone
+/// anker-zin (bv. "Spend 3 XP, exhaust: Draw 1.") draagt de claim gewoon.
+///
+/// <b>Restrisico (zin-scope):</b> een schoon anker élders in dezelfde eenheid over
+/// iets ánders redt de claim — Safety Inspector draagt naast "You may spend 3 XP…"
+/// een los "each player must kill…" en passeert dus. Zelfde grens als het
+/// kind-anker (#330): noodzakelijk, niet voldoende.</summary>
+public static class RequiresOptionality
+{
+    private static readonly IReadOnlyList<string> Underminers = ["may", "optional", "optionally"];
+
+    /// <summary>Bevat <paramref name="text"/> ergens een REQUIRES-anker
+    /// (<see cref="InteractionKindAnchors"/>), ondermijnd of niet?</summary>
+    public static bool HasAnchor(string? text) =>
+        Sentences(text).Any(HasAnchorIn);
+
+    /// <summary>Bevat <paramref name="text"/> een ZIN met een REQUIRES-anker
+    /// zónder may/optional(ly) — een anker dat de claim echt kan dragen?</summary>
+    public static bool HasCleanAnchor(string? text) =>
+        Sentences(text).Any(s => HasAnchorIn(s)
+            && !Underminers.Any(u => TermMatch.ContainsWord(s, u)));
+
+    private static bool HasAnchorIn(string sentence) =>
+        InteractionKindAnchors.Catalog[InteractionKinds.Requires]
+            .Any(a => TermMatch.ContainsWord(sentence, a));
+
+    /// <summary>Zinnen op ./!/?-grenzen — bewust simpel: de teksten zijn korte
+    /// gedrukte regels, en een te slimme splitser zou zelf een poort-omzeiling
+    /// worden.</summary>
+    private static IEnumerable<string> Sentences(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) yield break;
+        var start = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] is not ('.' or '!' or '?')) continue;
+            if (i > start) yield return text[start..i];
+            start = i + 1;
+        }
+        if (start < text.Length) yield return text[start..];
+    }
+}
+
+/// <summary>Klasse D (#335) — resource-vs-keyword: een GRANTS/MODIFIES-claim met
+/// een RESOURCE-achtige mechanic als patient eist expliciete keyword-taal (de
+/// gebrackete vorm) in het dragende bewijs. Gemeten aanleiding: "spend 3 XP"
+/// (Safety Inspector) werd MODIFIES en "Gain 1 XP" (Gardens of Becoming) werd
+/// GRANTS — maar XP is een resource, geen keyword op een unit; hoeveelheids-taal
+/// verbruikt of produceert de resource en zegt niets over het mechanisme.
+/// REQUIRES blijft buiten de poort: een kaart die XP spendeert HANGT er echt van
+/// af (drie bevestigde era-3-rijen).
+///
+/// De catalogus is DATA, afgeleid uit de ontologie/definities: XP is expliciet
+/// "not a Game Object" (officiële definitie) en meet in 1429 kaartteksten 0×
+/// gebracket tegenover 84× hoeveelheids-taal ("gain/spend N XP"). Uitbreiden mag
+/// alleen op diezelfde twee gronden — definitie zegt resource, corpus drukt in
+/// hoeveelheden.</summary>
+public static class ResourceMechanics
+{
+    /// <summary>De resource-achtige mechanics (gesloten lijst, zie klasse-doc).</summary>
+    public static readonly IReadOnlySet<string> Labels =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "XP" };
+
+    /// <summary>Geldt de resource-poort voor deze claim? Alleen GRANTS/MODIFIES
+    /// met een mechanic-patient uit de catalogus.</summary>
+    public static bool Applies(string? kind, EntityType patientType, string? patientLabel) =>
+        (kind == InteractionKinds.Grants || kind == InteractionKinds.Modifies)
+        && OntologySchema.IsA(patientType, EntityType.Mechanic)
+        && patientLabel is not null && Labels.Contains(patientLabel.Trim());
 }
 
 /// <summary>De tautologie-poort (#249): kaart↔eigen-keyword hoort GEEN

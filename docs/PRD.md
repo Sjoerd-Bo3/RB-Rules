@@ -1340,6 +1340,30 @@ de globale duur-vangrail).
   automatisch mee (sinds #332 breed afgedwongen, zie de volgende bullet).
   Meetpunt: de volgende fable-run + audit hoort deze betwist-klasse naar ~0 te
   brengen.
+- **Poorten-iteratie 2: de vier rest-klassen uit de populatie-audit** (#335) —
+  de volledige era-3-audit (16 oordelen: 11 bevestigd, 5 afgekeurd; precisie
+  16% → 27% → 55% over de tijdperken) wees vier scherpe rest-klassen aan, elk
+  nu een eigen deterministische poort met eigen status_reason, geteld in het
+  run-detail en gekalibreerd op de 16 echte audit-rijen plus een corpus-meting
+  over 1429 kaartteksten. (A) `endpoint_presence`: een mechanic-agent moet in
+  keyword-gedaante in het dragende bewijs staan — Burn↔Flow promoveerde op een
+  kleine-letter-prozamatch. (B) Werkwoord-achtige keywords (Ready, Recycle —
+  gemeten 0× gebracket) tellen in de woordvormpoort alleen nog gebracket:
+  "Ready me" (Hungry Wolf) materialiseerde het gedocumenteerde
+  hoofdletter-werkwoord-restrisico. (C) De woordvormpoort geldt nu ook voor
+  REQUIRES (Predict↔Recycle strandde als GRANTS en kwam als REQUIRES terug),
+  een optionality-tegen-anker vangt "may/optionally" in de anker-zin (optioneel
+  is geen vereiste), en een soort-wissel (zelfde paar, andere soort na eerder
+  stranden) telt zichtbaar in het run-detail — telemetrie, geen poort: een
+  correctie is legitiem, de inhouds-poorten vangen de junk. (D)
+  `resource_patient`: GRANTS/MODIFIES op een resource-mechanic (XP — "not a
+  Game Object") eist de gebrackete keyword-vorm; "spend/Gain N XP" is
+  hoeveelheids-taal over de resource, geen claim over het mechanisme. De elf
+  bevestigde era-3-rijen blijven onder al deze poorten promoveerbaar en staan
+  als regressie-wachters vast (o.a. Siphoning Strike bewaakt dat MODIFIES
+  buiten de woordvormpoort blijft, Baccai Witherclaw dat Channel niet in de
+  werkwoord-catalogus sluipt). Meetpunt: volgende volle mine + populatie-audit,
+  doel >75% precisie.
 - **De demotiegarantie geldt voor élke her-mine-uitkomst** (#332, met #333) —
   de adversariële review van PR #331 mat dat de garantie smaller was dan
   gedocumenteerd: de guard beschermde een bestaande promotie alleen tegen de

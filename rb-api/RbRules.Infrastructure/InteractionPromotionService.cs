@@ -20,10 +20,23 @@ namespace RbRules.Infrastructure;
 /// een lexicaal anker van de geclaimde soort (<see cref="InteractionKindAnchors"/>)?
 /// BEWUST zonder default (#300-les): wie dit request bouwt, heeft het bewijs in
 /// handen en moet de poort berekenen — de typechecker dwingt dat af.</param>
-/// <param name="PatientWordFormSupport">Poort B (#330): staat het keyword-doel van
-/// een toekennende claim in keyword-vorm in het bewijs (<see cref="KeywordWordForm"/>)?
-/// Zelfde verplichting als <paramref name="KindAnchorSupport"/>; geef true wanneer de
-/// poort niet van toepassing is (<see cref="KeywordWordForm.Applies"/> is false).</param>
+/// <param name="PatientWordFormSupport">Poort B (#330, verbreed in #335): staat het
+/// keyword-doel van een toekennende/vereisende claim in keyword-vorm in het bewijs
+/// (<see cref="KeywordWordForm"/>)? Zelfde verplichting als
+/// <paramref name="KindAnchorSupport"/>; geef true wanneer de poort niet van
+/// toepassing is (<see cref="KeywordWordForm.Applies"/> is false).</param>
+/// <param name="EndpointPresenceSupport">Klasse A (#335): staat een mechanic-AGENT
+/// in keyword-gedaante in het dragende bewijs
+/// (<see cref="InteractionEndpointPresence"/>)? VERPLICHT zonder default
+/// (#300-les), net als de #330-poorten; true wanneer niet van toepassing.</param>
+/// <param name="RequiresNotOptional">Klasse C2 (#335): draagt het dragende bewijs
+/// van een REQUIRES-claim minstens één anker-zin zónder may/optional(ly)
+/// (<see cref="RequiresOptionality"/>)? Zelfde verplichting; true wanneer niet van
+/// toepassing.</param>
+/// <param name="ResourcePatientSupport">Klasse D (#335): draagt het bewijs van een
+/// GRANTS/MODIFIES-claim op een resource-patient (<see cref="ResourceMechanics"/>)
+/// de gebrackete keyword-vorm? Zelfde verplichting; true wanneer niet van
+/// toepassing.</param>
 public sealed record InteractionPromotionRequest(
     string AgentRef, EntityType AgentType,
     string PatientRef, EntityType PatientType,
@@ -36,6 +49,9 @@ public sealed record InteractionPromotionRequest(
     bool LlmVerdictInteracts,
     bool KindAnchorSupport,
     bool PatientWordFormSupport,
+    bool EndpointPresenceSupport,
+    bool RequiresNotOptional,
+    bool ResourcePatientSupport,
     bool IsCardOwnKeywordPair = false);
 
 /// <summary>Eén conditie-invoer (window/status/cost) op een promotie-verzoek.</summary>
@@ -44,11 +60,17 @@ public sealed record InteractionConditionInput(
 
 /// <summary>De uitkomst van één promotie-poort-run: de tier + memo, plus (als er
 /// een interactie werd vastgelegd) het id. <paramref name="DegradedBy"/> is de
-/// soort-poort (#330, <see cref="InteractionGatePorts"/>) die een zou-promoveren-
-/// claim naar Candidate degradeerde — de aanroeper telt erop (ADR-20).</summary>
+/// soort-poort (#330/#335, <see cref="InteractionGatePorts"/>) die een
+/// zou-promoveren-claim naar Candidate degradeerde — de aanroeper telt erop
+/// (ADR-20). <paramref name="KindSwitchedFrom"/> is de soort-wissel-telemetrie
+/// (#335-C3): de soort van een broertje-paar (zelfde agent/patient, andere Kind)
+/// dat eerder strandde of afgekeurd werd — de dedupe-sleutel bevat Kind, dus een
+/// soort-wissel omzeilt de upsert-historie en hoort zichtbaar geteld. Bewust
+/// telemetrie en geen poort: een soort-CORRECTIE is legitiem, en de
+/// inhouds-poorten vangen de junk op inhoud.</summary>
 public sealed record InteractionPromotionResult(
     InteractionGateOutcome Outcome, string StatusReason, long? InteractionId,
-    string? DegradedBy = null);
+    string? DegradedBy = null, string? KindSwitchedFrom = null);
 
 /// <summary>Fase 2 (#226) — de promotie-pipeline rond de deterministische poort
 /// (<see cref="InteractionPromotionGate"/>). Hangt de IO (Postgres = SoT) om de
@@ -123,12 +145,39 @@ public class InteractionPromotionService(RbRulesDbContext db)
             // kaart↔eigen-keyword-vlag komt van de aanroeper (die kent Card.Mechanics).
             RolesDistinct: !string.Equals(request.AgentRef, request.PatientRef, StringComparison.Ordinal),
             IsCardOwnKeywordPair: request.IsCardOwnKeywordPair,
-            // Soort-poorten (#330): berekend door de aanroeper (die het bewijs heeft),
-            // verplichte velden op het request zodat niemand ze kan overslaan.
+            // Soort-poorten (#330/#335): berekend door de aanroeper (die het bewijs
+            // heeft), verplichte velden op het request zodat niemand ze kan overslaan.
             KindAnchorSupport: request.KindAnchorSupport,
-            PatientWordFormSupport: request.PatientWordFormSupport);
+            PatientWordFormSupport: request.PatientWordFormSupport,
+            EndpointPresenceSupport: request.EndpointPresenceSupport,
+            RequiresNotOptional: request.RequiresNotOptional,
+            ResourcePatientSupport: request.ResourcePatientSupport);
 
         var gate = InteractionPromotionGate.Evaluate(signals);
+
+        // ── Soort-wissel-telemetrie (#335-C3): de dedupe-sleutel bevat Kind, dus een
+        // her-voorstel onder een ANDERE soort omzeilt de upsert-historie van zijn
+        // broertje. Bewust géén poort maar telemetrie (run-detail telt zichtbaar):
+        // een soort-correctie is legitiem, en de inhouds-poorten vangen de junk op
+        // inhoud — maar de wissel hoort nooit stil te zijn (ADR-20). Alleen
+        // strand-/afkeur-historie telt: een gepromoveerd broertje is geen ruis-spoor
+        // (twee soorten kunnen legitiem naast elkaar bestaan).
+        var canonicalKind = kind ?? request.Kind;
+        var kindSwitchedFrom = await db.Interactions.AsNoTracking()
+            .Where(x => x.AgentRef == request.AgentRef && x.PatientRef == request.PatientRef
+                && x.Kind != canonicalKind
+                && (x.Status == InteractionStatus.Candidate
+                    || x.Status == InteractionStatus.Rejected
+                    || x.Status == InteractionStatus.ModelHypothesizedUnruled))
+            .OrderBy(x => x.Kind)
+            .Select(x => x.Kind)
+            .FirstOrDefaultAsync(ct)
+            ?? await db.RejectionTombstones.AsNoTracking()
+                .Where(t => t.AgentRef == request.AgentRef && t.PatientRef == request.PatientRef
+                    && t.Kind != canonicalKind && !t.Lifted)
+                .OrderBy(t => t.Kind)
+                .Select(t => t.Kind)
+                .FirstOrDefaultAsync(ct);
 
         // ── Demotiegarantie (#313, verbreed in #332): géén her-mine-uitkomst die
         // ZWAKKER is dan de bestaande status verlaagt die status automatisch — de
@@ -145,7 +194,7 @@ public class InteractionPromotionService(RbRulesDbContext db)
         // mét flip-flop-suppressie.
         var existing = await db.Interactions.AsNoTracking()
             .Where(x => x.AgentRef == request.AgentRef
-                && x.PatientRef == request.PatientRef && x.Kind == (kind ?? request.Kind))
+                && x.PatientRef == request.PatientRef && x.Kind == canonicalKind)
             .Select(x => new { x.Id, x.Status })
             .FirstOrDefaultAsync(ct);
         if (existing is not null
@@ -160,12 +209,14 @@ public class InteractionPromotionService(RbRulesDbContext db)
                 RunId = runId,
             });
             await db.SaveChangesAsync(ct);
-            return new(gate.Outcome, gate.StatusReason, existing.Id, gate.DegradedBy);
+            return new(gate.Outcome, gate.StatusReason, existing.Id, gate.DegradedBy,
+                kindSwitchedFrom);
         }
 
-        return gate.Outcome == InteractionGateOutcome.Rejected
-            ? await RejectAsync(request, kind ?? request.Kind, dedupeKey, gate, runId, ct)
+        var result = gate.Outcome == InteractionGateOutcome.Rejected
+            ? await RejectAsync(request, canonicalKind, dedupeKey, gate, runId, ct)
             : await AcceptAsync(request, kind!, conditions, gate, runId, ct);
+        return result with { KindSwitchedFrom = kindSwitchedFrom };
     }
 
     // ── Verwerping: tombstone (herstelpad) + decision-memo, geen graaf-knoop ──
