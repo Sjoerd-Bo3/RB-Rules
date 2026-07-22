@@ -383,12 +383,15 @@ public class ReifiedInteractionTests
         string kind = "COUNTERS", bool lexical = false, int consensus = 0, bool verdict = true,
         string agent = "card:a", string patient = "card:b",
         IReadOnlyList<InteractionConditionInput>? conditions = null,
-        string? governedBy = null) =>
+        string? governedBy = null, bool kindAnchor = true, bool wordForm = true) =>
         new(agent, agentType, patient, patientType, kind,
             DerivedFromRef: governedBy ?? "section:core-rules-pdf/7.4",
             GovernedByRef: governedBy,
             Conditions: conditions ?? [],
-            LexicalSupport: lexical, ConsensusCount: consensus, LlmVerdictInteracts: verdict);
+            LexicalSupport: lexical, ConsensusCount: consensus, LlmVerdictInteracts: verdict,
+            // Soort-poorten (#330): verplichte velden; deze tests toetsen de overige
+            // poorten en geven ze default door als "gehaald".
+            KindAnchorSupport: kindAnchor, PatientWordFormSupport: wordForm);
 
     [Fact]
     public async Task Service_PromotedPath_WritesInteractionAssertionDecision()
@@ -663,6 +666,59 @@ public class ReifiedInteractionTests
         var decisions = await db.InteractionDecisions
             .Where(d => d.InteractionId == interactionId).ToListAsync();
         Assert.Contains(decisions, d => d.Outcome == InteractionStatus.Rejected);
+    }
+
+    // ── Soort-poorten (#330): degradatie is zichtbaar en raakt promoties niet ──
+
+    [Fact]
+    public async Task Service_SoortPoortStrandt_NieuweClaimWordtCandidateMetPoortReden()
+    {
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var r = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Vision", patient: "mechanic:Recycle", kind: "GRANTS",
+            lexical: true, verdict: true, wordForm: false), runId);
+
+        Assert.Equal(InteractionGateOutcome.Candidate, r.Outcome);
+        Assert.Equal("word_form", r.DegradedBy);
+        var ix = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Candidate, ix.Status);
+        Assert.Contains("word_form", ix.StatusReason);
+        Assert.Null(ix.PromotedAt);
+        Assert.False(await db.RejectionTombstones.AnyAsync());   // soft-pad, geen grafsteen
+    }
+
+    [Fact]
+    public async Task Service_SoortPoortStrandtBijHerMine_BestaandePromotieBlijftStaan()
+    {
+        // Invariant #313 (#330): een poort-degradatie zegt iets over dít voorstel,
+        // niet over het eerder gepromoveerde feit — nooit auto-demoveren. Wel
+        // zichtbaar: een beslissings-memo, geen stille overslag.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var promoted = await svc.PromoteAsync(Req(lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, promoted.Outcome);
+        var before = await db.Interactions.SingleAsync();
+        var stamp = before.PromotedAt;
+        Assert.NotNull(stamp);
+
+        var degraded = await svc.PromoteAsync(Req(
+            lexical: true, verdict: true, kindAnchor: false), runId);
+        Assert.Equal(InteractionGateOutcome.Candidate, degraded.Outcome);
+        Assert.Equal("kind_anchor", degraded.DegradedBy);
+
+        var after = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Promoted, after.Status);   // NIET gedemoveerd
+        Assert.Equal(stamp, after.PromotedAt);
+        var memo = await db.InteractionDecisions
+            .Where(d => d.InteractionId == after.Id && d.Outcome == InteractionStatus.Candidate)
+            .SingleAsync();
+        Assert.Contains("#313", memo.Memo);                       // zichtbaar, nooit stil
     }
 
     // ── InMemory-context (pgvector als tekst, zoals de andere service-tests) ──

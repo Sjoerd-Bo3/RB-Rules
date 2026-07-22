@@ -14,17 +14,22 @@ namespace RbRules.Infrastructure;
 /// mechanic-niveau-vraag (#286) — de goedkope pass die mech↔mech dekt.</param>
 /// <param name="CallMetrics">De ingebouwde meting (#286): aanroepen, gemiddelde
 /// wandkloktijd en gemiddeld aantal aangeboden refs per fase.</param>
+/// <param name="KindAnchorDegraded">Aantal claims dat de kind_anchor-poort (#330,
+/// poort A) naar Candidate degradeerde — zichtbaar in het run-detail (ADR-20:
+/// nooit stil).</param>
+/// <param name="WordFormDegraded">Idem voor de word_form-poort (#330, poort B).</param>
 public sealed record BreinInteractionMiningResult(
     int FocusCards, int Extracted, int Promoted, int Candidates,
     int Hypothesized, int Rejected, int Failed, bool CapHit,
     int SkippedKnown = 0, string? FailureDetail = null,
     int MechanicSubjects = 0, string? CallMetrics = null,
     string? ModelAlias = null, int BatchK = 1, int BatchSessions = 0,
-    int UnknownCode = 0, long? InputTokens = null, long? OutputTokens = null)
+    int UnknownCode = 0, long? InputTokens = null, long? OutputTokens = null,
+    int KindAnchorDegraded = 0, int WordFormDegraded = 0)
 {
     public string Summary =>
         $"{MechanicSubjects} mechanics + {FocusCards} kaarten, {Extracted} kandidaten geëxtraheerd → " +
-        $"{Promoted} gepromoveerd, {Candidates} kandidaat, {Hypothesized} hypothese, " +
+        $"{Promoted} gepromoveerd, {Candidates} kandidaat{PortDetail}, {Hypothesized} hypothese, " +
         $"{Rejected} verworpen, {SkippedKnown} al-bekend (kaart↔eigen-keyword), " +
         $"{Failed} rb-ai-uitval" +
         (string.IsNullOrEmpty(FailureDetail) ? "" : $" ({FailureDetail})") +
@@ -39,6 +44,19 @@ public sealed record BreinInteractionMiningResult(
             (InputTokens is not null || OutputTokens is not null
                 ? $", tokens {InputTokens?.ToString() ?? "?"} in / {OutputTokens?.ToString() ?? "?"} uit"
                 : ""));
+
+    /// <summary>De soort-poort-uitsplitsing (#330), direct achter de kandidaat-teller
+    /// en alleen wanneer er iets te melden valt — een permanent "0×" maakt het getal
+    /// betekenisloos (#302-les). Staat náást de batch-meting van #323: beide staarten
+    /// melden alleen wat er echt gebeurd is.</summary>
+    private string PortDetail =>
+        KindAnchorDegraded == 0 && WordFormDegraded == 0
+            ? ""
+            : " (poorten: " + string.Join(", ", new[]
+              {
+                  KindAnchorDegraded > 0 ? $"kind_anchor×{KindAnchorDegraded}" : null,
+                  WordFormDegraded > 0 ? $"word_form×{WordFormDegraded}" : null,
+              }.Where(p => p is not null)) + ")";
 }
 
 /// <summary>Brein-mining-orkestratie voor gekwalificeerde interacties (#226, §3.1 +
@@ -356,7 +374,8 @@ public class BreinInteractionMiningService(
             tally.SkippedKnown, tally.FailureDetail,
             tally.MechanicsProcessed, tally.CallMetrics,
             extract?.ModelAlias, batchK, tally.BatchSessions,
-            tally.UnknownCode, tally.InputTokens, tally.OutputTokens);
+            tally.UnknownCode, tally.InputTokens, tally.OutputTokens,
+            tally.KindAnchorDegraded, tally.WordFormDegraded);
     }
 
     /// <summary>De worker-lus, één keer geschreven voor beide passes (#286). Workers
@@ -796,8 +815,26 @@ public class BreinInteractionMiningService(
             // claim-niveau (#324): mechanic↔mechanic telt alleen op regel-/
             // definitietekst — een kaarttekst waarin beide termen staan bewijst een
             // kaart-specifiek effect, geen eigenschap van de mechanieken.
-            var lexical = offer.Evidence.Any(unit => InteractionEvidence.ExpressesRelation(
-                Anchor(unit, from), Anchor(unit, to), unit.Source, from.Type, to.Type));
+            var supporting = offer.Evidence.Where(unit => InteractionEvidence.ExpressesRelation(
+                Anchor(unit, from), Anchor(unit, to), unit.Source, from.Type, to.Type)).ToList();
+            var lexical = supporting.Count > 0;
+
+            // Soort-poorten (#330), berekend over de DRAGENDE eenheden — bewust niet
+            // over al het aangeboden bewijs: een anker in een eenheid die het paar
+            // niet eens verbindt (bv. "modified" in §465.2.c.4.a terwijl alleen
+            // §465.2.c.6 Tank én Backline noemt) mag een soort-claim niet redden.
+            // Poort A: draagt een dragende eenheid het anker van de geclaimde soort?
+            // Poort B: staat het keyword-doel van een GRANTS-claim ergens in een
+            // dragende eenheid in keyword-vorm ([…] of niet-zins-initiële
+            // hoofdletter)? Zonder lexicale steun zijn beide leeg-waar: het item
+            // promoveert dan toch niet (Candidate via "wacht op corroboratie") en de
+            // poorten horen die reden niet te maskeren.
+            var kindCanonical = InteractionKinds.Canonicalize(ix.Kind);
+            var kindAnchored = !lexical
+                || supporting.Any(u => InteractionKindAnchors.CarriesKind(kindCanonical, u.Text));
+            var wordFormOk = !lexical
+                || !KeywordWordForm.Applies(kindCanonical, to.Type)
+                || supporting.Any(u => KeywordWordForm.AppearsAsKeyword(u.Text, to.Label));
 
             var request = new InteractionPromotionRequest(
                 AgentRef: from.Ref, AgentType: from.Type,
@@ -810,7 +847,9 @@ public class BreinInteractionMiningService(
                 Conditions: conditions,
                 LexicalSupport: lexical,
                 ConsensusCount: 1, // één extractie-pass = één bron
-                LlmVerdictInteracts: ix.Interacts);
+                LlmVerdictInteracts: ix.Interacts,
+                KindAnchorSupport: kindAnchored,
+                PatientWordFormSupport: wordFormOk);
 
             // Geserialiseerd: twee items kunnen hetzelfde paar voorstellen, en de poort
             // doet lees-dan-schrijf op een unieke sleutel.
@@ -843,7 +882,7 @@ public class BreinInteractionMiningService(
             {
                 context.Gate.Release();
             }
-            context.Tally.Gate(result.Outcome);
+            context.Tally.Gate(result.Outcome, result.DegradedBy);
         }
     }
 
@@ -1124,6 +1163,7 @@ public class BreinInteractionMiningService(
         private int _cardsProcessed, _mechanicsProcessed;
         private int _extracted, _promoted, _candidates, _hypothesized;
         private int _rejected, _failed, _skippedKnown;
+        private int _kindAnchorDegraded, _wordFormDegraded;
         private bool _deadlineHit;
 
         private sealed class CallStats
@@ -1201,7 +1241,10 @@ public class BreinInteractionMiningService(
         public void SkipKnown() { lock (_gate) _skippedKnown++; }
         public void HitDeadline() { lock (_gate) _deadlineHit = true; }
 
-        public void Gate(InteractionGateOutcome outcome)
+        /// <summary>Telt een poort-uitslag, mét de soort-poort (#330) die een
+        /// zou-promoveren-claim degradeerde — het run-detail splitst erop uit
+        /// (ADR-20: een poort die stil telt is geen poort).</summary>
+        public void Gate(InteractionGateOutcome outcome, string? degradedBy = null)
         {
             lock (_gate)
             {
@@ -1211,6 +1254,11 @@ public class BreinInteractionMiningService(
                     case InteractionGateOutcome.Candidate: _candidates++; break;
                     case InteractionGateOutcome.ModelHypothesizedUnruled: _hypothesized++; break;
                     case InteractionGateOutcome.Rejected: _rejected++; break;
+                }
+                switch (degradedBy)
+                {
+                    case InteractionGatePorts.KindAnchor: _kindAnchorDegraded++; break;
+                    case InteractionGatePorts.WordForm: _wordFormDegraded++; break;
                 }
             }
         }
@@ -1224,6 +1272,8 @@ public class BreinInteractionMiningService(
         public int Rejected { get { lock (_gate) return _rejected; } }
         public int Failed { get { lock (_gate) return _failed; } }
         public int SkippedKnown { get { lock (_gate) return _skippedKnown; } }
+        public int KindAnchorDegraded { get { lock (_gate) return _kindAnchorDegraded; } }
+        public int WordFormDegraded { get { lock (_gate) return _wordFormDegraded; } }
         public bool DeadlineHit { get { lock (_gate) return _deadlineHit; } }
         public int BatchSessions { get { lock (_gate) return _batchSessions; } }
         public int UnknownCode { get { lock (_gate) return _unknownCode; } }

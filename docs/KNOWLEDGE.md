@@ -177,6 +177,21 @@ topic_type="tactic", en graph-edges Card—STAPLE_IN→Archetype.
   (reviewqueue) — en het mag óók geen duurzame verwerping (tombstone) dragen:
   wat niet sterk genoeg is om te promoveren, is niet sterk genoeg om permanent
   te sluiten.
+- **Bewijs draagt een claim alleen als het ook de SOORT uitdrukt** (#330, het
+  verlengstuk van het #324-principe, gevonden door de audit op de eerste
+  fable-batch): het niveau zegt WAAROVER bewijs mag spreken, de soort zegt WAT
+  het dan beweert. Tier-1-co-occurrence ("deze twee keywords staan samen in
+  §727.1.b") waarborgt het niveau maar niet de relatiesoort — het model
+  overclaimde daarop stelselmatig GRANTS/MODIFIES/COUNTERS. Daarom eist de
+  promotiepoort deterministisch dat het drágende bewijs de geclaimde soort
+  lexicaal uitdrukt (gesloten anker-catalogus per soort, gekalibreerd op de
+  echte audit-paren) en dat een toegekend keyword er in keyword-VORM staat
+  (gebracket of hoofdletter-term — "you may recycle it" is het werkwoord, geen
+  toekenning van [Recycle]). Zelfde soft-pad als het niveau-principe: stranden
+  is kandidaat worden, nooit stil verdwijnen, nooit een tombstone — en de
+  soort-poorten demoveren nooit een bestaande promotie (strandt een
+  her-voorstel op een poort terwijl de rij al gepromoveerd is, dan blijft de
+  rij staan en wordt alleen een beslissings-memo geschreven).
 
 ## Evolutie-raamwerk: de bank groeit met het spel mee
 

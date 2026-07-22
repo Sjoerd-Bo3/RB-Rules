@@ -16,6 +16,14 @@ namespace RbRules.Infrastructure;
 /// (#249)? De aanroeper weet dat (hij kent <c>Card.Mechanics</c>); de poort weigert
 /// het dan als al-deterministisch-bekend feit. Default false — het is een
 /// aanvullende guard, geen verplichting voor bestaande aanroepers.</param>
+/// <param name="KindAnchorSupport">Poort A (#330): draagt een dragende bewijs-eenheid
+/// een lexicaal anker van de geclaimde soort (<see cref="InteractionKindAnchors"/>)?
+/// BEWUST zonder default (#300-les): wie dit request bouwt, heeft het bewijs in
+/// handen en moet de poort berekenen — de typechecker dwingt dat af.</param>
+/// <param name="PatientWordFormSupport">Poort B (#330): staat het keyword-doel van
+/// een toekennende claim in keyword-vorm in het bewijs (<see cref="KeywordWordForm"/>)?
+/// Zelfde verplichting als <paramref name="KindAnchorSupport"/>; geef true wanneer de
+/// poort niet van toepassing is (<see cref="KeywordWordForm.Applies"/> is false).</param>
 public sealed record InteractionPromotionRequest(
     string AgentRef, EntityType AgentType,
     string PatientRef, EntityType PatientType,
@@ -26,6 +34,8 @@ public sealed record InteractionPromotionRequest(
     bool LexicalSupport,
     int ConsensusCount,
     bool LlmVerdictInteracts,
+    bool KindAnchorSupport,
+    bool PatientWordFormSupport,
     bool IsCardOwnKeywordPair = false);
 
 /// <summary>Eén conditie-invoer (window/status/cost) op een promotie-verzoek.</summary>
@@ -33,9 +43,12 @@ public sealed record InteractionConditionInput(
     string OnKind, string? SubjectRole, string Value, string? Operator);
 
 /// <summary>De uitkomst van één promotie-poort-run: de tier + memo, plus (als er
-/// een interactie werd vastgelegd) het id.</summary>
+/// een interactie werd vastgelegd) het id. <paramref name="DegradedBy"/> is de
+/// soort-poort (#330, <see cref="InteractionGatePorts"/>) die een zou-promoveren-
+/// claim naar Candidate degradeerde — de aanroeper telt erop (ADR-20).</summary>
 public sealed record InteractionPromotionResult(
-    InteractionGateOutcome Outcome, string StatusReason, long? InteractionId);
+    InteractionGateOutcome Outcome, string StatusReason, long? InteractionId,
+    string? DegradedBy = null);
 
 /// <summary>Fase 2 (#226) — de promotie-pipeline rond de deterministische poort
 /// (<see cref="InteractionPromotionGate"/>). Hangt de IO (Postgres = SoT) om de
@@ -109,7 +122,11 @@ public class InteractionPromotionService(RbRulesDbContext db)
             // Rollen-poort (#249): self-loop is hier gratis vast te stellen; de
             // kaart↔eigen-keyword-vlag komt van de aanroeper (die kent Card.Mechanics).
             RolesDistinct: !string.Equals(request.AgentRef, request.PatientRef, StringComparison.Ordinal),
-            IsCardOwnKeywordPair: request.IsCardOwnKeywordPair);
+            IsCardOwnKeywordPair: request.IsCardOwnKeywordPair,
+            // Soort-poorten (#330): berekend door de aanroeper (die het bewijs heeft),
+            // verplichte velden op het request zodat niemand ze kan overslaan.
+            KindAnchorSupport: request.KindAnchorSupport,
+            PatientWordFormSupport: request.PatientWordFormSupport);
 
         var gate = InteractionPromotionGate.Evaluate(signals);
 
@@ -194,6 +211,27 @@ public class InteractionPromotionService(RbRulesDbContext db)
             .FirstOrDefaultAsync(x => x.AgentRef == request.AgentRef
                 && x.PatientRef == request.PatientRef && x.Kind == kind, ct);
 
+        // Invariant #313 (#330): een soort-poort-degradatie mag een BESTAANDE
+        // promotie nooit automatisch demoveren. Een re-mine wiens bewijs op
+        // kind_anchor/word_form strandt zegt iets over dít voorstel, niet over het
+        // eerder gepromoveerde feit — de audit + reviewqueue leveren de degradatie-
+        // beslissing, nooit de poort zelf. Wel zichtbaar: de beslissing wordt als
+        // memo vastgelegd (nooit stil, ADR-20), de rij blijft ongemoeid.
+        if (gate.DegradedBy is not null && interaction is not null
+            && interaction.Status == InteractionStatus.Promoted)
+        {
+            db.InteractionDecisions.Add(new InteractionDecision
+            {
+                InteractionId = interaction.Id,
+                Outcome = gate.Status,
+                Memo = $"{gate.StatusReason} — bestaande promotie NIET gedemoveerd (invariant #313)",
+                RunId = runId,
+            });
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return new(gate.Outcome, gate.StatusReason, interaction.Id, gate.DegradedBy);
+        }
+
         if (interaction is null)
         {
             interaction = new Interaction
@@ -273,7 +311,7 @@ public class InteractionPromotionService(RbRulesDbContext db)
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
-        return new(gate.Outcome, gate.StatusReason, interaction.Id);
+        return new(gate.Outcome, gate.StatusReason, interaction.Id, gate.DegradedBy);
     }
 
     /// <summary>Herstelpad (rode draad #236): hef de tombstone op de dedupe-sleutel

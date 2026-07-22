@@ -162,7 +162,16 @@ met quota en rate-limiting.
   promoveren mag ook geen tombstone dragen — zelfde steun, zelfde grens;
   (c) bestaande gepromoveerde rijen degraderen NIET automatisch mee — een
   oordeel draagt geen actie alleen; de audit levert de lijst, de reviewqueue de
-  beslissing.
+  beslissing. **Vervolg (#330): het juiste NIVEAU is niet genoeg — het bewijs
+  moet ook de SOORT dragen.** De volgende audit (7 van 9 betwist) zat volledig
+  in tier-1-co-occurrence die de relatiesoort niet uitdrukt ("[Reaction] — Add
+  [1]" werd COUNTERS; "you may recycle it" — werkwoord — werd GRANTS
+  [Recycle]). Sindsdien twee data-gekalibreerde soort-poorten op de
+  promotielaag (`InteractionKindAnchors` + `KeywordWordForm`, ankers zijn
+  catalogus-DATA): het anker moet in de DRÁGENDE bewijs-eenheid staan (niet
+  ergens in de aanbieding), en let bij kalibratie op de vals-vriendelijke
+  werkwoorden — "gains"/"become" zijn bewust GEEN grants-ankers omdat de
+  gemeten overclaims er precies mee geformuleerd waren.
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`

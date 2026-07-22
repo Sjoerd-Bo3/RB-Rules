@@ -84,6 +84,142 @@ public static class InteractionEvidence
         || OntologySchema.IsA(patientType, EntityType.Card);
 }
 
+/// <summary>Poort A (#330) — het kind-anker: per relatiesoort een GESLOTEN
+/// catalogus van lexicale ankers waarvan er minstens één in een dragende
+/// bewijs-eenheid moet staan vóór promotie. De aanleiding is gemeten: de eerste
+/// fable-batch (23 promoties, opus-audit op 9) gaf 7 afkeuringen in ÉÉN
+/// faalklasse — het model overclaimt de relatieSOORT op co-occurrence. #324
+/// waarborgt dat het bewijs het NIVEAU van de claim draagt (mech↔mech alleen op
+/// regeltekst), maar tier-1-co-occurrence zegt nog niet WELKE relatie: "[Reaction]
+/// — Add [1]" werd COUNTERS, twee Dependent Keywords naast elkaar (§727.1.b)
+/// werden MODIFIES. Deze poort eist dat de bewijstekst de soort ook uitdrukt.
+///
+/// De catalogus is DATA, gekalibreerd op de zeven betwiste en twee bevestigde
+/// paren (meet eerst, #211): de betwiste bewijsteksten bevatten géén anker van
+/// hun geclaimde soort, de bevestigde REQUIRES-paren halen hun anker op hun echte
+/// sectieteksten ("must have 11 XP", "pay its Equip cost"). Twee bewuste
+/// weglatingen bij GRANTS, allebei door de meting afgedwongen: <c>gains</c>
+/// ("my controller gains X XP" — §823.1.c.1, precies de Hunt→XP-overclaim) en
+/// <c>become/becomes/becoming</c> ("become ready" — §805.6, de Accelerate→Ready-
+/// overclaim). Echte grants die met die werkwoorden geformuleerd zijn degraderen
+/// dus naar Candidate (reviewqueue) — aanvaard: de poort is een NOODZAKELIJKE
+/// voorwaarde, en een gemiste promotie wacht op review terwijl een valse
+/// promotie het brein vervuilt. <c>has/have</c> staan er wél in: de gemeten
+/// drukconventie voor granting is "Friendly units have [Deflect]" / "give a unit
+/// [Ganking]" (live kaartcorpus).
+///
+/// <b>Wat deze poort NIET garandeert.</b> Ze matcht gedrukte woordvormen op
+/// woordgrenzen binnen een dragende bewijs-eenheid — een anker-woord elders in
+/// diezelfde tekst, over iets ánders, komt erdoor ("has" in een voorbeeldzin
+/// die een kaarttekst citeert). Dat is aanvaard restrisico: noodzakelijk, niet
+/// voldoende. De poort verwerpt bovendien niets — stranden = Candidate
+/// (reviewqueue), zelfde soft-pad als de #324-bewijstier.</summary>
+public static class InteractionKindAnchors
+{
+    /// <summary>De catalogus: relatiesoort → ankervormen (letterlijke gedrukte
+    /// vormen, woordgrens-gematcht via <see cref="TermMatch.ContainsWord"/>;
+    /// meerwoords toegestaan). Zowel rechte als typografische apostrofs — de
+    /// regel-PDF drukt "can’t".</summary>
+    public static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> Catalog =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            [InteractionKinds.Grants] =
+                ["grant", "grants", "granted", "give", "gives", "given", "has", "have"],
+            [InteractionKinds.Counters] =
+                ["counter", "counters", "countered", "can't", "can’t", "cannot",
+                 "prevent", "prevents", "prevented", "negate", "negates", "negated",
+                 "instead", "lose", "loses", "remove", "removes", "removed",
+                 "reduce", "reduces", "reduced", "ignore", "ignores", "ignored",
+                 "stop", "stops", "block", "blocks"],
+            [InteractionKinds.Modifies] =
+                ["modify", "modifies", "modified", "instead", "additional",
+                 "as though", "treat", "treats", "treated", "rather than",
+                 "replace", "replaces", "replaced"],
+            [InteractionKinds.Requires] =
+                ["require", "requires", "required", "need", "needs", "needed",
+                 "must", "only if", "in order", "as long as",
+                 "cost", "costs", "pay", "pays", "paid", "spend", "spends", "spent"],
+        };
+
+    /// <summary>Bevat <paramref name="evidenceText"/> minstens één anker van
+    /// <paramref name="kind"/>? Onbekende/niet-canonieke soort → false (de
+    /// schema-poort weigert die toch al; hier niet gokken).</summary>
+    public static bool CarriesKind(string? kind, string? evidenceText) =>
+        kind is not null
+        && Catalog.TryGetValue(kind, out var anchors)
+        && anchors.Any(a => TermMatch.ContainsWord(evidenceText, a));
+}
+
+/// <summary>Poort B (#330) — de woordvormpoort voor keyword-doelen: een claim in
+/// een toekennende soort (GRANTS) met een MECHANIC als patient eist dat de
+/// patient-naam in KEYWORD-vorm in een dragende bewijs-eenheid staat. De gemeten
+/// drukconventie (#211: 31 keywords over 1429 kaartteksten, állemaal gebracket)
+/// is hier hergebruikt als poort: gebracket (<c>[Recycle]</c>) telt, en een
+/// hoofdlettervorm die NIET aan een zinsbegin staat telt ("my controller gains X
+/// XP" — XP als gedefinieerde term). Een kleine letter midden in de zin is de
+/// werkwoord-/prozavorm en telt niet: "You may recycle it" (Vision/Predict) en
+/// "become ready" (Accelerate) waren precies de gemeten overclaims — het
+/// werkwoord recycle is geen toegekend keyword [Recycle].
+///
+/// <b>Wat deze poort NIET garandeert.</b> Riot kapitaliseert ook spelwerkwoorden
+/// midden in een zin ("whether or not to Recycle it", §436.1) — die vorm komt
+/// erdoor. En een zins-initiële hoofdletter is ambigu en telt dáárom niet mee,
+/// ook als het wél een keyword is. Noodzakelijke voorwaarde, geen voldoende;
+/// stranden = Candidate, nooit stil weg.</summary>
+public static class KeywordWordForm
+{
+    /// <summary>Geldt de woordvormpoort voor deze claim? Alleen de toekennende
+    /// soort (GRANTS) met een mechanic-patient — sinds #304 zijn keyword-rollen
+    /// getypeerd als <see cref="EntityType.Mechanic"/>. Voor REQUIRES/COUNTERS/
+    /// MODIFIES is de patient-naam in prozavorm een normaal bewijs
+    /// ("Deflect prevents Assault damage").</summary>
+    public static bool Applies(string? kind, EntityType patientType) =>
+        kind == InteractionKinds.Grants
+        && OntologySchema.IsA(patientType, EntityType.Mechanic);
+
+    /// <summary>Staat <paramref name="label"/> ergens in <paramref name="text"/>
+    /// in keyword-vorm: direct gebracket (<c>[Label</c>, dekt ook magnitudes als
+    /// <c>[Assault 2]</c>) of met hoofdletter op een niet-zins-initiële positie?
+    /// Woordgrens-bewust (dezelfde grens als <see cref="TermMatch"/>).</summary>
+    public static bool AppearsAsKeyword(string? text, string? label)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(label)) return false;
+        var needle = label.Trim();
+
+        var from = 0;
+        while (from <= text.Length - needle.Length)
+        {
+            var at = text.IndexOf(needle, from, StringComparison.OrdinalIgnoreCase);
+            if (at < 0) return false;
+            if (TermMatch.IsBoundary(text, at, needle.Length) && IsKeywordForm(text, at))
+                return true;
+            from = at + 1;
+        }
+        return false;
+    }
+
+    private static bool IsKeywordForm(string text, int at)
+    {
+        // Gebracket = de gemeten drukconventie, sterkste signaal — hoofdletter
+        // doet er dan niet toe.
+        if (at > 0 && text[at - 1] == '[') return true;
+        // Kleine letter midden in de zin = werkwoord-/prozavorm.
+        if (!char.IsUpper(text[at])) return false;
+        // Hoofdletter telt alleen buiten het zinsbegin ("Ready" als eerste woord
+        // is ambigu — kan net zo goed een gebiedende wijs zijn).
+        return !IsSentenceInitial(text, at);
+    }
+
+    private static bool IsSentenceInitial(string text, int at)
+    {
+        var i = at - 1;
+        while (i >= 0 && (char.IsWhiteSpace(text[i]) || IsQuote(text[i]))) i--;
+        return i < 0 || text[i] is '.' or '!' or '?';
+    }
+
+    private static bool IsQuote(char c) => c is '"' or '\'' or '“' or '”' or '‘' or '’';
+}
+
 /// <summary>De tautologie-poort (#249): kaart↔eigen-keyword hoort GEEN
 /// <see cref="Interaction"/> te worden.
 ///
