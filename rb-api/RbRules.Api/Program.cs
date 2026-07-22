@@ -139,6 +139,7 @@ builder.Services.AddScoped<PrimerService>();
 builder.Services.AddScoped<BanErrataSyncService>();
 builder.Services.AddScoped<InteractionService>();
 builder.Services.AddScoped<AdminOverviewService>();
+builder.Services.AddScoped<AiUsageReportService>();
 builder.Services.AddScoped<ChangeClassificationService>();
 // Changeconsolidatie (#206): koppelt changes die hetzelfde event vanuit
 // meerdere bronnen melden (feed-presentatie, geen inhoudelijke waarheid).
@@ -330,6 +331,12 @@ if (!app.Environment.IsEnvironment("Testing"))
         db.BenchmarkQuestions.Add(q);
     await db.SaveChangesAsync();
 
+    // Schaduwtarieven (#328): alleen bij een lege tabel — daarna is
+    // /api/admin/tariffs (append-only) de bron van waarheid.
+    if (!await db.AiTariffs.AnyAsync())
+        db.AiTariffs.AddRange(AiTariffSeed.Defaults);
+    await db.SaveChangesAsync();
+
     // Bron-feeds (#167): zelfde seed-alleen-ontbrekende-semantiek.
     var existingFeeds = await db.SourceFeeds.Select(f => f.Id).ToHashSetAsync();
     foreach (var feed in SourceFeedSeed.Defaults.Where(f => !existingFeeds.Contains(f.Id)))
@@ -365,6 +372,7 @@ app.MapPushEndpoints();
 app.MapAdminEndpoints();
 app.MapBrainAdminEndpoints();
 app.MapSettingsAdminEndpoints();
+app.MapCostAdminEndpoints();
 
 app.Run();
 

@@ -1424,6 +1424,15 @@ public class AskService(
                 InputTokens = usage?.InputTokens,
                 OutputTokens = usage?.OutputTokens,
             });
+            // Kosten-grootboek (#328): dezelfde meting nogmaals als
+            // ai_usage_event — mét user-attributie, model-ID en de
+            // tariefversie van dit moment (reproduceerbare schaduwkost).
+            // Bewust in dezelfde save als de metric: één best-effort-blok.
+            var path = model ?? (images is { Count: > 0 } ? "hard" : "cheap");
+            db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
+                db, AiUsageEvent.OriginUser, "ask", AskPathModels.Resolve(path),
+                userContext.User?.Id, usage?.InputTokens, usage?.OutputTokens,
+                (int)Math.Min(elapsedMs, int.MaxValue), ok));
             await db.SaveChangesAsync();
         }
         catch
@@ -1433,6 +1442,9 @@ public class AskService(
             // context, anders faalt de trace-save erna mee (review-fix).
             foreach (var entry in db.ChangeTracker.Entries<AskMetric>()
                          .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+                         .Cast<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry>()
+                         .Concat(db.ChangeTracker.Entries<AiUsageEvent>()
+                             .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added))
                          .ToList())
                 entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
         }
