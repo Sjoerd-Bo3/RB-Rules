@@ -1352,7 +1352,9 @@ de globale duur-vangrail).
   verlagen, mag haar sleutel ook niet duurzaam sluiten. De werk-tiers onderling
   volgen het normale verloop (een candidate wordt bij een gegrond negatief
   verdict nog gewoon verworpen, mét flip-flop-suppressie); degradaties van
-  promoties komen uit de audit + reviewqueue, nooit uit de poort. Bijvangst
+  promoties komen uit de audit + reviewqueue, nooit uit de poort — al kan de
+  reviewqueue die beslissing vandaag alleen nog tónen, niet uitvoeren (de
+  uitvoerbare degradatie-actie is #338). Bijvangst
   (#333): de hypothese-koppeling `ToSignals` kent de soort-poorten voortaan als
   verplichte parameters, zodat de toekomstige fase-5-verificatie ze niet kán
   overslaan — dezelfde typechecker-afdwinging als op het mining-pad.

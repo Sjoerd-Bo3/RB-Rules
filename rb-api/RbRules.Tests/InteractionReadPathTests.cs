@@ -245,6 +245,25 @@ public class InteractionReadPathTests
             ReifiedInteractionDisplay.Describe(row, "Viktor", thisIsAgent: false));
     }
 
+    [Fact]
+    public void Beschrijving_VerifiedIsDeSterksteTier_NietNogNietGepromoveerd()
+    {
+        // #332-orde: verified > promoted. De oude UI-tekst ("Geverifieerd, nog
+        // niet gepromoveerd.") beweerde het omgekeerde — alsof verified nog op
+        // de promotiepoort wachtte.
+        var verified = Reified(
+            "card:a", "card:b", InteractionKinds.Counters, InteractionStatus.Verified);
+        var text = ReifiedInteractionDisplay.Describe(verified, "Jinx", thisIsAgent: true);
+        Assert.Contains("Geverifieerd.", text);
+        Assert.DoesNotContain("nog niet gepromoveerd", text);
+
+        // Promoted is de norm en blijft stil.
+        var promoted = Reified(
+            "card:a", "card:b", InteractionKinds.Counters, InteractionStatus.Promoted);
+        Assert.DoesNotContain("Geverifieerd",
+            ReifiedInteractionDisplay.Describe(promoted, "Jinx", thisIsAgent: true));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static InteractionService Service(RbRulesDbContext db) =>

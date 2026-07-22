@@ -195,6 +195,20 @@ public class ReifiedInteractionTests
     }
 
     [Fact]
+    public void Projection_VerifiedRij_KrijgtTier1_NetAlsPromoted()
+    {
+        // #332-orde: verified is de sterkste tier — de RELATES_TO-cache mag haar
+        // niet als tier 2 wegzetten alsof ze zwakker is dan promoted (dat deed de
+        // oude expressie `== Promoted ? 1 : 2`). Literals bewust uitgeschreven
+        // (#286d): de test mag niet meeschuiven met de expressie of met Strength.
+        Assert.Equal(1, InteractionProjection.ToQualifiers(Ix(InteractionStatus.Verified)).Tier);
+        Assert.Equal(1, InteractionProjection.ToQualifiers(Ix(InteractionStatus.Promoted)).Tier);
+        Assert.Equal(2, InteractionProjection.ToQualifiers(Ix(InteractionStatus.Candidate)).Tier);
+        Assert.Equal(2, InteractionProjection.ToQualifiers(
+            Ix(InteractionStatus.ModelHypothesizedUnruled)).Tier);
+    }
+
+    [Fact]
     public void Projection_IsRebuildableFromInteraction_Deterministic()
     {
         var ix = Ix(InteractionStatus.Promoted, Cond(InteractionConditionKinds.Window, "Showdown"));

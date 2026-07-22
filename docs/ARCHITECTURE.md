@@ -2746,7 +2746,12 @@ nachtrun:
      candidate wordt bij een gegrond negatief verdict nog gewoon verworpen mét
      grafsteen (flip-flop-suppressie), want dat is pipeline-verloop van een
      voorstel, geen demotie van een vastgesteld feit. De audit + reviewqueue
-     leveren degradaties van promoties, nooit de poort zelf.
+     leveren degradaties van promoties, nooit de poort zelf — al is dat kanaal
+     vandaag alleen nog kijkend: de conflicts-queue is GET-only en
+     `LiftTombstonesAsync` is onbedraad, dus de uitvoerbare degradatie-actie is
+     #338. En de audit-pool zelf (`BreinInteractionAuditService`) sampelt
+     vandaag alleen `promoted`-rijen — zodra er een verified-schrijver bestaat,
+     hoort de verified-tier in die pool mee.
   *Wat de soort-poorten NIET garanderen* (restrisico's, bewust aanvaard en in
   de code gedocumenteerd): een anker-woord elders in dezelfde dragende eenheid
   over iets ánders passeert poort A ("has" in een voorbeeldzin die een

@@ -172,10 +172,11 @@ public static class ReifiedInteractionDisplay
         if (row.GovernedByRef is { Length: > 0 } governed)
             parts.Add($"Verankerd in {governed}.");
 
-        // Alleen bij de lagere tier vermelden: "promoted" is de norm en hoeft
-        // geen slag om de arm, "verified" wacht nog op de promotiepoort.
+        // Verified is de STERKSTE tier (#332-orde: verified > promoted, zie
+        // InteractionStatus.Strength) — het vermelden waard als extra vertrouwen.
+        // "Promoted" is de norm en blijft stil.
         if (row.Status == InteractionStatus.Verified)
-            parts.Add("Geverifieerd, nog niet gepromoveerd.");
+            parts.Add("Geverifieerd.");
 
         return string.Join(" ", parts);
     }

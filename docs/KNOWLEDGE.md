@@ -195,7 +195,8 @@ topic_type="tactic", en graph-edges Card—STAPLE_IN→Archetype.
   laat de rij ongemoeid en schrijft alleen een beslissings-memo, zonder
   tombstone (wat de rij niet mag verlagen, mag haar sleutel ook niet duurzaam
   sluiten). Degradaties van promoties komen uit de audit + reviewqueue, nooit
-  uit de poort zelf.
+  uit de poort zelf — al kan de reviewqueue die beslissing vandaag alleen nog
+  tónen, niet uitvoeren (de uitvoerbare degradatie-actie is #338).
 
 ## Evolutie-raamwerk: de bank groeit met het spel mee
 
