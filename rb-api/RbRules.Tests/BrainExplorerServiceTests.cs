@@ -125,6 +125,43 @@ public class BrainExplorerServiceTests
     }
 
     [Fact]
+    public async Task Cockpit_GroepeertUsagePerProviderEnEenheid()
+    {
+        using var db = NewDb();
+        db.MiningRuns.AddRange(
+            new MiningRun
+            {
+                Id = "u1", Kind = "interaction", LlmProvider = "codex-sdk",
+                LlmModel = "gpt-5.3-codex", LlmCalls = 2,
+                InputTokens = 100, OutputTokens = 20, UsageUnit = "tokens",
+            },
+            new MiningRun
+            {
+                Id = "u2", Kind = "mechanic", LlmProvider = "codex-sdk",
+                LlmModel = "gpt-5.3-codex", LlmCalls = 3,
+                InputTokens = 250, OutputTokens = 40, UsageUnit = "tokens",
+                CostUsd = 0.25m,
+            },
+            new MiningRun
+            {
+                Id = "u3", Kind = "interaction_audit", LlmProvider = "claude-agent-sdk",
+                LlmModel = "claude-opus-4-8", LlmCalls = 1,
+                InputTokens = 50, OutputTokens = 5, UsageUnit = "tokens",
+            });
+        await db.SaveChangesAsync();
+
+        var c = await new BrainExplorerService(db).CockpitAsync(retrievalEnabled: false);
+
+        var codex = Assert.Single(c.ProviderUsage!, x => x.Provider == "codex-sdk");
+        Assert.Equal(2, codex.Runs);
+        Assert.Equal(5, codex.Calls);
+        Assert.Equal(350, codex.InputTokens);
+        Assert.Equal(60, codex.OutputTokens);
+        Assert.Equal(0.25m, codex.CostUsd);
+        Assert.Single(c.ProviderUsage!, x => x.Provider == "claude-agent-sdk");
+    }
+
+    [Fact]
     public async Task Entities_TombstoneKrijgtDoellabelEnFiltert()
     {
         using var db = NewDb();

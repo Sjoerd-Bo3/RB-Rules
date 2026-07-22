@@ -146,7 +146,12 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         // Assertion draagt in Postgres altijd WAS_GENERATED_BY + DERIVED_FROM
         // (schrijfpoort), dus de edges hieronder resolveren per constructie.
         var miningRuns = await db.MiningRuns.AsNoTracking()
-            .Select(r => new { r.Id, r.Kind, r.LlmModel, r.PromptVersion, r.StartedAt, r.CompletedAt })
+            .Select(r => new
+            {
+                r.Id, r.Kind, r.LlmProvider, r.LlmModelAlias, r.LlmModel,
+                r.LlmCalls, r.InputTokens, r.OutputTokens, r.UsageUnit, r.CostUsd,
+                r.PromptVersion, r.StartedAt, r.CompletedAt,
+            })
             .ToListAsync(ct);
         var assertions = await db.Assertions.AsNoTracking()
             .Select(a => new
@@ -423,7 +428,14 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
             ["ref"] = BrainRef.MiningRun(r.Id).Format(),
             ["id"] = r.Id,
             ["kind"] = r.Kind,
+            ["llmProvider"] = r.LlmProvider,
+            ["llmModelAlias"] = r.LlmModelAlias,
             ["llmModel"] = r.LlmModel,
+            ["llmCalls"] = r.LlmCalls,
+            ["inputTokens"] = r.InputTokens,
+            ["outputTokens"] = r.OutputTokens,
+            ["usageUnit"] = r.UsageUnit,
+            ["costUsd"] = r.CostUsd,
             ["promptVersion"] = r.PromptVersion,
             ["startedAt"] = r.StartedAt.UtcDateTime.ToString("o"),
             ["completedAt"] = r.CompletedAt?.UtcDateTime.ToString("o"),
@@ -604,7 +616,11 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
         await RunRowsAsync(tx,
             """
             CREATE (r:MiningRun {ref: row.ref, id: row.id, kind: row.kind,
-                                 llmModel: row.llmModel, promptVersion: row.promptVersion,
+                                 llmProvider: row.llmProvider, llmModelAlias: row.llmModelAlias,
+                                 llmModel: row.llmModel, llmCalls: row.llmCalls,
+                                 inputTokens: row.inputTokens, outputTokens: row.outputTokens,
+                                 usageUnit: row.usageUnit, costUsd: row.costUsd,
+                                 promptVersion: row.promptVersion,
                                  startedAt: row.startedAt, completedAt: row.completedAt})
             """,
             miningRunRows);

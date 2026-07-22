@@ -33,6 +33,12 @@ public sealed record BrainOverviewCounts(
 /// JobRunner-snapshot) en toont dus ook de automatische scheduler-runs.</summary>
 public sealed record BrainJobRunItem(string Name, string Status, string? Detail, DateTimeOffset At);
 
+/// <summary>Provider-aware usage van brein-miningruns (#325). Unit blijft expliciet
+/// zodat tokens, abonnementquotum en latere premium requests niet op één hoop komen.</summary>
+public sealed record BrainProviderUsageItem(
+    string Provider, string Unit, int Runs, int Calls,
+    long InputTokens, long OutputTokens, decimal? CostUsd);
+
 /// <summary>De operationele brein-cockpit (brein-jobs-ui): per-stap-tellingen +
 /// laatste-run per brein-job + de /ask-retrieval-flag. READ-ONLY en additief bovenop
 /// het bestaande overzicht. De pipeline is 1→2→3: extractie (interacties + mechanic-
@@ -61,7 +67,8 @@ public sealed record BrainCockpit(
     BrainJobRunItem? NightlyRun = null,
     // Steekproef-audit (#255): aantal geveld oordelen + laatste audit-run.
     int InteractionAudits = 0,
-    BrainJobRunItem? AuditRun = null);
+    BrainJobRunItem? AuditRun = null,
+    IReadOnlyList<BrainProviderUsageItem>? ProviderUsage = null);
 
 /// <summary>Eén canonieke entiteit in de verkenner: canoniek label + alias-lexicon
 /// + merge-status. <see cref="MergedIntoLabel"/> is het label van de overlevende
@@ -106,7 +113,9 @@ public sealed record BrainInteractionsPage(
 
 /// <summary>Eén PROV-O-mining-run in de provenance-keten (WAS_GENERATED_BY-doel).</summary>
 public sealed record BrainMiningRunItem(
-    string Id, string Kind, string? LlmModel, string? PromptVersion, string? EmbeddingModel,
+    string Id, string Kind, string? LlmProvider, string? LlmModelAlias, string? LlmModel,
+    int LlmCalls, long? InputTokens, long? OutputTokens, string? UsageUnit,
+    decimal? CostUsd, string? PromptVersion, string? EmbeddingModel,
     string? VocabSnapshot, string? GitSha, DateTimeOffset StartedAt, DateTimeOffset? CompletedAt,
     int Candidates, int Verified, int Rejected);
 
@@ -226,6 +235,28 @@ public class BrainExplorerService(RbRulesDbContext db)
                 },
                 StringComparer.Ordinal);
 
+        var usageRows = await db.MiningRuns.AsNoTracking()
+            .Where(r => r.LlmProvider != null)
+            .Select(r => new
+            {
+                Provider = r.LlmProvider!,
+                Unit = r.UsageUnit ?? "onbekend",
+                r.LlmCalls,
+                r.InputTokens,
+                r.OutputTokens,
+                r.CostUsd,
+            })
+            .ToListAsync(ct);
+        var providerUsage = usageRows
+            .GroupBy(r => new { r.Provider, r.Unit })
+            .OrderBy(g => g.Key.Provider, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.Unit, StringComparer.Ordinal)
+            .Select(g => new BrainProviderUsageItem(
+                g.Key.Provider, g.Key.Unit, g.Count(), g.Sum(r => r.LlmCalls),
+                g.Sum(r => r.InputTokens ?? 0), g.Sum(r => r.OutputTokens ?? 0),
+                g.Any(r => r.CostUsd is not null) ? g.Sum(r => r.CostUsd ?? 0) : null))
+            .ToList();
+
         return new BrainCockpit(
             Interactions: await db.Interactions.CountAsync(ct),
             MechanicPredicates: await db.MechanicPredicates.CountAsync(ct),
@@ -241,7 +272,8 @@ public class BrainExplorerService(RbRulesDbContext db)
             RetrievalEnabled: retrievalEnabled,
             NightlyRun: lastByJob.GetValueOrDefault("nachtrun"),
             InteractionAudits: await db.InteractionAudits.CountAsync(ct),
-            AuditRun: lastByJob.GetValueOrDefault("breinaudit-interacties"));
+            AuditRun: lastByJob.GetValueOrDefault("breinaudit-interacties"),
+            ProviderUsage: providerUsage);
     }
 
     /// <summary>Canonieke entiteiten met alias-lexicon en merge-status, gepagineerd.
@@ -428,7 +460,10 @@ public class BrainExplorerService(RbRulesDbContext db)
             a.Id, a.Subject, a.FactKind, a.MiningRunId, a.DerivedFromRef, a.DerivedFromDocumentId,
             a.Model, a.PromptVersion, a.Verifier, a.Verdict, a.EvidenceSpan, a.ValidFrom, a.AssertedAt,
             a.MiningRun is null ? null : new BrainMiningRunItem(
-                a.MiningRun.Id, a.MiningRun.Kind, a.MiningRun.LlmModel, a.MiningRun.PromptVersion,
+                a.MiningRun.Id, a.MiningRun.Kind, a.MiningRun.LlmProvider,
+                a.MiningRun.LlmModelAlias, a.MiningRun.LlmModel, a.MiningRun.LlmCalls,
+                a.MiningRun.InputTokens, a.MiningRun.OutputTokens, a.MiningRun.UsageUnit,
+                a.MiningRun.CostUsd, a.MiningRun.PromptVersion,
                 a.MiningRun.EmbeddingModel, a.MiningRun.VocabSnapshot, a.MiningRun.GitSha,
                 a.MiningRun.StartedAt, a.MiningRun.CompletedAt, a.MiningRun.Candidates,
                 a.MiningRun.Verified, a.MiningRun.Rejected))).ToList();

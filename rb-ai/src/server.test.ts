@@ -21,7 +21,18 @@ import type { ExtractOutcome } from "./ai.js";
 // Vóór de import: server.ts leest PORT bij module-load en gaat meteen
 // luisteren; 0 = een vrije efemere poort, zodat de suite nergens mee botst.
 process.env.PORT = "0";
+// Isoleer de module-singletons van de shell waarin de tests draaien en boot ze
+// bewust met uitsluitend een genummerd Claude-slot. Zo bewijst /health dat het
+// nieuwe registry-oordeel wordt gebruikt, niet de oude ongenummerde env-check.
+const authKeys = Object.keys(process.env).filter((key) =>
+  /^(?:CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|CODEX_ACCESS_TOKEN|CODEX_HOME)(?:_\d+)?$/.test(key));
+const savedAuth = new Map(authKeys.map((key) => [key, process.env[key]]));
+for (const key of authKeys) delete process.env[key];
+process.env.CLAUDE_CODE_OAUTH_TOKEN_325 = "health-test-numbered-account";
 const { deps, server } = await import("./server.js");
+delete process.env.CLAUDE_CODE_OAUTH_TOKEN_325;
+for (const [key, value] of savedAuth)
+  if (value !== undefined) process.env[key] = value;
 const realExtract = deps.extractWithTool;
 
 let base = "";
@@ -53,6 +64,17 @@ const post = async (path: string, body: unknown) => {
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 };
+
+test("GET /health is configured met uitsluitend een genummerd account", async () => {
+  const res = await fetch(`${base}/health`);
+  assert.equal(res.status, 200);
+  const body = await res.json() as Record<string, unknown>;
+  assert.equal(body.configured, true);
+  assert.equal(
+    (body.providers as Record<string, unknown>)["claude-agent-sdk"],
+    true,
+  );
+});
 
 const interactionRequest = {
   system: "systeemprompt",

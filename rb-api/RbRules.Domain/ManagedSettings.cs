@@ -14,6 +14,11 @@ public static class SettingKeys
     /// kunnen bijstellen zonder deploy.</summary>
     public const string BreinAuditSampleN = "brein.audit.sample_n";
 
+    /// <summary>Gesloten model-alias voor de tool-forced brein-extractie (#325).
+    /// rb-ai resolveert de alias naar provider + concreet model; model-id's zijn
+    /// hier bewust niet vrij invoerbaar.</summary>
+    public const string BreinExtractModel = "brein.extract.model";
+
     /// <summary>Noodrem op de AUTOMATISCHE nachtrun (was <c>NIGHTLY_ENABLED</c>).
     /// Handmatig starten via de beheer-knop blijft altijd werken.</summary>
     public const string NightlyEnabled = "nightly.enabled";
@@ -34,6 +39,8 @@ public enum SettingKind
     /// <summary>Klein positief geheel getal (1 t/m 100) — bv. de
     /// audit-steekproefdichtheid "1 op de N" (#255).</summary>
     Count,
+    /// <summary>Keuze uit de gesloten <see cref="SettingDefinition.Options"/>.</summary>
+    Choice,
 }
 
 /// <summary>Eén beheerbare instelling: wat hij heet, wat hij betekent en waar hij in
@@ -43,7 +50,25 @@ public enum SettingKind
 /// <param name="Group">Groep in de beheer-UI: <c>brein</c> (cockpit) of
 /// <c>nachtrun</c> (jobs-paneel).</param>
 public sealed record SettingDefinition(
-    string Key, SettingKind Kind, string Group, string Label, string Description);
+    string Key, SettingKind Kind, string Group, string Label, string Description,
+    IReadOnlyList<string>? Options = null);
+
+/// <summary>Stabiele aliases aan de rb-api-grens (#325). Alleen rb-ai kent de
+/// provider/model-id-mapping; deze lijst voorkomt dat beheer een vrije string tot
+/// aan een SDK of externe API kan laten reizen.</summary>
+public static class BreinExtractModelAliases
+{
+    public const string Sonnet = "sonnet";
+    public const string Opus = "opus";
+    public const string Fable = "fable";
+    public const string Codex = "codex";
+
+    public static readonly IReadOnlyList<string> All =
+        [Sonnet, Opus, Fable, Codex];
+
+    public static bool IsValid(string? value) =>
+        value is not null && All.Contains(value, StringComparer.Ordinal);
+}
 
 /// <summary>Het resultaat van het valideren/normaliseren van één ingevoerde waarde.
 /// <see cref="Value"/> is de GENORMALISEERDE opslagvorm ("true"/"false", "22",
@@ -74,6 +99,11 @@ public static class ManagedSettingsCatalog
             "Welk deel van de gepromoveerde interacties het sterkere model beoordeelt "
             + "(1 = alles, 10 = een tiende). De audit meet alleen — hij promoveert of "
             + "degradeert nooit zelf."),
+        new(SettingKeys.BreinExtractModel, SettingKind.Choice, "brein",
+            "Extractiemodel",
+            "Model-alias voor interactie- en predicaatextractie. De alias resolveert "
+            + "in rb-ai naar een vaste provider en model-id; vrije modelnamen zijn niet toegestaan.",
+            BreinExtractModelAliases.All),
         new(SettingKeys.NightlyEnabled, SettingKind.Bool, "nachtrun",
             "Automatische nachtrun",
             "Mag de scheduler de nachtrun zelf starten binnen het venster? Uit = de "
@@ -115,6 +145,10 @@ public static class ManagedSettingsCatalog
             SettingKind.Count => int.TryParse(v, out var n) && n is >= 1 and <= 100
                 ? SettingParse.Success(n.ToString())
                 : SettingParse.Fail($"'{v}' is geen aantal (1 t/m 100)."),
+            SettingKind.Choice => def.Options?.Contains(v, StringComparer.Ordinal) == true
+                ? SettingParse.Success(v)
+                : SettingParse.Fail($"'{v}' is geen geldige keuze voor '{def.Label}' "
+                    + $"(kies {string.Join(", ", def.Options ?? [])})."),
             _ => SettingParse.Fail($"Onbekend waardetype voor '{key}'."),
         };
     }

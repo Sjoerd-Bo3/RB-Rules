@@ -28,6 +28,46 @@ public class RbAiOutcomeTests
     }
 
     [Fact]
+    public async Task Extractie_LeestProviderModelUsageEnKostenUitSuccesrespons()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.OK,
+            """{"interactions":[],"provider":"codex-sdk","model":"gpt-5.3-codex","usage":{"inputTokens":120,"outputTokens":17,"unit":"tokens","costUsd":0.01234567}}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal("codex-sdk", r.Provider);
+        Assert.Equal("gpt-5.3-codex", r.Model);
+        Assert.Equal(120, r.Usage?.InputTokens);
+        Assert.Equal(17, r.Usage?.OutputTokens);
+        Assert.Equal("tokens", r.Usage?.Unit);
+        Assert.Equal(0.01234567m, r.Usage?.CostUsd);
+    }
+
+    [Fact]
+    public async Task Extractie_BestaandeArrayrespons_BlijftGeldigZonderMetadata()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.OK, "[]"));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Ok, r.Outcome);
+        Assert.Equal("[]", r.Raw);
+        Assert.Null(r.Provider);
+        Assert.Null(r.Usage);
+    }
+
+    [Fact]
+    public async Task Extractie_AfgekaptJsonDatMetObjectBegint_IsOnleesbaar()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.OK, "{\"interactions\":["));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.Unparseable, r.Outcome);
+        Assert.Null(r.Raw);
+    }
+
+    [Fact]
     public async Task Extractie_200MetOnleesbareBody_IsParsefout_GeenServerfout()
     {
         // Tool-forced output die niet valideert kwam vroeger als dezelfde null
@@ -50,6 +90,22 @@ public class RbAiOutcomeTests
 
         Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
         Assert.Equal(500, r.StatusCode);
+    }
+
+    [Fact]
+    public async Task Extractie_Foutrespons_BehoudtProviderModelEnUsage()
+    {
+        var ai = Ai(_ => Json(HttpStatusCode.InternalServerError,
+            """{"error":"mislukt","reason":"api_error","provider":"codex-sdk","model":"gpt-5.6-sol","usage":{"inputTokens":25,"outputTokens":4,"unit":"tokens"}}"""));
+
+        var r = await ai.ExtractStructuredDetailedAsync("/extract/interactions", new { });
+
+        Assert.Equal(AiCallOutcome.ServerError, r.Outcome);
+        Assert.Equal("api_error", r.Reason);
+        Assert.Equal("codex-sdk", r.Provider);
+        Assert.Equal("gpt-5.6-sol", r.Model);
+        Assert.Equal(25, r.Usage?.InputTokens);
+        Assert.Equal(4, r.Usage?.OutputTokens);
     }
 
     [Fact]

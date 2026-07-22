@@ -17,6 +17,11 @@ import {
   type QueryRunner,
 } from "./ai.js";
 import { failureOf, logCall, StderrTail } from "./failure.js";
+import { claudeRateLimitSignal } from "./providers/claude-agent.js";
+import {
+  ClaudeAccountRouter,
+  type ClaudeAccountEnvironment,
+} from "./providers/claude-accounts.js";
 import { pushableInput, WarmPool, type WarmBootHandle } from "./warmpool.js";
 
 async function* stream(...messages: unknown[]) {
@@ -277,7 +282,7 @@ test("collectAnswer: text-deltas gaan naar onDelta, niet dubbel in het antwoord"
 });
 
 test("collectAnswer: sawOutput blijft false bij alleen systeemberichten (dode warme sessie)", async () => {
-  const progress: CollectProgress = { sawOutput: false };
+  const progress: CollectProgress = { sawOutput: false, deliveredText: false };
   const res = await collectAnswer(
     stream({ type: "system", subtype: "init" }),
     undefined,
@@ -285,7 +290,7 @@ test("collectAnswer: sawOutput blijft false bij alleen systeemberichten (dode wa
   );
   assert.equal(progress.sawOutput, false, "geen output ⇒ ai.ts mag veilig koud herstarten");
   assert.equal(res.answer, "");
-  const progress2: CollectProgress = { sawOutput: false };
+  const progress2: CollectProgress = { sawOutput: false, deliveredText: false };
   await collectAnswer(stream({ type: "result", result: "x" }), undefined, progress2);
   assert.equal(progress2.sawOutput, true);
 });
@@ -552,6 +557,161 @@ function noWarmPool(): WarmPool {
     log: () => {},
   });
 }
+
+test("/ask routeert elke taak geïsoleerd en valt na accountauth-fout over", async () => {
+  for (const task of ["cheap", "hard", "research", "agentic"] as const) {
+    const environments: ClaudeAccountEnvironment[] = [
+      Object.freeze({
+        CLAUDE_CODE_OAUTH_TOKEN: "account-a",
+        HOME: "/tmp/claude-a",
+        CLAUDE_CONFIG_DIR: "/tmp/claude-a",
+      }),
+      Object.freeze({
+        CLAUDE_CODE_OAUTH_TOKEN: "account-b",
+        HOME: "/tmp/claude-b",
+        CLAUDE_CONFIG_DIR: "/tmp/claude-b",
+      }),
+    ];
+    const router = new ClaudeAccountRouter(environments.map((environment) => ({
+      environment,
+      quotaReader: { read: async () => null },
+    })));
+    const attempts: string[] = [];
+    const runQuery: AskQueryRunner = ({ options }) => {
+      const env = options.env ?? {};
+      const credential = env.CLAUDE_CODE_OAUTH_TOKEN;
+      assert.ok(credential, `task=${task} kreeg geen accountgebonden omgeving`);
+      attempts.push(credential);
+      assert.equal("ANTHROPIC_API_KEY" in env, false);
+      assert.equal("DATABASE_URL" in env, false);
+      assert.equal(options.persistSession, false);
+      assert.deepEqual(options.settingSources, []);
+      if (credential === "account-a")
+        return stream(
+          {
+            type: "assistant",
+            error: "authentication_failed",
+            message: { content: [] },
+          },
+          failedResult,
+        );
+      return stream({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: `ok-${task}`,
+      });
+    };
+
+    const result = await askClaude({
+      prompt: "vraag",
+      task,
+      accountRouter: router,
+      pool: noWarmPool(),
+      runQuery,
+    });
+
+    assert.equal(result.answer, `ok-${task}`);
+    assert.deepEqual(attempts, ["account-a", "account-b"], `task=${task}`);
+    assert.equal(router.health().inFlight, 0, `task=${task} lekte een lease`);
+  }
+});
+
+test("Claude rate-limit-event normaliseert fractie naar percentage", () => {
+  assert.deepEqual(
+    claudeRateLimitSignal({
+      type: "rate_limit_event",
+      rate_limit_info: { status: "allowed_warning", utilization: 0.82 },
+    }),
+    { status: "allowed_warning", utilization: 82 },
+  );
+  assert.equal(
+    claudeRateLimitSignal({
+      type: "rate_limit_event",
+      rate_limit_info: { status: "allowed_warning", utilization: 82 },
+    })?.utilization,
+    82,
+  );
+});
+
+test("/ask valt over na lege rate-limit-uitval, ook al waren er protocolframes", async () => {
+  const environments: ClaudeAccountEnvironment[] = [
+    Object.freeze({ CLAUDE_CODE_OAUTH_TOKEN: "account-a", HOME: "/tmp/claude-a" }),
+    Object.freeze({ CLAUDE_CODE_OAUTH_TOKEN: "account-b", HOME: "/tmp/claude-b" }),
+  ];
+  const router = new ClaudeAccountRouter(environments.map((environment) => ({
+    environment,
+    quotaReader: { read: async () => null },
+  })));
+  const attempts: string[] = [];
+  const runQuery: AskQueryRunner = ({ options }) => {
+    const credential = options.env?.CLAUDE_CODE_OAUTH_TOKEN as string;
+    attempts.push(credential);
+    if (credential === "account-a")
+      return stream(
+        {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", utilization: 1 },
+        },
+        failedResult,
+      );
+    return stream({ type: "result", subtype: "success", is_error: false, result: "ok" });
+  };
+
+  const result = await askClaude({
+    prompt: "vraag",
+    accountRouter: router,
+    pool: noWarmPool(),
+    runQuery,
+  });
+  assert.equal(result.answer, "ok");
+  assert.deepEqual(attempts, ["account-a", "account-b"]);
+});
+
+test("/ask valt niet over nadat een stream-delta al aan de client is geleverd", async () => {
+  const environments: ClaudeAccountEnvironment[] = [
+    Object.freeze({ CLAUDE_CODE_OAUTH_TOKEN: "account-a", HOME: "/tmp/claude-a" }),
+    Object.freeze({ CLAUDE_CODE_OAUTH_TOKEN: "account-b", HOME: "/tmp/claude-b" }),
+  ];
+  const router = new ClaudeAccountRouter(environments.map((environment) => ({
+    environment,
+    quotaReader: { read: async () => null },
+  })));
+  const attempts: string[] = [];
+  const deltas: string[] = [];
+  const runQuery: AskQueryRunner = ({ options }) => {
+    attempts.push(options.env?.CLAUDE_CODE_OAUTH_TOKEN as string);
+    return stream(
+      {
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "deelantwoord" },
+        },
+      },
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { status: "rejected", utilization: 1 },
+      },
+      failedResult,
+    );
+  };
+
+  await assert.rejects(
+    askClaude({
+      prompt: "vraag",
+      accountRouter: router,
+      onDelta: (text) => {
+        deltas.push(text);
+      },
+      pool: noWarmPool(),
+      runQuery,
+    }),
+    (error: unknown) => failureOf(error).reason === "api_error",
+  );
+  assert.deepEqual(deltas, ["deelantwoord"]);
+  assert.deepEqual(attempts, ["account-a"]);
+});
 
 /** Warme pool met bestuurbare sessies: elke boot krijgt een eigen staart en een
  * eigen berichtenkraan, zodat een test kan naspelen wat een echte warme sessie

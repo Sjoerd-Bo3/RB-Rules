@@ -714,6 +714,13 @@ test("failure.ts is de ENIGE module in rb-ai die naar stdout schrijft", () => {
     .map(String)
     .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== "failure.ts");
   assert.ok(modules.length >= 5, `verwacht meerdere modules, kreeg ${modules.length}`);
+  const providerModules = modules.filter((name) => /^providers[\\/]/.test(name));
+  assert.ok(
+    providerModules.includes("providers/claude-agent.ts")
+      && providerModules.includes("providers/codex.ts")
+      && providerModules.includes("providers/registry.ts"),
+    `recursieve secret/log-scan heeft providers/ niet bereikt: ${providerModules.join(", ")}`,
+  );
 
   const schrijvers = new RegExp(STDOUT_PATROON, "g");
   for (const naam of modules) {

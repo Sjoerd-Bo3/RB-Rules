@@ -104,6 +104,7 @@ public class BreinInteractionAuditService(
         {
             Id = Ulid.NewUlid(),
             Kind = FactKinds.InteractionAudit,
+            LlmModelAlias = BreinExtractModelAliases.Opus,
             LlmModel = AuditModel,
             PromptVersion = promptVersion,
         };
@@ -114,6 +115,11 @@ public class BreinInteractionAuditService(
 
         var tally = new AiOutcomeTally();
         int audited = 0, sound = 0, disputed = 0, failed = 0;
+        int llmCalls = 0;
+        long inputTokens = 0, outputTokens = 0;
+        decimal costUsd = 0;
+        bool hasUsage = false, hasCost = false;
+        string? provider = null, actualModel = null, usageUnit = null;
         var stoppedOnDeadline = false;
 
         foreach (var (interaction, index) in selected.Select((x, i) => (x, i)))
@@ -131,6 +137,21 @@ public class BreinInteractionAuditService(
             var call = await ai.ExtractStructuredDetailedAsync(
                 "/audit/interaction",
                 new { system = InteractionAuditExtraction.SystemPrompt, text }, ct);
+            llmCalls++;
+            provider ??= call.Provider;
+            actualModel = call.Model ?? actualModel;
+            if (call.Usage is { } usage)
+            {
+                hasUsage = true;
+                inputTokens += usage.InputTokens;
+                outputTokens += usage.OutputTokens;
+                usageUnit ??= usage.Unit;
+                if (usage.CostUsd is { } cost)
+                {
+                    hasCost = true;
+                    costUsd += cost;
+                }
+            }
             if (call.Raw is null)
             {
                 // Degradatie (#249-les): géén audit-rij — dus géén watermark — bij
@@ -163,7 +184,7 @@ public class BreinInteractionAuditService(
             {
                 InteractionId = interaction.Id,
                 RunId = run.Id,
-                Model = AuditModel,
+                Model = call.Model ?? AuditModel,
                 PromptVersion = promptVersion,
                 Correct = verdict.Correct,
                 SupportedByEvidence = verdict.SupportedByEvidence,
@@ -171,7 +192,8 @@ public class BreinInteractionAuditService(
                 InteractionStatusAtAudit = interaction.Status,
             });
             if (!(verdict.Correct && verdict.SupportedByEvidence))
-                await QueueDisputeAsync(interaction, verdict, run.Id, ct);
+                await QueueDisputeAsync(
+                    interaction, verdict, call.Model ?? AuditModel, run.Id, ct);
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
         }
@@ -179,6 +201,13 @@ public class BreinInteractionAuditService(
         run.Candidates = audited + failed; // aangeboden aan het model
         run.Verified = sound;
         run.Rejected = disputed;
+        run.LlmCalls = llmCalls;
+        run.LlmProvider = provider;
+        run.LlmModel = actualModel ?? AuditModel;
+        run.InputTokens = hasUsage ? inputTokens : null;
+        run.OutputTokens = hasUsage ? outputTokens : null;
+        run.UsageUnit = hasUsage ? usageUnit : null;
+        run.CostUsd = hasCost ? costUsd : null;
         run.CompletedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
 
@@ -201,7 +230,7 @@ public class BreinInteractionAuditService(
     /// dedupe mee herzien worden — anders verdwijnt een héér-dispute na een
     /// prompt-bump onzichtbaar achter de afgehandelde rij.</summary>
     private async Task QueueDisputeAsync(
-        Interaction interaction, InteractionAuditVerdict verdict, string runId,
+        Interaction interaction, InteractionAuditVerdict verdict, string model, string runId,
         CancellationToken ct)
     {
         var subjectRef = interaction.Ref.Format();
@@ -216,7 +245,7 @@ public class BreinInteractionAuditService(
             Channel = ConflictRouter.ChannelString(ConflictRouter.Route(kind)),
             SubjectRef = subjectRef,
             CounterRef = null,
-            Memo = $"steekproef-audit ({AuditModel}, {InteractionAuditExtraction.PromptVersion}): "
+            Memo = $"steekproef-audit ({model}, {InteractionAuditExtraction.PromptVersion}): "
                 + $"correct={(verdict.Correct ? "ja" : "nee")}, "
                 + $"gedragen={(verdict.SupportedByEvidence ? "ja" : "nee")}"
                 + (string.IsNullOrWhiteSpace(verdict.Motivation) ? "" : $" — {verdict.Motivation}"),

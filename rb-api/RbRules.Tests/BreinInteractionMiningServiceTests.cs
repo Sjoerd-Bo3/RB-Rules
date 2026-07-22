@@ -1078,6 +1078,37 @@ public class BreinInteractionMiningServiceTests
         Assert.Contains("meting:", r.Summary);
     }
 
+    [Fact]
+    public async Task RunAsync_BeheerdeAliasReistMee_EnProviderUsageLandtOpRun()
+    {
+        using var db = NewDb();
+        await SeedCardAsync(db, "ogn-325", "Provider Test", "Unit",
+            "Deflect prevents Assault damage.", ["Deflect", "Assault"]);
+        var bodies = new List<string>();
+        var managed = new ManagedSettingsService(seed: new Dictionary<string, string>
+        {
+            [SettingKeys.BreinExtractModel] = BreinExtractModelAliases.Codex,
+        });
+        var svc = new BreinInteractionMiningService(
+            db,
+            CapturingAi(bodies, () =>
+                """{"interactions":[],"provider":"codex-sdk","model":"gpt-5.3-codex","usage":{"inputTokens":80,"outputTokens":12,"unit":"tokens"}}"""),
+            new EntityResolutionService(db), new InteractionPromotionService(db),
+            managedSettings: managed);
+
+        await svc.RunAsync(maxFocusCards: 1, maxMechanicSubjects: 0);
+
+        using var payload = JsonDocument.Parse(Assert.Single(bodies));
+        Assert.Equal("codex", payload.RootElement.GetProperty("model").GetString());
+        var run = await db.MiningRuns.SingleAsync();
+        Assert.Equal("codex", run.LlmModelAlias);
+        Assert.Equal("codex-sdk", run.LlmProvider);
+        Assert.Equal("gpt-5.3-codex", run.LlmModel);
+        Assert.Equal(1, run.LlmCalls);
+        Assert.Equal(80, run.InputTokens);
+        Assert.Equal(12, run.OutputTokens);
+    }
+
     // ── testinfra ─────────────────────────────────────────────────────────────
 
     private static BreinInteractionMiningService Service(RbRulesDbContext db, Func<string?> body) =>

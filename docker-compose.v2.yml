@@ -30,11 +30,28 @@ services:
   rb-ai:
     build: ./rb-ai
     environment:
+      # Ongenummerd = compatibele single-accountmodus. Zodra een genummerd
+      # slot niet-leeg is, negeert rb-ai de ongenummerde waarden voor die provider.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN_1: ${CLAUDE_CODE_OAUTH_TOKEN_1:-}
+      ANTHROPIC_API_KEY_1: ${ANTHROPIC_API_KEY_1:-}
+      CLAUDE_CODE_OAUTH_TOKEN_2: ${CLAUDE_CODE_OAUTH_TOKEN_2:-}
+      ANTHROPIC_API_KEY_2: ${ANTHROPIC_API_KEY_2:-}
+      CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}
+      CODEX_HOME: ${CODEX_HOME:-}
+      CODEX_ACCESS_TOKEN_1: ${CODEX_ACCESS_TOKEN_1:-}
+      CODEX_HOME_1: ${CODEX_HOME_1:-}
+      CODEX_ACCESS_TOKEN_2: ${CODEX_ACCESS_TOKEN_2:-}
+      CODEX_HOME_2: ${CODEX_HOME_2:-}
       # Brein-tools (#106/#107): de agentic-taak praat via de brein-API terug
       # met rb-api (compose-intern).
       RB_API_URL: http://rb-api:8080
+    volumes:
+      # Alleen gebruikt wanneer CODEX_HOME_1/2 naar deze containerpaden wijst.
+      # Elk account heeft een eigen schrijfbare auth/state-directory.
+      - codexhome1_v2:/var/lib/rb-ai/codex-1
+      - codexhome2_v2:/var/lib/rb-ai/codex-2
     # geen ports: alleen intern bereikbaar
 
   postgres:
@@ -78,3 +95,5 @@ volumes:
   pgdata_v2:
   neo4jdata_v2:
   ollamadata_v2:
+  codexhome1_v2:
+  codexhome2_v2:

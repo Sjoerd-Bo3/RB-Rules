@@ -1,8 +1,8 @@
-// rb-ai: interne AI-sidecar. Draait de Claude Agent SDK op het abonnement
-// (CLAUDE_CODE_OAUTH_TOKEN) zodat rb-api (.NET) geen per-token API-key nodig
-// heeft. Alleen bereikbaar binnen het compose-netwerk — nooit publiek exposen.
+// rb-ai: interne AI-sidecar. Bezit de Claude Agent SDK- en Codex SDK/CLI-
+// runtimes plus hun geïsoleerde credentials; rb-api (.NET) ziet alleen dit
+// smalle HTTP-contract. Alleen compose-intern bereikbaar — nooit publiek.
 import { createServer } from "node:http";
-import { askClaude, extractWithTool, warmPool } from "./ai.js";
+import { askClaude, extractWithTool, providerRegistry, warmPool } from "./ai.js";
 import { aiSemaphore, ConcurrencyLimitError } from "./concurrency.js";
 import {
   extractFailureResponse,
@@ -95,6 +95,11 @@ export const server = createServer(async (req, res) => {
     task?: string;
     rejected?: number;
     rejectedConditions?: number;
+    provider?: string;
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    costUsd?: number;
   } = {};
   const note = (status: number, failure?: AiFailure) => {
     if (logged || !LOGGED_PATHS.has(path)) return;
@@ -132,9 +137,41 @@ export const server = createServer(async (req, res) => {
 
   /** Uitval van een extractie-endpoint. De beslissing zelf woont in
    * `extractFailureResponse` (puur, gedragsgetest); hier alleen de bedrading. */
-  const sendExtractFailure = (outcome: { failure?: AiFailure; timedOut?: boolean }) => {
+  const extractMeta = (outcome: {
+    provider?: string;
+    model?: string;
+    usage?: { inputTokens: number; outputTokens: number; unit: "tokens"; costUsd?: number } | null;
+  }) => ({
+    ...(outcome.provider ? { provider: outcome.provider } : {}),
+    ...(outcome.model ? { model: outcome.model } : {}),
+    usage: outcome.usage ?? null,
+  });
+
+  const noteExtractMeta = (outcome: {
+    provider?: string;
+    model?: string;
+    usage?: { inputTokens: number; outputTokens: number; costUsd?: number } | null;
+  }) => {
+    shape = {
+      ...shape,
+      provider: outcome.provider,
+      model: outcome.model,
+      inputTokens: outcome.usage?.inputTokens,
+      outputTokens: outcome.usage?.outputTokens,
+      costUsd: outcome.usage?.costUsd,
+    };
+  };
+
+  const sendExtractFailure = (outcome: {
+    failure?: AiFailure;
+    timedOut?: boolean;
+    provider?: string;
+    model?: string;
+    usage?: { inputTokens: number; outputTokens: number; unit: "tokens"; costUsd?: number } | null;
+  }) => {
+    noteExtractMeta(outcome);
     const { status, error, code, failure } = extractFailureResponse(outcome);
-    const body = errorBody(error, failure);
+    const body = { ...errorBody(error, failure), ...extractMeta(outcome) };
     return send(status, code ? { ...body, code } : body, failure);
   };
 
@@ -151,9 +188,22 @@ export const server = createServer(async (req, res) => {
    *   `grep '"reason":"timeout"'` → alles wat tegen de tijdslimiet aan liep,
    *                                 geslaagd of niet. */
   const sendExtractSuccess = (
-    outcome: { failure?: AiFailure; timedOut?: boolean },
+    outcome: {
+      failure?: AiFailure;
+      timedOut?: boolean;
+      provider?: string;
+      model?: string;
+      usage?: { inputTokens: number; outputTokens: number; unit: "tokens"; costUsd?: number } | null;
+    },
     body: unknown,
-  ) => send(200, body, outcome.timedOut ? outcome.failure : undefined);
+  ) => {
+    noteExtractMeta(outcome);
+    return send(
+      200,
+      { ...(body as Record<string, unknown>), ...extractMeta(outcome) },
+      outcome.timedOut ? outcome.failure : undefined,
+    );
+  };
 
   // Weggelopen client = Claude-call afbreken (review #31): zonder deze
   // koppeling maakt de sidecar elke geannuleerde vraag gewoon af en schrijft
@@ -168,9 +218,7 @@ export const server = createServer(async (req, res) => {
 
   try {
     if (req.method === "GET" && req.url === "/health") {
-      const configured = Boolean(
-        process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY,
-      );
+      const configured = providerRegistry.list().some((provider) => provider.configured());
       // capacity (#155) en warm (#154): tellers om de cap en de pool op
       // echte cijfers bij te stellen — rb-api leest /health al best-effort.
       return send(200, {
@@ -179,6 +227,14 @@ export const server = createServer(async (req, res) => {
         configured,
         capacity: aiSemaphore.snapshot(),
         warm: warmPool.stats(),
+        providers: Object.fromEntries(
+          providerRegistry.list().map((provider) => [provider.id, provider.configured()]),
+        ),
+        providerAccounts: Object.fromEntries(
+          providerRegistry.list()
+            .filter((provider) => provider.health)
+            .map((provider) => [provider.id, provider.health!()]),
+        ),
       });
     }
 
@@ -334,6 +390,7 @@ export const server = createServer(async (req, res) => {
           system: parsed.request.system,
           addendum: INTERACTION_TOOL_ADDENDUM,
           text: interactionPromptText(parsed.request),
+          model: parsed.request.model,
           signal: abort.signal,
         });
         // null = tool niet geroepen / run gefaald: geef een 500 zodat rb-api dit als
@@ -384,6 +441,7 @@ export const server = createServer(async (req, res) => {
           system: parsed.request.system,
           addendum: PREDICATE_TOOL_ADDENDUM,
           text: predicatePromptText(parsed.request),
+          model: parsed.request.model,
           signal: abort.signal,
         });
         if (outcome.items === null) return sendExtractFailure(outcome);

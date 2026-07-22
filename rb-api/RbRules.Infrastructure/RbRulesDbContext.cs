@@ -414,6 +414,8 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // sorteerbaar, maar StartedAt is de operationele as).
             e.HasIndex(x => x.StartedAt);
             e.HasIndex(x => x.Kind);
+            e.HasIndex(x => new { x.LlmProvider, x.StartedAt });
+            e.Property(x => x.CostUsd).HasPrecision(18, 8);
         });
 
         b.Entity<Assertion>(e =>

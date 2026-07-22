@@ -26,7 +26,8 @@ public sealed record InteractionPromotionRequest(
     bool LexicalSupport,
     int ConsensusCount,
     bool LlmVerdictInteracts,
-    bool IsCardOwnKeywordPair = false);
+    bool IsCardOwnKeywordPair = false,
+    string? LlmModel = null);
 
 /// <summary>Eén conditie-invoer (window/status/cost) op een promotie-verzoek.</summary>
 public sealed record InteractionConditionInput(
@@ -258,7 +259,7 @@ public class InteractionPromotionService(RbRulesDbContext db)
             FactKind = FactKinds.Interaction,
             MiningRunId = runId,
             DerivedFromRef = request.DerivedFromRef,
-            Model = run?.LlmModel,
+            Model = request.LlmModel ?? run?.LlmModel,
             PromptVersion = run?.PromptVersion,
             Verifier = verifier,
             Verdict = verdict,

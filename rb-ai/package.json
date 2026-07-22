@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AI-sidecar: Claude Agent SDK op abonnement (classify/answer). Interne service \u2014 niet publiek exposen.",
+  "description": "Interne Claude/Codex agent-runtime sidecar met provider- en account-routing.",
   "scripts": {
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/validate.test.ts src/brain-tools.test.ts src/relations.test.ts src/extract.test.ts src/audit.test.ts src/usage.test.ts src/warmpool.test.ts src/concurrency.test.ts src/failure.test.ts src/ai.test.ts src/server.test.ts && AI_EXTRACT_TIMEOUT_MS=1000 node --import tsx --test src/extract-timeout.test.ts"
+    "test": "node --import tsx --test src/validate.test.ts src/brain-tools.test.ts src/relations.test.ts src/extract.test.ts src/audit.test.ts src/usage.test.ts src/warmpool.test.ts src/concurrency.test.ts src/failure.test.ts src/providers/claude-accounts.test.ts src/providers/codex.test.ts src/providers/provider-contract.test.ts src/ai.test.ts src/server.test.ts && AI_EXTRACT_TIMEOUT_MS=1000 node --import tsx --test src/extract-timeout.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.178",
+    "@openai/codex-sdk": "^0.145.0",
     "tsx": "^4.19.2",
     "zod": "^4.4.3"
   },

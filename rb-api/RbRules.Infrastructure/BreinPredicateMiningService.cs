@@ -46,7 +46,8 @@ public sealed record BreinPredicateMiningResult(
 public class BreinPredicateMiningService(
     RbRulesDbContext db, RbAiClient ai,
     IDbContextFactory<RbRulesDbContext>? dbFactory = null,
-    BreinMiningSettings? settings = null)
+    BreinMiningSettings? settings = null,
+    ManagedSettingsService? managedSettings = null)
 {
     private const int DefaultMaxSubjects = 40;
     private const int MaxEvidenceCards = 3;
@@ -86,7 +87,10 @@ public class BreinPredicateMiningService(
             .Select(c => new CardEvidence(c.Name, c.Mechanics, c.TextPlain))
             .ToListAsync(ct);
 
-        var run = await StartRunAsync(ct);
+        var extractSettings = managedSettings is null
+            ? BreinExtractSettings.Default
+            : await managedSettings.BreinExtractAsync(ct);
+        var run = await StartRunAsync(extractSettings.ModelAlias, ct);
         var objectHints = MechanicPredicateKinds.All
             .SelectMany(MechanicPredicateLexicon.SeedFor)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -121,7 +125,8 @@ public class BreinPredicateMiningService(
                     ? null
                     : await dbFactory.CreateDbContextAsync(ct);
                 await MineSubjectAsync(
-                    subject, owned ?? db, run.Id, cards, objectHints, tally, ct);
+                    subject, owned ?? db, run.Id, extractSettings.ModelAlias,
+                    cards, objectHints, tally, ct);
             }
         }
 
@@ -137,6 +142,7 @@ public class BreinPredicateMiningService(
 
         run.Candidates = tally.Mined + tally.Skipped;
         run.Verified = tally.Mined;
+        tally.ApplyTo(run);
         run.CompletedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
 
@@ -151,7 +157,7 @@ public class BreinPredicateMiningService(
     /// subject in de parallelle stand) en raakt de gedeelde scoped context nooit
     /// aan.</summary>
     private async Task MineSubjectAsync(
-        CanonicalEntity subject, RbRulesDbContext ctx, string runId,
+        CanonicalEntity subject, RbRulesDbContext ctx, string runId, string modelAlias,
         IReadOnlyList<CardEvidence> cards, IReadOnlyList<string> objectHints,
         RunTally tally, CancellationToken ct)
     {
@@ -168,12 +174,14 @@ public class BreinPredicateMiningService(
             new
             {
                 system = MechanicPredicateExtraction.SystemPrompt,
+                model = modelAlias,
                 text,
                 subjectRef,
                 subjectLabel = subject.CanonicalLabel,
                 predicates = MechanicPredicateKinds.All,
                 objectHints,
             }, ct);
+        tally.Meter(call);
 
         if (call.Raw is null)
         {
@@ -240,6 +248,11 @@ public class BreinPredicateMiningService(
         private readonly object _gate = new();
         private readonly AiOutcomeTally _ai = new();   // uitval per oorzaak (#251)
         private int _processed, _mined, _skipped, _failed;
+        private int _llmCalls;
+        private string? _provider, _model, _usageUnit;
+        private long _inputTokens, _outputTokens;
+        private decimal _costUsd;
+        private bool _hasUsage, _hasCost;
         private bool _deadlineHit;
 
         public void Report(Action<string>? progress, int total)
@@ -252,6 +265,40 @@ public class BreinPredicateMiningService(
         }
 
         public void Ai(AiCallOutcome outcome) { lock (_gate) _ai.Add(outcome); }
+
+        public void Meter(AiExtraction call)
+        {
+            lock (_gate)
+            {
+                _llmCalls++;
+                _provider ??= call.Provider;
+                _model = call.Model ?? _model;
+                if (call.Usage is not { } usage) return;
+                _hasUsage = true;
+                _inputTokens += usage.InputTokens;
+                _outputTokens += usage.OutputTokens;
+                _usageUnit ??= usage.Unit;
+                if (usage.CostUsd is { } cost)
+                {
+                    _hasCost = true;
+                    _costUsd += cost;
+                }
+            }
+        }
+
+        public void ApplyTo(MiningRun run)
+        {
+            lock (_gate)
+            {
+                run.LlmCalls = _llmCalls;
+                run.LlmProvider = _provider;
+                run.LlmModel = _model ?? run.LlmModel;
+                run.InputTokens = _hasUsage ? _inputTokens : null;
+                run.OutputTokens = _hasUsage ? _outputTokens : null;
+                run.UsageUnit = _hasUsage ? _usageUnit : null;
+                run.CostUsd = _hasCost ? _costUsd : null;
+            }
+        }
 
         /// <summary>Telt één uitval, met de fijnmazige reden die rb-ai meestuurde
         /// (#281) — zo staat er "5xx×22 (max_turns×14, spawn×8)" in het run-detail
@@ -310,7 +357,7 @@ public class BreinPredicateMiningService(
 
     private sealed record CardEvidence(string Name, string[]? Mechanics, string? TextPlain);
 
-    private async Task<MiningRun> StartRunAsync(CancellationToken ct)
+    private async Task<MiningRun> StartRunAsync(string modelAlias, CancellationToken ct)
     {
         var labels = await db.CanonicalEntities.AsNoTracking()
             .OrderBy(e => e.Id).Select(e => e.CanonicalLabel).ToListAsync(ct);
@@ -318,7 +365,10 @@ public class BreinPredicateMiningService(
         {
             Id = Ulid.NewUlid(),
             Kind = FactKinds.Mechanic,
-            LlmModel = "claude-sonnet-4-6",
+            LlmModelAlias = modelAlias,
+            LlmModel = modelAlias == BreinExtractModelAliases.Sonnet
+                ? "claude-sonnet-4-6"
+                : null,
             PromptVersion = PromptVersion,
             VocabSnapshot = TextUtils.Sha256(string.Join('\n', labels)),
         };

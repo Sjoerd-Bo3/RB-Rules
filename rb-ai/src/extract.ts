@@ -22,6 +22,8 @@
 // Agent SDK — de SDK-gedreven run woont in ai.ts, net als askClaude. Zo is de
 // hele vocabulaire-poort unit-testbaar zonder LLM.
 import { z } from "zod";
+import { isModelAlias } from "./providers/registry.js";
+import type { ModelAlias } from "./providers/types.js";
 
 // ── Interacties (spiegelt InteractionExtraction, emit_interactions) ──────────
 
@@ -38,6 +40,7 @@ export interface OfferedRef {
  * en rekent het antwoord er deterministisch tegen na (#312). */
 export interface InteractionExtractRequest {
   system?: string;
+  model?: ModelAlias;
   text: string;
   refs: OfferedRef[];
   kinds: string[];
@@ -306,6 +309,7 @@ export function enforceInteractionVocabulary(
 
 export interface PredicateExtractRequest {
   system?: string;
+  model?: ModelAlias;
   text: string;
   subjectRef: string;
   subjectLabel: string;
@@ -404,6 +408,8 @@ export function parseInteractionExtractRequest(
   body: unknown,
 ): ExtractParseResult<InteractionExtractRequest> {
   const b = asRecord(body);
+  if (b.model !== undefined && b.model !== null && !isModelAlias(b.model))
+    return { ok: false, error: "onbekende modelalias" };
   const text = typeof b.text === "string" ? b.text : "";
   if (!text.trim()) return { ok: false, error: "text vereist" };
 
@@ -424,6 +430,7 @@ export function parseInteractionExtractRequest(
     ok: true,
     request: {
       system: optionalSystem(b.system),
+      ...(isModelAlias(b.model) ? { model: b.model } : {}),
       text,
       refs,
       kinds,
@@ -445,6 +452,8 @@ export function parsePredicateExtractRequest(
   body: unknown,
 ): ExtractParseResult<PredicateExtractRequest> {
   const b = asRecord(body);
+  if (b.model !== undefined && b.model !== null && !isModelAlias(b.model))
+    return { ok: false, error: "onbekende modelalias" };
   const text = typeof b.text === "string" ? b.text : "";
   if (!text.trim()) return { ok: false, error: "text vereist" };
 
@@ -462,6 +471,7 @@ export function parsePredicateExtractRequest(
     ok: true,
     request: {
       system: optionalSystem(b.system),
+      ...(isModelAlias(b.model) ? { model: b.model } : {}),
       text,
       subjectRef,
       subjectLabel,

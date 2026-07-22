@@ -17,13 +17,42 @@ namespace RbRules.Infrastructure;
 /// de reden zegt waarom — zonder dat laatste was "5xx×22" alles wat een run-detail
 /// over 55% uitval kon melden. Null bij een geslaagde call of een oudere rb-ai.</summary>
 public sealed record AiExtraction(
-    string? Raw, AiCallOutcome Outcome, int? StatusCode, string? Reason = null);
+    string? Raw, AiCallOutcome Outcome, int? StatusCode, string? Reason = null,
+    string? Provider = null, string? Model = null, AiUsage? Usage = null);
 
 /// <summary>Echte token-tellingen van één rb-ai-call (#121): input telt de
 /// cache-tokens mee (rb-ai's volume-maat), bij multi-turn-taken opgeteld over
 /// alle beurten. Null waar usage hoort betekent: rb-ai (of een oudere versie
 /// ervan) gaf niets terug — onbekend, niet 0.</summary>
-public record AiUsage(long InputTokens, long OutputTokens);
+public record AiUsage(
+    long InputTokens, long OutputTokens, string Unit = "tokens", decimal? CostUsd = null);
+
+internal static class AiUsageParser
+{
+    public static AiUsage? Parse(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("usage", out var u)
+            || u.ValueKind != JsonValueKind.Object)
+            return null;
+        if (!u.TryGetProperty("inputTokens", out var input)
+            || input.ValueKind != JsonValueKind.Number || !input.TryGetInt64(out var inputTokens)
+            || !u.TryGetProperty("outputTokens", out var output)
+            || output.ValueKind != JsonValueKind.Number || !output.TryGetInt64(out var outputTokens))
+            return null;
+        var unit = u.TryGetProperty("unit", out var unitValue)
+                   && unitValue.ValueKind == JsonValueKind.String
+                   && !string.IsNullOrWhiteSpace(unitValue.GetString())
+            ? unitValue.GetString()!
+            : "tokens";
+        decimal? costUsd = u.TryGetProperty("costUsd", out var cost)
+                           && cost.ValueKind == JsonValueKind.Number
+                           && cost.TryGetDecimal(out var parsedCost)
+            ? parsedCost
+            : null;
+        return new AiUsage(inputTokens, outputTokens, unit, costUsd);
+    }
+}
 
 /// <summary>Eén NDJSON-frame uit de rb-ai-stream (#31):
 /// delta (tekststukje), done (volledig antwoord, met usage #121) of error.</summary>
@@ -48,7 +77,7 @@ public record AiStreamFrame(
             return type is null
                 ? null
                 : new AiStreamFrame(
-                    type, Prop("text"), Prop("answer"), Prop("error"), ParseUsage(root));
+                    type, Prop("text"), Prop("answer"), Prop("error"), AiUsageParser.Parse(root));
         }
         catch (JsonException)
         {
@@ -58,21 +87,10 @@ public record AiStreamFrame(
 
     /// <summary>Usage uit het done-frame — best-effort (#121): een frame
     /// zonder (of met een kapot) usage-object blijft gewoon bruikbaar.</summary>
-    private static AiUsage? ParseUsage(JsonElement root)
-    {
-        if (!root.TryGetProperty("usage", out var u) || u.ValueKind != JsonValueKind.Object)
-            return null;
-        return u.TryGetProperty("inputTokens", out var input)
-               && input.ValueKind == JsonValueKind.Number && input.TryGetInt64(out var inputTokens)
-               && u.TryGetProperty("outputTokens", out var output)
-               && output.ValueKind == JsonValueKind.Number && output.TryGetInt64(out var outputTokens)
-            ? new AiUsage(inputTokens, outputTokens)
-            : null;
-    }
 }
 
-/// <summary>Client voor de rb-ai sidecar (Claude Agent SDK op abonnement).
-/// Best-effort: AI-uitval mag een scan nooit breken.</summary>
+/// <summary>Client voor de interne rb-ai provider-sidecar. Best-effort:
+/// AI-uitval mag een scan nooit breken.</summary>
 public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
 {
     /// <summary>Gedeelde fallback-tekst bij AI-uitval (één plek, #44).</summary>
@@ -194,7 +212,22 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
                             path, body?.Length ?? 0);
                         return new(null, AiCallOutcome.Unparseable, status);
                     }
-                    return new(body, AiCallOutcome.Ok, status);
+                    try
+                    {
+                        using var document = JsonDocument.Parse(body!);
+                        var root = document.RootElement;
+                        return new(body, AiCallOutcome.Ok, status,
+                            Provider: TextProperty(root, "provider"),
+                            Model: TextProperty(root, "model"),
+                            Usage: AiUsageParser.Parse(root));
+                    }
+                    catch (JsonException)
+                    {
+                        logger.LogWarning(
+                            "rb-ai {Path} gaf 200 met afgekapt of ongeldig JSON ({Length} tekens)",
+                            path, body?.Length ?? 0);
+                        return new(null, AiCallOutcome.Unparseable, status);
+                    }
                 }
 
                 var outcome = Classify(res.StatusCode);
@@ -228,7 +261,8 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
                 logger.LogWarning(
                     "rb-ai {Path} gaf {Status} (reden={Reason}: {Detail})",
                     path, status, error.Reason ?? "onbekend", error.Detail ?? "-");
-                return new(null, outcome, status, Distinct(outcome, error.Reason));
+                return new(null, outcome, status, Distinct(outcome, error.Reason),
+                    error.Provider, error.Model, error.Usage);
             }
         }
     }
@@ -263,8 +297,12 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
 
     /// <summary>De machine-leesbare velden uit een rb-ai-foutbody: <c>code</c> (de
     /// sidecar-cap, #279) en <c>reason</c>/<c>detail</c> (de uitvalsoort, #281). Alle
-    /// drie mogen ontbreken.</summary>
-    private readonly record struct AiError(string? Code, string? Reason, string? Detail);
+    /// drie mogen ontbreken. Provider/model/usage blijven ook op een foutrespons
+    /// behouden, zodat mislukte calls aan de werkelijk gekozen provider kunnen
+    /// worden toegeschreven.</summary>
+    private readonly record struct AiError(
+        string? Code, string? Reason, string? Detail,
+        string? Provider, string? Model, AiUsage? Usage);
 
     /// <summary>Lees de foutbody van rb-ai uit. Best-effort en bewust defensief: een
     /// onleesbare of lege body betekent alleen "geen extra informatie" en laat de
@@ -281,11 +319,13 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
             using var doc = JsonDocument.Parse(body!);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return default;
-            string? Text(string name) =>
-                root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(v.GetString())
-                    ? v.GetString() : null;
-            return new(Text("code"), Text("reason"), Text("detail"));
+            return new(
+                TextProperty(root, "code"),
+                TextProperty(root, "reason"),
+                TextProperty(root, "detail"),
+                TextProperty(root, "provider"),
+                TextProperty(root, "model"),
+                AiUsageParser.Parse(root));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -349,6 +389,14 @@ public class RbAiClient(HttpClient http, ILogger<RbAiClient> logger)
         var trimmed = body?.TrimStart();
         return trimmed is { Length: > 0 } && (trimmed[0] == '{' || trimmed[0] == '[');
     }
+
+    private static string? TextProperty(JsonElement root, string name) =>
+        root.ValueKind == JsonValueKind.Object
+        && root.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.String
+        && !string.IsNullOrWhiteSpace(value.GetString())
+            ? value.GetString()
+            : null;
 
     /// <summary>Antwoord van het agent-pad (#107): het antwoord plus de
     /// brein-stappen (één regel per tool-call) die rb-ai bij task="agentic"

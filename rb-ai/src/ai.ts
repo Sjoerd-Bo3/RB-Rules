@@ -15,16 +15,40 @@ import { aiSemaphore, AI_QUEUE_WAIT_MS, ConcurrencyLimitError } from "./concurre
 import {
   AiRunError,
   describeThrown,
+  failureOf,
   logEvent,
-  resultFailure,
   RetryTracker,
+  safeDetail,
   StderrTail,
   stderrDigestLine,
   withRetries,
-  withStderr,
   withStderrDigest,
   type AiFailure,
 } from "./failure.js";
+import { z } from "zod";
+import {
+  claudeRateLimitSignal,
+  ClaudeAgentToolProvider,
+  mergeClaudeMessageFailure,
+  type ClaudeRateLimitSignal,
+  type QueryRunner as ClaudeQueryRunner,
+} from "./providers/claude-agent.js";
+import {
+  ClaudeAccountPoolProvider,
+  claudeAccountRouter,
+  isClaudeAccountLocalFailure,
+  type ClaudeAccountEnvironment,
+  type ClaudeAccountLease,
+  type ClaudeAccountRouter,
+} from "./providers/claude-accounts.js";
+import { CodexAccountPoolProvider } from "./providers/codex.js";
+import { ProviderRegistry } from "./providers/registry.js";
+import type {
+  ModelAlias,
+  ProviderDiagnostics,
+  ProviderUsage,
+  ResolvedModel,
+} from "./providers/types.js";
 import { RELATIONS_MARKER } from "./relations.js";
 import { usageFromSdk, type AskUsage } from "./usage.js";
 import {
@@ -34,8 +58,9 @@ import {
   type WarmSignature,
 } from "./warmpool.js";
 
-// Auth: CLAUDE_CODE_OAUTH_TOKEN (abonnement) of ANTHROPIC_API_KEY.
-// Laat ANTHROPIC_API_KEY leeg bij abonnementsgebruik — die wint stilletjes.
+// Claude-auth wordt per geïsoleerd account ontdekt in claude-accounts.ts.
+// Een slot bevat óf CLAUDE_CODE_OAUTH_TOKEN óf ANTHROPIC_API_KEY; genummerde
+// niet-lege slots zijn leidend en een ongenummerde credential is de fallback.
 export type Task = "cheap" | "hard" | "research" | "agentic";
 
 export interface AskImage {
@@ -160,11 +185,6 @@ export function createBrainMcpServer(onStep?: (step: string) => void) {
   });
 }
 
-// Brein-extractie (#226, §3.1): tool-forced structured output. Eén beurt om de
-// tool te roepen, één om af te ronden — ruim gehouden op 3. Harde timeout net als
-// research/agentic zodat een hangende run nooit op abonnementskosten blijft draaien.
-const EXTRACT_MAX_TURNS = 3;
-
 /** Harde grens per extractie-run. Verstelbaar via `AI_EXTRACT_TIMEOUT_MS`, met
  * de bestaande 90 s als default — dus zonder env-wijziging verandert er niets.
  *
@@ -190,10 +210,13 @@ const EXTRACT_TIMEOUT_MS = (() => {
 /** De SDK-aanroep als injecteerbare functie (test-seam, zie
  * {@link extractWithTool}). Structureel getypeerd op wat wij ervan gebruiken:
  * prompt + options erin, een berichtenstroom eruit. */
-export type QueryRunner = (arg: {
-  prompt: string;
-  options: Options;
-}) => AsyncIterable<unknown>;
+export type QueryRunner = ClaudeQueryRunner;
+
+/** Production registry for the stateless extract/audit path. `/ask` stays on Claude. */
+export const providerRegistry = new ProviderRegistry([
+  new ClaudeAccountPoolProvider(),
+  new CodexAccountPoolProvider(),
+]);
 
 /** Dezelfde naad voor het /ask-pad (#300), met de bredere prompt-vorm die
  * {@link askClaude} gebruikt: een kale string, of een streaming-input-iterator
@@ -220,6 +243,9 @@ export type AskQueryRunner = (arg: {
 export interface ExtractOutcome {
   items: unknown[] | null;
   failure?: AiFailure;
+  provider?: string;
+  model?: string;
+  usage?: ProviderUsage | null;
   /** Is de run door ONZE harde timeout afgekapt (#281)? Apart van
    * `failure.reason`, want `withRetries` mag die reden overschrijven met de
    * upstream-oorzaak (een timeout ná zeven mislukte API-pogingen is een
@@ -349,6 +375,10 @@ export async function extractWithTool(opts: {
    * pointe van de audit, en de bestaande Task→model-mapping is er al — géén
    * nieuw model-config-mechanisme. */
   task?: Task;
+  /** Closed model alias. Unknown/free model ids never reach a provider. */
+  model?: ModelAlias;
+  /** Registry seam for provider contract tests. */
+  registry?: ProviderRegistry;
   /** Test-seam (#281-review): de SDK-aanroep zelf. Productie laat dit weg en
    * krijgt `query`; een test levert een eigen berichtenstroom en kan zo de
    * faal- en timeout-paden ECHT doorlopen. Zonder deze naad viel er over dit
@@ -361,25 +391,23 @@ export async function extractWithTool(opts: {
   const {
     toolName, description, schema, resultKey, system, addendum, text, signal,
     task = "cheap",
-    runQuery = query as unknown as QueryRunner,
+    model = task === "hard" ? "opus" : "sonnet",
+    registry = providerRegistry,
+    runQuery,
   } = opts;
-  const serverName = "extract";
-
+  const resolved: ResolvedModel = runQuery
+    ? {
+        alias: model,
+        provider: new ClaudeAgentToolProvider(runQuery),
+        providerId: "claude-agent-sdk",
+        modelId: model === "opus"
+          ? MODEL.hard
+          : model === "fable"
+            ? "claude-fable-5"
+            : MODEL.cheap,
+      }
+    : registry.resolve(model);
   let captured: unknown[] | null = null;
-  const extractServer = createSdkMcpServer({
-    name: serverName,
-    version: "1.0.0",
-    tools: [
-      tool(toolName, description, schema, async (args) => {
-        const value = (args as Record<string, unknown>)[resultKey];
-        // Alleen een echte array telt; alles anders is een lege vangst (de .NET-
-        // parser is de tweede muur, maar we leveren nooit rommel op).
-        captured = Array.isArray(value) ? value : [];
-        return { content: [{ type: "text" as const, text: "ok" }] };
-      }),
-    ],
-  });
-
   const controller = new AbortController();
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -388,34 +416,41 @@ export async function extractWithTool(opts: {
   else signal?.addEventListener("abort", onAbort, { once: true });
 
   const systemPrompt = [system, addendum].filter(Boolean).join("\n\n");
-  // Stderr van het subprocess meelezen (#281): stil bij succes, doorslaggevend
-  // bij uitval — zie StderrTail.
-  const stderr = new StderrTail();
-  // SDK-interne retries meetellen (#281): een aanhoudende 429/529 kost via de
-  // exponentiële backoff meer dan de hele 90s-begroting en verscheen daardoor
-  // als onze timeout in plaats van als de API-fout die het was.
-  const retries = new RetryTracker();
-  /** Elke uitval krijgt dezelfde context mee: wat het subprocess naar stderr
-   * schreef en hoe vaak de SDK intern opnieuw probeerde. Eén poort, zodat geen
-   * enkel faalpad half-geïnstrumenteerd kan achterblijven. */
-  const enrich = (failure: AiFailure): AiFailure =>
-    withRetries(withStderr(failure, stderr), retries);
-  /** Beide uitgangen — na de leeslus én uit het catch-blok — lopen hier
-   * doorheen, zodat ze per constructie dezelfde beslissing nemen. De
-   * stderr-staart en de SDK-retries worden er hier overheen gelegd. */
+  let providerResult: Awaited<ReturnType<typeof resolved.provider.invokeTool>> | undefined;
+
+  const enrich = (failure: AiFailure, diagnostics?: ProviderDiagnostics): AiFailure => {
+    if (!diagnostics) return failure;
+    return {
+      reason:
+        failure.reason === "timeout" && diagnostics.timeoutReason
+          ? diagnostics.timeoutReason
+          : failure.reason,
+      detail: diagnostics.detail
+        ? safeDetail(`${failure.detail} | ${diagnostics.detail}`)
+        : failure.detail,
+    };
+  };
   const finish = (): ExtractOutcome => {
     const outcome = decideExtractOutcome({
       captured,
       timedOut,
       aborted: controller.signal.aborted,
-      runFailure,
+      runFailure: providerResult?.failure,
       toolName,
       timeoutMs: EXTRACT_TIMEOUT_MS,
     });
-    return outcome.failure ? { ...outcome, failure: enrich(outcome.failure) } : outcome;
+    const failure = outcome.failure && timedOut
+      ? enrich(outcome.failure, providerResult?.diagnostics)
+      : outcome.failure;
+    return {
+      ...outcome,
+      ...(failure ? { failure } : {}),
+      provider: resolved.providerId,
+      model: resolved.modelId,
+      usage: providerResult?.usage ?? null,
+    };
   };
   let release: (() => void) | undefined;
-  let runFailure: AiFailure | undefined;
   try {
     // Background (#279): de extractie-endpoints zijn batch-werk voor de
     // brein-mining — er zit geen bezoeker op te wachten. Ze mogen daarom
@@ -438,25 +473,21 @@ export async function extractWithTool(opts: {
       timedOut = true;
       controller.abort();
     }, EXTRACT_TIMEOUT_MS);
-    const options: Options = {
-      model: MODEL[task],
-      maxTurns: EXTRACT_MAX_TURNS,
-      tools: [],
-      mcpServers: { [serverName]: extractServer },
-      allowedTools: [`mcp__${serverName}__${toolName}`],
-      permissionMode: "dontAsk" as const,
-      abortController: controller,
+    providerResult = await resolved.provider.invokeTool({
+      modelId: resolved.modelId,
       systemPrompt,
-      stderr: (data: string) => stderr.append(data),
-    };
-    // De berichten leeglezen zodat de tool-call daadwerkelijk vuurt; het
-    // tekstantwoord interesseert ons niet — captured draagt het resultaat.
-    // Het afsluitende result-bericht lezen we WEL (#281): daar — en nergens
-    // anders — meldt de SDK dat de run mislukte.
-    for await (const message of runQuery({ prompt: text, options })) {
-      retries.observe(message);
-      runFailure = resultFailure(message) ?? runFailure;
-    }
+      prompt: text,
+      tool: { name: toolName, description, schema: schema as z.ZodRawShape },
+      signal: controller.signal,
+      onToolCall: (name, input) => {
+        if (name !== toolName) return false;
+        const parsed = z.object(schema as z.ZodRawShape).safeParse(input);
+        if (!parsed.success) return false;
+        const value = (parsed.data as Record<string, unknown>)[resultKey];
+        captured = Array.isArray(value) ? value : [];
+        return true;
+      },
+    });
     // De leeslus is afgelopen — één beslispunt, gedeeld met het catch-blok.
     return finish();
   } catch (e) {
@@ -466,7 +497,13 @@ export async function extractWithTool(opts: {
     // Een geworpen fout is alleen de oorzaak als er geen afkapping was; anders
     // wint de afkapping (dezelfde beslissing als hierboven).
     if (!timedOut && !controller.signal.aborted && captured === null)
-      return { items: null, failure: enrich(runFailure ?? describeThrown(e)) };
+      return {
+        items: null,
+        failure: failureOf(e),
+        provider: resolved.providerId,
+        model: resolved.modelId,
+        usage: providerResult?.usage ?? null,
+      };
     return finish();
   } finally {
     if (timer) clearTimeout(timer);
@@ -520,6 +557,8 @@ export interface AskAnswer {
   answer: string;
   usage: AskUsage | null;
   failure?: AiFailure;
+  /** Internal account-router signal; never serialized by the HTTP handlers. */
+  accountSignal?: ClaudeRateLimitSignal;
 }
 
 /** Eén bron van waarheid voor de query-opties per taaktype (#154): het koude
@@ -555,9 +594,12 @@ export function buildQueryOptions(input: {
    * (#292), en een structurele test op de aanroepvorm heeft altijd omzeilingen
    * (#295-review). Hier kan het per constructie niet fout gaan. */
   stderr: (data: string) => void;
+  /** One already-selected account; omitted only by injected test runners. */
+  accountEnvironment?: ClaudeAccountEnvironment;
 }): Options {
   const {
     task, systemPrompt, includePartialMessages, controller, onBrainStep, model, stderr,
+    accountEnvironment,
   } = input;
   const research = task === "research";
   const agentic = task === "agentic";
@@ -591,6 +633,13 @@ export function buildQueryOptions(input: {
     // delta-afnemer is — anders blijft het berichtenverkeer zoals het was.
     ...(includePartialMessages ? { includePartialMessages: true } : {}),
     stderr,
+    ...(accountEnvironment
+      ? {
+          env: { ...accountEnvironment },
+          persistSession: false,
+          settingSources: [],
+        }
+      : {}),
   };
 }
 
@@ -609,6 +658,7 @@ export function warmBootOptions(
   sig: WarmSignature,
   controller: AbortController,
   stderr: (data: string) => void,
+  accountEnvironment?: ClaudeAccountEnvironment,
 ): Options {
   return buildQueryOptions({
     task: "cheap",
@@ -616,6 +666,7 @@ export function warmBootOptions(
     includePartialMessages: sig.includePartialMessages,
     controller,
     stderr,
+    accountEnvironment,
   });
 }
 
@@ -628,7 +679,12 @@ function bootWarmCheapSession(sig: WarmSignature): WarmBootHandle {
   const stderr = new StderrTail();
   const q = query({
     prompt: input.iterable as Parameters<typeof query>[0]["prompt"],
-    options: warmBootOptions(sig, controller, (data: string) => stderr.append(data)),
+    options: warmBootOptions(
+      sig,
+      controller,
+      (data: string) => stderr.append(data),
+      claudeAccountRouter.singleEnvironment(),
+    ),
   });
   return {
     messages: q,
@@ -648,9 +704,12 @@ function bootWarmCheapSession(sig: WarmSignature): WarmBootHandle {
  * transparant — de schakelaar is er voor ops-noodgevallen). */
 export const warmPool = new WarmPool({
   boot: bootWarmCheapSession,
-  enabled: !["0", "false", "off"].includes(
-    (process.env.AI_WARM_POOL ?? "1").toLowerCase(),
-  ),
+  // A warm process is already bound to one credential. With multiple accounts
+  // it cannot be reassigned safely, so routing stays cold and quota-aware.
+  enabled: claudeAccountRouter.accountCount() === 1
+    && !["0", "false", "off"].includes(
+      (process.env.AI_WARM_POOL ?? "1").toLowerCase(),
+    ),
   ttlMs: (() => {
     const parsed = Number.parseInt(process.env.AI_WARM_TTL_MS ?? "", 10);
     return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : 600_000; // 10 min
@@ -663,6 +722,9 @@ export const warmPool = new WarmPool({
  * mag ai.ts transparant koud opnieuw starten. */
 export interface CollectProgress {
   sawOutput: boolean;
+  /** Text already emitted through onDelta. Retrying after this would append a
+   * second account's answer to the first account's partial response. */
+  deliveredText: boolean;
 }
 
 /** Gedeelde leeslus over de SDK-berichten (koud én warm — #154).
@@ -681,6 +743,7 @@ export async function collectAnswer(
   let resultText = "";
   let usage: AskUsage | null = null;
   let failure: AiFailure | undefined;
+  let accountSignal: ClaudeRateLimitSignal | undefined;
   for await (const message of messages) {
     // Mislukte run (#281): de SDK meldt die met een result-bericht, niet met
     // een exception. Vóór deze regel viel zo'n run stil terug op een leeg
@@ -688,7 +751,11 @@ export async function collectAnswer(
     // berichten gaan naar de tracker: die maken zichtbaar dat de SDK intern
     // al minutenlang op een 429/529 zat te wachten.
     retries?.observe(message);
-    failure = resultFailure(message) ?? failure;
+    accountSignal = claudeRateLimitSignal(message) ?? accountSignal;
+    failure = mergeClaudeMessageFailure(failure, message);
+    if (accountSignal?.status === "rejected")
+      failure = failure
+        ?? { reason: "api_error", detail: "Claude-account heeft zijn rate limit bereikt" };
     const m = message as {
       type: string;
       text?: string;
@@ -708,7 +775,10 @@ export async function collectAnswer(
         ev.delta.text
       ) {
         if (progress) progress.sawOutput = true;
-        if (onDelta) await onDelta(ev.delta.text);
+        if (onDelta) {
+          if (progress) progress.deliveredText = true;
+          await onDelta(ev.delta.text);
+        }
       }
     } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
       if (progress) progress.sawOutput = true;
@@ -728,6 +798,7 @@ export async function collectAnswer(
     answer: (resultText || assistantText).trim(),
     usage,
     ...(failure ? { failure } : {}),
+    ...(accountSignal ? { accountSignal } : {}),
   };
 }
 
@@ -798,6 +869,10 @@ export async function askClaude(opts: {
   /** Test-seam (#300): de SDK-aanroep van het KOUDE pad. Productie laat dit weg
    * en krijgt `query`; zie {@link AskQueryRunner}. */
   runQuery?: AskQueryRunner;
+  /** Account-router seam for routing/failover tests. Supplying it also routes
+   * an injected runner, while the historical runQuery-only seam stays a
+   * single-account SDK simulation for existing tests. */
+  accountRouter?: ClaudeAccountRouter;
   /** Test-seam (#300): de warme pool. Productie laat dit weg en krijgt de
    * module-singleton {@link warmPool}.
    *
@@ -812,9 +887,12 @@ export async function askClaude(opts: {
 }): Promise<AskAnswer> {
   const {
     prompt, system, task = "cheap", images = [], onDelta, onBrainStep, signal, model,
-    runQuery = query as unknown as AskQueryRunner,
+    runQuery: injectedRunQuery,
+    accountRouter = claudeAccountRouter,
     pool = warmPool,
   } = opts;
+  const productionRouting = injectedRunQuery === undefined || opts.accountRouter !== undefined;
+  const runQuery = injectedRunQuery ?? query as unknown as AskQueryRunner;
   const research = task === "research";
   const agentic = task === "agentic";
 
@@ -851,10 +929,10 @@ export async function askClaude(opts: {
   // SDK-interne retries (#281): dezelfde meting als op het extract-pad, zodat
   // een /ask-timeout die in werkelijkheid een aanhoudende API-fout was ook hier
   // als zodanig in de log belandt.
-  const retries = new RetryTracker();
+  let retries = new RetryTracker();
   // Stderr van het subprocess (#300). De KOUDE sessie krijgt deze buffer; een
   // warme claim brengt zijn eigen mee (aangelegd bij zijn boot).
-  const coldStderr = new StderrTail();
+  let coldStderr = new StderrTail();
   /** Welke staart de uitval van DEZE aanroep verklaart.
    *
    * ATTRIBUTIE IS HIER HET HELE PUNT, en fout toewijzen is erger dan geen
@@ -867,7 +945,7 @@ export async function askClaude(opts: {
   let failureStderr = coldStderr;
   let release: (() => void) | undefined;
   let unhookWarmAbort: (() => void) | undefined;
-  const progress: CollectProgress = { sawOutput: false };
+  let progress: CollectProgress = { sawOutput: false, deliveredText: false };
   try {
     // Permit vóór elke sessie-start (koud én warm-claim) — de voorverwarmde
     // boot zelf telt niet (idle, geen API-call; de pool-cap begrenst die al).
@@ -879,71 +957,111 @@ export async function askClaude(opts: {
       priority: "interactive",
     });
 
-    if (task === "cheap" && !model && pool.isEnabled()) {
-      const sig: WarmSignature = { systemPrompt, includePartialMessages };
-      pool.observe(sig);
-      const claimed = controller.signal.aborted ? null : pool.claim(sig);
-      if (claimed) {
-        // Vanaf hier draait de WARME sessie; haar staart verklaart wat er
-        // misgaat tot het moment dat we eventueel koud herstarten.
-        failureStderr = claimed.stderr;
-        const killWarm = () => claimed.kill();
-        controller.signal.addEventListener("abort", killWarm, { once: true });
-        unhookWarmAbort = () =>
-          controller.signal.removeEventListener("abort", killWarm);
-        try {
-          claimed.send(buildUserMessage(prompt, images));
-          const res = await collectAnswer(claimed.messages(), onDelta, progress, retries);
-          if (progress.sawOutput) return finishAskRun(res, claimed.stderr, retries);
-          // Sessie eindigde zonder één output-bericht: subprocess was dood
-          // bij de claim — er is geen API-call gedaan, dus koud is veilig.
-          // Wát het subprocess nog geroepen heeft vóór het omviel staat in zijn
-          // eigen staart, en hoort HIER gemeld te worden (#300): dit is het
-          // enige moment waarop die uitvoer nog aan de juiste sessie hangt.
-          logEvent("warmpool_fallback", {
-            stage: "dood bij claim",
-            stderr: stderrDigestLine(claimed.stderr) || undefined,
-          });
-        } catch (e) {
-          if (progress.sawOutput || controller.signal.aborted || timedOut) throw e;
-          // Door dezelfde poort als elk ander faalpad sinds #281 (#292): een
-          // rauwe `String(e)` uit de SDK kan een auth-header of tokenfragment
-          // dragen, en levert bovendien geen classificatie op. `describeThrown`
-          // redacteert, kapt af én zegt WELKE knop dit is (spawn/auth/api_error)
-          // — precies het onderscheid waar de warme pool om vraagt als hij
-          // stelselmatig omvalt.
-          const failure = describeThrown(e);
-          logEvent("warmpool_fallback", {
-            stage: "faalde vóór output",
-            reason: failure.reason,
-            detail: failure.detail,
-            stderr: stderrDigestLine(claimed.stderr) || undefined,
-          });
+    if (productionRouting) await accountRouter.refreshQuotas();
+    const excludedAccounts = new Set<number>();
+    let lastAccountFailure: AiFailure | undefined;
+    const routeModel = model ?? MODEL[task];
+
+    while (true) {
+      const lease: ClaudeAccountLease | undefined = productionRouting
+        ? accountRouter.acquire(routeModel, excludedAccounts) ?? undefined
+        : undefined;
+      if (productionRouting && !lease)
+        throw new AiRunError(lastAccountFailure ?? {
+          reason: accountRouter.configured() ? "api_error" : "auth",
+          detail: accountRouter.configured()
+            ? "geen Claude-account met gebruiksruimte beschikbaar"
+            : "geen Claude-accounts geconfigureerd",
+        });
+      if (lease) excludedAccounts.add(lease.ordinal);
+
+      retries = new RetryTracker();
+      coldStderr = new StderrTail();
+      failureStderr = coldStderr;
+      progress = { sawOutput: false, deliveredText: false };
+      let accountSignal: ClaudeRateLimitSignal | undefined;
+      try {
+        // Warm sessions are credential-bound. The module pool is disabled for
+        // multi-account production; injected test pools retain their old seam.
+        if (
+          task === "cheap"
+          && !model
+          && pool.isEnabled()
+          && (!productionRouting || accountRouter.accountCount() <= 1)
+        ) {
+          const sig: WarmSignature = { systemPrompt, includePartialMessages };
+          pool.observe(sig);
+          const claimed = controller.signal.aborted ? null : pool.claim(sig);
+          if (claimed) {
+            failureStderr = claimed.stderr;
+            const killWarm = () => claimed.kill();
+            controller.signal.addEventListener("abort", killWarm, { once: true });
+            unhookWarmAbort = () =>
+              controller.signal.removeEventListener("abort", killWarm);
+            try {
+              claimed.send(buildUserMessage(prompt, images));
+              const res = await collectAnswer(claimed.messages(), onDelta, progress, retries);
+              accountSignal = res.accountSignal;
+              if (lease) accountRouter.observeSignal(lease, accountSignal);
+              if (progress.sawOutput) return finishAskRun(res, claimed.stderr, retries);
+              logEvent("warmpool_fallback", {
+                stage: "dood bij claim",
+                stderr: stderrDigestLine(claimed.stderr) || undefined,
+              });
+            } catch (e) {
+              if (progress.sawOutput || controller.signal.aborted || timedOut) throw e;
+              const failure = describeThrown(e);
+              logEvent("warmpool_fallback", {
+                stage: "faalde vóór output",
+                reason: failure.reason,
+                detail: failure.detail,
+                stderr: stderrDigestLine(claimed.stderr) || undefined,
+              });
+            }
+            pool.noteDeadClaim();
+            progress.sawOutput = false;
+            failureStderr = coldStderr;
+          }
         }
-        pool.noteDeadClaim();
-        progress.sawOutput = false;
-        // De warme sessie is op en haar uitvoer is hierboven gemeld. Wat nu
-        // volgt is een VERSE sessie; die mag nooit verklaard worden met de
-        // regels van de dode (zie `failureStderr`).
-        failureStderr = coldStderr;
+
+        const options = buildQueryOptions({
+          task,
+          systemPrompt,
+          includePartialMessages,
+          controller,
+          onBrainStep,
+          model,
+          stderr: (data: string) => coldStderr.append(data),
+          accountEnvironment: lease?.environment,
+        });
+        const arg = {
+          prompt: images.length > 0 ? userMessage(prompt, images) : prompt,
+          options,
+        };
+        const res = await collectAnswer(runQuery(arg), onDelta, progress, retries);
+        accountSignal = res.accountSignal;
+        if (lease) accountRouter.observeSignal(lease, accountSignal);
+        return finishAskRun(res, coldStderr, retries);
+      } catch (e) {
+        const accountFailure = e instanceof AiRunError
+          ? failureOf(e)
+          : withStderrDigest(withRetries(describeThrown(e), retries), failureStderr);
+        const canFailOver = Boolean(
+          lease
+          && !controller.signal.aborted
+          && !timedOut
+          && isClaudeAccountLocalFailure(accountFailure, accountSignal)
+          && !progress.deliveredText,
+        );
+        if (!canFailOver || !lease) throw e;
+        lastAccountFailure = accountFailure;
+        accountRouter.markAccountFailure(lease, accountFailure, accountSignal);
+      } finally {
+        unhookWarmAbort?.();
+        unhookWarmAbort = undefined;
+        lease?.release();
       }
     }
-
-    const options = buildQueryOptions({
-      task,
-      systemPrompt,
-      includePartialMessages,
-      controller,
-      onBrainStep,
-      model,
-      stderr: (data: string) => coldStderr.append(data),
-    });
-    const arg = {
-      prompt: images.length > 0 ? userMessage(prompt, images) : prompt,
-      options,
-    };
-    const res = await collectAnswer(runQuery(arg), onDelta, progress, retries);
-    return finishAskRun(res, coldStderr, retries);
   } catch (e) {
     // Capaciteitsgrens (#155) onvertaald doorgeven: server.ts maakt er een
     // 429 met machine-leesbare reden van.

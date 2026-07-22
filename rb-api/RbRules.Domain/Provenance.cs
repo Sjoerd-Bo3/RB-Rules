@@ -75,6 +75,22 @@ public class MiningRun
     public string? PromptVersion { get; set; }
     /// <summary>rb-ai-modelId (bv. "claude-opus-4-8"); null bij deterministisch.</summary>
     public string? LlmModel { get; set; }
+    /// <summary>Stabiele beheer-alias waarmee de run gestart is (#325). Provider en
+    /// concreet model komen uit rb-ai's registry en staan apart.</summary>
+    public string? LlmModelAlias { get; set; }
+    /// <summary>Provider die rb-ai werkelijk gebruikte (bv. claude-agent-sdk of
+    /// codex-sdk). Null voor oude/deterministische runs.</summary>
+    public string? LlmProvider { get; set; }
+    /// <summary>Aantal provider-calls binnen deze mining-run.</summary>
+    public int LlmCalls { get; set; }
+    /// <summary>Provider-gerapporteerde usage, over alle calls in de run opgeteld.
+    /// Null betekent onbekend; nul is een echte gemeten nul.</summary>
+    public long? InputTokens { get; set; }
+    public long? OutputTokens { get; set; }
+    public string? UsageUnit { get; set; }
+    /// <summary>Werkelijke providerkosten in USD waar de provider die rapporteert
+    /// waar die beschikbaar zijn; null bij abonnement/quotum of onbekende kosten.</summary>
+    public decimal? CostUsd { get; set; }
     /// <summary>bge-m3 (of opvolger) als de run embeddings raakte; anders null.</summary>
     public string? EmbeddingModel { get; set; }
     /// <summary>Hash van de vocabulaire-snapshot (mechanics/keywords/kinds)

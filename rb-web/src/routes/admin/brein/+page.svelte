@@ -13,6 +13,15 @@
 		detail: string | null;
 		at: string;
 	}
+	interface ProviderUsage {
+		provider: string;
+		unit: string;
+		runs: number;
+		calls: number;
+		inputTokens: number;
+		outputTokens: number;
+		costUsd: number | null;
+	}
 	interface Cockpit {
 		interactions: number;
 		mechanicPredicates: number;
@@ -28,6 +37,7 @@
 		nightlyRun: JobRun | null;
 		interactionAudits: number;
 		auditRun: JobRun | null;
+		providerUsage: ProviderUsage[] | null;
 	}
 	const cockpit = $derived(data.cockpit as Cockpit | null);
 
@@ -147,12 +157,14 @@
 		overridden: boolean;
 		updatedAt: string | null;
 		updatedBy: string | null;
+		options: string[] | null;
 	}
 	const settings = $derived((data.settings ?? []) as ManagedSetting[]);
 	const settingOf = (key: string) => settings.find((s) => s.key === key) ?? null;
 
 	const retrievalSetting = $derived(settingOf('brein.retrieval.enabled'));
 	const auditSampleSetting = $derived(settingOf('brein.audit.sample_n'));
+	const extractModelSetting = $derived(settingOf('brein.extract.model'));
 	const nightlySetting = $derived(settingOf('nightly.enabled'));
 	// Het venster in het formulier: uit de effectieve waarden, met een terugval op
 	// de bestaande defaults zolang de instellingen-lijst er nog niet is.
@@ -160,6 +172,17 @@
 	const nightlyEnd = $derived(settingOf('nightly.end_hour')?.effective ?? '11');
 	const nightlyTz = $derived(settingOf('nightly.timezone')?.effective ?? 'Europe/Amsterdam');
 	const HOURS = Array.from({ length: 24 }, (_, i) => String(i));
+	const fmtNumber = (n: number) => n.toLocaleString('nl-NL');
+	const fmtUsd = (n: number) => `$${n.toFixed(6)}`;
+	function modelAliasLabel(alias: string): string {
+		switch (alias) {
+			case 'sonnet': return 'Claude Sonnet';
+			case 'opus': return 'Claude Opus';
+			case 'fable': return 'Claude Fable';
+			case 'codex': return 'Codex';
+			default: return alias;
+		}
+	}
 
 	// "gewijzigd 3u geleden door beheer" — herkomst van een schakelaar hoort
 	// zichtbaar te zijn (rode draad #236); het volledige spoor staat in run_log.
@@ -412,6 +435,55 @@
 							<button class="cta">Opslaan</button>
 							<span class="run-meta">{settingMeta(auditSampleSetting)}</span>
 						</form>
+					{/if}
+					{#if extractModelSetting}
+						<form
+							class="auditdensity"
+							method="POST"
+							action="?/setting"
+							use:enhance={() => async ({ update }) => {
+								await update();
+								await invalidateAll();
+							}}
+						>
+							<label>
+								<span>Extractiemodel</span>
+								<input type="hidden" name="key" value="brein.extract.model" />
+								<select name="value" aria-label="Extractiemodel">
+									{#each extractModelSetting.options ?? [] as alias (alias)}
+										<option value={alias} selected={alias === extractModelSetting.effective}>{modelAliasLabel(alias)}</option>
+									{/each}
+								</select>
+							</label>
+							<button class="cta">Opslaan</button>
+							<span class="run-meta">{settingMeta(extractModelSetting)}</span>
+						</form>
+					{/if}
+
+					{#if cockpit.providerUsage?.length}
+						<div class="provider-usage">
+							<h4>Providergebruik</h4>
+							<div class="table-wrap">
+								<table>
+									<thead>
+										<tr><th>Provider</th><th>Runs</th><th>Calls</th><th>Eenheid</th><th>In / uit</th><th>Kosten</th></tr>
+									</thead>
+									<tbody>
+										{#each cockpit.providerUsage as usage (`${usage.provider}:${usage.unit}`)}
+											<tr>
+												<td><strong>{usage.provider}</strong></td>
+												<td class="tnum">{fmtNumber(usage.runs)}</td>
+												<td class="tnum">{fmtNumber(usage.calls)}</td>
+												<td>{usage.unit}</td>
+												<td class="tnum">{fmtNumber(usage.inputTokens)} / {fmtNumber(usage.outputTokens)}</td>
+												<td class="tnum">{usage.costUsd === null ? '—' : fmtUsd(usage.costUsd)}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+							<p class="run-meta">Cumulatief over de bewaarde brein-miningruns; kosten zijn alleen ingevuld als de provider echte USD-kosten rapporteert.</p>
+						</div>
 					{/if}
 				</div>
 			</div>
@@ -1043,8 +1115,30 @@
 		background: var(--surface-deep);
 		color: var(--text);
 	}
+	.auditdensity select {
+		padding: 7px 28px 7px 9px;
+		font-size: 16px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md, 8px);
+		background: var(--surface-deep);
+		color: var(--text);
+	}
 	.auditdensity .run-meta {
 		flex-basis: 100%;
+	}
+	.provider-usage {
+		margin-top: 16px;
+	}
+	.provider-usage h4 {
+		margin: 0 0 8px;
+		font-size: 0.84rem;
+	}
+	.provider-usage table {
+		font-size: 0.78rem;
+	}
+	.provider-usage .run-meta {
+		display: block;
+		margin-top: 7px;
 	}
 	.nightly {
 		display: flex;

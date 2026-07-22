@@ -13,11 +13,14 @@ import { z } from "zod";
 // Type-only: audit.ts blijft runtime-puur (geen Agent SDK-import), maar de
 // builder hieronder moet wél het Task-vocabulaire van ai.ts spreken.
 import type { Task } from "./ai.js";
+import { isModelAlias } from "./providers/registry.js";
+import type { ModelAlias } from "./providers/types.js";
 
 /** De audit-request: rb-api componeert claim + bewijs al tot één tekst (net als de
  * extract-endpoints krijgt deze sidecar nooit losse database-toegang). */
 export interface InteractionAuditRequest {
   system?: string;
+  model?: ModelAlias;
   text: string;
 }
 
@@ -84,6 +87,7 @@ export function buildAuditExtraction(
   text: string;
   signal?: AbortSignal;
   task: Task;
+  model: ModelAlias;
 } {
   return {
     toolName: "emit_audit_verdict",
@@ -97,6 +101,7 @@ export function buildAuditExtraction(
     // Het sterkere model — de hele pointe van de audit (#255): MODEL.hard via de
     // bestaande taak-typering.
     task: "hard",
+    model: request.model ?? "opus",
   };
 }
 
@@ -106,8 +111,13 @@ export type AuditParseResult =
 
 export function parseInteractionAuditRequest(body: unknown): AuditParseResult {
   const b = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+  if (b.model !== undefined && b.model !== null && !isModelAlias(b.model))
+    return { ok: false, error: "onbekende modelalias" };
   const text = typeof b.text === "string" ? b.text : "";
   if (!text.trim()) return { ok: false, error: "text vereist" };
   const system = typeof b.system === "string" && b.system.trim() ? b.system : undefined;
-  return { ok: true, request: { system, text } };
+  return {
+    ok: true,
+    request: { system, text, ...(isModelAlias(b.model) ? { model: b.model } : {}) },
+  };
 }

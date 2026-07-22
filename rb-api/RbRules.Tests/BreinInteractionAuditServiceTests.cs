@@ -74,6 +74,27 @@ public class BreinInteractionAuditServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_GebruiktWerkelijkProviderModelEnMetertUsage()
+    {
+        using var db = NewDb();
+        await SeedPromotedAsync(db, "mechanic:Deflect", "mechanic:Assault");
+        var svc = Service(db, () =>
+            """{"verdicts":[{"correct":true,"supported_by_evidence":true,"motivation":"ok"}],"provider":"claude-agent-sdk","model":"claude-opus-4-9","usage":{"inputTokens":90,"outputTokens":10,"unit":"tokens"}}""");
+
+        await svc.RunAsync();
+
+        Assert.Equal("claude-opus-4-9", (await db.InteractionAudits.SingleAsync()).Model);
+        var run = await db.MiningRuns.SingleAsync();
+        Assert.Equal("opus", run.LlmModelAlias); // auditkeuze blijft los van brein.extract.model
+        Assert.Equal("claude-agent-sdk", run.LlmProvider);
+        Assert.Equal("claude-opus-4-9", run.LlmModel);
+        Assert.Equal(1, run.LlmCalls);
+        Assert.Equal(90, run.InputTokens);
+        Assert.Equal(10, run.OutputTokens);
+        Assert.Null(run.CostUsd);
+    }
+
+    [Fact]
     public async Task RunAsync_NegatiefOordeel_DegradeertNooit_AlleenZichtbaarKanaal()
     {
         using var db = NewDb();

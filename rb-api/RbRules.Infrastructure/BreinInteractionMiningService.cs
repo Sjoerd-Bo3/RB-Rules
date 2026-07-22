@@ -117,7 +117,8 @@ public class BreinInteractionMiningService(
     RbRulesDbContext db, RbAiClient ai, EntityResolutionService entityResolution,
     InteractionPromotionService promotion,
     IDbContextFactory<RbRulesDbContext>? dbFactory = null,
-    BreinMiningSettings? settings = null)
+    BreinMiningSettings? settings = null,
+    ManagedSettingsService? managedSettings = null)
 {
     private const int DefaultMaxFocusCards = 40;
     private const int DefaultMaxPartners = 3;
@@ -244,7 +245,11 @@ public class BreinInteractionMiningService(
             .Select(c => new SectionLite(c.SourceId, c.SectionCode, c.Text))
             .ToListAsync(ct);
 
-        var run = await StartRunAsync(windowLexicon, statusLexicon, ct);
+        var extractSettings = managedSettings is null
+            ? BreinExtractSettings.Default
+            : await managedSettings.BreinExtractAsync(ct);
+        var run = await StartRunAsync(
+            windowLexicon, statusLexicon, extractSettings.ModelAlias, ct);
 
         var tally = new RunTally();
         // Schrijf-slot om de promotie-poort (#279): zie de klasse-samenvatting —
@@ -257,7 +262,7 @@ public class BreinInteractionMiningService(
 
         var context = new PassContext(
             run.Id, cardPool, ruleSections, vocabulary, windowLexicon, statusLexicon,
-            tally, gate, labelCache);
+            tally, gate, labelCache, extractSettings.ModelAlias);
 
         // FASE 1 — mechanic-niveau. Bewust eerst: klein van payload, en de mech↔mech-
         // kennis die hij oplevert hoeft de kaart-pass daarna niet meer te ontdekken.
@@ -280,6 +285,7 @@ public class BreinInteractionMiningService(
         run.Candidates = tally.Extracted;
         run.Verified = tally.Promoted;
         run.Rejected = tally.Rejected;
+        tally.ApplyTo(run);
         run.CompletedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
 
@@ -499,7 +505,7 @@ public class BreinInteractionMiningService(
         var clock = Stopwatch.StartNew();
         var call = await context.Ai(ai, offer, vocab, ct);
         clock.Stop();
-        context.Tally.Call(phase, clock.ElapsedMilliseconds, offer.Plan.Refs.Count);
+        context.Tally.Call(phase, clock.ElapsedMilliseconds, offer.Plan.Refs.Count, call);
 
         if (call.Raw is null)
         {
@@ -566,7 +572,8 @@ public class BreinInteractionMiningService(
                 Conditions: conditions,
                 LexicalSupport: lexical,
                 ConsensusCount: 1, // één extractie-pass = één bron
-                LlmVerdictInteracts: ix.Interacts);
+                LlmVerdictInteracts: ix.Interacts,
+                LlmModel: call.Model);
 
             // Geserialiseerd: twee items kunnen hetzelfde paar voorstellen, en de poort
             // doet lees-dan-schrijf op een unieke sleutel.
@@ -717,13 +724,18 @@ public class BreinInteractionMiningService(
         labels.Select(l => BrainRef.Mechanic(l).Format()).ToHashSet(StringComparer.Ordinal);
 
     private async Task<MiningRun> StartRunAsync(
-        IReadOnlyList<string> windows, IReadOnlyList<string> statuses, CancellationToken ct)
+        IReadOnlyList<string> windows, IReadOnlyList<string> statuses,
+        string modelAlias, CancellationToken ct)
     {
         var run = new MiningRun
         {
             Id = Ulid.NewUlid(),
             Kind = FactKinds.Interaction,
-            LlmModel = "claude-sonnet-4-6",
+            LlmModelAlias = modelAlias,
+            // Compatibiliteit met een oudere rb-ai die nog geen metadata stuurde.
+            LlmModel = modelAlias == BreinExtractModelAliases.Sonnet
+                ? "claude-sonnet-4-6"
+                : null,
             PromptVersion = PromptVersion,
             VocabSnapshot = TextUtils.Sha256(string.Join('|',
                 InteractionKinds.All.Concat(windows).Concat(statuses))),
@@ -771,7 +783,8 @@ public class BreinInteractionMiningService(
         IReadOnlyList<string> StatusLexicon,
         RunTally Tally,
         SemaphoreSlim Gate,
-        ConcurrentDictionary<string, string> LabelCache)
+        ConcurrentDictionary<string, string> LabelCache,
+        string ModelAlias)
     {
         /// <summary>De rb-ai-aanroep zelf, op één plek zodat beide passes gegarandeerd
         /// dezelfde payload-vorm sturen.</summary>
@@ -782,6 +795,7 @@ public class BreinInteractionMiningService(
                 new
                 {
                     system = InteractionExtraction.SystemPrompt,
+                    model = ModelAlias,
                     text = offer.PromptText,
                     refs = offer.Plan.Refs.Select(r => new { r.Ref, r.Label }),
                     sections = offer.SectionRefs,
@@ -827,6 +841,11 @@ public class BreinInteractionMiningService(
         private int _cardsProcessed, _mechanicsProcessed;
         private int _extracted, _promoted, _candidates, _hypothesized;
         private int _rejected, _failed, _skippedKnown;
+        private int _llmCalls;
+        private string? _provider, _model, _usageUnit;
+        private long _inputTokens, _outputTokens;
+        private decimal _costUsd;
+        private bool _hasUsage, _hasCost;
         private bool _deadlineHit;
 
         private sealed class CallStats
@@ -842,7 +861,7 @@ public class BreinInteractionMiningService(
         public int CountCard() { lock (_gate) return ++_cardsProcessed; }
         public int CountMechanic() { lock (_gate) return ++_mechanicsProcessed; }
 
-        public void Call(MiningPhase phase, long millis, int refs)
+        public void Call(MiningPhase phase, long millis, int refs, AiExtraction call)
         {
             lock (_gate)
             {
@@ -850,6 +869,35 @@ public class BreinInteractionMiningService(
                 s.Count++;
                 s.Millis += millis;
                 s.Refs += refs;
+                _llmCalls++;
+                _provider ??= call.Provider;
+                _model = call.Model ?? _model;
+                if (call.Usage is { } usage)
+                {
+                    _hasUsage = true;
+                    _inputTokens += usage.InputTokens;
+                    _outputTokens += usage.OutputTokens;
+                    _usageUnit ??= usage.Unit;
+                    if (usage.CostUsd is { } cost)
+                    {
+                        _hasCost = true;
+                        _costUsd += cost;
+                    }
+                }
+            }
+        }
+
+        public void ApplyTo(MiningRun run)
+        {
+            lock (_gate)
+            {
+                run.LlmCalls = _llmCalls;
+                run.LlmProvider = _provider;
+                run.LlmModel = _model ?? run.LlmModel;
+                run.InputTokens = _hasUsage ? _inputTokens : null;
+                run.OutputTokens = _hasUsage ? _outputTokens : null;
+                run.UsageUnit = _hasUsage ? _usageUnit : null;
+                run.CostUsd = _hasCost ? _costUsd : null;
             }
         }
 

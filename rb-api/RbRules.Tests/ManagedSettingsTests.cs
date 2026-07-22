@@ -73,6 +73,34 @@ public class ManagedSettingsTests
     }
 
     [Fact]
+    public async Task Extractiemodel_IsEenGeslotenAlias_EnWerktDirect()
+    {
+        var factory = NewFactory();
+        var svc = Service(factory, BreinRetrievalSettings.Disabled, NightlyRunSettings.Default);
+
+        Assert.Equal(BreinExtractModelAliases.Sonnet,
+            (await svc.BreinExtractAsync()).ModelAlias);
+
+        var change = await svc.SetAsync(SettingKeys.BreinExtractModel, "codex", "beheer");
+
+        Assert.True(change.Ok);
+        Assert.Equal("sonnet", change.Previous);
+        Assert.Equal("codex", change.Current);
+        Assert.Equal("codex", (await svc.BreinExtractAsync()).ModelAlias);
+    }
+
+    [Fact]
+    public void Extractiemodel_WeigertVrijeModelIds()
+    {
+        Assert.True(ManagedSettingsCatalog.ParseValue(
+            SettingKeys.BreinExtractModel, "codex").Ok);
+        var invalid = ManagedSettingsCatalog.ParseValue(
+            SettingKeys.BreinExtractModel, "gpt-willekeurig");
+        Assert.False(invalid.Ok);
+        Assert.Contains("sonnet, opus, fable, codex", invalid.Error);
+    }
+
+    [Fact]
     public async Task Nachtrun_Noodrem_EnVenster_ZijnBeheerbaar_MetDirectEffect()
     {
         var svc = Service(NewFactory(), BreinRetrievalSettings.Disabled,
@@ -339,6 +367,10 @@ public class ManagedSettingsTests
         var tz = views.Single(v => v.Key == SettingKeys.NightlyTimeZone);
         Assert.False(tz.Overridden);
         Assert.Equal(tz.Default, tz.Effective);
+
+        var extract = views.Single(v => v.Key == SettingKeys.BreinExtractModel);
+        Assert.Equal("sonnet", extract.Default);
+        Assert.Contains("codex", extract.Options!);
     }
 
     // ── 7) Het koppelvlak met rb-web ──────────────────────────────────────

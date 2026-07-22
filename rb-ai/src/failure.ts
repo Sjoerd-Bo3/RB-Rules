@@ -785,6 +785,12 @@ export function logCall(entry: {
   rejectedConditions?: number;
   /** Taaktype van een /ask-call (cheap/hard/research/agentic). */
   task?: string;
+  /** Provider/model-attributie voor extract/audit-kosten, nooit request-inhoud. */
+  provider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
 }): void {
   logEvent("ai_call", {
     endpoint: entry.endpoint,
@@ -792,6 +798,11 @@ export function logCall(entry: {
     status: entry.status,
     outcome: entry.outcome,
     task: entry.task,
+    provider: entry.provider,
+    model: entry.model,
+    inputTokens: entry.inputTokens,
+    outputTokens: entry.outputTokens,
+    costUsd: entry.costUsd,
     bytes: entry.bytes,
     refs: entry.refs,
     items: entry.items,

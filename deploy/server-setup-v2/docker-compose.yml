@@ -197,8 +197,21 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "false"
     environment:
+      # AI-auth (#325). Ongenummerd blijft de single-accountfallback; zodra er
+      # een genummerd slot niet-leeg is negeert rb-ai de ongenummerde waarden voor
+      # die provider. Per Claude-slot exact één van OAuth/API-key invullen.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN_1: ${CLAUDE_CODE_OAUTH_TOKEN_1:-}
+      ANTHROPIC_API_KEY_1: ${ANTHROPIC_API_KEY_1:-}
+      CLAUDE_CODE_OAUTH_TOKEN_2: ${CLAUDE_CODE_OAUTH_TOKEN_2:-}
+      ANTHROPIC_API_KEY_2: ${ANTHROPIC_API_KEY_2:-}
+      CODEX_ACCESS_TOKEN: ${CODEX_ACCESS_TOKEN:-}
+      CODEX_HOME: ${CODEX_HOME:-}
+      CODEX_ACCESS_TOKEN_1: ${CODEX_ACCESS_TOKEN_1:-}
+      CODEX_HOME_1: ${CODEX_HOME_1:-}
+      CODEX_ACCESS_TOKEN_2: ${CODEX_ACCESS_TOKEN_2:-}
+      CODEX_HOME_2: ${CODEX_HOME_2:-}
       # Brein-tools (#106/#107): de agentic-taak praat via de brein-API terug
       # met rb-api (compose-intern, containernaam zoals RB_AI_URL hierboven).
       RB_API_URL: http://rb-v2-api:8080
@@ -232,6 +245,11 @@ services:
       # wandkloktijd per mislukte kaart in de nachtrun — een run met 22
       # uitvallen betaalt 22× deze waarde.
       AI_EXTRACT_TIMEOUT_MS: ${AI_EXTRACT_TIMEOUT_MS:-90000}
+    volumes:
+      # Persistente, onderling geïsoleerde Codex-login/state. Zet CODEX_HOME_1/2
+      # op deze containerpaden; laat ze leeg bij access-token- of Claude-only gebruik.
+      - /mnt/data/codex/rb-rules-v2/account-1:/var/lib/rb-ai/codex-1
+      - /mnt/data/codex/rb-rules-v2/account-2:/var/lib/rb-ai/codex-2
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
