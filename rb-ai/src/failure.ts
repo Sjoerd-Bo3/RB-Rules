@@ -115,6 +115,24 @@ const SECRET_ENV_PATTERN = /(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)/i;
  * deze grens is de kans op een toevallige match (bv. `KEY=1`) groter dan de
  * winst, en zou de redactie zelf ruis worden. */
 const MIN_SECRET_LENGTH = 8;
+const runtimeSecrets = new Map<string, number>();
+
+/** Register encrypted-vault credentials while a runtime generation can use them. */
+export function registerRuntimeSecrets(values: Iterable<string>): () => void {
+  const registered = [...new Set([...values].filter((value) => value.length >= MIN_SECRET_LENGTH))];
+  for (const value of registered)
+    runtimeSecrets.set(value, (runtimeSecrets.get(value) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const value of registered) {
+      const count = runtimeSecrets.get(value) ?? 0;
+      if (count <= 1) runtimeSecrets.delete(value);
+      else runtimeSecrets.set(value, count - 1);
+    }
+  };
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -140,6 +158,7 @@ export function redactSecrets(text: string): string {
     if (!value || value.length < MIN_SECRET_LENGTH) continue;
     out = out.replaceAll(value, "[redacted]");
   }
+  for (const value of runtimeSecrets.keys()) out = out.replaceAll(value, "[redacted]");
 
   out = out.replace(/\bsk-ant-[A-Za-z0-9_-]+/g, "[redacted]");
   out = out.replace(/\bsk-[A-Za-z0-9_-]{16,}/g, "[redacted]");

@@ -12,6 +12,7 @@ import {
   type QueryRunner,
 } from "./claude-agent.js";
 import type {
+  AccountRouteMetadata,
   ProviderAccountHealth,
   ToolProvider,
   ToolProviderRequest,
@@ -51,6 +52,8 @@ export class NoopClaudeQuotaReader implements ClaudeQuotaReader {
 export interface ClaudeAccount {
   environment: ClaudeAccountEnvironment;
   quotaReader: ClaudeQuotaReader;
+  route?: AccountRouteMetadata;
+  initialStatus?: "auth_invalid";
 }
 
 interface ClaudeAccountState extends ClaudeAccount {
@@ -60,13 +63,25 @@ interface ClaudeAccountState extends ClaudeAccount {
   quotaReadAt: number;
   cooldownUntil: number;
   observedUtilization: number | null;
+  credentialBlocked: boolean;
+  safeStatus: "unknown" | "ready" | "cooldown" | "quota_exhausted" | "auth_invalid";
   refreshing?: Promise<void>;
 }
 
 export interface ClaudeAccountLease {
   readonly environment: ClaudeAccountEnvironment;
   readonly ordinal: number;
+  readonly accountId?: string;
+  readonly poolId?: string;
   release(): void;
+}
+
+export interface RoutedAccountStatus {
+  accountId: string;
+  poolId: string;
+  status: "unknown" | "ready" | "cooldown" | "quota_exhausted" | "auth_invalid";
+  available: boolean;
+  inFlight: number;
 }
 
 export interface ClaudeAccountFactories {
@@ -239,6 +254,19 @@ function openInput() {
   };
 }
 
+export interface ClaudeQuotaProbeResult {
+  status: "ready" | "auth_invalid" | "unknown";
+  quota: ClaudeQuotaSnapshot | null;
+}
+
+export function claudeProbeFailureStatus(error: unknown): "auth_invalid" | "unknown" {
+  const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  return /\b401\b|\b403\b|authentication[_\s-]?failed|unauthori[sz]ed|invalid[_\s-]?(?:oauth|token)/i
+    .test(text)
+    ? "auth_invalid"
+    : "unknown";
+}
+
 /** No-turn usage probe: initialize streaming SDK transport, request usage, close. */
 export class SdkClaudeQuotaReader implements ClaudeQuotaReader {
   constructor(
@@ -247,24 +275,25 @@ export class SdkClaudeQuotaReader implements ClaudeQuotaReader {
     private readonly timeoutMs = QUOTA_PROBE_TIMEOUT_MS,
   ) {}
 
-  async read(): Promise<ClaudeQuotaSnapshot | null> {
+  async probe(): Promise<ClaudeQuotaProbeResult> {
     const controller = new AbortController();
     const input = openInput();
-    const session = query({
-      prompt: input.iterable as Parameters<typeof query>[0]["prompt"],
-      options: {
-        abortController: controller,
-        cwd: this.workingDirectory,
-        env: { ...this.environment },
-        maxTurns: 1,
-        persistSession: false,
-        settingSources: [],
-        tools: [],
-        stderr: () => {},
-      },
-    });
+    let session: ReturnType<typeof query> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+      session = query({
+        prompt: input.iterable as Parameters<typeof query>[0]["prompt"],
+        options: {
+          abortController: controller,
+          cwd: this.workingDirectory,
+          env: { ...this.environment },
+          maxTurns: 1,
+          persistSession: false,
+          settingSources: [],
+          tools: [],
+          stderr: () => {},
+        },
+      });
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error("Claude usage probe timeout")), this.timeoutMs);
         timer.unref?.();
@@ -276,15 +305,20 @@ export class SdkClaudeQuotaReader implements ClaudeQuotaReader {
         })(),
         timeout,
       ]);
-      return parseClaudeQuota(response as SDKControlGetUsageResponse);
-    } catch {
-      return null;
+      const quota = parseClaudeQuota(response as SDKControlGetUsageResponse);
+      return { status: quota ? "ready" : "unknown", quota };
+    } catch (error) {
+      return { status: claudeProbeFailureStatus(error), quota: null };
     } finally {
       if (timer) clearTimeout(timer);
       input.end();
       controller.abort();
-      session.close();
+      session?.close();
     }
+  }
+
+  async read(): Promise<ClaudeQuotaSnapshot | null> {
+    return (await this.probe()).quota;
   }
 }
 
@@ -300,6 +334,7 @@ export function isClaudeAccountLocalFailure(
 
 export class ClaudeAccountRouter {
   private readonly states: ClaudeAccountState[];
+  private readonly poolCredits = new Map<string, number>();
   private cursor = 0;
   private refreshingAll?: Promise<void>;
 
@@ -314,8 +349,10 @@ export class ClaudeAccountRouter {
       inFlight: 0,
       quota: null,
       quotaReadAt: Number.NEGATIVE_INFINITY,
-      cooldownUntil: 0,
+      cooldownUntil: account.initialStatus === "auth_invalid" ? Number.POSITIVE_INFINITY : 0,
       observedUtilization: null,
+      credentialBlocked: account.initialStatus === "auth_invalid",
+      safeStatus: account.initialStatus ?? "unknown",
     }));
   }
 
@@ -332,6 +369,7 @@ export class ClaudeAccountRouter {
   }
 
   private async refresh(state: ClaudeAccountState): Promise<void> {
+    if (state.credentialBlocked) return;
     if (this.now() - state.quotaReadAt < this.quotaTtlMs) return;
     if (state.refreshing) return await state.refreshing;
     state.refreshing = (async () => {
@@ -375,12 +413,24 @@ export class ClaudeAccountRouter {
       : (state.index - this.cursor + this.states.length) % this.states.length;
   }
 
+  private poolKey(state: ClaudeAccountState): string {
+    return state.route?.poolId ?? `unmanaged-account-${state.index}`;
+  }
+
+  private recoverExpiredState(state: ClaudeAccountState, now: number): void {
+    if (state.credentialBlocked || state.cooldownUntil <= 0 || state.cooldownUntil > now) return;
+    state.cooldownUntil = 0;
+    if (state.observedUtilization === 100) state.observedUtilization = null;
+    if (state.safeStatus === "auth_invalid" || state.safeStatus === "quota_exhausted"
+      || state.safeStatus === "cooldown")
+      state.safeStatus = "unknown";
+  }
+
   acquire(modelId: string, excluded: ReadonlySet<number> = new Set()): ClaudeAccountLease | null {
     const now = this.now();
     const candidates = this.states.filter((state) => {
+      this.recoverExpiredState(state, now);
       if (excluded.has(state.index) || state.cooldownUntil > now) return false;
-      if (state.cooldownUntil <= now && state.observedUtilization === 100)
-        state.observedUtilization = null;
       const score = this.score(state, modelId);
       return score === null || score < 100;
     });
@@ -389,22 +439,72 @@ export class ClaudeAccountRouter {
       + Math.min(MAX_IN_FLIGHT_PENALTY_PERCENT, state.inFlight * IN_FLIGHT_PENALTY_PERCENT);
     const compareLoad = (left: ClaudeAccountState, right: ClaudeAccountState) =>
       left.inFlight - right.inFlight || this.distance(left) - this.distance(right);
-    const known = candidates
-      .filter((state) => this.score(state, modelId) !== null)
-      .sort((left, right) =>
-        effective(left) - effective(right)
-        || compareLoad(left, right));
-    const unknown = candidates
-      .filter((state) => this.score(state, modelId) === null)
-      .sort(compareLoad);
-    const selected = known[0] ?? unknown[0];
-    if (!selected) return null;
+    const grouped = new Map<string, ClaudeAccountState[]>();
+    for (const state of candidates) {
+      const key = this.poolKey(state);
+      const members = grouped.get(key) ?? [];
+      members.push(state);
+      grouped.set(key, members);
+    }
+    const pools = [...grouped.entries()].map(([key, states]) => {
+      const priority = states[0]?.route?.priority ?? 0;
+      const weight = states[0]?.route?.weight ?? 1;
+      const known = states
+        .filter((state) => this.score(state, modelId) !== null)
+        .sort((left, right) =>
+          effective(left) - effective(right)
+          || compareLoad(left, right));
+      const unknown = states
+        .filter((state) => this.score(state, modelId) === null)
+        .sort(compareLoad);
+      return {
+        key,
+        priority,
+        weight,
+        known: known.length > 0,
+        best: (known.length > 0 ? known : unknown)[0],
+      };
+    });
+    const highestPriority = pools.length > 0
+      ? Math.max(...pools.map((pool) => pool.priority))
+      : Number.NEGATIVE_INFINITY;
+    const prioritized = pools.filter((pool) => pool.priority === highestPriority && pool.best);
+    const comparable = prioritized.some((pool) => pool.known)
+      ? prioritized.filter((pool) => pool.known)
+      : prioritized;
+    comparable.sort((left, right) =>
+      effective(left.best) - effective(right.best)
+      || compareLoad(left.best, right.best));
+    const bestPool = comparable[0];
+    const equivalent = bestPool
+      ? comparable.filter((pool) =>
+          effective(pool.best) === effective(bestPool.best)
+          && pool.best.inFlight === bestPool.best.inFlight)
+      : [];
+    // A load/quota/cooldown-forced choice is not a weighted-routing turn;
+    // carrying credit through it would bias the next genuinely equal turn.
+    if (equivalent.length === 1) this.poolCredits.clear();
+    for (const pool of equivalent)
+      this.poolCredits.set(pool.key, (this.poolCredits.get(pool.key) ?? 0) + pool.weight);
+    const selectedPool = equivalent.sort((left, right) =>
+      (this.poolCredits.get(right.key) ?? 0) - (this.poolCredits.get(left.key) ?? 0)
+      || this.distance(left.best) - this.distance(right.best))[0];
+    if (!selectedPool) return null;
+    this.poolCredits.set(
+      selectedPool.key,
+      (this.poolCredits.get(selectedPool.key) ?? 0)
+        - equivalent.reduce((total, pool) => total + pool.weight, 0),
+    );
+    const selected = selectedPool.best;
     selected.inFlight += 1;
     this.cursor = (selected.index + 1) % this.states.length;
     let released = false;
     return {
       environment: selected.environment,
       ordinal: selected.index,
+      ...(selected.route
+        ? { accountId: selected.route.accountId, poolId: selected.route.poolId }
+        : {}),
       release: () => {
         if (released) return;
         released = true;
@@ -418,13 +518,21 @@ export class ClaudeAccountRouter {
     const state = this.states[lease.ordinal];
     if (!state) return;
     if (typeof signal.utilization === "number") state.observedUtilization = signal.utilization;
+    if (signal.status === "allowed" || signal.status === "allowed_warning")
+      state.safeStatus = "ready";
     if (signal.status === "rejected") {
       state.observedUtilization = 100;
+      state.safeStatus = "quota_exhausted";
       state.cooldownUntil = Math.max(
         state.cooldownUntil,
         resetTime(signal.resetsAt) ?? this.now() + RATE_LIMIT_COOLDOWN_MS,
       );
     }
+  }
+
+  markSuccess(lease: ClaudeAccountLease): void {
+    const state = this.states[lease.ordinal];
+    if (state) state.safeStatus = "ready";
   }
 
   markAccountFailure(
@@ -436,8 +544,12 @@ export class ClaudeAccountRouter {
     if (!state) return;
     this.observeSignal(lease, signal);
     if (failure.reason === "auth")
-      state.cooldownUntil = Math.max(state.cooldownUntil, this.now() + AUTH_COOLDOWN_MS);
+      {
+        state.safeStatus = "auth_invalid";
+        state.cooldownUntil = Math.max(state.cooldownUntil, this.now() + AUTH_COOLDOWN_MS);
+      }
     else if (isClaudeAccountLocalFailure(failure, signal)) {
+      state.safeStatus = "quota_exhausted";
       state.observedUtilization = 100;
       state.cooldownUntil = Math.max(state.cooldownUntil, this.now() + RATE_LIMIT_COOLDOWN_MS);
     }
@@ -445,6 +557,7 @@ export class ClaudeAccountRouter {
 
   health(): ProviderAccountHealth {
     const now = this.now();
+    for (const state of this.states) this.recoverExpiredState(state, now);
     return {
       configuredAccounts: this.states.length,
       availableAccounts: this.states.filter((state) =>
@@ -452,6 +565,25 @@ export class ClaudeAccountRouter {
         && (this.score(state, "claude-sonnet-4-6") ?? 0) < 100).length,
       inFlight: this.states.reduce((total, state) => total + state.inFlight, 0),
     };
+  }
+
+  accountStatuses(): readonly RoutedAccountStatus[] {
+    const now = this.now();
+    return this.states.flatMap((state) => {
+      this.recoverExpiredState(state, now);
+      if (!state.route) return [];
+      const quotaExhausted = (this.score(state, "claude-sonnet-4-6") ?? 0) >= 100;
+      const status = state.cooldownUntil > now
+        ? state.safeStatus === "auth_invalid" ? "auth_invalid" : "cooldown"
+        : quotaExhausted ? "quota_exhausted" : state.safeStatus;
+      return [{
+        accountId: state.route.accountId,
+        poolId: state.route.poolId,
+        status,
+        available: state.cooldownUntil <= now && !quotaExhausted,
+        inFlight: state.inFlight,
+      }];
+    });
   }
 }
 
@@ -482,13 +614,18 @@ export function createClaudeAccountRouter(
   return new ClaudeAccountRouter(createClaudeAccountsFromEnvironment(source, factories));
 }
 
-export const claudeAccountRouter = createClaudeAccountRouter(process.env);
+let fallbackClaudeAccountRouter: ClaudeAccountRouter | undefined;
+
+export function getFallbackClaudeAccountRouter(): ClaudeAccountRouter {
+  return fallbackClaudeAccountRouter
+    ??= createClaudeAccountRouter(process.env);
+}
 
 export class ClaudeAccountPoolProvider implements ToolProvider {
   readonly id = "claude-agent-sdk";
 
   constructor(
-    private readonly router: ClaudeAccountRouter = claudeAccountRouter,
+    private readonly router: ClaudeAccountRouter = getFallbackClaudeAccountRouter(),
     private readonly providerFactory: (environment: ClaudeAccountEnvironment) => ClaudeAgentToolProvider =
       (environment) => new ClaudeAgentToolProvider(query as unknown as QueryRunner, environment),
   ) {}
@@ -533,6 +670,7 @@ export class ClaudeAccountPoolProvider implements ToolProvider {
             return request.onToolCall(name, input);
           },
         });
+        if (!result.failure) this.router.markSuccess(lease);
         this.router.observeSignal(lease, result.accountSignal);
         if (
           result.failure

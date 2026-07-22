@@ -50,6 +50,7 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD ontbreekt in .env}
       RB_AI_URL: http://rb-v2-ai:8090
+      RB_AI_CONTROL_KEY: ${RB_AI_CONTROL_KEY:?RB_AI_CONTROL_KEY ontbreekt in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       OLLAMA_URL: http://rb-v2-ollama:11434
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
@@ -212,6 +213,11 @@ services:
       CODEX_HOME_1: ${CODEX_HOME_1:-}
       CODEX_ACCESS_TOKEN_2: ${CODEX_ACCESS_TOKEN_2:-}
       CODEX_HOME_2: ${CODEX_HOME_2:-}
+      # Beheer → Brein schrijft alleen via deze interne control-poort. De
+      # vault-key blijft uitsluitend in rb-ai; rb-api ziet hem nooit.
+      RB_AI_CONTROL_KEY: ${RB_AI_CONTROL_KEY:?RB_AI_CONTROL_KEY ontbreekt in .env}
+      RB_AI_VAULT_KEY: ${RB_AI_VAULT_KEY:?RB_AI_VAULT_KEY ontbreekt in .env}
+      RB_AI_CONFIG_DIR: /var/lib/rb-ai/config
       # Brein-tools (#106/#107): de agentic-taak praat via de brein-API terug
       # met rb-api (compose-intern, containernaam zoals RB_AI_URL hierboven).
       RB_API_URL: http://rb-v2-api:8080
@@ -250,6 +256,7 @@ services:
       # op deze containerpaden; laat ze leeg bij access-token- of Claude-only gebruik.
       - /mnt/data/codex/rb-rules-v2/account-1:/var/lib/rb-ai/codex-1
       - /mnt/data/codex/rb-rules-v2/account-2:/var/lib/rb-ai/codex-2
+      - /mnt/data/rb-ai/rb-rules-v2/config:/var/lib/rb-ai/config
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import AiConfiguration from './AiConfiguration.svelte';
 
 	let { data, form } = $props();
 
@@ -164,7 +165,6 @@
 
 	const retrievalSetting = $derived(settingOf('brein.retrieval.enabled'));
 	const auditSampleSetting = $derived(settingOf('brein.audit.sample_n'));
-	const extractModelSetting = $derived(settingOf('brein.extract.model'));
 	const nightlySetting = $derived(settingOf('nightly.enabled'));
 	// Het venster in het formulier: uit de effectieve waarden, met een terugval op
 	// de bestaande defaults zolang de instellingen-lijst er nog niet is.
@@ -174,15 +174,6 @@
 	const HOURS = Array.from({ length: 24 }, (_, i) => String(i));
 	const fmtNumber = (n: number) => n.toLocaleString('nl-NL');
 	const fmtUsd = (n: number) => `$${n.toFixed(6)}`;
-	function modelAliasLabel(alias: string): string {
-		switch (alias) {
-			case 'sonnet': return 'Claude Sonnet';
-			case 'opus': return 'Claude Opus';
-			case 'fable': return 'Claude Fable';
-			case 'codex': return 'Codex';
-			default: return alias;
-		}
-	}
 
 	// "gewijzigd 3u geleden door beheer" — herkomst van een schakelaar hoort
 	// zichtbaar te zijn (rode draad #236); het volledige spoor staat in run_log.
@@ -436,30 +427,6 @@
 							<span class="run-meta">{settingMeta(auditSampleSetting)}</span>
 						</form>
 					{/if}
-					{#if extractModelSetting}
-						<form
-							class="auditdensity"
-							method="POST"
-							action="?/setting"
-							use:enhance={() => async ({ update }) => {
-								await update();
-								await invalidateAll();
-							}}
-						>
-							<label>
-								<span>Extractiemodel</span>
-								<input type="hidden" name="key" value="brein.extract.model" />
-								<select name="value" aria-label="Extractiemodel">
-									{#each extractModelSetting.options ?? [] as alias (alias)}
-										<option value={alias} selected={alias === extractModelSetting.effective}>{modelAliasLabel(alias)}</option>
-									{/each}
-								</select>
-							</label>
-							<button class="cta">Opslaan</button>
-							<span class="run-meta">{settingMeta(extractModelSetting)}</span>
-						</form>
-					{/if}
-
 					{#if cockpit.providerUsage?.length}
 						<div class="provider-usage">
 							<h4>Providergebruik</h4>
@@ -607,6 +574,13 @@
 				</div>
 			</div>
 		</div>
+
+		<AiConfiguration
+			config={data.aiConfig}
+			{settings}
+			{form}
+			deviceLoginPending={data.deviceLoginPending}
+		/>
 
 		<!-- Nachtrun — de volledige ongecapte keten (#245) -->
 		<div class="nightly">
@@ -1110,14 +1084,6 @@
 		width: 78px;
 		padding: 7px 9px;
 		font-size: 16px; /* iOS zoomt op form-controls < 16px */
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md, 8px);
-		background: var(--surface-deep);
-		color: var(--text);
-	}
-	.auditdensity select {
-		padding: 7px 28px 7px 9px;
-		font-size: 16px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius-md, 8px);
 		background: var(--surface-deep);

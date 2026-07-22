@@ -9,6 +9,8 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-rbrules-neo4j}
       RB_AI_URL: http://rb-ai:8090
+      # Alleen voor de interne beheerproxy; providercredentials komen nooit in rb-api.
+      RB_AI_CONTROL_KEY: ${RB_AI_CONTROL_KEY:-local-development-control-key-325}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       OLLAMA_URL: http://ollama:11434
     ports:
@@ -44,6 +46,10 @@ services:
       CODEX_HOME_1: ${CODEX_HOME_1:-}
       CODEX_ACCESS_TOKEN_2: ${CODEX_ACCESS_TOKEN_2:-}
       CODEX_HOME_2: ${CODEX_HOME_2:-}
+      RB_AI_CONTROL_KEY: ${RB_AI_CONTROL_KEY:-local-development-control-key-325}
+      # Dev-only fallback: 32 nulbytes in base64. Productie heeft een unieke key.
+      RB_AI_VAULT_KEY: ${RB_AI_VAULT_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+      RB_AI_CONFIG_DIR: /var/lib/rb-ai/config
       # Brein-tools (#106/#107): de agentic-taak praat via de brein-API terug
       # met rb-api (compose-intern).
       RB_API_URL: http://rb-api:8080
@@ -52,6 +58,7 @@ services:
       # Elk account heeft een eigen schrijfbare auth/state-directory.
       - codexhome1_v2:/var/lib/rb-ai/codex-1
       - codexhome2_v2:/var/lib/rb-ai/codex-2
+      - aiconfig_v2:/var/lib/rb-ai/config
     # geen ports: alleen intern bereikbaar
 
   postgres:
@@ -97,3 +104,4 @@ volumes:
   ollamadata_v2:
   codexhome1_v2:
   codexhome2_v2:
+  aiconfig_v2:

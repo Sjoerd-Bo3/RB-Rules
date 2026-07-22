@@ -7,7 +7,7 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/validate.test.ts src/brain-tools.test.ts src/relations.test.ts src/extract.test.ts src/audit.test.ts src/usage.test.ts src/warmpool.test.ts src/concurrency.test.ts src/failure.test.ts src/providers/claude-accounts.test.ts src/providers/codex.test.ts src/providers/provider-contract.test.ts src/ai.test.ts src/server.test.ts && AI_EXTRACT_TIMEOUT_MS=1000 node --import tsx --test src/extract-timeout.test.ts"
+    "test": "node --import tsx --test src/validate.test.ts src/brain-tools.test.ts src/relations.test.ts src/extract.test.ts src/audit.test.ts src/usage.test.ts src/warmpool.test.ts src/concurrency.test.ts src/failure.test.ts src/providers/claude-accounts.test.ts src/providers/codex.test.ts src/providers/provider-contract.test.ts src/control/vault.test.ts src/control/codex-login.test.ts src/control/http.test.ts src/control/runtime.test.ts src/control/service.test.ts src/ai.test.ts src/server.test.ts && AI_EXTRACT_TIMEOUT_MS=1000 node --import tsx --test src/extract-timeout.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.178",

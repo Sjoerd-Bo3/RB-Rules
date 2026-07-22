@@ -157,6 +157,7 @@ export class WarmPool {
   private deadIdle = 0;
   private deadOnClaim = 0;
   private bootFailures = 0;
+  private topologyEnabled = true;
 
   constructor(private readonly config: WarmPoolConfig) {
     this.maxSignatures = config.maxSignatures ?? 8;
@@ -169,7 +170,24 @@ export class WarmPool {
   }
 
   isEnabled(): boolean {
-    return this.config.enabled;
+    return this.config.enabled && this.topologyEnabled;
+  }
+
+  /** Destroy credential-bound idle state after an account topology swap. */
+  invalidate(): void {
+    if (this.slot) {
+      this.slot.handle.kill();
+      if (this.slot.timer) clearTimeout(this.slot.timer);
+      this.slot = null;
+    }
+    this.registry.clear();
+    this.windowUntil = 0;
+  }
+
+  /** A runtime credential topology cannot safely reuse future warm boots. */
+  setTopologyEnabled(enabled: boolean): void {
+    this.topologyEnabled = enabled;
+    this.invalidate();
   }
 
   private windowActive(): boolean {
@@ -180,7 +198,7 @@ export class WarmPool {
    * venster, zodat losse achtergrondjobs (mining draait óók task=cheap in
    * bulk) de voorverwarm-keuze niet domineren buiten gebruikersactiviteit. */
   observe(sig: WarmSignature): void {
-    if (!this.config.enabled || !this.windowActive()) return;
+    if (!this.isEnabled() || !this.windowActive()) return;
     const key = signatureKey(sig);
     const existing = this.registry.get(key);
     if (existing) {
@@ -219,7 +237,7 @@ export class WarmPool {
    * en boot — idempotent — één warme sessie voor de best geleerde signatuur.
    * Antwoordt altijd meteen; de boot zelf loopt op de achtergrond. */
   prewarm(): { enabled: boolean; booted: boolean; reason?: string } {
-    if (!this.config.enabled) return { enabled: false, booted: false, reason: "kill-switch" };
+    if (!this.isEnabled()) return { enabled: false, booted: false, reason: "kill-switch" };
     this.windowUntil = Date.now() + this.config.ttlMs;
     if (this.slot && !this.slot.done) return { enabled: true, booted: false, reason: "al warm" };
     const sig = this.bestSignature();
@@ -295,7 +313,7 @@ export class WarmPool {
    * ⇒ null (aanroeper start koud); binnen het activiteitsvenster wordt dan —
    * of na een geslaagde claim — asynchroon opnieuw voorverwarmd. */
   claim(sig: WarmSignature): ClaimedWarmSession | null {
-    if (!this.config.enabled) return null;
+    if (!this.isEnabled()) return null;
     const slot = this.slot;
     if (!slot) {
       this.misses += 1;
@@ -363,7 +381,7 @@ export class WarmPool {
 
   stats(): WarmPoolStats {
     return {
-      enabled: this.config.enabled,
+      enabled: this.isEnabled(),
       slot: this.slot ? "aan het opwarmen of warm" : "leeg",
       windowActive: this.windowActive(),
       boots: this.boots,

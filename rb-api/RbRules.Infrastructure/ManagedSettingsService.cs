@@ -373,6 +373,7 @@ public sealed class ManagedSettingsService
     {
         SettingKeys.BreinRetrievalEnabled => brein.Enabled ? "true" : "false",
         SettingKeys.BreinAuditSampleN => audit.SampleDivisor.ToString(),
+        SettingKeys.BreinAuditModel => audit.ModelAlias,
         SettingKeys.BreinExtractModel => extract.ModelAlias,
         SettingKeys.NightlyEnabled => nightly.Enabled ? "true" : "false",
         SettingKeys.NightlyStartHour => nightly.StartHour.ToString(),

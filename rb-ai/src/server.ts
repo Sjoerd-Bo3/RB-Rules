@@ -29,6 +29,7 @@ import {
 } from "./extract.js";
 import { splitRelationProposals } from "./relations.js";
 import { parseAskRequest } from "./validate.js";
+import { controlHttpHandler } from "./control/http.js";
 
 /** Test-seam (#312-review): de SDK-gedreven extractie als vervangbaar veld.
  *
@@ -217,6 +218,7 @@ export const server = createServer(async (req, res) => {
   });
 
   try {
+    if (await controlHttpHandler(req, res)) return;
     if (req.method === "GET" && req.url === "/health") {
       const configured = providerRegistry.list().some((provider) => provider.configured());
       // capacity (#155) en warm (#154): tellers om de cap en de pool op

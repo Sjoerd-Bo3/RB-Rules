@@ -9,6 +9,7 @@ import {
   createClaudeAccountsFromEnvironment,
   discoverClaudeAccountEnvironments,
   NoopClaudeQuotaReader,
+  claudeProbeFailureStatus,
   parseClaudeQuota,
   SdkClaudeQuotaReader,
   type ClaudeAccount,
@@ -64,6 +65,16 @@ function toolRequest(signal: AbortSignal = new AbortController().signal): ToolPr
 }
 
 describe("Claude account discovery", () => {
+  it("distinguishes OAuth auth rejection from an unknown transport failure", () => {
+    for (const error of [
+      new Error("401 unauthorized"),
+      new Error("403 forbidden"),
+      new Error("authentication_failed"),
+    ]) assert.equal(claudeProbeFailureStatus(error), "auth_invalid");
+    assert.equal(claudeProbeFailureStatus(new Error("ECONNRESET")), "unknown");
+    assert.equal(claudeProbeFailureStatus(new Error("probe timeout")), "unknown");
+  });
+
   it("uses arbitrary numbered slots and isolates every selected credential", () => {
     const homes = ["/tmp/claude-home-2", "/tmp/claude-home-9"];
     const environments = discoverClaudeAccountEnvironments({
@@ -229,11 +240,69 @@ describe("Claude quota parsing and router", () => {
     assert.equal(balanced.health().inFlight, 0);
   });
 
+  it("honors managed pool priority and smooth routing weight on equivalent accounts", () => {
+    const routed = (
+      name: string,
+      priority: number,
+      weight: number,
+      poolId = `pool-${name}`,
+    ): ClaudeAccount => ({
+      ...account({ name }),
+      route: { accountId: name, poolId, priority, weight },
+    });
+    const prioritized = new ClaudeAccountRouter([
+      routed("low", 1, 100),
+      routed("high", 10, 1),
+    ]);
+    const high = prioritized.acquire("claude-sonnet-4-6");
+    assert.equal(high?.accountId, "high");
+    high?.release();
+
+    const weighted = new ClaudeAccountRouter([
+      routed("weight-three", 5, 3),
+      routed("weight-one", 5, 1),
+    ]);
+    const counts = new Map<string, number>();
+    for (let index = 0; index < 8; index += 1) {
+      const lease = weighted.acquire("claude-sonnet-4-6");
+      assert.ok(lease?.accountId);
+      counts.set(lease.accountId, (counts.get(lease.accountId) ?? 0) + 1);
+      lease.release();
+    }
+    assert.deepEqual(Object.fromEntries(counts), { "weight-three": 6, "weight-one": 2 });
+
+    const poolCounts = (weightA: number) => {
+      const router = new ClaudeAccountRouter([
+        routed("a-1", 5, weightA, "pool-a"),
+        routed("a-2", 5, weightA, "pool-a"),
+        routed("b-1", 5, 1, "pool-b"),
+      ]);
+      const selected: string[] = [];
+      for (let index = 0; index < 8; index += 1) {
+        const lease = router.acquire("claude-sonnet-4-6");
+        assert.ok(lease?.poolId);
+        selected.push(lease.poolId);
+        lease.release();
+      }
+      return selected;
+    };
+    const equalPools = poolCounts(1);
+    assert.equal(equalPools.filter((pool) => pool === "pool-a").length, 4);
+    assert.equal(equalPools.filter((pool) => pool === "pool-b").length, 4);
+    const weightedPools = poolCounts(3);
+    assert.equal(weightedPools.filter((pool) => pool === "pool-a").length, 6);
+    assert.equal(weightedPools.filter((pool) => pool === "pool-b").length, 2);
+  });
+
   it("recovers auth and rate-limit cooldowns after their deadline", () => {
     let now = 1_800_000_000_000;
     const router = new ClaudeAccountRouter([
-      account({ name: "a" }),
-      account({ name: "b" }),
+      { ...account({ name: "a" }), route: {
+        accountId: "a", poolId: "pool-a", priority: 0, weight: 1,
+      } },
+      { ...account({ name: "b" }), route: {
+        accountId: "b", poolId: "pool-b", priority: 0, weight: 1,
+      } },
     ], () => now);
     const first = router.acquire("claude-sonnet-4-6");
     assert.equal(first?.ordinal, 0);
@@ -245,8 +314,10 @@ describe("Claude quota parsing and router", () => {
     second?.release();
 
     now += 300_001;
+    assert.equal(router.accountStatuses().find((item) => item.accountId === "a")?.status, "unknown");
     const recovered = router.acquire("claude-sonnet-4-6");
     assert.equal(recovered?.ordinal, 0);
+    assert.equal(router.accountStatuses().find((item) => item.accountId === "a")?.status, "unknown");
     if (!recovered) return;
     router.markAccountFailure(
       recovered,
@@ -260,9 +331,11 @@ describe("Claude quota parsing and router", () => {
     // Account-local failures have a one-minute minimum cooldown even when an
     // event carries an earlier reset, avoiding an immediate retry storm.
     now += 60_001;
+    assert.equal(router.accountStatuses().find((item) => item.accountId === "a")?.status, "unknown");
     const resetRecovered = router.acquire("claude-sonnet-4-6");
     assert.equal(resetRecovered?.ordinal, 0);
     resetRecovered?.release();
+    assert.equal(router.accountStatuses().find((item) => item.accountId === "a")?.status, "unknown");
   });
 });
 

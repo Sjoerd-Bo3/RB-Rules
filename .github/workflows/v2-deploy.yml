@@ -100,6 +100,7 @@ jobs:
       - name: "Bootstrap: schrijf .env uit secrets"
         if: steps.check.outputs.enabled == 'true' && inputs.bootstrap == true
         run: |
+          umask 077
           # Secrets-hygiëne (issue #45): geen hardcoded NEO4J_PASSWORD meer en
           # CLAUDE_CODE_OAUTH_TOKEN wordt óók gevalideerd — een bootstrap
           # zonder AI-token levert anders een stilletjes kreupele stack op.
@@ -121,14 +122,86 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN
           ANTHROPIC_API_KEY=
           EOF
-          $SSHCMD "mkdir -p $VM_PATH"
-          scp -i ~/.ssh/id_deploy env.tmp "$VM_USER@$VM_HOST:$VM_PATH/.env"
+          $SSHCMD "mkdir -p '$VM_PATH'"
+          scp -i ~/.ssh/id_deploy env.tmp "$VM_USER@$VM_HOST:$VM_PATH/.env.bootstrap"
+          # Vervang de bootstrapwaarden atomair, maar behoud rb-ai-keys die al
+          # op de VM staan. Rotatie zonder kluismigratie zou de kluis breken.
+          $SSHCMD "sh -s -- '$VM_PATH'" <<'REMOTE'
+          set -eu
+          vm_path="$1"
+          env_file="$vm_path/.env"
+          bootstrap_file="$vm_path/.env.bootstrap"
+          next_file="$vm_path/.env.next"
+          umask 077
+          cp "$bootstrap_file" "$next_file"
+          for name in RB_AI_CONTROL_KEY RB_AI_VAULT_KEY; do
+            value=""
+            if [ -f "$env_file" ]; then
+              value="$(sed -n "s/^${name}=//p" "$env_file" | tail -n 1)"
+            fi
+            if [ -n "$value" ]; then
+              printf '%s=%s\n' "$name" "$value" >> "$next_file"
+            fi
+          done
+          mv "$next_file" "$env_file"
+          rm -f "$bootstrap_file"
+          chmod 600 "$env_file"
+          REMOTE
           rm env.tmp
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+      - name: Zorg voor rb-ai control- en vault-keys
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          # Bestaande VM's hebben deze waarden nog niet. Genereer ze OP de VM,
+          # toon ze nooit in Actions-output en bewaar de .env met mode 600.
+          # De vault-key is exact 32 bytes in base64 (AES-256-GCM).
+          $SSHCMD "sh -s -- '$VM_PATH'" <<'REMOTE'
+          set -eu
+          vm_path="$1"
+          env_file="$vm_path/.env"
+          vault_file="/mnt/data/rb-ai/rb-rules-v2/config/ai-config.v1.enc"
+          key_check="$vm_path/.rb-ai-vault-key.check"
+          umask 077
+          mkdir -p "$vm_path" /mnt/data/rb-ai/rb-rules-v2/config
+          touch "$env_file"
+          control_key="$(sed -n 's/^RB_AI_CONTROL_KEY=//p' "$env_file" | tail -n 1)"
+          if ! printf '%s' "$control_key" | grep -Eq '^[a-fA-F0-9]{64}$'; then
+            value="$(openssl rand -hex 32)"
+            if grep -q '^RB_AI_CONTROL_KEY=' "$env_file"; then
+              sed -i "s|^RB_AI_CONTROL_KEY=.*|RB_AI_CONTROL_KEY=$value|" "$env_file"
+            else
+              printf 'RB_AI_CONTROL_KEY=%s\n' "$value" >> "$env_file"
+            fi
+          fi
+
+          vault_key="$(sed -n 's/^RB_AI_VAULT_KEY=//p' "$env_file" | tail -n 1)"
+          vault_key_valid=false
+          if [ -n "$vault_key" ] \
+             && printf '%s' "$vault_key" | base64 -d > "$key_check" 2>/dev/null \
+             && [ "$(wc -c < "$key_check" | tr -d ' ')" = "32" ]; then
+            vault_key_valid=true
+          fi
+          rm -f "$key_check"
+          if [ "$vault_key_valid" != true ]; then
+            if [ -s "$vault_file" ]; then
+              echo "ongeldige RB_AI_VAULT_KEY bij bestaande AI-kluis; herstel de originele key" >&2
+              exit 1
+            fi
+            value="$(openssl rand -base64 32)"
+            if grep -q '^RB_AI_VAULT_KEY=' "$env_file"; then
+              sed -i "s|^RB_AI_VAULT_KEY=.*|RB_AI_VAULT_KEY=$value|" "$env_file"
+            else
+              printf 'RB_AI_VAULT_KEY=%s\n' "$value" >> "$env_file"
+            fi
+          fi
+          chmod 600 "$env_file"
+          chmod 700 /mnt/data/rb-ai/rb-rules-v2/config
+          REMOTE
 
       - name: Sync compose file
         if: steps.check.outputs.enabled == 'true'
@@ -215,21 +288,36 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         run: |
           # Issue #45: een deploy die niets verifieert is geen deploy. Wacht
-          # tot rb-api én rb-web echt antwoorden (max ~3 min — EF-migraties
-          # bij opstart kunnen even duren); anders faalt de run zichtbaar.
+          # tot rb-api, rb-web én de bestaande Beheer → Brein-controlketen echt
+          # antwoorden (max ~3 min — EF-migraties bij opstart kunnen even duren).
           verify() {
             $SSHCMD "docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS -m 10 -o /dev/null $1"
           }
+          verify_ai_config() {
+            # Lees ADMIN_PASSWORD uitsluitend op de VM. Deze facade-probe bewijst
+            # tegelijk beheerauth → rb-api → control-key → rb-ai → vault-load.
+            $SSHCMD "sh -s -- '$VM_PATH'" <<'REMOTE'
+          set -eu
+          vm_path="$1"
+          admin_key="$(sed -n 's/^ADMIN_PASSWORD=//p' "$vm_path/.env" | tail -n 1)"
+          [ -n "$admin_key" ]
+          docker run --rm --network rb-rules-v2_internal curlimages/curl:latest \
+            -fsS -m 10 -o /dev/null -H "X-Admin-Key: $admin_key" \
+            http://rb-v2-api:8080/api/admin/ai-config
+          REMOTE
+          }
           for i in $(seq 1 18); do
-            if verify http://rb-v2-api:8080/health && verify http://rb-v2-web:3000/; then
-              echo "OK: rb-api en rb-web antwoorden (poging $i)"
+            if verify http://rb-v2-api:8080/health \
+               && verify http://rb-v2-web:3000/ \
+               && verify_ai_config; then
+              echo "OK: rb-api, rb-web en AI-beheer antwoorden (poging $i)"
               exit 0
             fi
             echo "nog niet gezond (poging $i/18) — 10s wachten"
             sleep 10
           done
-          echo "::error::rb-api of rb-web antwoordt niet na de deploy"
-          $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 ps && docker compose --project-name rb-rules-v2 logs --tail 50 rb-api rb-web"
+          echo "::error::rb-api, rb-web of AI-beheer antwoordt niet na de deploy"
+          $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 ps && docker compose --project-name rb-rules-v2 logs --tail 50 rb-api rb-web rb-ai"
           exit 1
 
       - name: "Bootstrap: embeddings-model, Caddy-route, kickoff"

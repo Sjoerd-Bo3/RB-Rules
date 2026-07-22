@@ -39,6 +39,16 @@ builder.Services.AddHttpClient<RbAiClient>(c =>
     // de sidecar doorwerkt. Overige taken antwoorden of falen veel eerder.
     c.Timeout = TimeSpan.FromMinutes(6);
 });
+// Private AI control plane (#325): deliberately separate from RbAiClient and
+// ManagedSettings. RB_AI_CONTROL_KEY is server-to-server only and credentials
+// sent through this client are write-only; the typed response contract contains
+// no secret fields.
+builder.Services.AddSingleton(_ => AiControlOptions.FromEnvironment());
+builder.Services.AddHttpClient<AiControlClient>(c =>
+{
+    c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("RB_AI_URL") ?? "http://localhost:8090");
+    c.Timeout = TimeSpan.FromSeconds(45);
+}).RedactLoggedHeaders([AiControlClient.ControlHeaderName]);
 // SSRF-guard (#45), fetch-laag: IngestService praat als enige client met
 // URL's van buiten (register/scout/hub) — DNS-check op elk verbindingsdoel
 // (ook redirect-hops) + redirect-limiet. De URL-regels zelf checkt
@@ -353,6 +363,7 @@ app.MapPushEndpoints();
 app.MapAdminEndpoints();
 app.MapBrainAdminEndpoints();
 app.MapSettingsAdminEndpoints();
+app.MapAiConfigAdminEndpoints();
 
 app.Run();
 

@@ -112,6 +112,24 @@ test("kill-switch: uitgeschakelde pool doet helemaal niets", async () => {
   assert.equal(p.stats().signatures, 0);
 });
 
+test("topology swap kills old credential state but single-account warmup can re-enable", () => {
+  const { p, boots } = pool();
+  p.prewarm();
+  p.observe(SIG);
+  p.claim(SIG);
+  assert.equal(boots.length, 1);
+  p.setTopologyEnabled(false);
+  assert.equal(boots[0].killed, true, "old credential-bound process must be destroyed");
+  assert.equal(p.isEnabled(), false);
+  p.setTopologyEnabled(true);
+  assert.equal(p.isEnabled(), true, "single-account config load must not disable warmup forever");
+  assert.deepEqual(p.prewarm(), {
+    enabled: true,
+    booted: false,
+    reason: "nog geen signatuur geleerd",
+  });
+});
+
 test("prewarm zonder geleerde signatuur boot niets (maar opent het venster)", () => {
   const { p, boots } = pool();
   const r = p.prewarm();

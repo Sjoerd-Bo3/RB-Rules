@@ -26,8 +26,9 @@
 		<a class="crumb" href="/admin">&larr; beheer</a>
 		<h1>Brein</h1>
 		<p class="lede">
-			Read-only verkenner &amp; inspectie van het Poracle-brein. Alles komt uit Postgres (de bron
-			van waarheid); afgeleide graaf-feiten worden herbouwd, niets is hier bewerkbaar.
+			Verken en beheer het Poracle-brein. Postgres blijft de bron van waarheid; kennis en
+			afgeleide graaf-feiten zijn read-only, operationele instellingen op het overzicht zijn
+			direct beheerbaar.
 		</p>
 	</header>
 

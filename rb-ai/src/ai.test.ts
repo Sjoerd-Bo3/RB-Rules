@@ -634,6 +634,32 @@ test("Claude rate-limit-event normaliseert fractie naar percentage", () => {
   );
 });
 
+test("/ask markeert een succesvol account ready zonder rate-limit-event", async () => {
+  const environment: ClaudeAccountEnvironment = Object.freeze({
+    ANTHROPIC_API_KEY: "api-account-without-rate-signal",
+    HOME: "/tmp/claude-api-success",
+    CLAUDE_CONFIG_DIR: "/tmp/claude-api-success",
+  });
+  const router = new ClaudeAccountRouter([{
+    environment,
+    quotaReader: { read: async () => null },
+    route: { accountId: "managed-ready", poolId: "managed-pool", priority: 0, weight: 1 },
+  }]);
+  const result = await askClaude({
+    prompt: "vraag",
+    accountRouter: router,
+    pool: noWarmPool(),
+    runQuery: () => stream({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "klaar",
+    }),
+  });
+  assert.equal(result.answer, "klaar");
+  assert.equal(router.accountStatuses()[0]?.status, "ready");
+});
+
 test("/ask valt over na lege rate-limit-uitval, ook al waren er protocolframes", async () => {
   const environments: ClaudeAccountEnvironment[] = [
     Object.freeze({ CLAUDE_CODE_OAUTH_TOKEN: "account-a", HOME: "/tmp/claude-a" }),

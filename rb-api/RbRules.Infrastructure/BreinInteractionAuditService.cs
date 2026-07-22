@@ -13,11 +13,12 @@ namespace RbRules.Infrastructure;
 /// interactie komt de volgende run terug.</param>
 public sealed record BreinInteractionAuditResult(
     int Audited, int Sound, int Disputed, int Failed, bool CapHit,
-    string? FailureDetail = null)
+    string? FailureDetail = null,
+    string Model = BreinInteractionAuditService.AuditModel)
 {
     public string Summary =>
         $"{Audited} gepromoveerde interacties geauditeerd (steekproef door " +
-        $"{BreinInteractionAuditService.AuditModel}) → {Sound} bevestigd, " +
+        $"{Model}) → {Sound} bevestigd, " +
         $"{Disputed} betwist, {Failed} rb-ai-uitval" +
         (string.IsNullOrEmpty(FailureDetail) ? "" : $" ({FailureDetail})");
 }
@@ -26,10 +27,9 @@ public sealed record BreinInteractionAuditResult(
 /// (#255). De observability toonde "precisie ≈ 0,91" voor de interactie-mining, maar
 /// dat is de accept-ratio van onze eigen promotie-poort (verified ÷ judged) —
 /// zelfreferentieel: een pijplijn die tautologieën promoveert scoort er uitstekend
-/// op. Deze pass laat rb-ai's <c>/audit/interaction</c> (task "hard", MODEL.hard —
-/// de bestaande taak-typering, géén nieuw model-mechanisme) per gesamplede
-/// interactie een gesloten tool-forced oordeel vellen: klopt de bewering, en wordt
-/// ze gedragen door het bewijs waarop ze promoveerde?
+/// op. Deze pass laat rb-ai's <c>/audit/interaction</c> via een gesloten,
+/// beheerbare modelalias per gesamplede interactie een tool-forced oordeel vellen:
+/// klopt de bewering, en wordt ze gedragen door het bewijs waarop ze promoveerde?
 ///
 /// <b>DE HARDE REGEL</b> (issue #255, rode draad #236): het oordeel wordt vastgelegd
 /// als aparte <see cref="InteractionAudit"/>-rij met eigen provenance (model +
@@ -53,16 +53,16 @@ public sealed record BreinInteractionAuditResult(
 /// watermark op uitval).
 ///
 /// Sequentieel, bewust: de steekproef is per constructie klein (pool ÷ N, gecapt
-/// per run) en elke oproep is een dure hard-model-call — parallelliseren koopt hier
+/// per run) en elke oproep is een dure audit-model-call — parallelliseren koopt hier
 /// niets en zou de drie #279-plichten (context-per-worker, schrijfslot, deelcap)
 /// zonder winst importeren. De rb-ai-semafoor doet de rest: het endpoint draait op
 /// achtergrond-prioriteit, dus /ask houdt zijn reserve.</summary>
 public class BreinInteractionAuditService(
     RbRulesDbContext db, RbAiClient ai, ManagedSettingsService settings)
 {
-    /// <summary>Provenance-stempel: het model achter rb-ai's task "hard" (MODEL.hard,
-    /// rb-ai/src/ai.ts) — zelfde afspraak als de "claude-sonnet-4-6"-stempel van de
-    /// mining-run. Ook het label in de observability ("steekproef door …").</summary>
+    /// <summary>Concreet legacy/defaultmodel achter de opus-alias. Nieuwe rb-ai-
+    /// antwoorden dragen altijd hun werkelijke provider/model; deze waarde is alleen
+    /// de eerlijke fallback bij een oudere sidecar zonder die metadata.</summary>
     public const string AuditModel = "claude-opus-4-8";
 
     /// <summary>Per-run cap (overdag): een handvol dure hard-model-calls per klik.
@@ -80,7 +80,12 @@ public class BreinInteractionAuditService(
     {
         // Op het gebruiksmoment gelezen (#254): een in beheer bijgestelde dichtheid
         // geldt voor de eerstvolgende run, zonder herstart.
-        var divisor = Math.Max(1, (await settings.BreinAuditAsync(ct)).SampleDivisor);
+        var auditSettings = await settings.BreinAuditAsync(ct);
+        var divisor = Math.Max(1, auditSettings.SampleDivisor);
+        // Eén snapshot voor de hele run: een beheerwijziging halverwege mag nooit
+        // één MiningRun over twee providers/modellen verdelen.
+        var modelAlias = auditSettings.ModelAlias;
+        var fallbackModel = modelAlias == BreinExtractModelAliases.Opus ? AuditModel : null;
         var promptVersion = InteractionAuditExtraction.PromptVersion;
 
         // De steekproef-pool: gepromoveerd, in de deterministische 1-op-N-greep, en
@@ -98,14 +103,15 @@ public class BreinInteractionAuditService(
             .ToListAsync(ct);
         var capHit = selected.Count > maxAudits;
         if (capHit) selected = selected.Take(maxAudits).ToList();
-        if (selected.Count == 0) return new(0, 0, 0, 0, false);
+        if (selected.Count == 0)
+            return new(0, 0, 0, 0, false, Model: fallbackModel ?? modelAlias);
 
         var run = new MiningRun
         {
             Id = Ulid.NewUlid(),
             Kind = FactKinds.InteractionAudit,
-            LlmModelAlias = BreinExtractModelAliases.Opus,
-            LlmModel = AuditModel,
+            LlmModelAlias = modelAlias,
+            LlmModel = fallbackModel,
             PromptVersion = promptVersion,
         };
         db.MiningRuns.Add(run);
@@ -136,7 +142,7 @@ public class BreinInteractionAuditService(
             var text = ComposeAuditText(interaction, evidence);
             var call = await ai.ExtractStructuredDetailedAsync(
                 "/audit/interaction",
-                new { system = InteractionAuditExtraction.SystemPrompt, text }, ct);
+                new { model = modelAlias, system = InteractionAuditExtraction.SystemPrompt, text }, ct);
             llmCalls++;
             provider ??= call.Provider;
             actualModel = call.Model ?? actualModel;
@@ -184,7 +190,7 @@ public class BreinInteractionAuditService(
             {
                 InteractionId = interaction.Id,
                 RunId = run.Id,
-                Model = call.Model ?? AuditModel,
+                Model = call.Model ?? fallbackModel ?? modelAlias,
                 PromptVersion = promptVersion,
                 Correct = verdict.Correct,
                 SupportedByEvidence = verdict.SupportedByEvidence,
@@ -193,7 +199,7 @@ public class BreinInteractionAuditService(
             });
             if (!(verdict.Correct && verdict.SupportedByEvidence))
                 await QueueDisputeAsync(
-                    interaction, verdict, call.Model ?? AuditModel, run.Id, ct);
+                    interaction, verdict, call.Model ?? fallbackModel ?? modelAlias, run.Id, ct);
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
         }
@@ -203,7 +209,7 @@ public class BreinInteractionAuditService(
         run.Rejected = disputed;
         run.LlmCalls = llmCalls;
         run.LlmProvider = provider;
-        run.LlmModel = actualModel ?? AuditModel;
+        run.LlmModel = actualModel ?? fallbackModel;
         run.InputTokens = hasUsage ? inputTokens : null;
         run.OutputTokens = hasUsage ? outputTokens : null;
         run.UsageUnit = hasUsage ? usageUnit : null;
@@ -213,7 +219,8 @@ public class BreinInteractionAuditService(
 
         return new(audited, sound, disputed, failed,
             capHit || stoppedOnDeadline,
-            tally.Summary is { Length: > 0 } detail ? detail : null);
+            tally.Summary is { Length: > 0 } detail ? detail : null,
+            actualModel ?? fallbackModel ?? modelAlias);
     }
 
     /// <summary>Het negatieve oordeel zichtbaar maken — en niets anders. Het

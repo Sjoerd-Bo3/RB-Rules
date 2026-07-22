@@ -390,6 +390,30 @@ public class BreinInteractionAuditServiceTests
         // En het systeem-prompt is de audit-instructie, niet de extractie-prompt.
         var system = doc.RootElement.GetProperty("system").GetString()!;
         Assert.Contains("emit_audit_verdict", system);
+        Assert.Equal("opus", doc.RootElement.GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public async Task RunAsync_LeestAuditmodelEenmaal_StuurtAliasEnBewaartWerkelijkeProvider()
+    {
+        using var db = NewDb();
+        await SeedPromotedAsync(db, "mechanic:A", "mechanic:B");
+        var bodies = new List<string>();
+        var svc = new BreinInteractionAuditService(
+            db,
+            CapturingAi(bodies, () =>
+                """{"verdicts":[{"correct":true,"supported_by_evidence":true,"motivation":"ok"}],"provider":"codex-sdk","model":"gpt-5.6-sol","usage":{"inputTokens":12,"outputTokens":3,"unit":"tokens"}}"""),
+            Settings(1, "codex"));
+
+        await svc.RunAsync();
+
+        using var payload = JsonDocument.Parse(Assert.Single(bodies));
+        Assert.Equal("codex", payload.RootElement.GetProperty("model").GetString());
+        var run = await db.MiningRuns.SingleAsync();
+        Assert.Equal("codex", run.LlmModelAlias);
+        Assert.Equal("codex-sdk", run.LlmProvider);
+        Assert.Equal("gpt-5.6-sol", run.LlmModel);
+        Assert.Equal("gpt-5.6-sol", (await db.InteractionAudits.SingleAsync()).Model);
     }
 
     [Fact]
@@ -553,8 +577,9 @@ public class BreinInteractionAuditServiceTests
 
     /// <summary>Instellingen zonder DB-laag: de audit-basis is de enige waarheid —
     /// divisor 1 (alles in de steekproef) tenzij de test anders vraagt.</summary>
-    private static ManagedSettingsService Settings(int divisor) =>
-        new(auditBase: new BreinAuditSettings(divisor));
+    private static ManagedSettingsService Settings(
+        int divisor, string modelAlias = BreinExtractModelAliases.Opus) =>
+        new(auditBase: new BreinAuditSettings(divisor, modelAlias));
 
     private static string Verdict(bool correct, bool supported, string motivation) =>
         JsonSerializer.Serialize(new

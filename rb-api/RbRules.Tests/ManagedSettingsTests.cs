@@ -101,6 +101,25 @@ public class ManagedSettingsTests
     }
 
     [Fact]
+    public async Task Auditmodel_IsOnafhankelijkBeheerbaar_MetOpusAlsDefault()
+    {
+        var svc = Service(NewFactory(), BreinRetrievalSettings.Disabled,
+            NightlyRunSettings.Default);
+
+        Assert.Equal("opus", (await svc.BreinAuditAsync()).ModelAlias);
+        Assert.Equal("sonnet", (await svc.BreinExtractAsync()).ModelAlias);
+
+        var change = await svc.SetAsync(SettingKeys.BreinAuditModel, "codex", "beheer");
+
+        Assert.True(change.Ok);
+        Assert.Equal("opus", change.Previous);
+        Assert.Equal("codex", change.Current);
+        Assert.Equal("codex", (await svc.BreinAuditAsync()).ModelAlias);
+        // De twee routes hebben bewust ieder hun eigen knop.
+        Assert.Equal("sonnet", (await svc.BreinExtractAsync()).ModelAlias);
+    }
+
+    [Fact]
     public async Task Nachtrun_Noodrem_EnVenster_ZijnBeheerbaar_MetDirectEffect()
     {
         var svc = Service(NewFactory(), BreinRetrievalSettings.Disabled,
@@ -371,6 +390,10 @@ public class ManagedSettingsTests
         var extract = views.Single(v => v.Key == SettingKeys.BreinExtractModel);
         Assert.Equal("sonnet", extract.Default);
         Assert.Contains("codex", extract.Options!);
+
+        var auditModel = views.Single(v => v.Key == SettingKeys.BreinAuditModel);
+        Assert.Equal("opus", auditModel.Default);
+        Assert.Contains("codex", auditModel.Options!);
     }
 
     // ── 7) Het koppelvlak met rb-web ──────────────────────────────────────

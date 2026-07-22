@@ -35,7 +35,7 @@ import {
 } from "./providers/claude-agent.js";
 import {
   ClaudeAccountPoolProvider,
-  claudeAccountRouter,
+  getFallbackClaudeAccountRouter,
   isClaudeAccountLocalFailure,
   type ClaudeAccountEnvironment,
   type ClaudeAccountLease,
@@ -50,6 +50,7 @@ import type {
   ResolvedModel,
 } from "./providers/types.js";
 import { RELATIONS_MARKER } from "./relations.js";
+import { runtimeManager, runtimeProviderRegistry } from "./control/runtime.js";
 import { usageFromSdk, type AskUsage } from "./usage.js";
 import {
   pushableInput,
@@ -213,10 +214,7 @@ const EXTRACT_TIMEOUT_MS = (() => {
 export type QueryRunner = ClaudeQueryRunner;
 
 /** Production registry for the stateless extract/audit path. `/ask` stays on Claude. */
-export const providerRegistry = new ProviderRegistry([
-  new ClaudeAccountPoolProvider(),
-  new CodexAccountPoolProvider(),
-]);
+export const providerRegistry = runtimeProviderRegistry;
 
 /** Dezelfde naad voor het /ask-pad (#300), met de bredere prompt-vorm die
  * {@link askClaude} gebruikt: een kale string, of een streaming-input-iterator
@@ -683,7 +681,7 @@ function bootWarmCheapSession(sig: WarmSignature): WarmBootHandle {
       sig,
       controller,
       (data: string) => stderr.append(data),
-      claudeAccountRouter.singleEnvironment(),
+      runtimeManager.currentGeneration().claudeRouter.singleEnvironment(),
     ),
   });
   return {
@@ -706,15 +704,19 @@ export const warmPool = new WarmPool({
   boot: bootWarmCheapSession,
   // A warm process is already bound to one credential. With multiple accounts
   // it cannot be reassigned safely, so routing stays cold and quota-aware.
-  enabled: claudeAccountRouter.accountCount() === 1
-    && !["0", "false", "off"].includes(
-      (process.env.AI_WARM_POOL ?? "1").toLowerCase(),
-    ),
+  enabled: !["0", "false", "off"].includes(
+    (process.env.AI_WARM_POOL ?? "1").toLowerCase(),
+  ),
   ttlMs: (() => {
     const parsed = Number.parseInt(process.env.AI_WARM_TTL_MS ?? "", 10);
     return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : 600_000; // 10 min
   })(),
 });
+const syncWarmPoolTopology = () => warmPool.setTopologyEnabled(
+  runtimeManager.currentGeneration().claudeRouter.accountCount() === 1,
+);
+syncWarmPoolTopology();
+runtimeManager.onTopologyChange(syncWarmPoolTopology);
 
 /** Voortgangsvlag voor de leeslus: heeft de sessie echt output geleverd
  * (assistant/result/tekst-delta)? Bij een warme sessie die dood bleek bij de
@@ -888,10 +890,16 @@ export async function askClaude(opts: {
   const {
     prompt, system, task = "cheap", images = [], onDelta, onBrainStep, signal, model,
     runQuery: injectedRunQuery,
-    accountRouter = claudeAccountRouter,
+    accountRouter: injectedAccountRouter,
     pool = warmPool,
   } = opts;
   const productionRouting = injectedRunQuery === undefined || opts.accountRouter !== undefined;
+  const generationLease = injectedRunQuery === undefined && !injectedAccountRouter
+    ? runtimeManager.lease()
+    : undefined;
+  const accountRouter = injectedAccountRouter
+    ?? generationLease?.generation.claudeRouter
+    ?? getFallbackClaudeAccountRouter();
   const runQuery = injectedRunQuery ?? query as unknown as AskQueryRunner;
   const research = task === "research";
   const agentic = task === "agentic";
@@ -1003,7 +1011,11 @@ export async function askClaude(opts: {
               const res = await collectAnswer(claimed.messages(), onDelta, progress, retries);
               accountSignal = res.accountSignal;
               if (lease) accountRouter.observeSignal(lease, accountSignal);
-              if (progress.sawOutput) return finishAskRun(res, claimed.stderr, retries);
+              if (progress.sawOutput) {
+                const completed = finishAskRun(res, claimed.stderr, retries);
+                if (lease && !completed.failure) accountRouter.markSuccess(lease);
+                return completed;
+              }
               logEvent("warmpool_fallback", {
                 stage: "dood bij claim",
                 stderr: stderrDigestLine(claimed.stderr) || undefined,
@@ -1041,7 +1053,9 @@ export async function askClaude(opts: {
         const res = await collectAnswer(runQuery(arg), onDelta, progress, retries);
         accountSignal = res.accountSignal;
         if (lease) accountRouter.observeSignal(lease, accountSignal);
-        return finishAskRun(res, coldStderr, retries);
+        const completed = finishAskRun(res, coldStderr, retries);
+        if (lease && !completed.failure) accountRouter.markSuccess(lease);
+        return completed;
       } catch (e) {
         const accountFailure = e instanceof AiRunError
           ? failureOf(e)
@@ -1112,6 +1126,7 @@ export async function askClaude(opts: {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
     unhookWarmAbort?.();
+    generationLease?.release();
     release?.();
   }
 }

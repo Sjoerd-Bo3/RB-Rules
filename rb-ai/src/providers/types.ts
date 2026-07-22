@@ -54,6 +54,14 @@ export interface ProviderAccountHealth {
   inFlight: number;
 }
 
+/** Safe routing metadata supplied by managed/environment pool builders. */
+export interface AccountRouteMetadata {
+  accountId: string;
+  poolId: string;
+  priority: number;
+  weight: number;
+}
+
 export interface ResolvedModel {
   alias: ModelAlias;
   provider: ToolProvider;

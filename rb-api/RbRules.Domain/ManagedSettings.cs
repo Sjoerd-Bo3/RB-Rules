@@ -14,6 +14,11 @@ public static class SettingKeys
     /// kunnen bijstellen zonder deploy.</summary>
     public const string BreinAuditSampleN = "brein.audit.sample_n";
 
+    /// <summary>Gesloten model-alias voor de onafhankelijke interactie-audit.
+    /// Staat los van het extractiemodel: een sterkere of andere provider kan de
+    /// geminede interacties beoordelen zonder de miningroute mee te wijzigen.</summary>
+    public const string BreinAuditModel = "brein.audit.model";
+
     /// <summary>Gesloten model-alias voor de tool-forced brein-extractie (#325).
     /// rb-ai resolveert de alias naar provider + concreet model; model-id's zijn
     /// hier bewust niet vrij invoerbaar.</summary>
@@ -99,6 +104,11 @@ public static class ManagedSettingsCatalog
             "Welk deel van de gepromoveerde interacties het sterkere model beoordeelt "
             + "(1 = alles, 10 = een tiende). De audit meet alleen — hij promoveert of "
             + "degradeert nooit zelf."),
+        new(SettingKeys.BreinAuditModel, SettingKind.Choice, "brein",
+            "Auditmodel",
+            "Model-alias voor de onafhankelijke interactie-audit. De alias resolveert "
+            + "in rb-ai naar een vaste provider en model-id; vrije modelnamen zijn niet toegestaan.",
+            BreinExtractModelAliases.All),
         new(SettingKeys.BreinExtractModel, SettingKind.Choice, "brein",
             "Extractiemodel",
             "Model-alias voor interactie- en predicaatextractie. De alias resolveert "

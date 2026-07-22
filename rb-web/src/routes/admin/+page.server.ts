@@ -1,4 +1,5 @@
 import { fail } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import type { Actions, PageServerLoad } from './$types';
 import { env } from '$env/dynamic/private';
 import { ADMIN_COOKIE, adminApi, adminToken, authed } from '$lib/server/admin';
@@ -61,6 +62,7 @@ export const actions: Actions = {
 			path: '/',
 			httpOnly: true,
 			sameSite: 'lax',
+			secure: !dev,
 			maxAge: 60 * 60 * 24 * 30
 		});
 		return { ok: true };
