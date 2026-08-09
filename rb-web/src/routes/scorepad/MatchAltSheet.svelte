@@ -14,26 +14,24 @@
 </script>
 
 <SheetFrame {bw} title="Match Sheet" sub="Variant B · 1v1 · Best of 3 · First to 8 — Core Rules §486">
+	<div class="sh-row">
+		<span class="sh-field"><span class="micro">Date</span><span class="fill"></span></span>
+		<span class="sh-field" style="flex: 1.6"
+			><span class="micro">Event</span><span class="fill"></span></span
+		>
+	</div>
+	<div class="sh-row">
+		<span class="pl p1"
+			><span class="micro">P1 · You</span><span class="micro">Legend</span><span class="fill"
+			></span></span
+		>
+	</div>
+
 	<div class="stair">
-		<div class="info">
-			<div class="sh-row">
-				<span class="sh-field"><span class="micro">Date</span><span class="fill"></span></span>
-				<span class="sh-field" style="flex: 1.6"
-					><span class="micro">Event</span><span class="fill"></span></span
-				>
-			</div>
-			<div class="players">
-				<span class="pl p1"
-					><span class="micro">P1 · You</span><span class="micro">Legend</span><span class="fill"
-					></span></span
-				>
-				<span class="pl p2"
-					><span class="micro">P2 · Opponent</span><span class="micro">Legend</span><span
-						class="fill"
-					></span></span
-				>
-			</div>
-		</div>
+		<span class="pl p2 opp"
+			><span class="micro">P2 · Opponent</span><span class="micro">Legend</span><span class="fill"
+			></span></span
+		>
 
 		{#each GAMES as g (g)}
 			<!-- Plaatsing via inline grid-area (g1/g2/g3): zo blijft de each-lus
@@ -94,42 +92,26 @@
 </SheetFrame>
 
 <style>
-	/* De trap zit volledig in grid-template-areas: G1 bovenaan kolom 1; het
-	   info-vlak (over kolom 2+3) bepaalt de eerste trede — G2 start pas op de
-	   rij erónder — en de vaste spacer-rij van 10.5mm geeft G3 zijn tweede
-	   trede (~13mm incl. row-gap). Gekozen boven margin-top-hacks omdat de
-	   treden zo niet afhangen van content-hoogtes van de games en de
-	   DOM-volgorde vrij blijft; de '.'-cel blijft bewust leeg. */
+	/* De trap in grid-template-areas: DATE/EVENT en de You-regel staan als
+	   gewone rijen BOVEN de games-zone (volle breedte); alleen de
+	   Opponent-regel woont ín de trap, over kolom 2+3 — precies genoeg om G2
+	   en G3 elk één kleine, gelijkmatige trede (~9mm) te geven. De eerdere
+	   opzet stapelde het hele info-blok in de trap: treden van ~24mm en
+	   rafelige gaten (feedback Sjoerd). De '.'-cel blijft bewust leeg. */
 	.stair {
 		display: grid;
 		grid-template-columns: repeat(3, 1fr);
 		grid-template-areas:
-			'g1 info info'
+			'g1 opp opp'
 			'g1 g2 .'
 			'g1 g2 g3';
-		grid-template-rows: auto 10.5mm auto;
+		grid-template-rows: auto 6.4mm auto;
 		column-gap: 2.6mm;
 		row-gap: 2.6mm;
 		align-items: start;
 	}
-
-	.info {
-		grid-area: info;
-		display: flex;
-		flex-direction: column;
-	}
-	.players {
-		display: flex;
-		flex-direction: column;
-		gap: 1.4mm;
-	}
-	/* De legend-invullijn in de spelerregels: de globale .fill-stijl hangt aan
-	   .sh-field, dus binnen .pl lokaal spiegelen. */
-	.players .fill {
-		flex: 1;
-		min-width: 8mm;
-		border-bottom: 0.3mm solid var(--paper-line);
-		height: 4.2mm;
+	.opp {
+		grid-area: opp;
 	}
 
 	.game {
