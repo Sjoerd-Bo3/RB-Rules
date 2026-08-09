@@ -2,6 +2,7 @@
 	import { browser } from '$app/environment';
 	import { afterNavigate, replaceState } from '$app/navigation';
 	import type { PageProps } from './$types';
+	import { SvelteSet } from 'svelte/reactivity';
 	import {
 		MAX_SHEETS,
 		SHEET_INFO,
@@ -55,18 +56,86 @@
 		replaceState(qs ? `?${qs}` : '/scorepad', {});
 	});
 
+	// Selectie in het volgorde-paneel (multiselect): indexposities. Elke
+	// structurele mutatie maakt de indexen stale — dus wissen, behalve bij een
+	// drop, die selecteert het verplaatste blok op zijn nieuwe plek terug.
+	const sel = new SvelteSet<number>();
+
 	function add(k: SheetKind) {
 		if (opts.list.length < MAX_SHEETS) opts.list.push(k);
+		sel.clear();
 	}
 	function removeLast(k: SheetKind) {
 		const i = opts.list.lastIndexOf(k);
 		if (i >= 0) opts.list.splice(i, 1);
+		sel.clear();
 	}
 	function move(i: number, delta: -1 | 1) {
 		const j = i + delta;
 		if (j < 0 || j >= opts.list.length) return;
 		const [item] = opts.list.splice(i, 1);
 		opts.list.splice(j, 0, item);
+		sel.clear();
+	}
+	function removeAt(i: number) {
+		opts.list.splice(i, 1);
+		sel.clear();
+	}
+	function toggleSel(i: number) {
+		if (sel.has(i)) sel.delete(i);
+		else sel.add(i);
+	}
+	function removeSelected() {
+		for (const i of [...sel].sort((a, b) => b - a)) opts.list.splice(i, 1);
+		sel.clear();
+	}
+
+	// Drag & drop: een niet-geselecteerde rij verslepen pakt alleen die rij;
+	// een geselecteerde rij verslepen neemt de hele selectie mee. De pijltjes
+	// blijven bestaan als toetsenbord-pad (native DnD is muis/trackpad-only).
+	let dragIdxs: number[] | null = null;
+	let insertAt = $state<number | null>(null);
+
+	function onDragStart(e: DragEvent, i: number) {
+		if (!sel.has(i)) {
+			sel.clear();
+			sel.add(i);
+		}
+		dragIdxs = [...sel].sort((a, b) => a - b);
+		// Firefox start zonder data geen drag.
+		e.dataTransfer?.setData('text/plain', String(i));
+		if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+	}
+	function onDragOver(e: DragEvent, i: number) {
+		if (dragIdxs === null) return;
+		e.preventDefault();
+		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		insertAt =
+			i >= opts.list.length
+				? opts.list.length
+				: e.clientY < r.top + r.height / 2
+					? i
+					: Math.min(i + 1, opts.list.length);
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+	}
+	function onDrop(e: DragEvent) {
+		e.preventDefault();
+		if (dragIdxs === null || insertAt === null) return resetDrag();
+		const src = dragIdxs;
+		const items = src.map((i) => opts.list[i]);
+		let target = insertAt;
+		for (let x = src.length - 1; x >= 0; x--) {
+			opts.list.splice(src[x], 1);
+			if (src[x] < target) target--;
+		}
+		opts.list.splice(target, 0, ...items);
+		sel.clear();
+		for (let x = 0; x < items.length; x++) sel.add(target + x);
+		resetDrag();
+	}
+	function resetDrag() {
+		dragIdxs = null;
+		insertAt = null;
 	}
 
 	const GROUPS: { title: string; kinds: SheetKind[] }[] = [
@@ -74,13 +143,32 @@
 		{ title: 'Na het spel', kinds: SHEET_ORDER.filter((k) => SHEET_INFO[k].group === 'na') }
 	];
 
+	// Preview-weergave: 'grid' zet de pagina's als miniaturen naast elkaar
+	// (overzicht), 'full' toont ze groot onder elkaar. Puur een kijkstand —
+	// bewust niet in de URL en zonder invloed op het printresultaat.
+	let view = $state<'grid' | 'full'>('grid');
+
 	// Schaal van de preview: past de pagina in de beschikbare breedte. 1mm =
 	// 96/25.4 px (CSS-definitie), dus A5 = 559px en A4-liggend = 1123px breed.
+	// In gridstand bepaalt een richtbreedte per cel het kolomaantal; de cellen
+	// verdelen daarna de volle breedte.
 	const MM = 96 / 25.4;
+	const GAP = 14;
 	let pvw = $state(0);
 	const pageWmm = $derived(opts.paper === 'a4' ? 297 : 148);
-	const scale = $derived(pvw > 0 ? Math.min(1, pvw / (pageWmm * MM)) : 1);
+	const targetCell = $derived(opts.paper === 'a4' ? 470 : 300);
+	const cols = $derived(
+		view === 'grid' ? Math.max(1, Math.floor((pvw + GAP) / (targetCell + GAP))) : 1
+	);
+	const cellW = $derived(cols > 1 ? (pvw - (cols - 1) * GAP) / cols : pvw);
+	const scale = $derived(pvw > 0 ? Math.min(1, cellW / (pageWmm * MM)) : 1);
 	const slotH = $derived(Math.ceil(210 * MM * scale));
+
+	function pageLabel(p: SheetPage | null): string {
+		if (p === null) return 'leeg';
+		if (p === 'milestone2') return `${SHEET_INFO.milestone.label} — 2/2`;
+		return SHEET_INFO[p].label;
+	}
 
 	// De @page-maat kan niet via een CSS-klasse wisselen; dit is een vaste
 	// keuze uit twee letterlijke stylesheets (geen gebruikersinvoer — de enige
@@ -141,7 +229,26 @@
 					{:else}
 						<ol class="order">
 							{#each opts.list as k, i (i)}
-								<li>
+								<!-- Drag & drop is een muis-extra; het toegankelijke pad zijn de
+								     checkbox en de knoppen. Vandaar bewust géén interactieve rol
+								     op de rij zelf. -->
+								<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+								<li
+									class:sel={sel.has(i)}
+									class:drop-before={insertAt === i}
+									draggable="true"
+									ondragstart={(e) => onDragStart(e, i)}
+									ondragover={(e) => onDragOver(e, i)}
+									ondrop={onDrop}
+									ondragend={resetDrag}
+								>
+									<input
+										type="checkbox"
+										class="osel"
+										aria-label="Selecteer positie {i + 1} — {SHEET_INFO[k].label}"
+										checked={sel.has(i)}
+										onchange={() => toggleSel(i)}
+									/>
 									<span class="onum tnum">{i + 1}</span>
 									<span class="olabel"
 										>{SHEET_INFO[k].label}{SHEET_INFO[k].pages > 1 ? ' · 2 pag.' : ''}</span
@@ -162,12 +269,29 @@
 										<button
 											type="button"
 											aria-label="Verwijderen — positie {i + 1}"
-											onclick={() => opts.list.splice(i, 1)}>✕</button
+											onclick={() => removeAt(i)}>✕</button
 										>
 									</span>
 								</li>
 							{/each}
+							<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+							<li
+								class="drop-end"
+								class:drop-before={insertAt === opts.list.length}
+								aria-hidden="true"
+								ondragover={(e) => onDragOver(e, opts.list.length)}
+								ondrop={onDrop}
+							></li>
 						</ol>
+						{#if sel.size > 0}
+							<div class="selrow">
+								<span class="tnum">{sel.size} geselecteerd — sleep samen, of:</span>
+								<button type="button" class="link-btn" onclick={removeSelected}>Verwijder</button>
+								<button type="button" class="link-btn" onclick={() => sel.clear()}
+									>Wis selectie</button
+								>
+							</div>
+						{/if}
 					{/if}
 				</div>
 
@@ -284,12 +408,37 @@
 			</p>
 		</section>
 
-		<h2 class="pvhead">Voorbeeld</h2>
+		<div class="pvbar">
+			<h2 class="pvhead">Voorbeeld</h2>
+			<div class="chips pvchips">
+				<button type="button" class="chip" class:on={view === 'grid'} onclick={() => (view = 'grid')}
+					>Naast elkaar</button
+				>
+				<button type="button" class="chip" class:on={view === 'full'} onclick={() => (view = 'full')}
+					>Groot</button
+				>
+			</div>
+		</div>
 	</div>
 
-	<section class="preview" bind:clientWidth={pvw} aria-label="Voorbeeld van de vellen">
+	<section
+		class="preview"
+		class:grid={view === 'grid'}
+		bind:clientWidth={pvw}
+		aria-label="Voorbeeld van de vellen"
+	>
 		{#each plan as pageSheets, i (i)}
-			<div class="pslot" style="height: {slotH}px">
+			<div
+				class="pslot"
+				style="height: {slotH + (view === 'grid' ? 22 : 0)}px; {view === 'grid'
+					? `width: ${cellW}px`
+					: ''}"
+			>
+				{#if view === 'grid'}
+					<p class="pcap tnum">
+						{i + 1} · {pageSheets.map((p) => pageLabel(p)).join(' + ')}
+					</p>
+				{/if}
 				<div
 					class="ppage"
 					class:a4={opts.paper === 'a4'}
@@ -420,12 +569,11 @@
 		color: var(--muted);
 		font-size: 0.85rem;
 	}
+	/* Geen eigen scrollbalk: de lijst groeit gewoon mee met de kolom. */
 	.order {
 		list-style: none;
 		margin: 0;
 		padding: 0;
-		max-height: 320px;
-		overflow-y: auto;
 	}
 	.order li {
 		display: flex;
@@ -433,9 +581,38 @@
 		gap: 8px;
 		padding: 5px 0;
 		border-bottom: 1px solid var(--border);
+		cursor: grab;
 	}
-	.order li:last-child {
+	.order li.sel {
+		background: var(--accent-soft);
+	}
+	/* Invoeg-indicator als inset-schaduw: verschuift de layout niet. */
+	.order li.drop-before {
+		box-shadow: inset 0 2px 0 var(--accent);
+	}
+	.order li.drop-end {
 		border-bottom: 0;
+		min-height: 10px;
+		padding: 0;
+		cursor: default;
+	}
+	.order li:not(.drop-end):last-of-type {
+		border-bottom: 0;
+	}
+	.osel {
+		accent-color: var(--accent);
+		width: 15px;
+		height: 15px;
+		flex: none;
+		cursor: pointer;
+	}
+	.selrow {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 8px;
+		font-size: 0.8rem;
+		color: var(--muted);
 	}
 	.onum {
 		color: var(--muted);
@@ -541,6 +718,12 @@
 		color: var(--muted);
 	}
 
+	.pvbar {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+	}
 	.pvhead {
 		font-size: 0.72rem;
 		font-weight: 700;
@@ -549,12 +732,29 @@
 		color: var(--muted);
 		margin: 0 0 10px;
 	}
+	.pvchips {
+		margin-bottom: 6px;
+	}
+	.pcap {
+		margin: 0 0 4px;
+		font-size: 0.72rem;
+		color: var(--muted);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
 
-	/* ── Preview: pagina's op schaal, verticaal gestapeld ── */
+	/* ── Preview: pagina's op schaal — grid (naast elkaar) of groot ── */
 	.preview {
 		display: flex;
 		flex-direction: column;
 		gap: 18px;
+	}
+	.preview.grid {
+		flex-direction: row;
+		flex-wrap: wrap;
+		gap: 14px;
+		align-items: flex-start;
 	}
 	.pslot {
 		overflow: hidden;
@@ -619,7 +819,11 @@
 		}
 		.pslot {
 			height: auto !important;
+			width: auto !important;
 			overflow: visible;
+		}
+		.pcap {
+			display: none;
 		}
 		.ppage {
 			transform: none !important;

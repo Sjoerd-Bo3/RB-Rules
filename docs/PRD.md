@@ -1697,8 +1697,12 @@ de globale duur-vangrail).
   (acht rondes + record), **match reflection** en **milestone review**
   (2 pagina's) als aftergame-evaluatie, en **notes** (dots of lijntjes). De
   samenstelling is een geordende lijst (steppers + volgorde-paneel met
-  omhoog/omlaag/verwijderen) en leeft volledig in de query-string (deelbaar en
-  headless printbaar; run-length zoals `sheets=match:2,reflection`). Printen
+  drag & drop, checkbox-multiselect — samen slepen of verwijderen — en
+  omhoog/omlaag/verwijderen als toetsenbord-pad) en leeft volledig in de
+  query-string (deelbaar en headless printbaar; run-length zoals
+  `sheets=match:2,reflection`). De preview kent twee standen: miniaturen
+  naast elkaar (overzicht, met paginanummer + velnaam) of groot onder
+  elkaar. Printen
   gaat via de browserdialoog: A5 los (de digitale editie) of A4-liggend 2-up
   (snijstapel — elk vel dubbel — of op volgorde), kleur of zwart-wit, en een
   ringband-marge (geen/boven/zijkant) voor perforatie of spiraal. Vellen zijn
