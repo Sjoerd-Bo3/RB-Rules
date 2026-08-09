@@ -134,7 +134,10 @@
 		flex: 1;
 		min-width: 0;
 	}
-	.sheet :global(.sh-field .fill) {
+	/* Ook onder .pl (spelerregels): zonder deze scope was de legend-invullijn
+	   daar onzichtbaar — gevonden bij de bouw van variant B (#342). */
+	.sheet :global(.sh-field .fill),
+	.sheet :global(.pl .fill) {
 		flex: 1;
 		min-width: 8mm;
 		border-bottom: 0.3mm solid var(--paper-line);

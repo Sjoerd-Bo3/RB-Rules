@@ -39,14 +39,19 @@
 					<span class="bfl"><span class="micro">BF P2</span><span class="fill"></span></span>
 				</div>
 				<div class="trk">
-					<span class="trk-h c1">C</span><span class="trk-h c1">H</span><span></span>
-					<span class="trk-h c2">C</span><span class="trk-h c2">H</span>
+					<div class="trow th">
+						<span class="tc trk-h c1">C</span><span class="tc trk-h c1">H</span><span class="tn"
+						></span>
+						<span class="tc trk-h c2">C</span><span class="tc trk-h c2">H</span>
+					</div>
 					{#each POINTS as p (p)}
-						<span class="cell l"><span class="cb small p1"></span></span>
-						<span class="cell"><span class="cb small p1"></span></span>
-						<span class="trk-num" class:vs={p === 8}>{p}</span>
-						<span class="cell"><span class="cb small p2"></span></span>
-						<span class="cell r"><span class="cb small p2"></span></span>
+						<div class="trow">
+							<span class="tc"><span class="cb small p1"></span></span>
+							<span class="tc"><span class="cb small p1"></span></span>
+							<span class="tn"><span class="trk-num" class:vs={p === 8}>{p}</span></span>
+							<span class="tc"><span class="cb small p2"></span></span>
+							<span class="tc"><span class="cb small p2"></span></span>
+						</div>
 					{/each}
 				</div>
 				<footer class="gwin">
@@ -125,26 +130,34 @@
 		height: 3.4mm;
 	}
 
+	/* Rijen als échte rijen (flex): één doorlopende scheidingslijn per rij —
+	   losse cel-randjes lopen door hoogteverschillen nooit strak (#342). */
 	.trk {
-		display: grid;
-		grid-template-columns: 1fr 1fr 4.6mm 1fr 1fr;
-		row-gap: 0;
-		align-items: center;
+		display: flex;
+		flex-direction: column;
 	}
-	.cell {
+	.trow {
+		display: flex;
+		align-items: center;
+		padding: 0.55mm 0;
+		border-bottom: 0.2mm solid var(--paper-line-soft);
+	}
+	.trow.th {
+		padding: 0 0 0.6mm;
+		border-bottom: 0.28mm solid var(--paper-line);
+	}
+	.tc {
+		flex: 1;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 0.55mm 0;
 	}
-	/* Hairlines tussen de puntrijen; de speler-helften gescheiden door de
-	   cijferkolom zelf (geen extra lijnen — rust op het vel). */
-	.trk > :global(*) {
-		border-bottom: 0.2mm solid var(--paper-line-soft);
-	}
-	/* Eén doorlopende lijn onder de complete kopregel (alle vijf cellen). */
-	.trk > :global(:nth-child(-n + 5)) {
-		border-bottom: 0.28mm solid var(--paper-line);
+	.tn {
+		flex: none;
+		width: 4.6mm;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.gwin {

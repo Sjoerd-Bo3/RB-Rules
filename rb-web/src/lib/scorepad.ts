@@ -7,6 +7,7 @@
 /** Veltypen die de assembler kan samenstellen. */
 export type SheetKind =
 	| 'match'
+	| 'matchalt'
 	| 'solo'
 	| 'ffa'
 	| 'duo'
@@ -35,15 +36,27 @@ export interface ScorepadOptions {
 	ink: Ink;
 	notesStyle: NotesStyle;
 	binding: Binding;
+	/** Spelerkleur P1: 6 hex-tekens zonder '#', lowercase; null = standaardtoken. */
+	c1: string | null;
+	/** Spelerkleur P2 — zelfde vorm als c1. */
+	c2: string | null;
 }
 
-/** Bovengrens per run in de URL (sheets=match:9999) én per losse toevoeging. */
-export const MAX_PER_KIND = 20;
-/** Totaalplafond — houdt de preview en de printtaak hanteerbaar. */
+/** Standaard-spelerkleuren; spiegelen de --paper-p1/--paper-p2-tokens in
+ *  rb-web/src/app.css — wijzigt dáár iets, dan hier synchroon houden. */
+export const DEFAULT_P1 = 'a3790a';
+export const DEFAULT_P2 = 'c03a40';
+
+/** Totaalplafond — houdt de preview en de printtaak hanteerbaar. Bewust de
+ *  ENIGE grens: een apart per-run-plafond in de parser maakte de URL-rondgang
+ *  lossy (UI stond 25 gelijke vellen toe, de parser klemde ze op 20 — review
+ *  #343). Eén plafond dat parser én UI delen houdt serialize∘parse een
+ *  identiteit. */
 export const MAX_SHEETS = 40;
 
 export const SHEET_ORDER: readonly SheetKind[] = [
 	'match',
+	'matchalt',
 	'solo',
 	'ffa',
 	'duo',
@@ -62,6 +75,12 @@ export const SHEET_INFO: Record<
 	match: {
 		label: 'Match sheet (Bo3)',
 		hint: 'Drie games met Conquer/Hold-punttracks, battlefields en first player',
+		group: 'spel',
+		pages: 1
+	},
+	matchalt: {
+		label: 'Match sheet — variant B',
+		hint: 'Getrapte game-blokken met kleurbanden, zonder battlefield/first-velden, groot notes-vlak',
 		group: 'spel',
 		pages: 1
 	},
@@ -116,13 +135,15 @@ export function defaultOptions(): ScorepadOptions {
 		duplicate: true,
 		ink: 'color',
 		notesStyle: 'dots',
-		binding: 'none'
+		binding: 'none',
+		c1: null,
+		c2: null
 	};
 }
 
 function clampCount(n: number): number {
 	if (!Number.isFinite(n)) return 0;
-	return Math.min(MAX_PER_KIND, Math.max(0, Math.trunc(n)));
+	return Math.min(MAX_SHEETS, Math.max(0, Math.trunc(n)));
 }
 
 function isKind(v: string): v is SheetKind {
@@ -154,6 +175,12 @@ export function parseOptions(params: URLSearchParams): ScorepadOptions {
 	if (params.get('notes') === 'lines') o.notesStyle = 'lines';
 	const bind = params.get('bind');
 	if (bind === 'top' || bind === 'side') o.binding = bind;
+	// Spelerkleuren: alleen een exacte 6-hex-waarde telt; al het andere valt
+	// stil terug op de standaardtokens (null) — nooit een kapotte kleur printen.
+	const c1 = params.get('c1');
+	if (c1 !== null && /^[0-9a-fA-F]{6}$/.test(c1)) o.c1 = c1.toLowerCase();
+	const c2 = params.get('c2');
+	if (c2 !== null && /^[0-9a-fA-F]{6}$/.test(c2)) o.c2 = c2.toLowerCase();
 	return o;
 }
 
@@ -182,6 +209,8 @@ export function serializeOptions(o: ScorepadOptions): string {
 	if (o.ink !== d.ink) params.set('ink', o.ink);
 	if (o.notesStyle !== d.notesStyle) params.set('notes', o.notesStyle);
 	if (o.binding !== d.binding) params.set('bind', o.binding);
+	if (o.c1 !== null) params.set('c1', o.c1);
+	if (o.c2 !== null) params.set('c2', o.c2);
 	return params.toString();
 }
 

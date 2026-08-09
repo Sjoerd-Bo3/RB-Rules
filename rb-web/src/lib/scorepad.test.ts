@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-	MAX_PER_KIND,
 	MAX_SHEETS,
 	defaultOptions,
 	expandPages,
@@ -16,7 +15,8 @@ describe('scorepad-opties', () => {
 	});
 
 	it('bewaart de volgorde en overleeft een parse/serialize-rondgang', () => {
-		const qs = 'sheets=match%3A2%2Creflection%2Cmatch&paper=a4&dup=0&ink=bw&notes=lines&bind=side';
+		const qs =
+			'sheets=match%3A2%2Creflection%2Cmatch&paper=a4&dup=0&ink=bw&notes=lines&bind=side&c1=aabb01&c2=112233';
 		const parsed = parseOptions(new URLSearchParams(qs));
 		expect(parsed.list).toEqual(['match', 'match', 'reflection', 'match']);
 		expect(parsed.paper).toBe('a4');
@@ -24,6 +24,28 @@ describe('scorepad-opties', () => {
 		expect(parsed.ink).toBe('bw');
 		expect(parsed.notesStyle).toBe('lines');
 		expect(parsed.binding).toBe('side');
+		expect(parsed.c1).toBe('aabb01');
+		expect(parsed.c2).toBe('112233');
+		expect(serializeOptions(parsed)).toBe(qs);
+	});
+
+	it('slaat spelerkleuren lowercase op en laat de standaard buiten de URL', () => {
+		const parsed = parseOptions(new URLSearchParams('c1=AABB01'));
+		expect(parsed.c1).toBe('aabb01');
+		expect(parsed.c2).toBeNull();
+		expect(serializeOptions(defaultOptions())).toBe('');
+	});
+
+	it('negeert ongeldige spelerkleuren', () => {
+		expect(parseOptions(new URLSearchParams('c1=rood')).c1).toBeNull();
+		expect(parseOptions(new URLSearchParams('c1=fff')).c1).toBeNull();
+		expect(parseOptions(new URLSearchParams('c1=aabbccdd')).c1).toBeNull();
+	});
+
+	it('matchalt doet mee in een volgorde-rondgang', () => {
+		const qs = 'sheets=matchalt%2Cmatch';
+		const parsed = parseOptions(new URLSearchParams(qs));
+		expect(parsed.list).toEqual(['matchalt', 'match']);
 		expect(serializeOptions(parsed)).toBe(qs);
 	});
 
@@ -42,10 +64,9 @@ describe('scorepad-opties', () => {
 		);
 		// solo:-3 en ffa:NaN → 0 exemplaren; onbekend type valt weg; kaal type = 1.
 		expect(parsed.list[0]).toBe('duo');
-		// match:9999 wordt eerst per run geklemd (MAX_PER_KIND) …
-		expect(parsed.list.filter((k) => k === 'match').length).toBe(MAX_PER_KIND);
-		// … en het geheel blijft onder het totaalplafond.
-		expect(parsed.list.length).toBeLessThanOrEqual(MAX_SHEETS);
+		// match:9999 vult tot het totaalplafond en niet verder.
+		expect(parsed.list.length).toBe(MAX_SHEETS);
+		expect(parsed.list.filter((k) => k === 'match').length).toBe(MAX_SHEETS - 1);
 	});
 
 	it('hanteert het totaalplafond over runs heen', () => {
@@ -53,6 +74,16 @@ describe('scorepad-opties', () => {
 			new URLSearchParams('sheets=match:20,notes:20,solo:20')
 		);
 		expect(parsed.list.length).toBe(MAX_SHEETS);
+	});
+
+	it('een lange run overleeft de rondgang — de UI-grens en de parser-grens zijn dezelfde', () => {
+		// Review #343: 25 gelijke vellen (UI stond dat toe) verloren er 5 bij
+		// het herladen doordat de parser per run op 20 klemde. Nu is het
+		// totaalplafond de enige grens, met uitgeschreven literals zodat een
+		// meebewegende constante deze test niet stil groen houdt (#293-les).
+		const parsed = parseOptions(new URLSearchParams('sheets=match:25'));
+		expect(parsed.list.length).toBe(25);
+		expect(serializeOptions(parsed)).toBe('sheets=match%3A25');
 	});
 });
 

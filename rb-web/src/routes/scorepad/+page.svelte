@@ -4,6 +4,8 @@
 	import type { PageProps } from './$types';
 	import { SvelteSet } from 'svelte/reactivity';
 	import {
+		DEFAULT_P1,
+		DEFAULT_P2,
 		MAX_SHEETS,
 		SHEET_INFO,
 		SHEET_ORDER,
@@ -15,6 +17,7 @@
 		type SheetPage
 	} from '$lib/scorepad';
 	import MatchSheet from './MatchSheet.svelte';
+	import MatchAltSheet from './MatchAltSheet.svelte';
 	import SoloSheet from './SoloSheet.svelte';
 	import FfaSheet from './FfaSheet.svelte';
 	import DuoSheet from './DuoSheet.svelte';
@@ -26,9 +29,10 @@
 	let { data }: PageProps = $props();
 
 	// Kopie van de load-opties: wij muteren lokaal en spiegelen naar de URL —
-	// het load-resultaat zelf blijft onaangeroerd. Bewust alleen de beginwaarde:
-	// ná mount is de URL een spiegel van deze state (replaceState hieronder),
-	// dus een latere data-verandering hoeft niet terug te stromen.
+	// het load-resultaat zelf blijft onaangeroerd. Hier bewust alleen de
+	// beginwaarde; bij een échte navigatie zet afterNavigate (hieronder) de
+	// vers geparste load-opties opnieuw — anders schreef de URL-spiegel de
+	// oude staat over een aangeklikte /scorepad?-link heen (review #343).
 	// svelte-ignore state_referenced_locally
 	let opts = $state(structuredClone(data.options));
 
@@ -42,6 +46,27 @@
 	);
 	const hasNotes = $derived(opts.list.includes('notes'));
 
+	// Gekozen spelerkleuren als CSS-vars op de .ppage: overschrijven de
+	// --paper-p1/--paper-p2-tokens plus hun -soft-tint (dezelfde lichte meng
+	// als de vaste tokens in app.css). Null = standaardtokens, dus geen
+	// override. De waarden zijn altijd gevalideerde 6-hex (parser + picker),
+	// dus veilig in een style-attribuut.
+	const colorStyle = $derived(
+		(opts.c1
+			? ` --paper-p1: #${opts.c1}; --paper-p1-soft: color-mix(in srgb, #${opts.c1} 16%, #ffffff);`
+			: '') +
+			(opts.c2
+				? ` --paper-p2: #${opts.c2}; --paper-p2-soft: color-mix(in srgb, #${opts.c2} 16%, #ffffff);`
+				: '')
+	);
+
+	// Kleurkeuze uit de native picker: '#' eraf, lowercase; de standaardkleur
+	// slaan we als null op zodat de URL schoon blijft.
+	function setPlayerColor(which: 'c1' | 'c2', value: string) {
+		const hex = value.replace('#', '').toLowerCase();
+		opts[which] = hex === (which === 'c1' ? DEFAULT_P1 : DEFAULT_P2) ? null : hex;
+	}
+
 	// Opties → URL (replaceState: geen navigatie, geen history-vervuiling).
 	// replaceState mag pas ná router-init; onMount is daarvoor nog te vroeg
 	// (hydration), dus afterNavigate — die vuurt pas als de initiële navigatie
@@ -49,7 +74,17 @@
 	// pagina slopen. `qs` wordt vóór de guard berekend zodat de
 	// afhankelijkheden ook op de eerste run geregistreerd staan.
 	let routerReady = $state(false);
-	afterNavigate(() => (routerReady = true));
+	afterNavigate(() => {
+		routerReady = true;
+		// Elke echte navigatie (in-app link naar /scorepad?…, of de kale
+		// navlink terwijl je al hier staat) parseert de URL opnieuw in de
+		// load — dát resultaat is dan de waarheid. Selectie en lightbox
+		// verwijzen naar de oude lijst en gaan mee dicht. (afterNavigate
+		// vuurt niet op onze eigen replaceState, dus dit lust niet.)
+		opts = structuredClone(data.options);
+		sel.clear();
+		zoom = null;
+	});
 	$effect(() => {
 		const qs = serializeOptions(opts);
 		if (!browser || !routerReady) return;
@@ -87,6 +122,12 @@
 	}
 	function removeSelected() {
 		for (const i of [...sel].sort((a, b) => b - a)) opts.list.splice(i, 1);
+		sel.clear();
+	}
+	function resetAll() {
+		// Reset vervangt de hele lijst — de selectie-indexen wijzen anders naar
+		// een lijst die niet meer bestaat (phantom-selectie, review #343).
+		opts = defaultOptions();
 		sel.clear();
 	}
 
@@ -170,6 +211,114 @@
 		return SHEET_INFO[p].label;
 	}
 
+	// ── Slepen in de preview ──
+	// Per printpagina de bijbehorende lijst-index (milestone2 hoort bij
+	// dezelfde entry als zijn eerste pagina — een paar verhuist als geheel).
+	// In A4-op-volgorde bundelt één pagina twee verschillende entries; slepen
+	// zou daar dubbelzinnig zijn, dus daar staat het uit.
+	const pageEntry = $derived.by(() => {
+		const map: number[] = [];
+		opts.list.forEach((k, li) => {
+			map.push(li);
+			if (k === 'milestone') map.push(li);
+		});
+		return map;
+	});
+	const pvDraggable = $derived(view === 'grid' && (opts.paper === 'a5' || opts.duplicate));
+
+	let pvDrag: number | null = null;
+	let pvMark = $state<{ page: number; side: 'l' | 'r' } | null>(null);
+
+	function pvDragStart(e: DragEvent, page: number) {
+		pvDrag = pageEntry[page];
+		e.dataTransfer?.setData('text/plain', String(page));
+		if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+	}
+	function pvDragOver(e: DragEvent, page: number) {
+		if (pvDrag === null) return;
+		e.preventDefault();
+		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		pvMark = { page, side: e.clientX < r.left + r.width / 2 ? 'l' : 'r' };
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+	}
+	function pvDrop(e: DragEvent) {
+		e.preventDefault();
+		if (pvDrag === null || pvMark === null) return pvReset();
+		const li = pageEntry[pvMark.page];
+		let to = pvMark.side === 'l' ? li : li + 1;
+		const [item] = opts.list.splice(pvDrag, 1);
+		if (pvDrag < to) to--;
+		opts.list.splice(to, 0, item);
+		sel.clear();
+		pvReset();
+	}
+	function pvReset() {
+		pvDrag = null;
+		pvMark = null;
+	}
+
+	// ── Uitvergroting (klik op een miniatuur) ──
+	let zoom = $state<number | null>(null);
+	let winW = $state(0);
+	let winH = $state(0);
+	let lbClose = $state<HTMLButtonElement | null>(null);
+	// De opener onthouden zodat de focus bij sluiten terugkeert waar hij
+	// vandaan kwam (WCAG 2.4.3 — review #343).
+	let zoomOpener: HTMLElement | null = null;
+	const zoomScale = $derived(
+		winW > 0 && winH > 0
+			? Math.min((winW * 0.92) / (pageWmm * MM), (winH * 0.86) / (210 * MM), 1.4)
+			: 1
+	);
+	// Het plan kan onder de lightbox uit veranderen — renderen op een veilige
+	// greep, en zoom zelf mag niet buiten bereik blijven staan.
+	const zoomPage = $derived(zoom === null ? null : (plan[zoom] ?? null));
+	$effect(() => {
+		if (zoom !== null && zoom >= plan.length) zoom = plan.length > 0 ? plan.length - 1 : null;
+	});
+	// Focus de sluitknop alleen bij het ÓPENEN: dit effect hangt aan de
+	// open-boolean (derived verandert niet bij bladeren), niet aan de
+	// zoom-wáárde — anders steelt elke ‹/›-klik de focus terug naar ✕ en
+	// sluit een tweede Enter de dialog (review #343).
+	const zoomOpen = $derived(zoom !== null);
+	$effect(() => {
+		if (zoomOpen) lbClose?.focus();
+	});
+	function openZoom(e: MouseEvent, i: number) {
+		zoomOpener = e.currentTarget as HTMLElement;
+		zoom = i;
+	}
+	function closeZoom() {
+		zoom = null;
+		zoomOpener?.focus();
+		zoomOpener = null;
+	}
+	function zoomKey(e: KeyboardEvent) {
+		if (zoom === null) return;
+		if (e.key === 'Escape') closeZoom();
+		else if (e.key === 'ArrowRight') zoom = Math.min(plan.length - 1, zoom + 1);
+		else if (e.key === 'ArrowLeft') zoom = Math.max(0, zoom - 1);
+		else if (e.key === 'Tab') {
+			// Simpele focus-trap: aria-modal verbergt de achtergrond al voor
+			// screenreaders, dus Tab hoort binnen de balk te cirkelen — anders
+			// bereik je onzichtbare controls achter de scrim (review #343).
+			const btns = [...document.querySelectorAll<HTMLButtonElement>('.lb-bar button')].filter(
+				(b) => !b.disabled
+			);
+			if (btns.length === 0) return;
+			e.preventDefault();
+			const cur = btns.indexOf(document.activeElement as HTMLButtonElement);
+			const next = e.shiftKey
+				? cur <= 0
+					? btns.length - 1
+					: cur - 1
+				: cur === -1 || cur === btns.length - 1
+					? 0
+					: cur + 1;
+			btns[next].focus();
+		}
+	}
+
 	// De @page-maat kan niet via een CSS-klasse wisselen; dit is een vaste
 	// keuze uit twee letterlijke stylesheets (geen gebruikersinvoer — de enige
 	// variabele is de a5/a4-ternary), dus veilig voor {@html}.
@@ -182,6 +331,8 @@
 	<title>Score pad — Poracle</title>
 	{@html pageStyle}
 </svelte:head>
+
+<svelte:window bind:innerWidth={winW} bind:innerHeight={winH} onkeydown={zoomKey} />
 
 <main>
 	<div class="no-print">
@@ -366,6 +517,37 @@
 						>
 					</div>
 
+					{#if opts.ink === 'color'}
+						<p class="fglabel">Spelerkleuren</p>
+						<div class="pcolors">
+							<label class="pcolor">
+								<input
+									type="color"
+									value={'#' + (opts.c1 ?? DEFAULT_P1)}
+									oninput={(e) => setPlayerColor('c1', e.currentTarget.value)}
+								/>
+								P1
+							</label>
+							<label class="pcolor">
+								<input
+									type="color"
+									value={'#' + (opts.c2 ?? DEFAULT_P2)}
+									oninput={(e) => setPlayerColor('c2', e.currentTarget.value)}
+								/>
+								P2
+							</label>
+							<button
+								type="button"
+								class="link-btn"
+								disabled={opts.c1 === null && opts.c2 === null}
+								onclick={() => {
+									opts.c1 = null;
+									opts.c2 = null;
+								}}>Standaard</button
+							>
+						</div>
+					{/if}
+
 					{#if hasNotes}
 						<p class="fglabel">Notes-stijl</p>
 						<div class="chips">
@@ -398,14 +580,40 @@
 						→ {total} vel{total === 1 ? '' : 'len'}
 					{/if}
 				</span>
-				<button type="button" class="link-btn" onclick={() => (opts = defaultOptions())}
-					>Reset</button
-				>
+				<button type="button" class="link-btn" onclick={resetAll}>Reset</button>
 			</div>
 			<p class="hint">
 				Kies in het printdialoog "Opslaan als PDF" voor de digitale editie (tablet + stylus). De
 				marges staan al op nul; drukt je printer de rasters niet af, zet dan "Achtergronden" aan.
 			</p>
+			<details class="uitleg">
+				<summary>Hoe werkt dit?</summary>
+				<ol>
+					<li>
+						Kies links de vellen en aantallen; herorden via het Volgorde-paneel of door miniaturen
+						te slepen. Klik een miniatuur voor een uitvergroting (pijltjestoetsen bladeren, Esc
+						sluit).
+					</li>
+					<li>
+						A5 = losse vellen en de digitale editie; A4 legt twee A5's naast elkaar — snijstapel
+						betekent elk vel dubbel, na het snijden twee gelijke stapels.
+					</li>
+					<li>
+						Ringband-marge geeft extra witruimte aan de bindkant; spelerkleuren zijn aanpasbaar,
+						of kies zwart-wit.
+					</li>
+					<li>
+						"Print / bewaar als PDF": kies je printer, of bestemming "Opslaan als PDF" voor
+						tablet + stylus (GoodNotes en dergelijke). Marges staan al op nul; zet
+						"Achtergronden" aan als rasters ontbreken.
+					</li>
+					<li>
+						Op de vellen is C een punt door Conquer en H een punt door Hold; de omcirkelde 8 (11
+						bij 2v2) is de Victory Score — bij overshoot turf je gewoon door.
+					</li>
+					<li>Je samenstelling zit in de URL, dus bookmarken of delen kan.</li>
+				</ol>
+			</details>
 		</section>
 
 		<div class="pvbar">
@@ -439,26 +647,85 @@
 						{i + 1} · {pageSheets.map((p) => pageLabel(p)).join(' + ')}
 					</p>
 				{/if}
+				<button
+					type="button"
+					class="pthumb"
+					class:mark-l={pvMark?.page === i && pvMark.side === 'l'}
+					class:mark-r={pvMark?.page === i && pvMark.side === 'r'}
+					draggable={pvDraggable}
+					aria-label="Vergroot pagina {i + 1} — {pageSheets.map((p) => pageLabel(p)).join(' + ')}"
+					onclick={(e) => openZoom(e, i)}
+					ondragstart={(e) => pvDragStart(e, i)}
+					ondragover={(e) => pvDragOver(e, i)}
+					ondrop={pvDrop}
+					ondragend={pvReset}
+				>
+					<div
+						class="ppage"
+						class:a4={opts.paper === 'a4'}
+						class:bind-top={opts.binding === 'top'}
+						class:bind-side={opts.binding === 'side'}
+						style="transform: scale({scale});{colorStyle}"
+					>
+						{#each pageSheets as p, j (j)}
+							{#if j > 0}<div class="cut"></div>{/if}
+							{@render sheetOf(p)}
+						{/each}
+					</div>
+				</button>
+			</div>
+		{/each}
+	</section>
+
+	{#if zoom !== null && zoomPage}
+		<div class="lightbox" role="dialog" aria-modal="true" aria-label="Pagina {zoom + 1} van {plan.length}">
+			<button class="lb-scrim" aria-label="Sluiten" tabindex="-1" onclick={closeZoom}></button>
+			<div
+				class="lb-stage"
+				style="width: {Math.round(pageWmm * MM * zoomScale)}px; height: {Math.round(
+					210 * MM * zoomScale
+				)}px"
+			>
 				<div
 					class="ppage"
 					class:a4={opts.paper === 'a4'}
 					class:bind-top={opts.binding === 'top'}
 					class:bind-side={opts.binding === 'side'}
-					style="transform: scale({scale})"
+					style="transform: scale({zoomScale});{colorStyle}"
 				>
-					{#each pageSheets as p, j (j)}
+					{#each zoomPage as p, j (j)}
 						{#if j > 0}<div class="cut"></div>{/if}
 						{@render sheetOf(p)}
 					{/each}
 				</div>
 			</div>
-		{/each}
-	</section>
+			<div class="lb-bar">
+				<button
+					type="button"
+					onclick={() => (zoom = Math.max(0, (zoom ?? 0) - 1))}
+					disabled={zoom === 0}
+					aria-label="Vorige pagina">‹</button
+				>
+				<span class="tnum">{zoom + 1} / {plan.length}</span>
+				<button
+					type="button"
+					onclick={() => (zoom = Math.min(plan.length - 1, (zoom ?? 0) + 1))}
+					disabled={zoom === plan.length - 1}
+					aria-label="Volgende pagina">›</button
+				>
+				<button type="button" bind:this={lbClose} onclick={closeZoom} aria-label="Sluiten"
+					>✕</button
+				>
+			</div>
+		</div>
+	{/if}
 </main>
 
 {#snippet sheetOf(p: SheetPage | null)}
 	{#if p === 'match'}
 		<MatchSheet {bw} />
+	{:else if p === 'matchalt'}
+		<MatchAltSheet {bw} />
 	{:else if p === 'solo'}
 		<SoloSheet {bw} />
 	{:else if p === 'ffa'}
@@ -673,6 +940,34 @@
 		font-weight: 700;
 	}
 
+	/* Spelerkleuren: compacte native pickers met hun label ernaast. */
+	.pcolors {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+	.pcolor {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 0.8rem;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.pcolors input[type='color'] {
+		width: 30px;
+		height: 30px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 0;
+		background: none;
+		cursor: pointer;
+	}
+	/* De auto-marge van .link-btn (uit de actions-rij) is hier niet gewenst. */
+	.pcolors .link-btn {
+		margin-left: 0;
+	}
+
 	.actions {
 		display: flex;
 		align-items: center;
@@ -712,10 +1007,32 @@
 	.link-btn:hover {
 		color: var(--text);
 	}
+	.link-btn:disabled {
+		opacity: 0.4;
+		cursor: default;
+	}
 	.hint {
 		margin: 10px 0 0;
 		font-size: 0.78rem;
 		color: var(--muted);
+	}
+
+	/* Uitleg-blok: standaard ingeklapt — de volledige werkwijze voor wie wil. */
+	.uitleg {
+		margin-top: 10px;
+		font-size: 0.82rem;
+		color: var(--muted);
+	}
+	.uitleg summary {
+		cursor: pointer;
+		font-weight: 600;
+	}
+	.uitleg ol {
+		margin: 6px 0 0;
+		padding-left: 20px;
+	}
+	.uitleg li {
+		margin: 4px 0;
 	}
 
 	.pvbar {
@@ -759,6 +1076,22 @@
 	.pslot {
 		overflow: hidden;
 	}
+	/* De miniatuur is een knop (klik = uitvergroten, slepen = herordenen). */
+	.pthumb {
+		display: block;
+		width: 100%;
+		padding: 0;
+		border: 0;
+		background: none;
+		cursor: zoom-in;
+		text-align: left;
+	}
+	.pthumb.mark-l {
+		box-shadow: inset 3px 0 0 var(--accent);
+	}
+	.pthumb.mark-r {
+		box-shadow: inset -3px 0 0 var(--accent);
+	}
 	.ppage {
 		width: 148mm;
 		height: 210mm;
@@ -789,6 +1122,61 @@
 		height: 210mm;
 	}
 
+	/* ── Lightbox: uitvergrote pagina met navigatie ── */
+	.lightbox {
+		position: fixed;
+		inset: 0;
+		z-index: 40;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 12px;
+	}
+	.lb-scrim {
+		position: absolute;
+		inset: 0;
+		background: rgba(10, 12, 18, 0.72);
+		border: 0;
+		cursor: pointer;
+	}
+	.lb-stage {
+		position: relative;
+		z-index: 1;
+		overflow: hidden;
+		box-shadow: 0 24px 80px -24px rgba(0, 0, 0, 0.7);
+	}
+	.lb-stage .ppage {
+		box-shadow: none;
+		border: 0;
+	}
+	.lb-bar {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 6px 12px;
+		color: var(--muted);
+		font-size: 0.85rem;
+	}
+	.lb-bar button {
+		width: 32px;
+		height: 32px;
+		border: 1px solid var(--border);
+		border-radius: 50%;
+		background: var(--surface-deep);
+		color: var(--text);
+		cursor: pointer;
+	}
+	.lb-bar button:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+
 	/* ── Print: alleen de pagina's, op ware grootte, één per @page ── */
 	@media print {
 		/* App-schil weg — ook op andere routes onschadelijk, maar hier nodig. */
@@ -805,6 +1193,15 @@
 		:global(.content) {
 			display: block !important;
 			min-height: 0 !important;
+		}
+		/* De .ppage is bewust 0.4mm korter dan de @page (spookpagina-marge);
+		   in die kier schemert de body-achtergrond door — in het donkere
+		   thema een zwarte streep onderaan élke pagina zodra "Achtergronden"
+		   aan staat (review #343). Papier blijft papier, ook bij donker
+		   browsen. */
+		:global(html),
+		:global(body) {
+			background: var(--paper) !important;
 		}
 		main {
 			max-width: none;
@@ -825,6 +1222,12 @@
 		.pcap {
 			display: none;
 		}
+		.lightbox {
+			display: none !important;
+		}
+		.pthumb {
+			box-shadow: none !important;
+		}
 		.ppage {
 			transform: none !important;
 			box-shadow: none;
@@ -837,6 +1240,34 @@
 		}
 		.ppage:last-child {
 			break-after: auto;
+		}
+	}
+
+	/* ── Touch: de globale 44px-min-height (app.css) rekt smalle knopjes tot
+	   ovalen en laat de breedte onder de raakvlak-eis — dus hier ook de
+	   breedte mee laten groeien en de vormen herstellen (review #343). Juist
+	   op touch werkt HTML5-DnD niet, dus deze controls zijn daar het enige
+	   herorden-pad. ── */
+	@media (pointer: coarse) {
+		.sctl button,
+		.obtns button {
+			min-width: 44px;
+			width: auto;
+			border-radius: 9px;
+		}
+		.lb-bar button {
+			min-width: 44px;
+			width: auto;
+			border-radius: 999px;
+			padding: 0 14px;
+		}
+		.osel {
+			width: 24px;
+			height: 24px;
+		}
+		.pcolor input {
+			width: 44px;
+			height: 44px;
 		}
 	}
 </style>

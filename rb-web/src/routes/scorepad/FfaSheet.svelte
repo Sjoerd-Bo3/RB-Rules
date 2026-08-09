@@ -38,11 +38,15 @@
 				<div class="fline"><span class="micro">Name</span><span class="fill"></span></div>
 				<div class="fline"><span class="micro">Legend</span><span class="fill"></span></div>
 				<div class="trk">
-					<span></span><span class="trk-h">C</span><span class="trk-h">H</span>
+					<div class="trow th">
+						<span class="tn"></span><span class="tc trk-h">C</span><span class="tc trk-h">H</span>
+					</div>
 					{#each POINTS as p (p)}
-						<span class="trk-num" class:vs={p === 8}>{p}</span>
-						<span class="cell"><span class="cb small"></span></span>
-						<span class="cell"><span class="cb small"></span></span>
+						<div class="trow">
+							<span class="tn"><span class="trk-num" class:vs={p === 8}>{p}</span></span>
+							<span class="tc"><span class="cb small"></span></span>
+							<span class="tc"><span class="cb small"></span></span>
+						</div>
 					{/each}
 				</div>
 				<footer class="fwin"><span class="micro">Winner</span><span class="cb small"></span></footer>
@@ -95,24 +99,34 @@
 		height: 3.4mm;
 	}
 
+	/* Rijen als échte rijen (flex): één doorlopende scheidingslijn per rij. */
 	.trk {
-		display: grid;
-		grid-template-columns: 4.6mm 1fr 1fr;
-		align-items: center;
+		display: flex;
+		flex-direction: column;
 		margin-top: 0.8mm;
 	}
-	.cell {
+	.trow {
+		display: flex;
+		align-items: center;
+		padding: 0.55mm 0;
+		border-bottom: 0.2mm solid var(--paper-line-soft);
+	}
+	.trow.th {
+		padding: 0 0 0.5mm;
+		border-bottom: 0.28mm solid var(--paper-line);
+	}
+	.tn {
+		flex: none;
+		width: 4.6mm;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 0.55mm 0;
 	}
-	.trk > :global(*) {
-		border-bottom: 0.2mm solid var(--paper-line-soft);
-	}
-	/* Eén doorlopende lijn onder de complete kopregel (alle drie cellen). */
-	.trk > :global(:nth-child(-n + 3)) {
-		border-bottom: 0.28mm solid var(--paper-line);
+	.tc {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.fwin {

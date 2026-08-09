@@ -45,17 +45,23 @@
 					<span class="pnum tnum">2</span><span class="micro">Legend</span><span class="fill"></span>
 				</div>
 				<div class="trk">
-					<span class="trk-h span2">Player 1</span><span></span><span class="trk-h span2"
-						>Player 2</span
-					>
-					<span class="trk-h h2">C</span><span class="trk-h h2">H</span><span class="h2"></span>
-					<span class="trk-h h2">C</span><span class="trk-h h2">H</span>
+					<div class="trow tsp">
+						<span class="tspan trk-h">Player 1</span><span class="tn"></span><span
+							class="tspan trk-h">Player 2</span
+						>
+					</div>
+					<div class="trow th">
+						<span class="tc trk-h">C</span><span class="tc trk-h">H</span><span class="tn"></span>
+						<span class="tc trk-h">C</span><span class="tc trk-h">H</span>
+					</div>
 					{#each POINTS as p (p)}
-						<span class="cell"><span class="cb small {team.cls}"></span></span>
-						<span class="cell"><span class="cb small {team.cls}"></span></span>
-						<span class="trk-num" class:vs={p === 11}>{p}</span>
-						<span class="cell"><span class="cb small {team.cls}"></span></span>
-						<span class="cell"><span class="cb small {team.cls}"></span></span>
+						<div class="trow">
+							<span class="tc"><span class="cb small {team.cls}"></span></span>
+							<span class="tc"><span class="cb small {team.cls}"></span></span>
+							<span class="tn"><span class="trk-num" class:vs={p === 11}>{p}</span></span>
+							<span class="tc"><span class="cb small {team.cls}"></span></span>
+							<span class="tc"><span class="cb small {team.cls}"></span></span>
+						</div>
 					{/each}
 				</div>
 				<footer class="twin">
@@ -123,30 +129,42 @@
 		font-weight: 800;
 	}
 
+	/* Rijen als échte rijen (flex): één doorlopende scheidingslijn per rij. */
 	.trk {
-		display: grid;
-		grid-template-columns: 1fr 1fr 5mm 1fr 1fr;
-		align-items: center;
+		display: flex;
+		flex-direction: column;
 		margin-top: 1mm;
 	}
-	.span2 {
-		grid-column: span 2;
+	.trow {
+		display: flex;
+		align-items: center;
+		padding: 0.5mm 0;
+		border-bottom: 0.2mm solid var(--paper-line-soft);
 	}
-	.cell {
+	.trow.tsp {
+		padding: 0 0 0.3mm;
+		border-bottom: 0;
+	}
+	.trow.th {
+		padding: 0 0 0.5mm;
+		border-bottom: 0.28mm solid var(--paper-line);
+	}
+	.tspan {
+		flex: 2;
+		text-align: center;
+	}
+	.tn {
+		flex: none;
+		width: 5mm;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 0.5mm 0;
 	}
-	.trk > :global(*) {
-		border-bottom: 0.2mm solid var(--paper-line-soft);
-	}
-	.trk > .span2,
-	.trk > .span2 + span {
-		border-bottom: 0;
-	}
-	.trk > .h2 {
-		border-bottom: 0.28mm solid var(--paper-line);
+	.tc {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.twin {

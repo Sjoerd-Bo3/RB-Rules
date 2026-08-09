@@ -32,16 +32,20 @@
 	</div>
 
 	<div class="trk">
-		<span class="trk-h c1">C</span><span class="trk-h c1">H</span><span></span>
-		<span class="trk-h c2">C</span><span class="trk-h c2">H</span>
-		<span class="trk-h how">How the point was scored — battlefield, play, misplay</span>
+		<div class="trow th">
+			<span class="tc trk-h c1">C</span><span class="tc trk-h c1">H</span><span class="tn"></span>
+			<span class="tc trk-h c2">C</span><span class="tc trk-h c2">H</span>
+			<span class="thow trk-h how">How the point was scored — battlefield, play, misplay</span>
+		</div>
 		{#each POINTS as p (p)}
-			<span class="cell"><span class="cb p1"></span></span>
-			<span class="cell"><span class="cb p1"></span></span>
-			<span class="trk-num" class:vs={p === 8}>{p}</span>
-			<span class="cell"><span class="cb p2"></span></span>
-			<span class="cell"><span class="cb p2"></span></span>
-			<span class="how"></span>
+			<div class="trow">
+				<span class="tc"><span class="cb p1"></span></span>
+				<span class="tc"><span class="cb p1"></span></span>
+				<span class="tn"><span class="trk-num" class:vs={p === 8}>{p}</span></span>
+				<span class="tc"><span class="cb p2"></span></span>
+				<span class="tc"><span class="cb p2"></span></span>
+				<span class="thow wl"></span>
+			</div>
 		{/each}
 	</div>
 	<p class="legend">C = point by Conquer · H = point by Hold — the track runs past 8 (§194.2.a)</p>
@@ -69,34 +73,44 @@
 		flex: none;
 	}
 
+	/* Rijen als échte rijen (flex): geen losse cel-randjes die verspringen —
+	   de schrijflijn per punt is hier de enige rijlijn (#342). */
 	.trk {
-		display: grid;
-		grid-template-columns: 5.4mm 5.4mm 5.4mm 5.4mm 5.4mm 1fr;
-		align-items: center;
+		display: flex;
+		flex-direction: column;
 		margin-top: 1mm;
 	}
-	.cell {
+	.trow {
+		display: flex;
+		align-items: stretch;
+		height: 7mm;
+	}
+	.trow.th {
+		height: auto;
+		padding-bottom: 0.6mm;
+		border-bottom: 0.3mm solid var(--paper-line);
+		align-items: flex-end;
+	}
+	.tc,
+	.tn {
+		flex: none;
+		width: 5.4mm;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 1.5mm 0;
 	}
-	.trk > :global(*) {
-		border-bottom: 0.2mm solid var(--paper-line-soft);
-	}
-	/* Eén doorlopende lijn onder de complete kopregel (alle zes cellen). */
-	.trk > :global(:nth-child(-n + 6)) {
-		border-bottom: 0.3mm solid var(--paper-line);
+	.thow {
+		flex: 1;
+		min-width: 0;
 	}
 	.trk-h.how {
 		text-align: left;
 		padding-left: 2.4mm;
 		letter-spacing: 0.05em;
 	}
-	.how {
-		align-self: stretch;
-		margin: 0 0 1mm 2.4mm;
-		border-bottom: 0.28mm solid var(--paper-line) !important;
+	.wl {
+		border-bottom: 0.28mm solid var(--paper-line);
+		margin: 0 0 1.2mm 2.4mm;
 	}
 
 	.legend {
