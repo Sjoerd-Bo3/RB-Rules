@@ -1,0 +1,172 @@
+<script lang="ts">
+	// 2v2 Magma Chamber (#342): teams delen hun punten (§489.8.d), dus één
+	// gedeelde track per team — naar 11, doorlopend tot 13 (overshoot kan,
+	// §194.2.a). Turn order wisselt per team (§489.5.c).
+	import SheetFrame from './SheetFrame.svelte';
+
+	let { bw = false }: { bw?: boolean } = $props();
+
+	const POINTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+	const TEAMS = [
+		{ name: 'Team A', cls: 'p1' },
+		{ name: 'Team B', cls: 'p2' }
+	];
+</script>
+
+<SheetFrame {bw} title="2v2 Sheet" sub="Magma Chamber · Teams share points · First team to 11 — §489">
+	<div class="sh-row">
+		<span class="sh-field"><span class="micro">Date</span><span class="fill"></span></span>
+		<span class="sh-field" style="flex: 2"
+			><span class="micro">Event</span><span class="fill"></span></span
+		>
+	</div>
+
+	<div class="sh-row">
+		<span class="sh-field" style="flex: 1.2">
+			<span class="micro">Turn order</span>
+			{#each [1, 2, 3, 4] as n (n)}
+				<span class="ordnum tnum">{n}</span><span class="fill"></span>
+			{/each}
+		</span>
+		<span class="sh-field">
+			<span class="micro">Battlefields</span>
+			<span class="fill"></span><span class="fill"></span><span class="fill"></span>
+		</span>
+	</div>
+
+	<div class="teams">
+		{#each TEAMS as team (team.cls)}
+			<section class="team {team.cls}">
+				<header class="thead">{team.name}</header>
+				<div class="tline">
+					<span class="pnum tnum">1</span><span class="micro">Legend</span><span class="fill"></span>
+				</div>
+				<div class="tline">
+					<span class="pnum tnum">2</span><span class="micro">Legend</span><span class="fill"></span>
+				</div>
+				<div class="trk">
+					<span class="trk-h span2">Player 1</span><span></span><span class="trk-h span2"
+						>Player 2</span
+					>
+					<span class="trk-h h2">C</span><span class="trk-h h2">H</span><span class="h2"></span>
+					<span class="trk-h h2">C</span><span class="trk-h h2">H</span>
+					{#each POINTS as p (p)}
+						<span class="cell"><span class="cb small {team.cls}"></span></span>
+						<span class="cell"><span class="cb small {team.cls}"></span></span>
+						<span class="trk-num" class:vs={p === 11}>{p}</span>
+						<span class="cell"><span class="cb small {team.cls}"></span></span>
+						<span class="cell"><span class="cb small {team.cls}"></span></span>
+					{/each}
+				</div>
+				<footer class="twin">
+					<span class="micro">Team win</span><span class="cb small {team.cls}"></span>
+				</footer>
+			</section>
+		{/each}
+	</div>
+	<p class="legend">
+		C = by Conquer · H = by Hold — tick in the column of the teammate who scored it; the row
+		number is the shared team total (§489.8.d)
+	</p>
+
+	<div class="sec"><span>Notes</span></div>
+	<div class="notes dots"></div>
+</SheetFrame>
+
+<style>
+	.ordnum {
+		font-size: 5.6pt;
+		font-weight: 700;
+		color: var(--paper-muted);
+	}
+
+	.teams {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 3mm;
+	}
+	.team {
+		border: 0.3mm solid var(--paper-line);
+		border-radius: 1.2mm;
+		padding: 1.8mm 2.2mm;
+		display: flex;
+		flex-direction: column;
+		border-top: 1.4mm solid var(--paper-ink);
+	}
+	.team.p1 {
+		border-top-color: var(--paper-p1);
+	}
+	.team.p2 {
+		border-top-color: var(--paper-p2);
+	}
+	.thead {
+		font-size: 7pt;
+		font-weight: 800;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		margin-bottom: 1.2mm;
+	}
+	.tline {
+		display: flex;
+		align-items: baseline;
+		gap: 1.4mm;
+		margin-bottom: 0.9mm;
+	}
+	.tline .fill {
+		flex: 1;
+		border-bottom: 0.28mm solid var(--paper-line);
+		height: 3.6mm;
+	}
+
+	.pnum {
+		font-size: 6.4pt;
+		font-weight: 800;
+	}
+
+	.trk {
+		display: grid;
+		grid-template-columns: 1fr 1fr 5mm 1fr 1fr;
+		align-items: center;
+		margin-top: 1mm;
+	}
+	.span2 {
+		grid-column: span 2;
+	}
+	.cell {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0.5mm 0;
+	}
+	.trk > :global(*) {
+		border-bottom: 0.2mm solid var(--paper-line-soft);
+	}
+	.trk > .span2,
+	.trk > .span2 + span {
+		border-bottom: 0;
+	}
+	.trk > .h2 {
+		border-bottom: 0.28mm solid var(--paper-line);
+	}
+
+	.twin {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 1.6mm;
+		padding-top: 1.4mm;
+	}
+
+	.legend {
+		margin: 1.4mm 0 0;
+		font-size: 5pt;
+		color: var(--paper-muted);
+		letter-spacing: 0.03em;
+	}
+
+	.notes {
+		flex: 1;
+		min-height: 12mm;
+		margin-bottom: 1mm;
+	}
+</style>

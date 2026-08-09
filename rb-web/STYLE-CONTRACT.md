@@ -62,6 +62,13 @@ op licht, `none` op donker). Cijfers die uitlijnen: klasse `.tnum`
 - **Stat-tegel / kaart-tegel**: `--surface` + domein-accentstreep + groot
   `.tnum`-getal.
 
+**Papier** (#342, alleen voor /scorepad-printvellen): `--paper`, `--paper-ink`,
+`--paper-muted`, `--paper-line(-soft)`, `--paper-p1(-soft)` goud,
+`--paper-p2(-soft)` rood. Vast inkt-op-wit — wisselt NIET met het thema (wie
+donker browst print alsnog wit papier). Spelerkleuren zijn hier functionele
+codering aan tafel (P1 goud/P2 rood), geen decoratief geel; zwart-wit-modus
+remapt ze naar `--paper-ink`.
+
 ## 3. Do / Don't
 
 - DO: alleen tokens; `.tnum` op cijfers; brede tabellen/diagrammen in
