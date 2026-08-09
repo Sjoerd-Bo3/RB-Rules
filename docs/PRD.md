@@ -1712,9 +1712,16 @@ de globale duur-vangrail).
   spelerkleuren (`c1`/`c2` in de query-string, standaard de papier-tokens) —
   of zwart-wit, en een ringband-marge (geen/boven/zijkant) voor perforatie of
   spiraal. Een inklapbaar uitleg-blok op de pagina legt de werkwijze uit.
-  Vellen zijn Engelstalig (speltaal), de assembler-UI Nederlands. Volledig
-  client-side — geen rb-api nodig. *Route* `/scorepad` (nav-groep "Aan
-  tafel").
+  Na een UI/UX-review (workflow, alle bevindingen nagemeten): Name-velden op
+  de matchvellen en naam-boven-legend op 2v2, een Tbl-kolom
+  (Swiss-tafelnummers) op het toernooivel, P1/P2-tekstlabels op alle
+  kleur-gecodeerde boxparen (zwart-wit/kleurenblind-proof), liniatuur
+  (dots/lijnen/boxregels) als vector-primitieven zodat het printbestand niet
+  meer rastert, schrijfmaten op handschrift-ergonomie (regels >= 4mm,
+  turf-boxes 3.4mm), Reset met herstelregel en blokverplaats-knoppen op de
+  selectiebalk. Vellen zijn Engelstalig (speltaal), de assembler-UI
+  Nederlands. Volledig client-side — geen rb-api nodig. *Route* `/scorepad`
+  (nav-groep "Aan tafel").
 
 ---
 

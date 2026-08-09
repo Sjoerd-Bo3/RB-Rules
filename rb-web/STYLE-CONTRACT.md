@@ -67,7 +67,9 @@ op licht, `none` op donker). Cijfers die uitlijnen: klasse `.tnum`
 `--paper-p2(-soft)` rood. Vast inkt-op-wit — wisselt NIET met het thema (wie
 donker browst print alsnog wit papier). Spelerkleuren zijn hier functionele
 codering aan tafel (P1 goud/P2 rood), geen decoratief geel; zwart-wit-modus
-remapt ze naar `--paper-ink`.
+remapt ze naar `--paper-ink`. `--paper-p1-ink` `#8a6509` is de tekst-variant
+van P1-goud (~4.9:1 op wit) — verplicht waar P1-goud als tekstkleur dient;
+randen/checkboxes/balken blijven `--paper-p1`.
 
 ## 3. Do / Don't
 

@@ -17,15 +17,17 @@
 			>
 		</div>
 
+		<!-- Grotere gestuurde ruimte (keuze Sjoerd, UX-review): wat je invult is
+		     wat je later terugleest; het vrije Notes-vlak krimpt mee. -->
 		<div class="sec">
 			<span>Matchups I keep winning</span><span class="sec-note">and what wins them</span>
 		</div>
-		<div class="wbox" style="height: 24mm"></div>
+		<div class="wbox" style="height: 30mm"></div>
 
 		<div class="sec">
 			<span>Matchups that hurt</span><span class="sec-note">and where they slip away</span>
 		</div>
-		<div class="wbox" style="height: 24mm"></div>
+		<div class="wbox" style="height: 30mm"></div>
 
 		<div class="cards">
 			<div>
@@ -33,9 +35,11 @@
 				<div class="wline"></div>
 				<div class="wline"></div>
 				<div class="wline"></div>
+				<div class="wline"></div>
 			</div>
 			<div>
 				<div class="sec"><span>Cards underdelivering</span></div>
+				<div class="wline"></div>
 				<div class="wline"></div>
 				<div class="wline"></div>
 				<div class="wline"></div>
@@ -74,9 +78,11 @@
 		<div class="sec">
 			<span>New strategies I ran into</span><span class="sec-note">and how I handled them</span>
 		</div>
-		<div class="wbox" style="height: 22mm"></div>
+		<div class="wbox" style="height: 28mm"></div>
 
 		<div class="sec"><span>Tech worth adopting</span><span class="sec-note">seen at other tables</span></div>
+		<div class="wline"></div>
+		<div class="wline"></div>
 		<div class="wline"></div>
 		<div class="wline"></div>
 
@@ -85,6 +91,7 @@
 			<span class="micro">Is my battlefield lineup still right?</span>
 			<span class="opt"><span class="cb small"></span> Yes</span>
 			<span class="opt"><span class="cb small"></span> Doubting</span>
+			<span class="opt"><span class="cb small"></span> No</span>
 		</div>
 		<div class="fline"><span class="micro">Worth testing</span><span class="wline grow"></span></div>
 

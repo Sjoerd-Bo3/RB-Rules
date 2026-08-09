@@ -67,61 +67,73 @@ export const SHEET_ORDER: readonly SheetKind[] = [
 ];
 
 /** UI-metadata (Nederlands; de vellen zelf zijn Engelstalig, zoals al het
- *  officiële spelmateriaal). `pages` = fysieke pagina's per exemplaar. */
+ *  officiële spelmateriaal). `pages` = fysieke pagina's per exemplaar.
+ *  `shortLabel` is voor smalle contexten (het volgorde-paneel): het
+ *  onderscheid zit VOORAAN, zodat afkappen nooit twee gelijk ogende labels
+ *  oplevert ("Match sheet…" vs "Match sheet…"). */
 export const SHEET_INFO: Record<
 	SheetKind,
-	{ label: string; hint: string; group: 'spel' | 'na'; pages: number }
+	{ label: string; shortLabel: string; hint: string; group: 'spel' | 'na'; pages: number }
 > = {
 	match: {
 		label: 'Match sheet (Bo3)',
+		shortLabel: 'Bo3 match',
 		hint: 'Drie games met Conquer/Hold-punttracks, battlefields en first player',
 		group: 'spel',
 		pages: 1
 	},
 	matchalt: {
 		label: 'Match sheet — variant B',
+		shortLabel: 'Match var. B',
 		hint: 'Getrapte game-blokken met kleurbanden, zonder battlefield/first-velden, groot notes-vlak',
 		group: 'spel',
 		pages: 1
 	},
 	solo: {
 		label: 'Losse game',
+		shortLabel: 'Losse game',
 		hint: 'Eén game groot, met schrijfruimte per gescoord punt',
 		group: 'spel',
 		pages: 1
 	},
 	ffa: {
 		label: 'Free-for-all (3–4 spelers)',
+		shortLabel: 'FFA 3–4',
 		hint: 'FFA3 Skirmish / FFA4 War — ieder een eigen track naar 8',
 		group: 'spel',
 		pages: 1
 	},
 	duo: {
 		label: '2v2 Magma Chamber',
+		shortLabel: '2v2',
 		hint: 'Teamtracks naar 11 — per punt turven welke teammate scoorde (§489)',
 		group: 'spel',
 		pages: 1
 	},
 	tournament: {
 		label: 'Toernooi-dag',
+		shortLabel: 'Toernooi-dag',
 		hint: 'Rondes, tegenstanders, resultaten en eindrecord op één vel',
 		group: 'spel',
 		pages: 1
 	},
 	reflection: {
 		label: 'Match reflection',
+		shortLabel: 'Reflection',
 		hint: 'Verwachtingen vooraf, verloop en lessen achteraf',
 		group: 'na',
 		pages: 1
 	},
 	milestone: {
 		label: 'Milestone review',
+		shortLabel: 'Milestone',
 		hint: 'Periodieke evaluatie: resultaten, deck, meta en mindset (2 pagina’s)',
 		group: 'na',
 		pages: 2
 	},
 	notes: {
 		label: 'Notes',
+		shortLabel: 'Notes',
 		hint: 'Losse notitiepagina (dots of lijntjes)',
 		group: 'na',
 		pages: 1

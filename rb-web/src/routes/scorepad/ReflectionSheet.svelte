@@ -49,11 +49,11 @@
 	<div class="sec">
 		<span>The games</span><span class="sec-note">key moments, turning points, surprises</span>
 	</div>
-	<div class="wbox" style="height: 30mm"></div>
+	<div class="wbox" style="height: 28mm"></div>
 	<div class="sec">
 		<span>Mistakes I caught</span><span class="sec-note">and what they cost</span>
 	</div>
-	<div class="wbox" style="height: 18mm"></div>
+	<div class="wbox" style="height: 16mm"></div>
 
 	<div class="cards">
 		<div class="ccol">
@@ -61,9 +61,11 @@
 			<div class="wline"></div>
 			<div class="wline"></div>
 			<div class="wline"></div>
+			<div class="wline"></div>
 		</div>
 		<div class="ccol">
 			<div class="sec"><span>Underperformed</span></div>
+			<div class="wline"></div>
 			<div class="wline"></div>
 			<div class="wline"></div>
 			<div class="wline"></div>
@@ -76,10 +78,18 @@
 		<span class="opt"><span class="cb small"></span> Yes</span>
 		<span class="opt"><span class="cb small"></span> No</span>
 	</div>
-	<div class="fline"><span class="micro">Biggest lesson</span><span class="wline grow"></span></div>
-	<div class="fline"><span class="micro">Try next time</span><span class="wline grow"></span></div>
+	<!-- Label boven de regels en twee regels per vraag (keuze Sjoerd,
+	     UX-review): wat je invult is wat je later terugleest. -->
+	<p class="flabel micro">Biggest lesson</p>
+	<div class="wline"></div>
+	<div class="wline"></div>
+	<p class="flabel micro">Try next time</p>
+	<div class="wline"></div>
+	<div class="wline"></div>
 
 	<div class="sec"><span>Notes</span></div>
+	<!-- Bewust dots waar de andere na-afloop-vellen lijntjes hebben (keuze
+	     Sjoerd): vrije schetsruimte, bv. om een bordstand te tekenen. -->
 	<div class="xnotes dots"></div>
 </SheetFrame>
 
@@ -101,14 +111,8 @@
 		gap: 4mm;
 	}
 
-	.fline {
-		display: flex;
-		align-items: baseline;
-		gap: 2mm;
-		margin-bottom: 1.2mm;
-	}
-	.grow {
-		flex: 1;
+	.flabel {
+		margin: 1.4mm 0 0.4mm;
 	}
 	.xnotes {
 		flex: 1;

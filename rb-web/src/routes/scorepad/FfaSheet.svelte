@@ -44,8 +44,8 @@
 					{#each POINTS as p (p)}
 						<div class="trow">
 							<span class="tn"><span class="trk-num" class:vs={p === 8}>{p}</span></span>
-							<span class="tc"><span class="cb small"></span></span>
-							<span class="tc"><span class="cb small"></span></span>
+							<span class="tc"><span class="cb"></span></span>
+							<span class="tc"><span class="cb"></span></span>
 						</div>
 					{/each}
 				</div>
@@ -96,7 +96,7 @@
 	.fline .fill {
 		flex: 1;
 		border-bottom: 0.28mm solid var(--paper-line);
-		height: 3.4mm;
+		height: 4mm;
 	}
 
 	/* Rijen als échte rijen (flex): één doorlopende scheidingslijn per rij. */
@@ -139,7 +139,7 @@
 
 	.legend {
 		margin: 1.4mm 0 0;
-		font-size: 5pt;
+		font-size: 6pt;
 		color: var(--paper-muted);
 		letter-spacing: 0.03em;
 	}

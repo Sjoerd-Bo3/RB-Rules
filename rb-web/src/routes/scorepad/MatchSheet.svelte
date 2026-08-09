@@ -20,8 +20,16 @@
 	</div>
 
 	<div class="sh-row">
-		<span class="pl p1"><span class="micro">P1 · You</span><span class="micro">Legend</span><span class="fill"></span></span>
-		<span class="pl p2"><span class="micro">P2 · Opponent</span><span class="micro">Legend</span><span class="fill"></span></span>
+		<!-- Name naast Legend (keuze Sjoerd, UX-review): vastleggen tegen wíe je
+		     speelde hoort bij het archiveringsdoel van het vel. -->
+		<span class="pl p1"
+			><span class="micro">P1 · You</span><span class="micro">Name</span><span class="fill"
+			></span><span class="micro">Legend</span><span class="fill"></span></span
+		>
+		<span class="pl p2"
+			><span class="micro">P2 · Opponent</span><span class="micro">Name</span><span class="fill"
+			></span><span class="micro">Legend</span><span class="fill"></span></span
+		>
 	</div>
 
 	<div class="games">
@@ -29,9 +37,13 @@
 			<section class="game">
 				<header class="ghead">
 					<span class="gnum">Game {g}</span>
+					<!-- Tekstlabel per box: kleur alleen is in bw/kleurenblind niet te
+					     onderscheiden (#342-fix). -->
 					<span class="gfirst"
-						><span class="micro">First</span><span class="cb small p1"></span><span class="cb small p2"
-						></span></span
+						><span class="micro">First</span><span class="fp"
+							><span class="cb small p1"></span><span class="micro">P1</span></span
+						><span class="fp"><span class="cb small p2"></span><span class="micro">P2</span></span
+						></span
 					>
 				</header>
 				<div class="gbf">
@@ -39,6 +51,13 @@
 					<span class="bfl"><span class="micro">BF P2</span><span class="fill"></span></span>
 				</div>
 				<div class="trk">
+					<!-- Groepslabel per trackhelft: de C/H-koppen dragen alleen kleur en
+					     die valt in bw weg (#342-fix). -->
+					<div class="trow tsp">
+						<span class="tgrp micro">P1</span><span class="tn"></span><span class="tgrp micro"
+							>P2</span
+						>
+					</div>
 					<div class="trow th">
 						<span class="tc trk-h c1">C</span><span class="tc trk-h c1">H</span><span class="tn"
 						></span>
@@ -46,18 +65,18 @@
 					</div>
 					{#each POINTS as p (p)}
 						<div class="trow">
-							<span class="tc"><span class="cb small p1"></span></span>
-							<span class="tc"><span class="cb small p1"></span></span>
+							<span class="tc"><span class="cb p1"></span></span>
+							<span class="tc"><span class="cb p1"></span></span>
 							<span class="tn"><span class="trk-num" class:vs={p === 8}>{p}</span></span>
-							<span class="tc"><span class="cb small p2"></span></span>
-							<span class="tc"><span class="cb small p2"></span></span>
+							<span class="tc"><span class="cb p2"></span></span>
+							<span class="tc"><span class="cb p2"></span></span>
 						</div>
 					{/each}
 				</div>
 				<footer class="gwin">
-					<span class="micro">Winner</span><span class="cb small p1"></span><span
-						class="cb small p2"
-					></span>
+					<span class="micro">Winner</span><span class="fp"
+						><span class="cb small p1"></span><span class="micro">P1</span></span
+					><span class="fp"><span class="cb small p2"></span><span class="micro">P2</span></span>
 				</footer>
 			</section>
 		{/each}
@@ -108,10 +127,16 @@
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 	}
+	/* Ruime gap tussen de P1/P2-paren zodat label en box als paar lezen. */
 	.gfirst {
 		display: inline-flex;
 		align-items: center;
-		gap: 1mm;
+		gap: 2.5mm;
+	}
+	.fp {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.7mm;
 	}
 	.gbf {
 		display: flex;
@@ -127,7 +152,7 @@
 	.bfl .fill {
 		flex: 1;
 		border-bottom: 0.28mm solid var(--paper-line);
-		height: 3.4mm;
+		height: 4mm;
 	}
 
 	/* Rijen als échte rijen (flex): één doorlopende scheidingslijn per rij —
@@ -145,6 +170,14 @@
 	.trow.th {
 		padding: 0 0 0.6mm;
 		border-bottom: 0.28mm solid var(--paper-line);
+	}
+	.trow.tsp {
+		padding: 0 0 0.3mm;
+		border-bottom: 0;
+	}
+	.tgrp {
+		flex: 2;
+		text-align: center;
 	}
 	.tc {
 		flex: 1;
@@ -164,13 +197,13 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 1.4mm;
+		gap: 2.5mm;
 		padding-top: 1.4mm;
 	}
 
 	.legend {
 		margin: 1.4mm 0 0;
-		font-size: 5pt;
+		font-size: 6pt;
 		color: var(--paper-muted);
 		letter-spacing: 0.03em;
 	}

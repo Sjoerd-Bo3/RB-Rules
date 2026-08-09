@@ -32,6 +32,12 @@
 	</div>
 
 	<div class="trk">
+		<!-- Groepslabel per trackhelft: de C/H-koppen dragen alleen kleur en die
+		     valt in bw weg (#342-fix). -->
+		<div class="trow tsp">
+			<span class="tgrp micro">P1</span><span class="tn"></span><span class="tgrp micro">P2</span>
+			<span class="thow"></span>
+		</div>
 		<div class="trow th">
 			<span class="tc trk-h c1">C</span><span class="tc trk-h c1">H</span><span class="tn"></span>
 			<span class="tc trk-h c2">C</span><span class="tc trk-h c2">H</span>
@@ -55,7 +61,7 @@
 		<span class="opt"><span class="cb p1"></span> P1</span>
 		<span class="opt"><span class="cb p2"></span> P2</span>
 		<span class="sh-field" style="flex: 0 1 40mm"
-			><span class="micro">Final</span><span class="fill"></span><span class="dash">–</span><span
+			><span class="micro">Games</span><span class="fill"></span><span class="dash">–</span><span
 				class="fill"
 			></span></span
 		>
@@ -91,6 +97,18 @@
 		border-bottom: 0.3mm solid var(--paper-line);
 		align-items: flex-end;
 	}
+	.trow.tsp {
+		height: auto;
+		align-items: flex-end;
+		padding-bottom: 0.3mm;
+	}
+	/* Precies twee C/H-kolommen breed (2 × 5.4mm), zodat de track niet
+	   verbreedt. */
+	.tgrp {
+		flex: none;
+		width: 10.8mm;
+		text-align: center;
+	}
 	.tc,
 	.tn {
 		flex: none;
@@ -115,7 +133,7 @@
 
 	.legend {
 		margin: 1.2mm 0 0;
-		font-size: 5pt;
+		font-size: 6pt;
 		color: var(--paper-muted);
 		letter-spacing: 0.03em;
 	}

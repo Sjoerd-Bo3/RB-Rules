@@ -13,6 +13,7 @@
 		pagePlan,
 		serializeOptions,
 		sheetTotal,
+		type ScorepadOptions,
 		type SheetKind,
 		type SheetPage
 	} from '$lib/scorepad';
@@ -51,9 +52,12 @@
 	// als de vaste tokens in app.css). Null = standaardtokens, dus geen
 	// override. De waarden zijn altijd gevalideerde 6-hex (parser + picker),
 	// dus veilig in een style-attribuut.
+	// De -ink-variant (tekstkleur op wit) reist mee als donkerder afgeleide
+	// van de gekozen kleur — anders hielden de trackkoppen bij een custom
+	// P1-kleur de standaard donker-goud-inkt.
 	const colorStyle = $derived(
 		(opts.c1
-			? ` --paper-p1: #${opts.c1}; --paper-p1-soft: color-mix(in srgb, #${opts.c1} 16%, #ffffff);`
+			? ` --paper-p1: #${opts.c1}; --paper-p1-soft: color-mix(in srgb, #${opts.c1} 16%, #ffffff); --paper-p1-ink: color-mix(in srgb, #${opts.c1} 78%, #000);`
 			: '') +
 			(opts.c2
 				? ` --paper-p2: #${opts.c2}; --paper-p2-soft: color-mix(in srgb, #${opts.c2} 16%, #ffffff);`
@@ -84,6 +88,10 @@
 		opts = structuredClone(data.options);
 		sel.clear();
 		zoom = null;
+		// Een navigatie vervangt de samenstelling wisselend van buitenaf; een
+		// herstelregel van vóór die navigatie zou dan iets anders terugzetten
+		// dan de bezoeker net zag wegvallen.
+		undo = null;
 	});
 	$effect(() => {
 		const qs = serializeOptions(opts);
@@ -124,12 +132,50 @@
 		for (const i of [...sel].sort((a, b) => b - a)) opts.list.splice(i, 1);
 		sel.clear();
 	}
+	// Grenzen van de selectie, voor de Omhoog/Omlaag-knoppen op de selectiebalk.
+	const selMin = $derived(sel.size > 0 ? Math.min(...sel) : -1);
+	const selMax = $derived(sel.size > 0 ? Math.max(...sel) : -1);
+	// Omhoog/Omlaag verplaatst de hele selectie één positie, met hetzelfde
+	// gedrag als een drop: een niet-aaneengesloten selectie schuift als ÉÉN
+	// compact blok naar de doelplek — precies wat slepen ook doet. Per item
+	// één stap zou een tweede, afwijkend verplaatsmodel introduceren (en bij
+	// botsende items alsnog compacteren). "Eén positie" = de blokrand
+	// verschuift één plek: omhoog t.o.v. het bovenste item, omlaag t.o.v. het
+	// onderste.
+	function moveSelection(delta: -1 | 1) {
+		const src = [...sel].sort((a, b) => a - b);
+		if (src.length === 0) return;
+		if (delta === -1 && src[0] === 0) return;
+		if (delta === 1 && src[src.length - 1] === opts.list.length - 1) return;
+		moveBlock(src, delta === -1 ? src[0] - 1 : src[src.length - 1] + 2);
+	}
+
+	// ── Reset met herstel (geen confirm()-dialoog): de vorige opties blijven
+	// als snapshot staan tot er hersteld wordt of een nieuwe mutatie komt. ──
+	let undo = $state<ScorepadOptions | null>(null);
 	function resetAll() {
+		// Alleen een snapshot als er iets te verliezen valt; nogmaals Reset op
+		// een al-gereset pad mag de eerdere snapshot niet overschrijven met de
+		// standaardopties.
+		if (serializeOptions(opts) !== '') undo = $state.snapshot(opts) as ScorepadOptions;
 		// Reset vervangt de hele lijst — de selectie-indexen wijzen anders naar
 		// een lijst die niet meer bestaat (phantom-selectie, review #343).
 		opts = defaultOptions();
 		sel.clear();
 	}
+	function restoreReset() {
+		if (undo === null) return;
+		opts = undo;
+		undo = null;
+		sel.clear();
+	}
+	// Elke mutatie ná de reset maakt de herstelregel achterhaald: zodra de
+	// serialisatie afwijkt van de net-gereset standaard (die naar '' schrijft),
+	// verdwijnt hij. Dit dekt álle mutatiepaden (chips, pickers, DnD) zonder
+	// elke handler afzonderlijk te hoeven raken.
+	$effect(() => {
+		if (undo !== null && serializeOptions(opts) !== '') undo = null;
+	});
 
 	// Drag & drop: een niet-geselecteerde rij verslepen pakt alleen die rij;
 	// een geselecteerde rij verslepen neemt de hele selectie mee. De pijltjes
@@ -159,12 +205,13 @@
 					: Math.min(i + 1, opts.list.length);
 		if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 	}
-	function onDrop(e: DragEvent) {
-		e.preventDefault();
-		if (dragIdxs === null || insertAt === null) return resetDrag();
-		const src = dragIdxs;
+	// Verplaatst de entries op `src` (oplopend gesorteerd) als aaneengesloten
+	// blok naar `at` (invoegindex in de ÓÓRSPRONKELIJKE lijst) en herselecteert
+	// het blok op zijn nieuwe plek — gedeeld door drop én de knoppen op de
+	// selectiebalk, zodat beide paden exact hetzelfde doen.
+	function moveBlock(src: number[], at: number) {
 		const items = src.map((i) => opts.list[i]);
-		let target = insertAt;
+		let target = at;
 		for (let x = src.length - 1; x >= 0; x--) {
 			opts.list.splice(src[x], 1);
 			if (src[x] < target) target--;
@@ -172,6 +219,11 @@
 		opts.list.splice(target, 0, ...items);
 		sel.clear();
 		for (let x = 0; x < items.length; x++) sel.add(target + x);
+	}
+	function onDrop(e: DragEvent) {
+		e.preventDefault();
+		if (dragIdxs === null || insertAt === null) return resetDrag();
+		moveBlock(dragIdxs, insertAt);
 		resetDrag();
 	}
 	function resetDrag() {
@@ -265,9 +317,17 @@
 	// De opener onthouden zodat de focus bij sluiten terugkeert waar hij
 	// vandaan kwam (WCAG 2.4.3 — review #343).
 	let zoomOpener: HTMLElement | null = null;
+	// Smal scherm (≤760px): fit-to-width op de vólle vensterbreedte; de hoogte
+	// mag dan overlopen — de stage scrollt verticaal (mediaquery met dezelfde
+	// grens in de CSS onderaan, samen houden). Past schaal 1.0 binnen de
+	// breedte, dan komt de formule daar vanzelf op of boven uit. Desktop houdt
+	// de bestaande beide-richtingen-fit met 1.4-plafond.
+	const lbNarrow = $derived(winW > 0 && winW <= 760);
 	const zoomScale = $derived(
 		winW > 0 && winH > 0
-			? Math.min((winW * 0.92) / (pageWmm * MM), (winH * 0.86) / (210 * MM), 1.4)
+			? lbNarrow
+				? winW / (pageWmm * MM)
+				: Math.min((winW * 0.92) / (pageWmm * MM), (winH * 0.86) / (210 * MM), 1.4)
 			: 1
 	);
 	// Het plan kan onder de lightbox uit veranderen — renderen op een veilige
@@ -401,9 +461,13 @@
 										onchange={() => toggleSel(i)}
 									/>
 									<span class="onum tnum">{i + 1}</span>
-									<span class="olabel"
-										>{SHEET_INFO[k].label}{SHEET_INFO[k].pages > 1 ? ' · 2 pag.' : ''}</span
-									>
+									<!-- shortLabel: onderscheid vooraan, zodat afkappen in deze smalle
+									     kolom nooit twee gelijk ogende regels geeft. Het paginatal staat
+									     als apart badge-element buiten de ellipsis. -->
+									<span class="olabel">{SHEET_INFO[k].shortLabel}</span>
+									{#if SHEET_INFO[k].pages > 1}
+										<span class="opag tnum">{SHEET_INFO[k].pages} pag.</span>
+									{/if}
 									<span class="obtns">
 										<button
 											type="button"
@@ -436,7 +500,19 @@
 						</ol>
 						{#if sel.size > 0}
 							<div class="selrow">
-								<span class="tnum">{sel.size} geselecteerd — sleep samen, of:</span>
+								<span class="tnum">{sel.size} geselecteerd — verplaats of verwijder:</span>
+								<button
+									type="button"
+									class="link-btn"
+									disabled={selMin === 0}
+									onclick={() => moveSelection(-1)}>Omhoog</button
+								>
+								<button
+									type="button"
+									class="link-btn"
+									disabled={selMax === opts.list.length - 1}
+									onclick={() => moveSelection(1)}>Omlaag</button
+								>
 								<button type="button" class="link-btn" onclick={removeSelected}>Verwijder</button>
 								<button type="button" class="link-btn" onclick={() => sel.clear()}
 									>Wis selectie</button
@@ -572,14 +648,25 @@
 				<button type="button" class="print" disabled={plan.length === 0} onclick={() => window.print()}
 					>Print / bewaar als PDF</button
 				>
-				<span class="summary tnum">
-					{#if plan.length === 0}
-						Nog geen vellen gekozen
-					{:else}
-						{plan.length} {opts.paper === 'a4' ? 'A4' : 'A5'}-pagina{plan.length === 1 ? '' : "'s"}
-						→ {total} vel{total === 1 ? '' : 'len'}
-					{/if}
-				</span>
+				{#if undo !== null}
+					<!-- Herstelregel op de plek van de samenvatting: reset is direct
+					     ongedaan te maken, zonder confirm()-dialoog vooraf. -->
+					<span class="summary">
+						Samenstelling gewist —
+						<button type="button" class="link-btn" onclick={restoreReset}>Herstel</button>
+					</span>
+				{:else}
+					<span class="summary tnum">
+						{#if plan.length === 0}
+							Nog geen vellen gekozen
+						{:else}
+							{plan.length} {opts.paper === 'a4' ? 'A4' : 'A5'}-pagina{plan.length === 1
+								? ''
+								: "'s"}
+							→ {total} vel{total === 1 ? '' : 'len'}
+						{/if}
+					</span>
+				{/if}
 				<button type="button" class="link-btn" onclick={resetAll}>Reset</button>
 			</div>
 			<p class="hint">
@@ -680,23 +767,29 @@
 	{#if zoom !== null && zoomPage}
 		<div class="lightbox" role="dialog" aria-modal="true" aria-label="Pagina {zoom + 1} van {plan.length}">
 			<button class="lb-scrim" aria-label="Sluiten" tabindex="-1" onclick={closeZoom}></button>
-			<div
-				class="lb-stage"
-				style="width: {Math.round(pageWmm * MM * zoomScale)}px; height: {Math.round(
-					210 * MM * zoomScale
-				)}px"
-			>
+			<!-- De klemdoos (.lb-clip) draagt de geschaalde maat en knipt de
+			     ongeschaalde ppage-layoutdoos af; de stage eromheen kan zo op
+			     smalle schermen zélf verticaal scrollen (mediaquery onderaan)
+			     zonder dat de layout-overflow van de transform meescrollt. -->
+			<div class="lb-stage">
 				<div
-					class="ppage"
-					class:a4={opts.paper === 'a4'}
-					class:bind-top={opts.binding === 'top'}
-					class:bind-side={opts.binding === 'side'}
-					style="transform: scale({zoomScale});{colorStyle}"
+					class="lb-clip"
+					style="width: {Math.round(pageWmm * MM * zoomScale)}px; height: {Math.round(
+						210 * MM * zoomScale
+					)}px"
 				>
-					{#each zoomPage as p, j (j)}
-						{#if j > 0}<div class="cut"></div>{/if}
-						{@render sheetOf(p)}
-					{/each}
+					<div
+						class="ppage"
+						class:a4={opts.paper === 'a4'}
+						class:bind-top={opts.binding === 'top'}
+						class:bind-side={opts.binding === 'side'}
+						style="transform: scale({zoomScale});{colorStyle}"
+					>
+						{#each zoomPage as p, j (j)}
+							{#if j > 0}<div class="cut"></div>{/if}
+							{@render sheetOf(p)}
+						{/each}
+					</div>
 				</div>
 			</div>
 			<div class="lb-bar">
@@ -876,10 +969,16 @@
 	.selrow {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		flex-wrap: wrap;
+		gap: 2px 8px;
 		margin-top: 8px;
 		font-size: 0.8rem;
 		color: var(--muted);
+	}
+	/* De auto-marge van .link-btn hoort bij de actions-rij; hier staan vier
+	   knoppen als compacte groep naast de tekst. */
+	.selrow .link-btn {
+		margin-left: 0;
 	}
 	.onum {
 		color: var(--muted);
@@ -893,6 +992,16 @@
 		font-size: 0.86rem;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	/* Paginatal-badge: buiten het truncerende label, dus altijd leesbaar. */
+	.opag {
+		flex: none;
+		font-size: 0.68rem;
+		color: var(--muted);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 1px 6px;
 		white-space: nowrap;
 	}
 	.obtns {
@@ -933,11 +1042,14 @@
 		border-color: var(--border-strong);
 		color: var(--text);
 	}
+	/* Actieve chips als tint (keuze Sjoerd, UX-review): vol geel blijft
+	   exclusief voor de Print-CTA, zodat de primaire actie de enige gele
+	   vlek is — conform de actieve-filterchip-conventie in STYLE-CONTRACT. */
 	.chip.on {
-		background: var(--accent);
-		color: var(--accent-ink);
+		background: var(--accent-soft);
+		color: var(--text);
 		border-color: var(--accent);
-		font-weight: 700;
+		font-weight: 600;
 	}
 
 	/* Spelerkleuren: compacte native pickers met hun label ernaast. */
@@ -994,6 +1106,13 @@
 	.summary {
 		color: var(--muted);
 		font-size: 0.85rem;
+	}
+	/* De inline herstelknop erft de .link-btn-stijl, maar niet de auto-marge
+	   (die hoort bij de losse Reset-knop in de actions-rij). */
+	.summary .link-btn {
+		margin-left: 0;
+		padding: 0 2px;
+		text-decoration: underline;
 	}
 	.link-btn {
 		background: none;
@@ -1143,12 +1262,28 @@
 	.lb-stage {
 		position: relative;
 		z-index: 1;
-		overflow: hidden;
 		box-shadow: 0 24px 80px -24px rgba(0, 0, 0, 0.7);
+	}
+	/* Het knippen zit op de klemdoos: de ppage-layoutdoos is groter (schaal
+	   < 1) of kleiner (schaal > 1) dan de weergave, en de stage moet op smalle
+	   schermen vrij zijn om zelf te scrollen. */
+	.lb-clip {
+		overflow: hidden;
 	}
 	.lb-stage .ppage {
 		box-shadow: none;
 		border: 0;
+	}
+	/* Smal scherm: de lightbox-pagina rendert fit-to-width op de volle
+	   vensterbreedte (zie lbNarrow in de script — zelfde 760px-grens) en de
+	   stage pant/scrollt verticaal binnen het venster; 84px laat ruimte voor
+	   de navigatiebalk eronder. Desktop blijft ongewijzigd. */
+	@media (max-width: 760px) {
+		.lb-stage {
+			max-height: calc(100dvh - 84px);
+			overflow-y: auto;
+			overscroll-behavior: contain;
+		}
 	}
 	.lb-bar {
 		position: relative;

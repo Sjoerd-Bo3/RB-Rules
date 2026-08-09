@@ -21,13 +21,14 @@
 		>
 	</div>
 	<div class="sh-row">
+		<!-- Name naast Legend (keuze Sjoerd, UX-review): zelfde velden als A. -->
 		<span class="pl p1"
-			><span class="micro">P1 · You</span><span class="micro">Legend</span><span class="fill"
-			></span></span
+			><span class="micro">P1 · You</span><span class="micro">Name</span><span class="fill"
+			></span><span class="micro">Legend</span><span class="fill"></span></span
 		>
 		<span class="pl p2"
-			><span class="micro">P2 · Opponent</span><span class="micro">Legend</span><span class="fill"
-			></span></span
+			><span class="micro">P2 · Opponent</span><span class="micro">Name</span><span class="fill"
+			></span><span class="micro">Legend</span><span class="fill"></span></span
 		>
 	</div>
 
@@ -38,10 +39,13 @@
 				<!-- Kleurbanden: linkerhelft You (P1-goud), rechterhelft Opp
 				     (P2-rood); de cijferkolom in het midden blijft open zodat de
 				     banden exact boven de C/H-kolommen van de track staan. -->
+				<!-- P1/P2 in de band zelf: het groepslabel per trackhelft moet ook in
+				     bw leesbaar blijven, en de band zit al exact boven de C/H-koppen
+				     (#342-fix). -->
 				<div class="bands">
-					<span class="band b1">You</span>
+					<span class="band b1">P1 · You</span>
 					<span class="bn"></span>
-					<span class="band b2">Opp</span>
+					<span class="band b2">P2 · Opp</span>
 				</div>
 				<div class="trk">
 					<div class="trow th">
@@ -51,21 +55,30 @@
 					</div>
 					{#each POINTS as p (p)}
 						<div class="trow">
-							<span class="tc"><span class="cb small p1"></span></span>
-							<span class="tc"><span class="cb small p1"></span></span>
+							<span class="tc"><span class="cb p1"></span></span>
+							<span class="tc"><span class="cb p1"></span></span>
 							<span class="tn"><span class="trk-num" class:vs={p === 8}>{p}</span></span>
-							<span class="tc"><span class="cb small p2"></span></span>
-							<span class="tc"><span class="cb small p2"></span></span>
+							<span class="tc"><span class="cb p2"></span></span>
+							<span class="tc"><span class="cb p2"></span></span>
 						</div>
 					{/each}
 				</div>
+				<!-- Tekstlabel per box: kleur alleen is in bw niet te onderscheiden
+				     (#342-fix). -->
 				<footer class="gwin">
-					<span class="micro">W</span><span class="cb small p1"></span><span class="cb small p2"
-					></span>
+					<span class="micro">Winner</span><span class="fp"
+						><span class="cb small p1"></span><span class="micro">P1</span></span
+					><span class="fp"><span class="cb small p2"></span><span class="micro">P2</span></span>
 				</footer>
 			</section>
 		{/each}
 	</div>
+
+	<!-- Legenda direct onder de games-grid, boven het winnaar-blok — zelfde
+	     positie en formulering als variant A (#342-fix). -->
+	<p class="legend">
+		C = point by Conquer · H = point by Hold — the track runs past 8 on purpose (§194.2.a)
+	</p>
 
 	<div class="matchrow">
 		<span class="mw"
@@ -73,15 +86,11 @@
 			><span class="opt"><span class="cb p2"></span> P2</span></span
 		>
 		<span class="score"
-			><span class="micro">Score</span><span class="sfill"></span><span class="dash">–</span><span
+			><span class="micro">Games</span><span class="sfill"></span><span class="dash">–</span><span
 				class="sfill"
 			></span></span
 		>
 	</div>
-
-	<p class="legend">
-		C = point by Conquer · H = point by Hold — the track runs past 8 (§194.2.a)
-	</p>
 
 	<div class="sec"><span>Notes</span></div>
 	<div class="notes dots"></div>
@@ -177,12 +186,18 @@
 		justify-content: center;
 	}
 
+	/* Ruime gap tussen de P1/P2-paren zodat label en box als paar lezen. */
 	.gwin {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 1.4mm;
+		gap: 2.5mm;
 		padding-top: 1.4mm;
+	}
+	.fp {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.7mm;
 	}
 
 	.matchrow {
@@ -224,7 +239,7 @@
 
 	.legend {
 		margin: 1.4mm 0 0;
-		font-size: 5pt;
+		font-size: 6pt;
 		color: var(--paper-muted);
 		letter-spacing: 0.03em;
 	}

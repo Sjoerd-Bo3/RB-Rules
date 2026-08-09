@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
 	MAX_SHEETS,
+	SHEET_INFO,
+	SHEET_ORDER,
 	defaultOptions,
 	expandPages,
 	pagePlan,
@@ -74,6 +76,14 @@ describe('scorepad-opties', () => {
 			new URLSearchParams('sheets=match:20,notes:20,solo:20')
 		);
 		expect(parsed.list.length).toBe(MAX_SHEETS);
+	});
+
+	it('shortLabels zijn onderling uniek — het volgorde-paneel moet vooraan al onderscheiden', () => {
+		// Het volgorde-paneel kapt lange labels af; als twee veltypen met
+		// dezelfde tekst beginnen, ogen ze daar identiek. shortLabel bestaat
+		// precies dáárvoor, dus uniekheid is het contract.
+		const shorts = SHEET_ORDER.map((k) => SHEET_INFO[k].shortLabel);
+		expect(new Set(shorts).size).toBe(shorts.length);
 	});
 
 	it('een lange run overleeft de rondgang — de UI-grens en de parser-grens zijn dezelfde', () => {

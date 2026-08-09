@@ -38,11 +38,19 @@
 		{#each TEAMS as team (team.cls)}
 			<section class="team {team.cls}">
 				<header class="thead">{team.name}</header>
+				<!-- Name boven Legend per teammate (keuze Sjoerd, UX-review) — zelfde
+				     patroon als FFA. -->
 				<div class="tline">
-					<span class="pnum tnum">1</span><span class="micro">Legend</span><span class="fill"></span>
+					<span class="pnum tnum">1</span><span class="micro">Name</span><span class="fill"></span>
+				</div>
+				<div class="tline tsub">
+					<span class="micro">Legend</span><span class="fill"></span>
 				</div>
 				<div class="tline">
-					<span class="pnum tnum">2</span><span class="micro">Legend</span><span class="fill"></span>
+					<span class="pnum tnum">2</span><span class="micro">Name</span><span class="fill"></span>
+				</div>
+				<div class="tline tsub">
+					<span class="micro">Legend</span><span class="fill"></span>
 				</div>
 				<div class="trk">
 					<div class="trow tsp">
@@ -56,11 +64,11 @@
 					</div>
 					{#each POINTS as p (p)}
 						<div class="trow">
-							<span class="tc"><span class="cb small {team.cls}"></span></span>
-							<span class="tc"><span class="cb small {team.cls}"></span></span>
+							<span class="tc"><span class="cb {team.cls}"></span></span>
+							<span class="tc"><span class="cb {team.cls}"></span></span>
 							<span class="tn"><span class="trk-num" class:vs={p === 11}>{p}</span></span>
-							<span class="tc"><span class="cb small {team.cls}"></span></span>
-							<span class="tc"><span class="cb small {team.cls}"></span></span>
+							<span class="tc"><span class="cb {team.cls}"></span></span>
+							<span class="tc"><span class="cb {team.cls}"></span></span>
 						</div>
 					{/each}
 				</div>
@@ -118,10 +126,14 @@
 		gap: 1.4mm;
 		margin-bottom: 0.9mm;
 	}
+	/* Legend-regel springt in onder het spelernummer van de Name-regel. */
+	.tline.tsub {
+		padding-left: 3.2mm;
+	}
 	.tline .fill {
 		flex: 1;
 		border-bottom: 0.28mm solid var(--paper-line);
-		height: 3.6mm;
+		height: 4.2mm;
 	}
 
 	.pnum {
@@ -177,7 +189,7 @@
 
 	.legend {
 		margin: 1.4mm 0 0;
-		font-size: 5pt;
+		font-size: 6pt;
 		color: var(--paper-muted);
 		letter-spacing: 0.03em;
 	}

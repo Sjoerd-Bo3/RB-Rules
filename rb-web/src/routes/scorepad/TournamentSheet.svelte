@@ -9,11 +9,12 @@
 </script>
 
 <SheetFrame {bw} title="Tournament Day" sub="Swiss rounds, results & record">
+	<!-- Date vóór Event: zelfde veldvolgorde als alle andere vellen (#342-fix). -->
 	<div class="sh-row">
+		<span class="sh-field"><span class="micro">Date</span><span class="fill"></span></span>
 		<span class="sh-field" style="flex: 2"
 			><span class="micro">Event</span><span class="fill"></span></span
 		>
-		<span class="sh-field"><span class="micro">Date</span><span class="fill"></span></span>
 	</div>
 	<div class="sh-row">
 		<span class="sh-field"><span class="micro">Format</span><span class="fill"></span></span>
@@ -24,6 +25,7 @@
 	<div class="rtable">
 		<div class="rhead">
 			<span class="tnum">Rd</span>
+			<span>Tbl</span>
 			<span>Opponent — name over legend</span>
 			<span>First</span>
 			<span>Result</span>
@@ -32,15 +34,16 @@
 		{#each ROUNDS as r (r)}
 			<div class="rrow">
 				<span class="rd tnum">{r}</span>
+				<span class="tblline"></span>
 				<span class="opp"><span class="oline"></span><span class="oline"></span></span>
 				<span class="first">
-					<span class="opt"><span class="cb small p1"></span> Me</span>
-					<span class="opt"><span class="cb small p2"></span> Op</span>
+					<span class="opt"><span class="cb p1"></span> Me</span>
+					<span class="opt"><span class="cb p2"></span> Op</span>
 				</span>
 				<span class="res">
-					<span class="opt"><span class="cb small"></span> W</span>
-					<span class="opt"><span class="cb small"></span> L</span>
-					<span class="opt"><span class="cb small"></span> D</span>
+					<span class="opt"><span class="cb"></span> W</span>
+					<span class="opt"><span class="cb"></span> L</span>
+					<span class="opt"><span class="cb"></span> D</span>
 				</span>
 				<span class="games"><span class="gline"></span><span class="dash">–</span><span class="gline"></span></span>
 			</div>
@@ -70,13 +73,23 @@
 		border-radius: 1.2mm;
 		overflow: hidden;
 	}
+	/* First/Result iets breder sinds de boxjes 3.4mm zijn — anders wrappen de
+	   opt-paren binnen hun kolom. */
+	/* Tbl-kolom (keuze Sjoerd, UX-review): Swiss-pairings draaien op
+	   tafelnummers. */
 	.rhead,
 	.rrow {
 		display: grid;
-		grid-template-columns: 6mm 1fr 17mm 22mm 15mm;
+		grid-template-columns: 6mm 7mm 1fr 19mm 25mm 15mm;
 		gap: 2mm;
 		align-items: center;
 		padding: 0 2mm;
+	}
+	.tblline {
+		border-bottom: 0.28mm solid var(--paper-line);
+		height: 4mm;
+		align-self: end;
+		margin-bottom: 1.4mm;
 	}
 	.rhead {
 		font-size: 5pt;
@@ -104,12 +117,12 @@
 	.opp {
 		display: flex;
 		flex-direction: column;
-		gap: 2.6mm;
+		gap: 3.2mm;
 		padding-top: 0.6mm;
 	}
 	.oline {
 		border-bottom: 0.28mm solid var(--paper-line);
-		height: 2.6mm;
+		height: 3.2mm;
 	}
 	.first,
 	.res {

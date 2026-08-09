@@ -66,6 +66,11 @@
 	--paper-line: #b9bdc7;
 	--paper-line-soft: #e3e5ea;
 	--paper-p1: #a3790a;
+	/* Tekst-variant van P1-goud: --paper-p1 is als rand/balk prima maar haalt
+	   op wit geen leesbaar contrast voor microtekst; deze donkerder inkt komt
+	   op ~4.9:1. Alleen voor P1-goud als TEKSTKLEUR — randen, checkboxes en
+	   balken blijven --paper-p1. */
+	--paper-p1-ink: #8a6509;
 	--paper-p1-soft: #f5ecd2;
 	--paper-p2: #c03a40;
 	--paper-p2-soft: #f8e2e3;
