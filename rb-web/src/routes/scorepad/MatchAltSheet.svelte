@@ -25,19 +25,15 @@
 			><span class="micro">P1 · You</span><span class="micro">Legend</span><span class="fill"
 			></span></span
 		>
-	</div>
-
-	<div class="stair">
-		<span class="pl p2 opp"
+		<span class="pl p2"
 			><span class="micro">P2 · Opponent</span><span class="micro">Legend</span><span class="fill"
 			></span></span
 		>
+	</div>
 
+	<div class="games">
 		{#each GAMES as g (g)}
-			<!-- Plaatsing via inline grid-area (g1/g2/g3): zo blijft de each-lus
-			     één stuk markup zonder dynamische klassennamen die de scoped
-			     CSS niet statisch kan zien. -->
-			<section class="game" style="grid-area: g{g}">
+			<section class="game">
 				<header class="gnum">Game {g}</header>
 				<!-- Kleurbanden: linkerhelft You (P1-goud), rechterhelft Opp
 				     (P2-rood); de cijferkolom in het midden blijft open zodat de
@@ -92,26 +88,15 @@
 </SheetFrame>
 
 <style>
-	/* De trap in grid-template-areas: DATE/EVENT en de You-regel staan als
-	   gewone rijen BOVEN de games-zone (volle breedte); alleen de
-	   Opponent-regel woont ín de trap, over kolom 2+3 — precies genoeg om G2
-	   en G3 elk één kleine, gelijkmatige trede (~9mm) te geven. De eerdere
-	   opzet stapelde het hele info-blok in de trap: treden van ~24mm en
-	   rafelige gaten (feedback Sjoerd). De '.'-cel blijft bewust leeg. */
-	.stair {
+	/* Drie games strak naast elkaar op gelijke hoogte — de RiftHub-trap is op
+	   Sjoerds verzoek geschrapt (twee pogingen bleven rommelig ogen); het
+	   eigen karakter van variant B zit in de kleurbanden en het grote
+	   notes-vlak. */
+	.games {
 		display: grid;
 		grid-template-columns: repeat(3, 1fr);
-		grid-template-areas:
-			'g1 opp opp'
-			'g1 g2 .'
-			'g1 g2 g3';
-		grid-template-rows: auto 6.4mm auto;
-		column-gap: 2.6mm;
-		row-gap: 2.6mm;
+		gap: 2.6mm;
 		align-items: start;
-	}
-	.opp {
-		grid-area: opp;
 	}
 
 	.game {
