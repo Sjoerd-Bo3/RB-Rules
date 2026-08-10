@@ -7,7 +7,8 @@ kaarten — automatisch bijgehouden uit officiële bronnen, met een AI-vraagbaak
 Het product/merk heet sinds #216 **Poracle** (poro-mascotte, `PoroMark`-component
 + gele app-tegel); inhoudelijk blijft het een Riftbound-companion (omschrijving
 en disclaimer noemen Riftbound onverkort).
-Live: https://riftbound-v2.bo3.dev (het oude riftbound.bo3.dev is de
+Live: https://poracle.nl (#349; riftbound-v2.bo3.dev verwijst door.
+Het oude riftbound.bo3.dev is de
 Next.js-PoP, vervangen; alleen `docker-publish.yml` handmatig triggerbaar).
 
 **Einddoel** (docs/KNOWLEDGE.md): één samenhangend "brein" — alle kennis
