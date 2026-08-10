@@ -555,11 +555,16 @@ public static class JobCatalog
     private static async Task<JobOutcome> DecksAsync(
         IServiceProvider sp, Action<string> report, CancellationToken ct)
     {
-        var r = await sp.GetRequiredService<DeckIngestService>()
-            .RunAsync(progress: report, ct: ct);
+        var ingest = sp.GetRequiredService<DeckIngestService>();
+        var r = await ingest.RunAsync(progress: report, ct: ct);
+        // Herkoppel-pass (#355): ongewijzigde decks worden door de run
+        // overgeslagen, dus linker-verbeteringen bereiken bestaande rijen
+        // alleen via deze naloop.
+        var (healed, remaining) = await ingest.RelinkUnlinkedAsync(ct);
+        report($"herkoppel-pass: {healed} rijen geheeld, {remaining} blijven ongelinkt");
         // #190 (review-fix): de job is per-run gecapt (max pagina's) en het
         // result meldt dat al machine-leesbaar — doorgeven i.p.v. discarden.
-        return new(r.Message, Drained: !r.CapHit);
+        return new($"{r.Message} · relink {healed}/{healed + remaining}", Drained: !r.CapHit);
     }
 
     private static async Task<JobOutcome> BenchmarkAsync(
