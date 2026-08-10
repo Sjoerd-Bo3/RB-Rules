@@ -232,10 +232,14 @@ public static class InteractionPromotionGate
         //    soort-poort (#330/#335) strandt: dan Candidate (reviewqueue), nooit stil
         //    weg — zelfde soft-pad als de #324-bewijstier. Volgorde is bewust van
         //    specifiek naar generiek: B vóór het kind-anker (#330: "recycle is hier
-        //    een werkwoord" is de scherpere diagnose), dan de #335-klassen —
-        //    resource_patient en optionality zijn per constructie disjunct van het
-        //    kind-anker-pad (beide veronderstellen een gevonden anker), en
-        //    endpoint_presence sluit als meest generieke aanwezigheids-check de rij.
+        //    een werkwoord" is de scherpere diagnose), dan de #335-klassen. Alleen
+        //    optionality is per constructie disjunct van het kind-anker-pad (ze
+        //    veronderstelt een gevonden REQUIRES-anker); resource_patient is
+        //    anker-ONafhankelijk en kan dus samenvallen met een kind_anchor-misser
+        //    — bij zo'n samenloop beslist deze branchvolgorde welke reden de
+        //    status_reason wint (kind_anchor, de eerdere tak), en de uitkomst is
+        //    hoe dan ook Candidate. endpoint_presence sluit als meest generieke
+        //    aanwezigheids-check de rij.
         if (s.HasDeterministicSupport)
         {
             if (!s.PatientWordFormSupport)

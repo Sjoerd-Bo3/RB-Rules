@@ -318,10 +318,14 @@ public static class InteractionEndpointPresence
 /// ÉLKE anker-dragende zin in het dragende bewijs ondermijnd is; één schone
 /// anker-zin (bv. "Spend 3 XP, exhaust: Draw 1.") draagt de claim gewoon.
 ///
-/// <b>Restrisico (zin-scope):</b> een schoon anker élders in dezelfde eenheid over
-/// iets ánders redt de claim — Safety Inspector draagt naast "You may spend 3 XP…"
-/// een los "each player must kill…" en passeert dus. Zelfde grens als het
-/// kind-anker (#330): noodzakelijk, niet voldoende.</summary>
+/// <b>Restrisico (zin-scope), twee kanten op.</b> Vals-positief: een schoon anker
+/// élders in dezelfde eenheid over iets ánders redt de claim — Safety Inspector
+/// draagt naast "You may spend 3 XP…" een los "each player must kill…" en
+/// passeert dus. Vals-negatief: een "may" over iets ánders in de anker-zin
+/// ondermijnt die zin tóch ("You may choose a unit and pay 2 energy to kill it."
+/// draagt geen schoon anker) — het soft-pad begrenst die schade tot een Candidate
+/// in de reviewqueue, nooit verlies. Zelfde grens als het kind-anker (#330):
+/// noodzakelijk, niet voldoende.</summary>
 public static class RequiresOptionality
 {
     private static readonly IReadOnlyList<string> Underminers = ["may", "optional", "optionally"];

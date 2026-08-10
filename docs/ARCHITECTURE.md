@@ -2805,20 +2805,25 @@ nachtrun:
   geen voldoende; het meetpunt is de volgende fable-run + audit, waar deze
   betwist-klasse ~0 hoort te zijn.
 
-  **Poorten-iteratie 2 (#335) — de vier rest-klassen uit de volledige
-  era-3-populatie-audit** (2026-07-22: 16 oordelen over de fable-mét-poorten-
-  populatie, 11 bevestigd, 5 afgekeurd; precisie-trap 16% → 27% → 55%). Elke
-  klasse is een eigen deterministische poort op dezelfde promotielaag, zelfde
-  soft-pad (Candidate met eigen status_reason en poort-token, geen tombstone —
-  ook niet bij een negatief verdict, de #324b-symmetrie strekt zich over alle
-  vijf de poort-signalen uit), zelfde scoping (berekend over de DRÁGENDE
-  bewijs-eenheden), zelfde afdwinging (verplichte parameters op
-  `InteractionPromotionRequest` én `HypothesisPromotion.ToSignals`, #300/#333),
-  en per poort geteld in het run-detail. De catalogi zijn DATA, gekalibreerd op
-  de 16 echte audit-rijen én een corpus-meting over de 1429 kaartteksten
-  (bracket/hoofdletter/kleine-letter-tellingen per keyword); de elf bevestigde
-  rijen staan als regressie-wachters in `InteractionPortIteration2Tests` en
-  betrappen aantoonbaar élke over-verbreding.
+  **Poorten-iteratie 2 (#335) — vier rest-klassen uit de volledige
+  era-3-populatie-audit** (2026-07-22: **20 oordelen** over de
+  fable-mét-poorten-populatie, **11 bevestigd, 9 afgekeurd = 55%**;
+  precisie-trap 16% → 27% → 55%). De vier klassen verklaren **5 van de 9**
+  afkeuringen; de overige vier vallen buiten deze iteratie en blijven bewust
+  ONGEDEKT — de eerlijke restpost voor iteratie 3 (meetwaarden zijn
+  waarnemingen, #293). Elke klasse is een eigen deterministische poort op
+  dezelfde promotielaag, zelfde soft-pad (Candidate met eigen status_reason en
+  poort-token, geen tombstone — ook niet bij een negatief verdict, de
+  #324b-symmetrie strekt zich over alle vijf de poort-signalen uit), zelfde
+  scoping (berekend over de DRÁGENDE bewijs-eenheden), zelfde afdwinging
+  (verplichte parameters op `InteractionPromotionRequest` én
+  `HypothesisPromotion.ToSignals`, #300/#333), en per poort geteld in het
+  run-detail. De catalogi zijn DATA, gekalibreerd op de 16 fixture-rijen uit
+  die audit (de 11 bevestigde + de 5 in-klasse afkeuringen) én een
+  corpus-meting over de 1429 kaartteksten (bracket/hoofdletter/kleine-letter-
+  tellingen per keyword); de elf bevestigde rijen staan als regressie-wachters
+  in `InteractionPortIteration2Tests` en betrappen aantoonbaar élke
+  over-verbreding.
   22. **Klasse A — `endpoint_presence`** (`InteractionEndpointPresence`): een
      mechanic-AGENT moet in keyword-GEDAANTE (gebracket of met hoofdletter,
      zins-initiaal toegestaan — aanwezigheid, milder dan de woordvormpoort) in
@@ -2864,14 +2869,22 @@ nachtrun:
      van afhangen). Catalogus: XP; uitbreiden alleen op dezelfde twee gronden
      (definitie zegt resource, corpus drukt in hoeveelheden).
   *Restrisico's iteratie 2* (bewust aanvaard, in de code gedocumenteerd): het
-  optionality-tegen-anker werkt op ZIN-scope — een schoon anker elders in
-  dezelfde eenheid over iets ánders redt de claim (Safety Inspector draagt naast
-  "You may spend 3 XP…" een los "must kill…"); buiten de verb-like catalogus
-  passeert een gekapitaliseerd spelwerkwoord de woordvormpoort nog steeds; en de
+  optionality-tegen-anker werkt op ZIN-scope, en dat snijdt twee kanten op —
+  vals-positief: een schoon anker elders in dezelfde eenheid over iets ánders
+  redt de claim (Safety Inspector draagt naast "You may spend 3 XP…" een los
+  "must kill…"); vals-negatief: een "may" over iets ánders in de anker-zin
+  ondermijnt die zin tóch ("You may choose a unit and pay 2 energy to kill
+  it." draagt geen schoon anker) — het soft-pad begrenst die schade tot een
+  Candidate in de reviewqueue, nooit verlies. Buiten de verb-like catalogus
+  passeert een gekapitaliseerd spelwerkwoord de woordvormpoort nog steeds; de
   endpoint-presence-check accepteert elke hoofdlettervorm, ook een
-  zins-initiële gebiedende wijs. Meetpunt: de volgende volle mine +
-  populatie-audit — de vier klassen verklaren 5 van de 9 era-3-afkeuringen,
-  doel is >75% precisie in het volgende tijdperk.
+  zins-initiële gebiedende wijs. En de extractie-prompt spreekt de
+  iteratie-2-eisen bewust nog niet uit (#286a/#324a): dat is uitgesteld tot de
+  volgende run via de poort-tellers laat zien hoeveel weggooi-kandidaten het
+  model aandraagt — een prompt-wijziging bumpt de promptversie en verdient een
+  eigen meting. Meetpunt: de volgende volle mine + populatie-audit — de vier
+  klassen verklaren 5 van de 9 era-3-afkeuringen (de overige 4 zijn bewust
+  ongedekt), doel is >75% precisie in het volgende tijdperk.
 
   **`PromptVersion` is een stempel, geen stale-conditie** (#286-review). De bump naar
   `breinmine-interactions-v3` (en die naar v4, #324) legt in de `mining_run`-provenance

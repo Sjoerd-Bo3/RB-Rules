@@ -13,17 +13,20 @@ using RbRules.Infrastructure;
 namespace RbRules.Tests;
 
 /// <summary>Poorten-iteratie 2 (#335), end-to-end door de mining- en promotielaag,
-/// gekalibreerd op de VOLLEDIGE era-3-populatie-audit (2026-07-22, 16 oordelen:
-/// 11 bevestigd, 5 afgekeurd). De vijf afgekeurde promoties stranden elk op hun
-/// eigen klasse (A eindpunt-aanwezigheid, B hoofdletter-werkwoord, C kind-omleiding,
-/// D resource-vs-keyword); de elf bevestigde blijven promoveren — twee daarvan
+/// gekalibreerd op de era-3-populatie-audit (2026-07-22, 20 oordelen: 11
+/// bevestigd, 9 afgekeurd = 55%). De vier klassen dekken 5 van de 9 afkeuringen;
+/// de overige vier vallen buiten deze iteratie en blijven bewust ongedekt (de
+/// restpost voor iteratie 3). Deze fixture-set draagt dus 16 van de 20 rijen: de
+/// vijf in-klasse afkeuringen stranden elk op hun eigen klasse (A
+/// eindpunt-aanwezigheid, B hoofdletter-werkwoord, C kind-omleiding, D
+/// resource-vs-keyword) en de elf bevestigde blijven promoveren — twee daarvan
 /// (Level↔XP, Weaponmaster↔Equip) staan al als Bevestigd1/2 in
 /// <c>InteractionKindGateMiningTests</c> en bewaken dezelfde grens.
 ///
 /// De bewijsteksten zijn de ÉCHTE kaartteksten uit de Riot-gallery (VEN/UNL) en de
-/// echte definities; alleen unl-t08 (XP Tracker, token — niet in de gallery-dump),
-/// de Hidden-definitie en de Predict-sectie zijn gereconstrueerd rond de letterlijke
-/// audit-citaten (benoemd per test).
+/// echte definities; alleen de Hidden-definitie, de Predict-sectie en de
+/// Burn↔Flow-sectie zijn gereconstrueerd rond de letterlijke audit-citaten
+/// (benoemd per test).
 ///
 /// Corpus-meting die de catalogi draagt (1429 kaartteksten, zie PR): Ready 0×
 /// gebracket / 28× hoofdletter / 180× kleine letter; Recycle 0/26/51; XP 0/84/0 —
@@ -168,11 +171,12 @@ public class InteractionPortIteration2Tests
     [InlineData("unl-203-219", "Poppy - Keeper of the Hammer",
         "When you hold, gain 1 XP.Spend 3 XP, :rb_exhaust:: Draw 1.",
         "XP", "XP is not a Game Object.", "REQUIRES")]
-    // UNL-T08 XP Tracker — token, niet in de gallery-dump; GERECONSTRUEERD rond de
-    // audit-citaten ("tracking gained XP, spending XP").
+    // UNL-T08 XP Tracker — echte gallery-tekst. NB: "can spend" passeert de
+    // optionality-poort omdat "can" bewust geen underminer is — hier gewenst:
+    // kúnnen spenderen is precies de afhankelijkheid van het XP-mechanisme.
     [InlineData("unl-t08", "XP Tracker",
-        "Use this to track the XP you have gained. When you spend XP, update the " +
-        "total here.",
+        "Track gained XP here.Some cards get bonuses based on your [Level].Some " +
+        "cards can spend XP for powerful effects.",
         "XP", "XP is not a Game Object.", "REQUIRES")]
     // VEN-054/166 Questionable Tome — "Disempower this, …: Draw 1." (echt).
     [InlineData("ven-054-166", "Questionable Tome",
@@ -369,13 +373,19 @@ public class InteractionPortIteration2Tests
         Assert.True(RequiresOptionality.HasCleanAnchor(
             "When you hold, gain 1 XP.Spend 3 XP, :rb_exhaust:: Draw 1."));
 
-        // GEDOCUMENTEERD RESTRISICO (zin-scope): de volledige Safety
-        // Inspector-tekst draagt in zin 2 een los "must kill" over iets anders —
-        // dat schone anker redt een REQUIRES-claim op deze kaart. Zelfde grens
-        // als het kind-anker (#330).
+        // GEDOCUMENTEERD RESTRISICO (zin-scope), twee kanten op. Vals-positief:
+        // de volledige Safety Inspector-tekst draagt in zin 2 een los "must
+        // kill" over iets anders — dat schone anker redt een REQUIRES-claim op
+        // deze kaart. Zelfde grens als het kind-anker (#330).
         Assert.True(RequiresOptionality.HasCleanAnchor(
             "You may spend 3 XP as an additional cost to play me. When you play " +
             "me, each player must kill one of their units."));
+
+        // Vals-negatief: een "may" over iets ánders in de anker-zin ondermijnt
+        // die zin tóch — het soft-pad begrenst de schade tot een Candidate in
+        // de reviewqueue, nooit verlies.
+        Assert.False(RequiresOptionality.HasCleanAnchor(
+            "You may choose a unit and pay 2 energy to kill it."));
     }
 
     [Fact]
