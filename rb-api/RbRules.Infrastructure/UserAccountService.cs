@@ -39,7 +39,7 @@ public class UserAccountService(RbRulesDbContext db, MailService mail, ILogger<U
     /// mails kan sturen.</summary>
     private static string PublicBaseUrl =>
         Environment.GetEnvironmentVariable("PUBLIC_BASE_URL")?.TrimEnd('/')
-        ?? "https://riftbound-v2.bo3.dev";
+        ?? "https://poracle.nl";
 
     /// <summary>Maakt een eenmalige inloglink en mailt die. echoLink (alleen
     /// Development) geeft de link terug in het resultaat zodat de flow zonder
@@ -76,8 +76,8 @@ public class UserAccountService(RbRulesDbContext db, MailService mail, ILogger<U
         {
             try
             {
-                await mail.SendAsync(email, "Inloggen bij Riftbound Rules",
-                    "Log in bij Riftbound Rules Companion via deze link " +
+                await mail.SendAsync(email, "Inloggen bij Poracle",
+                    "Log in bij Poracle via deze link " +
                     $"({(int)LoginTokenTtl.TotalMinutes} minuten geldig):\n\n{link}\n\n" +
                     "Vroeg je dit niet aan? Dan kun je deze mail negeren.", ct);
             }

@@ -37,7 +37,7 @@ public class PushService(ILogger<PushService> logger)
             var sent = await SendToAllAsync(db,
                 "Belangrijke Riftbound-wijziging",
                 c.Summary ?? c.ChangeType,
-                "https://riftbound-v2.bo3.dev/", ct);
+                "https://poracle.nl/", ct);
             if (sent > 0)
                 logger.LogInformation("Push: {Sent} meldingen voor change {Id}", sent, c.Id);
         }

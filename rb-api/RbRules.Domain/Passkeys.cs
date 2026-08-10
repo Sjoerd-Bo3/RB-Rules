@@ -14,7 +14,7 @@ public static class Passkeys
     public const string LoginKind = "login";
 
     /// <summary>Leidt RP-id + toegestane origins af uit PUBLIC_BASE_URL
-    /// (prod: riftbound-v2.bo3.dev — compose zet die env altijd). Zonder of
+    /// (prod: poracle.nl — compose zet die env altijd). Zonder of
     /// met onbruikbare env: localhost-fallback voor dev (#109) — bewust anders
     /// dan de magic-link-fallback (die moet juist nooit localhost mailen),
     /// want een verkeerde RP-id maakt élke passkey onbruikbaar. De origins
