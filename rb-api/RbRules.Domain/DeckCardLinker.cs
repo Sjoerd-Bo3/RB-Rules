@@ -52,6 +52,19 @@ public partial class DeckCardLinker
             var code = variantNumber.Trim().ToLowerInvariant();
             if (_byCode.TryGetValue(code, out var hit))
                 return CardText.CanonicalId(hit);
+            // PA markeert star-printings met een asterisk ("UNL-229*"); ons
+            // riftbound_id schrijft die als "-star" ("unl-229-star", #351).
+            // Eerst de star-vorm proberen, anders zonder ster door naar de
+            // basisprinting — dezelfde gedachte als het letter-suffix-vangnet.
+            if (code.EndsWith('*'))
+            {
+                var bare = code.TrimEnd('*').TrimEnd('-');
+                if (_byCode.TryGetValue(bare + "-star", out var starHit))
+                    return CardText.CanonicalId(starHit);
+                if (_byCode.TryGetValue(bare, out var bareHit))
+                    return CardText.CanonicalId(bareHit);
+                code = bare;
+            }
             var baseCode = TrailingLetters().Replace(code, "").TrimEnd('-');
             if (baseCode != code && _byCode.TryGetValue(baseCode, out var baseHit))
                 return CardText.CanonicalId(baseHit);
