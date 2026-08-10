@@ -24,7 +24,24 @@ public static class PrimerTranslation
     /// hulpwerkwoord "might" ("you might draw") de spelterm "Might" opeisen en
     /// zou elke vertaling zonder dat woord ten onrechte als lek gelden.
     /// Hoofdletter-ONgevoelig aan de Nederlandse kant: "je unit wordt ready"
-    /// is een prima vertaling en telt gewoon mee.</summary>
+    /// is een prima vertaling en telt gewoon mee.
+    ///
+    /// Dit is een HANDMATIGE lijst die per set moet meegroeien (#362): de
+    /// mechanics-lezer (<see cref="MechanicMiner"/>) pikt een nieuw gebracket
+    /// keyword automatisch op, maar dit glossarium niet. De keyword-aanvulling
+    /// hieronder volgt de distinct-mechanics-meting op prod (2026-08, 32
+    /// families; UNL bracht [Ambush], 18 kaarten, o.a. Lord Broadmane
+    /// unl-012-219 en Grim Apothecary unl-021-219).
+    ///
+    /// Vier gemeten families ontbreken hier BEWUST: "Action", "Add", "Repeat"
+    /// en "Unique" zijn óók gewoon Engels dat in primer-proza met een
+    /// hoofdletter kan openen ("Add one rune…", "Repeat this process…",
+    /// "Actions you can take…") — de hoofdlettergevoelige woordbegin-controle
+    /// zou zo'n zin dan als lek aanmerken en de héle vertaling weggooien
+    /// (dezelfde klasse als het "might"-geval hierboven, maar via het
+    /// zinsbegin). Als keyword vangt de vertaalprompt ze nog via de
+    /// catch-all-instructie ("any other term that is clearly Riftbound
+    /// vocabulary"); alleen de mechanische nacontrole dekt ze niet.</summary>
     public static IReadOnlyList<string> Glossary =>
     [
         "Rune", "Battlefield", "showdown", "Might", "Bonus Damage", "Equip",
@@ -32,6 +49,10 @@ public static class PrimerTranslation
         "Unit", "Spell", "Gear", "Deathknell", "Accelerate", "Tank", "Deflect",
         "Hidden", "Shield", "Legion", "Temporary", "Exhaust", "Ready", "Trash",
         "Banish", "Domain", "Conquer",
+        // Keyword-aanvulling #362 (zie de samenvatting hierboven).
+        "Ambush", "Backline", "Buff", "Burn", "Empower", "Flow", "Ganking",
+        "Hunt", "Level", "Mighty", "Predict", "Quick-Draw", "Stun", "Vision",
+        "Weaponmaster", "XP",
     ];
 
     /// <summary>Systeem-prompt van de vertaalstap. Het glossarium wordt uit

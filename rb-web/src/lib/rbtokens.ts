@@ -15,6 +15,31 @@ const escapeHtml = (s: string) =>
 const RUNES = new Set(['fury', 'calm', 'mind', 'body', 'order', 'chaos', 'rainbow']);
 const MAX_ENERGY = 12;
 
+/**
+ * Alias-map (#371): het /ask-model schrijft soms een verkorte tokenvorm
+ * (`:rb_rainbow:` waar het gevendorde token `:rb_rune_rainbow:` heet).
+ * Ondubbelzinnige varianten worden hier vóór de `tokenInfo`-lookup
+ * genormaliseerd naar het echte token — de glyph-src blijft dus altijd het
+ * ECHTE pad (`/glyphs/rune_rainbow.svg`; een `rainbow.svg` bestaat niet).
+ *
+ * Alleen de zeven runenamen staan erin: fury/calm/mind/body/order/chaos zijn
+ * exact de zes officiële domeinnamen van Riftbound en rainbow is het
+ * "willekeurige rune"-symbool — Riots glyph-set kent per domein precies één
+ * icoon (de rune), dus een kale domeinnaam-token kán alleen die rune bedoelen.
+ * Bewust niets anders aliassen (geen gok-varianten als `power` of `energy`):
+ * een alias die ooit met een écht nieuw Riot-token botst is erger dan een
+ * letterlijke tekst — onbekend blijft letterlijk staan (allowlist-principe).
+ */
+const TOKEN_ALIASES: Record<string, string> = {
+	rainbow: 'rune_rainbow',
+	fury: 'rune_fury',
+	calm: 'rune_calm',
+	mind: 'rune_mind',
+	body: 'rune_body',
+	order: 'rune_order',
+	chaos: 'rune_chaos'
+};
+
 type TokenInfo = { label: string; fallback: string; cssClass: string };
 
 /**
@@ -133,8 +158,9 @@ export interface IconifyOptions {
 
 function replaceInText(text: string, opts?: IconifyOptions): string {
 	const out = text.replace(/:rb_([a-z0-9_]+):/g, (whole, tok: string) => {
-		const info = tokenInfo(tok);
-		return info ? glyphHtml(tok, info) : whole; // onbekend token: laten staan
+		const canonical = TOKEN_ALIASES[tok] ?? tok; // model-alias → echt token (#371)
+		const info = tokenInfo(canonical);
+		return info ? glyphHtml(canonical, info) : whole; // onbekend token: laten staan
 	});
 	if (opts?.keywords === false) return out;
 	return out.replace(KEYWORD_RE, (_, kw: string) => keywordHtml(kw));

@@ -177,7 +177,11 @@ public class AskService(
           [Reaction], [Assault 2] — nooit vet (**Action**) en nooit kaal; de
           site rendert de gebrackete vorm als kaart-badge. Neem de
           :rb_…:-icoontokens (kosten, might, runes) letterlijk over waar je
-          kaartteksten citeert.
+          kaartteksten citeert. De enige geldige tokenvormen zijn
+          `:rb_energy_0:` t/m `:rb_energy_12:`, `:rb_might:`, `:rb_exhaust:`
+          en `:rb_rune_fury|calm|mind|body|order|chaos|rainbow:` (dus
+          `:rb_rune_rainbow:`, niet `:rb_rainbow:`) — verzin geen andere
+          tokenvormen.
         - Verwijs nooit naar context-labels of bron-categorieën — geen
           "[kaartgegevens]", geen "(zie SPELBEGRIP)", geen "(GEVERIFIEERDE
           RULING)". Die labels zijn interne lagen-namen, geen leestekst.
@@ -569,6 +573,79 @@ public class AskService(
         ordered = Precedence.ReorderTiedByTier(
             ordered, c => c.TrustTier, c => c.UpdatedAt ?? c.PublishedAt);
 
+        // §-verwijzings-bijlading (#364): de opgehaalde fragmenten (en de
+        // vraag zelf) noemen soms secties die de retrieval níet ophaalde — in
+        // productie eindigde een antwoord op "Onzeker" met letterlijk "de
+        // volledige tekst van §811 … is niet meegeleverd", terwijl de
+        // meegeleverde fragmenten er wél naar verwezen. Deterministische
+        // expansie vóór de modelcall (geen tweede LLM-pass, dus streaming en
+        // niet-streaming delen dit pad vanzelf): scan fragmentteksten + vraag
+        // op §-verwijzingen en laad bestaande, nog ontbrekende secties bij als
+        // gewone citatie — ze schuiven in `ordered` en krijgen daarmee
+        // hieronder automatisch hun [n]-nummer, PDF-deeplink en ouderketen.
+        // De keuzes (bestaat-in-index, subcode-terugval, niet dubbel, cap,
+        // geen recursie) zitten puur en getest in SectionReferenceParser
+        // (Domain). Best-effort: uitval = kanaal-marker in de trace, nooit
+        // een 500.
+        var backfilled = 0;
+        try
+        {
+            var mentioned = SectionReferenceParser.ExtractCodes(
+                string.Join("\n", ordered.Select(c => c.Text).Append(question)));
+            if (mentioned.Count > 0)
+            {
+                var present = ordered.Where(c => c.SectionCode != null)
+                    .Select(c => c.SectionCode!).ToHashSet(StringComparer.Ordinal);
+                // Eén query voor kandidaten + hun ouders (de terugval van
+                // "§811.1" op "811" wanneer alleen 811 bestaat).
+                var lookup = mentioned
+                    .SelectMany(code => RuleSectionParser.ParentCodes(code).Append(code))
+                    .Distinct().ToList();
+                var rows = await db.RuleChunks.AsNoTracking()
+                    .Where(c => c.SectionCode != null && lookup.Contains(c.SectionCode))
+                    .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
+                    {
+                        c.Id, c.Text, c.SectionCode, c.Page, c.DocumentId, c.SourceId,
+                        s.Name, s.Url, s.TrustTier, s.PublishedAt, s.UpdatedAt,
+                        c.ChunkIndex,
+                    })
+                    .ToListAsync(ct);
+                var toLoad = SectionReferenceParser.SelectForBackfill(
+                    mentioned, present,
+                    rows.Select(r => r.SectionCode!).ToHashSet(StringComparer.Ordinal));
+                // Sectiecodes zijn per bron uniek, niet globaal: bij een code
+                // die in meerdere bronnen bestaat wint de bron die al in de
+                // context zit (dáár komt de verwijzing vandaan), daarna de
+                // hoogste trust; bij een op zinsgrens gesplitste sectie het
+                // eerste deel (zelfde keuze als RuleParentLookup).
+                var contextSources = ordered.Select(c => c.SourceId).ToHashSet();
+                foreach (var code in toLoad)
+                {
+                    var pick = rows.Where(r => r.SectionCode == code)
+                        .OrderBy(r => contextSources.Contains(r.SourceId) ? 0 : 1)
+                        .ThenBy(r => r.TrustTier).ThenBy(r => r.ChunkIndex)
+                        .First();
+                    ordered.Add(new
+                    {
+                        pick.Id, pick.Text, pick.SectionCode, pick.Page,
+                        pick.DocumentId, pick.SourceId, pick.Name, pick.Url,
+                        pick.TrustTier, pick.PublishedAt, pick.UpdatedAt,
+                    });
+                }
+                backfilled = toLoad.Count;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // de vrager zelf haakte af — niet maskeren
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "§-bijlading (#364) mislukt — de vraag draait door zonder extra secties");
+            NoteFailure("sectie-bijlading");
+        }
+
         // PDF-bestands-URL's voor deeplinks (…rules.pdf#page=N).
         var docIds = ordered.Select(c => c.DocumentId).Distinct().ToList();
         // Projectie: de Content-kolom (volledige PDF-tekst) hoort niet over
@@ -885,6 +962,10 @@ public class AskService(
                             ? "[embedding-uitval: vector-kanalen overgeslagen] " : "")
                         + (failedChannels.Count > 0
                             ? $"[kanaal-uitval: {string.Join(", ", failedChannels)}] " : "")
+                        // §-bijlading (#364): alleen een marker als er écht
+                        // iets bijgeladen is — 0 bijladingen is de norm en
+                        // hoort geen ruis te geven.
+                        + (backfilled > 0 ? $"[§-bijgeladen: {backfilled}] " : "")
                         + string.Join(", ", citations
                             .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
                     ContextCards = string.Join(", ", cardContext.CardNames),

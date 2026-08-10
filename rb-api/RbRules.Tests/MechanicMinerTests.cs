@@ -21,6 +21,12 @@ public class MechanicMinerTests
     private const string BloodRush =
         "[Action] (Play on your turn or in showdowns.)[Repeat] :rb_energy_1: (You may pay the " +
         "additional cost to repeat this spell's effect.)Give a unit [Assault 2]. (+2 :rb_might:.)";
+    // UNL-set (#362): [Ambush] is een set-keyword dat ná de bouw van de lezer
+    // verscheen — Lord Broadmane, unl-012-219 (riftcodex text.plain, 2026-08).
+    private const string LordBroadmane =
+        "[Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)" +
+        "When you play me, give your other units here [Assault] this turn. " +
+        "(+1 :rb_might: while they're attackers.)";
 
     // ── Deterministisch: wat de gebracket-vorm zegt (#211) ──────────────
 
@@ -69,6 +75,30 @@ public class MechanicMinerTests
     {
         Assert.Empty(MechanicMiner.Analyze(null).Bracketed);
         Assert.Empty(MechanicMiner.Analyze("  ").Candidates);
+    }
+
+    [Fact]
+    public void Analyze_NieuwSetKeyword_WordtZonderVocabulaireGelezen()
+    {
+        // #362 — de dekkingsvraag bij een nieuwe set: de gebrackete lezer is
+        // een VORM-herkenner, geen lijst. [Ambush] (UNL) bestond niet toen de
+        // lezer gebouwd werd en mag toch nooit op een vocabulaire wachten —
+        // hier bewust met het kale default-seed-vocabulaire (dat Ambush en
+        // Assault niet kent) aangeroepen.
+        var a = MechanicMiner.Analyze(LordBroadmane);
+        Assert.Equal(["Ambush", "Reaction", "Assault"], a.Bracketed);
+    }
+
+    [Fact]
+    public void ExtractKeywordCandidates_NieuwSetKeyword_WordtAlsKandidaatVoorgesteld()
+    {
+        // #362, tweede helft van de evolutie (#52): dezelfde UNL-kaart moet het
+        // onbekende keyword ook in de reviewqueue-harvest opleveren, zodat
+        // beheer het kan accepteren voor het ongebracket-kandidatenpad.
+        // "Reaction" zit al in het seed-vocabulaire en hoort er dus niet bij.
+        var candidates = MechanicMiner.ExtractKeywordCandidates(
+            LordBroadmane, MechanicMiner.SeedVocabulary);
+        Assert.Equal(["Ambush", "Assault"], candidates);
     }
 
     // ── Het LLM-deel: alleen wat de gebracket-vorm níét kan (#211) ───────
