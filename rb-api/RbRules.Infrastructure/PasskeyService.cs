@@ -34,7 +34,7 @@ public class PasskeyService(
         return new Fido2(new Fido2Configuration
         {
             ServerDomain = rpId,
-            ServerName = "Riftbound Rules",
+            ServerName = "Poracle",
             Origins = origins,
         });
     }

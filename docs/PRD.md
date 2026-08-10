@@ -1,6 +1,6 @@
 # Product Requirements Document — RB-Rules
 
-Levend product-document voor de Riftbound Rules Companion (live op
+Levend product-document voor Poracle, de Riftbound-companion (live op
 <https://poracle.nl>, voorheen riftbound-v2.bo3.dev). Het beschrijft *wat* het product is en voor
 *wie*, wélke features vandaag op `main` staan, en waar het heen gaat. Het is
 bewust gescheiden van het *hoe*: de architectuur staat in

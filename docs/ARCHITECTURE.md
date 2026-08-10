@@ -1,7 +1,8 @@
 # Architectuur — RB-Rules (arc42)
 
-Dit document beschrijft de architectuur van RB-Rules (Riftbound Rules
-Companion, live op https://poracle.nl — riftbound-v2.bo3.dev verwijst door) volgens de arc42-structuur.
+Dit document beschrijft de architectuur van RB-Rules (Poracle, de
+Riftbound-companion, live op https://poracle.nl — riftbound-v2.bo3.dev
+verwijst door) volgens de arc42-structuur.
 Het beschrijft de staat van `main` op dit moment. Elke bewering is bedoeld
 verifieerbaar in de repo; waar mogelijk staat het bronbestand erbij.
 

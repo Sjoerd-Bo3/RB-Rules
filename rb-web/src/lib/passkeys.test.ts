@@ -32,7 +32,7 @@ describe('base64url', () => {
 const creationFixture: ServerCreationOptions = {
 	// Vorm zoals fido2-net-lib hem serialiseert (base64url-velden, en een
 	// expliciete null voor authenticatorAttachment).
-	rp: { id: 'localhost', name: 'Riftbound Rules' },
+	rp: { id: 'localhost', name: 'Poracle' },
 	user: { id: 'AQID', name: 'speler@example.com', displayName: 'speler@example.com' },
 	challenge: 'y7z_AAEC',
 	pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
