@@ -420,7 +420,12 @@
 			{/if}
 			<AnswerView answer={current.answer} citations={current.citations} cards={current.cards} />
 			{#if current.citations.length}
-				<h2>Geciteerde regelsecties</h2>
+				<!-- #363: de regels staan al inline in het antwoord (regelwidgets
+				     en §-chips), dus de volledige lijst is naslagwerk geworden —
+				     standaard dichtgeklapt; hier wonen nog wel bronnaam, trust en
+				     bijwerkdatum. De misvattingen hieronder blijven juist open. -->
+				<details class="cites-wrap">
+					<summary><h2>Geciteerde regelsecties · {current.citations.length}</h2></summary>
 				{#each current.citations as c (c.n)}
 					{@const essence = citationEssence(c.text)}
 					{@const dateLabel = citationDateLabel(c)}
@@ -453,6 +458,7 @@
 						</p>
 					</details>
 				{/each}
+				</details>
 			{/if}
 
 			{#if current.claims?.length}
@@ -803,6 +809,11 @@
 		border-radius: 999px; padding: 2px 9px; margin-right: 8px;
 	}
 	h2 { font-size: 1rem; color: var(--accent); margin: 16px 0 6px; }
+	/* #363: de citatielijst is naslagwerk geworden (regels staan al inline in
+	   het antwoord) — dichtgeklapt achter één summary; de h2 blijft de kop
+	   maar rendert inline naast het driehoekje. */
+	.cites-wrap > summary { cursor: pointer; }
+	.cites-wrap > summary h2 { display: inline; }
 	.cite {
 		background: var(--surface-deep); border: 1px solid var(--border);
 		border-radius: 8px; padding: 8px 12px; margin-bottom: 6px;

@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { renderMarkdown, renderInlineMarkdown } from '$lib/markdown';
-	import { certaintyLevel, normalizeRuleCode, stripDuplicateRuleRefs } from '$lib/answerFormat';
+	import {
+		certaintyLevel,
+		certaintyParts,
+		normalizeAnswerRefs,
+		normalizeRuleCode,
+		prepareAnswerMarkers,
+		stripDuplicateRuleRefs
+	} from '$lib/answerFormat';
 	import RuleWidget from '$lib/RuleWidget.svelte';
 	import CardWidget from '$lib/CardWidget.svelte';
 
@@ -22,8 +29,15 @@
 
 	const parsed = $derived.by(() => {
 		// Vangnet (#69): een "Regelbasis"-blok of §-tabel die alleen de
-		// citatielijst onderaan dubbelt wordt niet nogmaals getoond.
-		let text = stripDuplicateRuleRefs(answer, citations);
+		// citatielijst onderaan dubbelt wordt niet nogmaals getoond. Daarná
+		// de verwijzings-/keyword-normalisatie (#363) — stripDuplicateRuleRefs
+		// moet de originele [n]/§-vormen nog zien om ref-blokken te herkennen.
+		// prepareAnswerMarkers als laatste: die maakt van mid-zin- en dubbele
+		// markers inline tekst/links, en normalizeAnswerRefs mag die nieuwe
+		// linkteksten niet nogmaals herschrijven.
+		let text = prepareAnswerMarkers(
+			normalizeAnswerRefs(stripDuplicateRuleRefs(answer, citations), citations)
+		);
 		let oordeel: string | null = null;
 		let zekerheid: string | null = null;
 		// Twee vormen accepteren: "**Oordeel:** zin" én "## Oordeel\n\nzin"
@@ -74,15 +88,24 @@
 	});
 
 	const zLevel = $derived(certaintyLevel(parsed.zekerheid));
+	// Zekerheid als chip (#366): kopdeel ("Zeker", "Hoog") in de niveaukleur,
+	// de toelichting erachter blijft muted tekst. De splitsing zit in
+	// answerFormat (unit-getest); hier alleen weergave.
+	const zParts = $derived(parsed.zekerheid ? certaintyParts(parsed.zekerheid) : null);
 </script>
 
 {#if parsed.oordeel}
 	<div class="verdict {zLevel}">
 		<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
 		<p class="verdict-text">{@html renderInlineMarkdown(parsed.oordeel)}</p>
-		{#if parsed.zekerheid}
-			<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
-			<p class="certainty">{@html renderInlineMarkdown(parsed.zekerheid)}</p>
+		{#if zParts}
+			<p class="certainty">
+				<span class="certainty-chip {zLevel}">{zParts.head}</span>
+				{#if zParts.rest}
+					<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
+					<span class="certainty-rest">{@html renderInlineMarkdown(zParts.rest)}</span>
+				{/if}
+			</p>
 		{/if}
 	</div>
 {/if}
@@ -114,5 +137,35 @@
 	.verdict.community { border-color: var(--accent); background: var(--accent-soft); }
 	.verdict.unsure { border-color: var(--border-strong); }
 	.verdict-text { margin: 0; font-size: 1.05rem; font-weight: 700; line-height: 1.5; }
-	.certainty { margin: 4px 0 0; color: var(--muted); font-size: 0.85rem; }
+	.certainty {
+		margin: 6px 0 0;
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		flex-wrap: wrap;
+		color: var(--muted);
+		font-size: 0.85rem;
+	}
+	/* Chip in de niveaukleur — zelfde tokens als de .verdict-box hierboven;
+	   unsure blijft bewust neutraal (rand + muted, geen vulling). */
+	.certainty-chip {
+		display: inline-block;
+		padding: 1px 9px;
+		border-radius: 999px;
+		border: 1px solid var(--border-strong);
+		color: var(--muted);
+		font-size: 0.75rem;
+		font-weight: 600;
+		white-space: nowrap;
+	}
+	.certainty-chip.ok { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
+	.certainty-chip.warn { border-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
+	/* Accent (geel) is als tekstkleur te licht op de soft-achtergrond; de
+	   chip volgt daarom de .verdict.community-aanpak: accent-rand en -vulling
+	   met de gewone tekstkleur. */
+	.certainty-chip.community {
+		border-color: var(--accent);
+		background: var(--accent-soft);
+		color: var(--text);
+	}
 </style>
