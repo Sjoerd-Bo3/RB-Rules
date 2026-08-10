@@ -9,6 +9,15 @@ export interface CitationRef {
 	section: string | null;
 }
 
+/** Normaliseert een §-code uit een widget-marker naar de opslagvorm (zonder
+ *  §-prefix of trailing punt, zoals RuleSectionParser ze opslaat). AnswerView
+ *  gebruikt dit voor de dedup-sleutel ÉN de doorgegeven waarde — dezelfde
+ *  functie, anders verdringt een slordige variant ("348.", "§348") de
+ *  matchende widget en blijft alleen de kapotte fallback over (review #359). */
+export function normalizeRuleCode(code: string): string {
+	return code.trim().replace(/^§\s*/, '').replace(/\.+$/, '');
+}
+
 /** Kleur-niveau van het zekerheidslabel in de oordeel-banner. #51 breidt het
  *  vocabulaire uit met "Community-consensus (N bronnen)" — een eigen niveau,
  *  visueel onderscheiden van officieel bevestigd/afgeleid. */

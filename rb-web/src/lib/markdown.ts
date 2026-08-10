@@ -38,3 +38,11 @@ export function renderMarkdown(src: string): string {
 	// Antwoorden citeren kaartteksten — icon-tokens ook hier als echte iconen.
 	return iconifyTokens(html);
 }
+
+/** Eén-regel-variant voor de oordeel-banner (#359): inline-markdown (vet,
+ *  cursief, code) zonder blok-elementen, met dezelfde escaping en dezelfde
+ *  token-/keyword-behandeling als de rest van het antwoord. */
+export function renderInlineMarkdown(src: string): string {
+	const html = marked.parseInline(escapeHtml(src), { async: false, gfm: true }) as string;
+	return iconifyTokens(html);
+}

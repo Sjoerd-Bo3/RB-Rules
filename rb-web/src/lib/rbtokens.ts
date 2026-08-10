@@ -62,11 +62,64 @@ function glyphHtml(tok: string, info: TokenInfo): string {
 	);
 }
 
-function replaceInText(text: string): string {
-	return text.replace(/:rb_([a-z0-9_]+):/g, (whole, tok: string) => {
+// Keyword-badges (#359): Riftbound drukt keywords gebracket in de kaarttekst
+// ([Action], [Assault 2]) — wij stylen ze als badge in de gedrukte kaartstijl
+// (schuin parallellogram, cursieve caps), overal waar speltekst rendert
+// (kaarten, antwoorden, regelcitaten). Bewust een VORM-patroon en geen
+// allowlist: de keyword-set groeit per set mee (docs/KNOWLEDGE.md) — een
+// onbekend keyword krijgt de neutrale badge. Wél tekstverlies: de haken
+// verdwijnen uit de weergave (de badge ís de bracket); oppervlakken waar
+// tekstgetrouwheid het doel is (admin-review) zetten keywords uit. Eisen:
+// begint met hoofdletter, hooguit drie woorden, optionele magnitude —
+// cijfers ([5]-citaties) en §-verwijzingen ([→§308.1.a]) vallen er per
+// constructie buiten. Geen apostrof in het patroon: marked escapet ' naar
+// &#39;, waardoor zo'n tak in de antwoordpaden toch nooit zou matchen
+// (review #359) — en gebrackete apostrof-termen zijn kaartnamen, geen
+// keywords.
+const KEYWORD_RE = /\[([A-Z][A-Za-z]*(?:[ -][A-Z][A-Za-z]*){0,2}(?: \d{1,2})?)\]/g;
+
+/** Kleurfamilie per keyword, GEMETEN op de gedrukte kaarten (workflow
+ *  2026-08-10: per keyword een echte kaartafbeelding afgelezen; hexwaarden
+ *  per pixel-regio bepaald). Riot kent vier badge-kleuren; magnitudes horen
+ *  bij hun familie ("Assault 2" → assault). Onbekend keyword → neutraal
+ *  grijs, zodat een nieuwe set niet stuk oogt maar gewoon nog geen kleur
+ *  heeft. Recycle/Stun/XP worden op de kaarten NIET als badge gedrukt en
+ *  staan hier bewust niet in — die matcht de regex alleen als een bron ze
+ *  tóch bracket, en dan is neutraal grijs prima. */
+const KEYWORD_KIND: Record<string, string> = {
+	// teal #24705f — timing/permissie
+	accelerate: 'kw-teal', action: 'kw-teal', ambush: 'kw-teal', flow: 'kw-teal',
+	hidden: 'kw-teal', legion: 'kw-teal', 'quick-draw': 'kw-teal',
+	reaction: 'kw-teal', repeat: 'kw-teal',
+	// magenta #cc356e — combat/stat
+	assault: 'kw-magenta', backline: 'kw-magenta', shield: 'kw-magenta', tank: 'kw-magenta',
+	// lime #94b22d (zwarte letters) — progressie/beweging
+	deathknell: 'kw-lime', deflect: 'kw-lime', ganking: 'kw-lime',
+	hunt: 'kw-lime', level: 'kw-lime', temporary: 'kw-lime'
+	// grijs #717171 is de default (o.a. Add, Buff, Burn, Empower, Equip,
+	// Mighty, Predict, Unique, Vision, Weaponmaster) — niet opgesomd, zodat
+	// een ongemeten nieuw keyword er automatisch bij hoort.
+};
+
+function keywordHtml(kw: string): string {
+	const base = kw.replace(/ \d+$/, '').toLowerCase();
+	const kind = KEYWORD_KIND[base] ?? '';
+	return `<span class="kw${kind ? ` ${kind}` : ''}">${kw}</span>`;
+}
+
+export interface IconifyOptions {
+	/** false = alleen glyphs, geen keyword-badges (admin-review toont de
+	 *  brontekst letterlijk, inclusief haken — review #359). */
+	keywords?: boolean;
+}
+
+function replaceInText(text: string, opts?: IconifyOptions): string {
+	const out = text.replace(/:rb_([a-z0-9_]+):/g, (whole, tok: string) => {
 		const info = tokenInfo(tok);
 		return info ? glyphHtml(tok, info) : whole; // onbekend token: laten staan
 	});
+	if (opts?.keywords === false) return out;
+	return out.replace(KEYWORD_RE, (_, kw: string) => keywordHtml(kw));
 }
 
 /**
@@ -78,13 +131,13 @@ function replaceInText(text: string): string {
  * attribuut plakken en daaruit ontsnappen. De invoer is ge-escaped, dus elke
  * echte `<` hoort bij een tag die wij zelf hebben gemaakt.
  */
-export function iconifyTokens(escapedHtml: string): string {
+export function iconifyTokens(escapedHtml: string, opts?: IconifyOptions): string {
 	return escapedHtml.replace(/<[^>]*>|[^<]+/g, (part) =>
-		part.startsWith('<') ? part : replaceInText(part)
+		part.startsWith('<') ? part : replaceInText(part, opts)
 	);
 }
 
 /** Kaarttekst (plain, onvertrouwd) → veilige HTML met iconen. */
-export function renderCardText(raw: string): string {
-	return iconifyTokens(escapeHtml(raw));
+export function renderCardText(raw: string, opts?: IconifyOptions): string {
+	return iconifyTokens(escapeHtml(raw), opts);
 }

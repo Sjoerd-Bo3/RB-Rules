@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { renderMarkdown } from '$lib/markdown';
-	import { certaintyLevel, stripDuplicateRuleRefs } from '$lib/answerFormat';
+	import { renderMarkdown, renderInlineMarkdown } from '$lib/markdown';
+	import { certaintyLevel, normalizeRuleCode, stripDuplicateRuleRefs } from '$lib/answerFormat';
 	import RuleWidget from '$lib/RuleWidget.svelte';
 	import CardWidget from '$lib/CardWidget.svelte';
 
@@ -57,9 +57,14 @@
 		const seen = new Set<string>();
 		while ((m = re.exec(text)) !== null) {
 			if (m.index > last) segs.push({ kind: 'md', value: text.slice(last, m.index) });
-			const key = `${m[1]}:${m[2].trim().toLowerCase()}`;
+			// Rule-codes normaliseren ("348." / "§348" → "348") vóór dedup ÉN
+			// doorgifte, anders staat §348 er dubbel als het model beide vormen
+			// schrijft (melding Sjoerd) — of erger: de slordige variant verdringt
+			// de matchende widget en de exacte lookup in RuleWidget faalt.
+			const value = m[1] === 'rule' ? normalizeRuleCode(m[2]) : m[2].trim();
+			const key = `${m[1]}:${value.toLowerCase()}`;
 			if (!seen.has(key)) {
-				segs.push({ kind: m[1] as 'rule' | 'card', value: m[2].trim() });
+				segs.push({ kind: m[1] as 'rule' | 'card', value });
 				seen.add(key);
 			}
 			last = m.index + m[0].length;
@@ -73,8 +78,12 @@
 
 {#if parsed.oordeel}
 	<div class="verdict {zLevel}">
-		<p class="verdict-text">{parsed.oordeel}</p>
-		{#if parsed.zekerheid}<p class="certainty">{parsed.zekerheid}</p>{/if}
+		<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
+		<p class="verdict-text">{@html renderInlineMarkdown(parsed.oordeel)}</p>
+		{#if parsed.zekerheid}
+			<!-- eslint-disable-next-line svelte/no-at-html-tags — bron is ge-escaped vóór markdown-parse -->
+			<p class="certainty">{@html renderInlineMarkdown(parsed.zekerheid)}</p>
+		{/if}
 	</div>
 {/if}
 

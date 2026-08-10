@@ -2,10 +2,24 @@ import { describe, expect, it } from 'vitest';
 import {
 	certaintyLevel,
 	citationEssence,
+	normalizeRuleCode,
 	splitSettled,
 	stripDuplicateRuleRefs,
 	type CitationRef
 } from './answerFormat';
+
+describe('normalizeRuleCode', () => {
+	it('stript §-prefix en trailing punt naar de opslagvorm', () => {
+		expect(normalizeRuleCode('348.')).toBe('348');
+		expect(normalizeRuleCode('§348')).toBe('348');
+		expect(normalizeRuleCode('§ 308.1.a')).toBe('308.1.a');
+	});
+
+	it('laat een al-schone code ongemoeid (binnenste punten blijven)', () => {
+		expect(normalizeRuleCode('308.1.a')).toBe('308.1.a');
+		expect(normalizeRuleCode('466.2.c')).toBe('466.2.c');
+	});
+});
 
 describe('splitSettled', () => {
 	it('zonder newline is alles staart', () => {

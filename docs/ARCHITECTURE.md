@@ -1369,7 +1369,14 @@ Gedeelde `$lib`: `api.ts` (server-side proxy), `AnswerView.svelte`,
 `markdown.ts` + `rbtokens.ts` (sanitize + icoon-injectie vóór `{@html}`; sinds
 #257 injecteert `rbtokens.ts` Riots officiële glyphs uit `static/glyphs/` — zie
 ADR-16 — achter een allowlist van 22 tokens, met een zichtbare tekst-terugval
-als een glyph niet laadt), `cardImage.ts` (#269/#270 — verhouding, alt-tekst,
+als een glyph niet laadt; sinds #359 rendert dezelfde tekst-positie-pass ook
+gebrackete keywords (`[Action]`, `[Assault 2]`) als `.kw`-badge in de
+gedrukte kaartstijl — schuin parallellogram met vier op echte
+kaartafbeeldingen gemeten kleurfamilies (teal/magenta/lime/grijs-default,
+`KEYWORD_KIND`); het matchen is bewust een vorm-patroon i.p.v. een allowlist,
+zodat nieuwe sets meeliften, en `RbText` kent `keywords={false}` voor
+review-oppervlakken die de brontekst letterlijk moeten tonen; `markdown.ts`
+biedt daarnaast `renderInlineMarkdown` voor de oordeel-banner), `cardImage.ts` (#269/#270 — verhouding, alt-tekst,
 laadkleur en "New"-markering per kaart; één plek voor het deckgrid, de
 kaartlijst, de kaartpagina en de kaartwidget),
 `answerFormat.ts`, `changeCard.ts`, `passkeys.ts`, `quota.ts`, `ranges.ts`
