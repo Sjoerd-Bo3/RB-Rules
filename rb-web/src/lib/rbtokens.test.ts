@@ -72,6 +72,31 @@ describe('iconifyTokens — bekende tokens renderen als glyph', () => {
 	});
 });
 
+describe('iconifyTokens — model-aliassen (#371) normaliseren naar het echte token', () => {
+	it('rendert :rb_rainbow: als het rune_rainbow-glyph met het juiste label', () => {
+		const html = iconifyTokens('Betaal :rb_rainbow: extra.');
+		// Het echte token-pad, nooit een niet-bestaand /glyphs/rainbow.svg.
+		expect(html).toContain('src="/glyphs/rune_rainbow.svg"');
+		expect(html).not.toContain('src="/glyphs/rainbow.svg"');
+		expect(html).toContain('aria-label="willekeurige rune"');
+		expect(html).toContain('title="willekeurige rune"');
+	});
+
+	it.each(RUNES)('rendert :rb_%s: als het rune_%s-glyph', (rune) => {
+		const html = iconifyTokens(`:rb_${rune}:`);
+		const label = rune === 'rainbow' ? 'willekeurige rune' : `${rune} rune`;
+		expect(html).toContain(`src="/glyphs/rune_${rune}.svg"`);
+		expect(html).toContain(`aria-label="${label}"`);
+	});
+
+	it('laat een niet-gealiast onbekend token letterlijk staan', () => {
+		// Alleen de zeven runenamen zijn gealiast; al het andere blijft op het
+		// allowlist-principe letterlijk staan.
+		expect(iconifyTokens(':rb_power:')).toBe(':rb_power:');
+		expect(iconifyTokens(':rb_energy:')).toBe(':rb_energy:');
+	});
+});
+
 describe('iconifyTokens — onbekende tokens (allowlist)', () => {
 	it('laat een niet-gevendorde energiewaarde letterlijk staan (energy_13 bestaat niet)', () => {
 		expect(iconifyTokens(':rb_energy_13:')).toBe(':rb_energy_13:');
