@@ -97,6 +97,71 @@ describe('iconifyTokens — onbekende tokens (allowlist)', () => {
 	});
 });
 
+describe('keyword-badges (#359) — gebrackete keywords in gedrukte kaartstijl', () => {
+	it('zet [Action] om naar een kw-badge zonder de haken, met de gemeten teal-familie', () => {
+		expect(iconifyTokens('draagt het [Action]-keyword')).toBe(
+			'draagt het <span class="kw kw-teal">Action</span>-keyword'
+		);
+	});
+
+	it('houdt de magnitude bij de familie ([Assault 2] → magenta net als [Shield 3])', () => {
+		expect(iconifyTokens('[Assault 2]')).toBe('<span class="kw kw-magenta">Assault 2</span>');
+		expect(iconifyTokens('Give a unit [Shield 3] and [Tank] this turn.')).toBe(
+			'Give a unit <span class="kw kw-magenta">Shield 3</span> and <span class="kw kw-magenta">Tank</span> this turn.'
+		);
+	});
+
+	it('kent de lime-familie (donkere letters op de kaart) en de teal-timing-familie', () => {
+		expect(iconifyTokens('[Deathknell]')).toBe('<span class="kw kw-lime">Deathknell</span>');
+		expect(iconifyTokens('[Quick-Draw]')).toBe('<span class="kw kw-teal">Quick-Draw</span>');
+	});
+
+	it('geeft een ongemeten/onbekend keyword de neutrale badge (default grijs)', () => {
+		expect(iconifyTokens('[Equip]')).toBe('<span class="kw">Equip</span>');
+		expect(iconifyTokens('[Toekomstig]')).toBe('<span class="kw">Toekomstig</span>');
+	});
+
+	it('werkt door renderCardText heen (kaartpagina en CardWidget)', () => {
+		expect(renderCardText('[Hidden] (Hide now for :rb_energy_0:.)')).toContain(
+			'<span class="kw kw-teal">Hidden</span>'
+		);
+	});
+
+	it('laat citatienummers en §-verwijzingen met rust', () => {
+		expect(iconifyTokens('zie [5] en [6→§308.1.a] en [→§347.2.b]')).toBe(
+			'zie [5] en [6→§308.1.a] en [→§347.2.b]'
+		);
+	});
+
+	it('laat kleine letters, apostrof-termen en widget-markers met rust', () => {
+		expect(iconifyTokens('[reactie] blijft tekst')).toBe('[reactie] blijft tekst');
+		// Kaartnamen met apostrof zijn geen keywords; en marked escapet ' naar
+		// &#39;, dus een apostrof-tak zou in de antwoordpaden toch nooit
+		// matchen (review #359) — beide vormen blijven letterlijk staan.
+		expect(iconifyTokens("[Doran's Blade]")).toBe("[Doran's Blade]");
+		expect(iconifyTokens('[Doran&#39;s Blade]')).toBe('[Doran&#39;s Blade]');
+		expect(iconifyTokens('[[rule:308.1]] en [[card:Back to Back]]')).toBe(
+			'[[rule:308.1]] en [[card:Back to Back]]'
+		);
+	});
+
+	it('vervangt geen keyword binnen een tag-attribuut', () => {
+		expect(iconifyTokens('<a href="/x/[Action]">[Action]</a>')).toBe(
+			'<a href="/x/[Action]"><span class="kw kw-teal">Action</span></a>'
+		);
+	});
+
+	it('toont de brontekst letterlijk met keywords: false (admin-review)', () => {
+		expect(renderCardText('[Action] resolves first', { keywords: false })).toBe(
+			'[Action] resolves first'
+		);
+		// Glyphs blijven wél werken in die stand.
+		expect(renderCardText('[Action] for :rb_energy_2:', { keywords: false })).toContain(
+			'src="/glyphs/energy_2.svg"'
+		);
+	});
+});
+
 describe('elk gerenderd glyph-pad bestaat ook echt op schijf', () => {
 	const files = new Set(existsSync(GLYPHS_DIR) ? readdirSync(GLYPHS_DIR) : []);
 

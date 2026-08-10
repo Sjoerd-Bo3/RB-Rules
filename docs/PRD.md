@@ -627,7 +627,11 @@ de globale duur-vangrail).
   op, met de essentie in één oogopslag.
 - **Citaties & bewijs** — uitklap-citaties tonen de regel plus de ouderregel
   voor context (#39); betrokken kaarten als bewijs; widget-markers
-  `[[rule:…]]` / `[[card:…]]` worden interactieve blokken. Elke citatie toont
+  `[[rule:…]]` / `[[card:…]]` worden interactieve blokken. De regel-widget in
+  het antwoord toont de regeltekst standaard (compacte §-chip die naar de
+  sectiepagina linkt, PDF-link erbij; #360); gebrackete keywords
+  (`[Action]`, `[Assault 2]`) renderen overal — antwoorden, oordeel-banner,
+  kaartteksten, regelcitaten — als chip in kaartstijl (#359). Elke citatie toont
   ook "geldig sinds"/"laatst bijgewerkt \<datum\>" van haar bron (#168); bij
   twee even gezaghebbende (gelijke TrustTier) fragmenten die in de fusie-
   rangorde naast elkaar staan, krijgt het recentste voorrang.

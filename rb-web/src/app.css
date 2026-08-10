@@ -315,6 +315,34 @@ a { color: inherit; }
 /* rune_*.svg zijn zelf al gekleurde schijven (rainbow: een gradient) — die
    werken ongewijzigd in beide thema's, dus geen filter/ring hier. */
 
+/* Keyword-badges (#359): [Action]/[Assault 2] uit kaart- en antwoordtekst,
+   gerenderd door rbtokens.ts in de stijl van de gedrukte kaarten: een schuin
+   parallellogram met vette cursieve kapitalen. De vier vulkleuren zijn
+   GEMETEN op echte kaartafbeeldingen (workflow 2026-08-10, pixel-regio's) en
+   zijn kaart-identiteit — net als de glyphs bewust hardcoded en gelijk in
+   beide thema's, niet aan de UI-tokens gekoppeld (geel blijft exclusief het
+   actie-accent). Default = grijs, zodat een ongemeten nieuw keyword er
+   automatisch bij hoort. */
+.kw {
+	display: inline-block;
+	transform: skewX(-8deg);
+	font-style: italic;
+	font-weight: 800;
+	text-transform: uppercase;
+	font-size: 0.72em;
+	line-height: 1.45;
+	letter-spacing: 0.03em;
+	padding: 0 0.55em 0.08em;
+	border-radius: 2px;
+	background: #717171;
+	color: #fff;
+	white-space: nowrap;
+	vertical-align: 0.12em;
+}
+.kw-teal { background: #24705f; }
+.kw-magenta { background: #cc356e; }
+.kw-lime { background: #94b22d; color: #1c1c1c; }
+
 @media (prefers-color-scheme: dark) {
 	.tok-glyph-might,
 	.tok-glyph-exhaust {
