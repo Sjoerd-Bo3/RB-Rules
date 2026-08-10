@@ -151,6 +151,9 @@ builder.Services.AddScoped<CardResolver>();
 builder.Services.AddScoped<CardDetailService>();
 builder.Services.AddScoped<DeckBrowserService>();
 builder.Services.AddScoped<DeckCodeService>();
+// On-demand deck-fetch (#346): hergebruikt DeckIngestService (typed client
+// hierboven) voor de Piltover-request en DeckBrowserService voor de read.
+builder.Services.AddScoped<DeckFetchService>();
 builder.Services.AddScoped<SourceDossierService>();
 builder.Services.AddScoped<SourceListService>();
 builder.Services.AddScoped<CardSimilarityService>();
@@ -280,6 +283,20 @@ builder.Services.AddRateLimiter(o =>
         _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = 12,
+            Window = TimeSpan.FromMinutes(5),
+            QueueLimit = 0,
+        }));
+    // On-demand deck-fetch (#346): spiegel van "prewarm" (strikt per IP),
+    // maar krapper — elke cache-miss is een externe request naar Piltover
+    // Archive, waar we te gast zijn (robots-afspraak, browser-UA, throttle).
+    // Een DB-hit valt óók onder deze limiet: dat houdt de policy eenvoudig
+    // en 6 per 5 minuten is ruim voor "plak een decklink op de score-pad".
+    o.AddPolicy("deckfetch", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        "deckfetch:" + (ctx.Request.Headers["X-Client-Ip"].FirstOrDefault()
+            ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "anon"),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 6,
             Window = TimeSpan.FromMinutes(5),
             QueueLimit = 0,
         }));

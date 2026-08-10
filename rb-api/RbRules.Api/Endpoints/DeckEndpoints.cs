@@ -35,6 +35,28 @@ public static class DeckEndpoints
                     title: "Ongeldige deck-code", detail: result.Error, statusCode: 400);
         });
 
+        // On-demand deck ophalen (#346): staat het deck al in de DB dan een
+        // gewone read, anders één gerichte Piltover-fetch via het ingest-pad.
+        // De status-mapping (400/404/502) is een service-beslissing; de
+        // rate-limit is er omdat elke miss een externe request kost — wij
+        // zijn te gast bij Piltover Archive.
+        app.MapPost("/api/decks/fetch", async (
+            DeckFetchRequest req, DeckFetchService fetch, CancellationToken ct) =>
+        {
+            var result = await fetch.FetchAsync(
+                req.Id, req.Format ?? DeckBrowserService.DefaultFormat, ct);
+            return result.Deck is { } deck
+                ? Results.Ok(deck)
+                : Results.Problem(
+                    title: result.Status switch
+                    {
+                        400 => "Ongeldige deck-id",
+                        404 => "Deck niet gevonden",
+                        _ => "Piltover Archive niet bereikbaar",
+                    },
+                    detail: result.Error, statusCode: result.Status);
+        }).RequireRateLimiting("deckfetch");
+
         app.MapGet("/api/decks/{id}", async (
             string id, string? format, DeckBrowserService decks, CancellationToken ct) =>
             await decks.DetailAsync(id, format ?? DeckBrowserService.DefaultFormat, ct) is { } detail

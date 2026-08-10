@@ -9,13 +9,14 @@
 		MAX_SHEETS,
 		SHEET_INFO,
 		SHEET_ORDER,
+		deckIdAt,
 		defaultOptions,
 		pagePlan,
 		serializeOptions,
 		sheetTotal,
 		type ScorepadOptions,
 		type SheetKind,
-		type SheetPage
+		type SheetPageEntry
 	} from '$lib/scorepad';
 	import {
 		fromDeckSections,
@@ -52,28 +53,138 @@
 	const bw = $derived(opts.ink === 'bw');
 	const counts = $derived(
 		Object.fromEntries(
-			SHEET_ORDER.map((k) => [k, opts.list.filter((x) => x === k).length])
+			SHEET_ORDER.map((k) => [k, opts.list.filter((x) => x.kind === k).length])
 		) as Record<SheetKind, number>
 	);
-	const hasNotes = $derived(opts.list.includes('notes'));
-	const hasDeckSheet = $derived(opts.list.includes('deck') || opts.list.includes('registration'));
-	const hasRegistration = $derived(opts.list.includes('registration'));
+	const hasNotes = $derived(opts.list.some((e) => e.kind === 'notes'));
+	const hasDeckSheet = $derived(
+		opts.list.some((e) => e.kind === 'deck' || e.kind === 'registration')
+	);
+	const hasRegistration = $derived(opts.list.some((e) => e.kind === 'registration'));
 
-	// ── Deck-bron (#344): twee soorten bron voor de deck-/registration-vellen.
-	// Het GEKOPPELDE deck (opts.deckId) reist mee in de URL — deelbaar en
-	// headless printbaar; zijn opgehaalde lijst staat hier. De LOKALE bron
-	// (geplakte deck-code of decklijst-tekst) is bewust alléén component-state
-	// en komt nooit in de URL: een code is geen stabiele referentie. De lokale
-	// bron wint van het gekoppelde deck zolang hij er is.
+	// ── Deck-bronnen (#344/#346): een LIJST bronnen voor de deck-/registration-
+	// vellen; elk vel wijst met SheetEntry.deckRef naar zijn bron.
+	// INGEST-bronnen (positieve refs, 1-based in opts.decks) reizen mee in de
+	// URL — deelbaar en headless printbaar; hun opgehaalde lijsten staan hier in
+	// een cache op id. LOKALE bronnen (geplakte deck-code of decklijst-tekst)
+	// zijn bewust alléén component-state en krijgen NEGATIEVE refs
+	// (-1 = eerste lokale bron): een code is geen stabiele referentie, dus die
+	// refs horen niet in de URL — urlOptions() hieronder serialiseert ze als
+	// null, zodat zo'n vel in een gedeelde link gewoon blanco is.
+	interface IngestState {
+		deck: DeckPrefill | null;
+		/** Weergave-melding; null = geladen of nog bezig. */
+		error: string | null;
+		loading: boolean;
+	}
+	interface LocalSource {
+		origin: 'code' | 'tekst';
+		prefill: DeckPrefill;
+		note: string | null;
+	}
+	const LOAD_ERROR_TEXT = {
+		notfound: 'Dit deck staat niet (meer) in de ingest — het vel blijft blanco.',
+		unavailable: 'Deck laden lukt nu niet — de bron is even niet bereikbaar; het vel blijft blanco.'
+	} as const;
+	function ingestFromData(rows: typeof data.decks): Record<string, IngestState> {
+		return Object.fromEntries(
+			rows.map((r) => [
+				r.id,
+				{ deck: r.deck, error: r.error === null ? null : LOAD_ERROR_TEXT[r.error], loading: false }
+			])
+		);
+	}
+	// Cache op deck-id; bij verwijderen van een bron blijft de cache-entry
+	// bewust staan, zodat "Herstel" na een Reset de prefill direct terug heeft.
 	// svelte-ignore state_referenced_locally
-	let linkedDeck = $state(data.deck);
-	// svelte-ignore state_referenced_locally
-	let linkedError = $state(data.deckError);
-	let deckLoading = $state(false);
-	let localDeck = $state<DeckPrefill | null>(null);
-	let localSource = $state<'code' | 'tekst' | null>(null);
-	let localNote = $state<string | null>(null);
-	const activeDeck = $derived(localDeck ?? linkedDeck);
+	let ingestState = $state(ingestFromData(data.decks));
+	let localSources = $state<LocalSource[]>([]);
+	// De laatst toegevoegde bron — nieuwe deck-vellen krijgen die als standaard.
+	let lastRef = $state<number | null>(null);
+
+	/** Prefill waar een deckRef naar wijst; null = blanco vel (geen ref,
+	 *  verweesde ref, of bron nog niet geladen/gefaald). */
+	function prefillFor(ref: number | null): DeckPrefill | null {
+		if (ref === null) return null;
+		if (ref < 0) return localSources[-ref - 1]?.prefill ?? null;
+		const id = deckIdAt(opts, ref);
+		return id === null ? null : (ingestState[id]?.deck ?? null);
+	}
+
+	/** Opties zoals ze de URL in mogen: lokale (negatieve) refs worden null —
+	 *  zie het blok-commentaar hierboven. Ook de undo-vergelijkingen gebruiken
+	 *  deze vorm, zodat 'deck@-1' nooit ergens serialiseert. */
+	function urlOptions(o: ScorepadOptions): ScorepadOptions {
+		return {
+			...o,
+			list: o.list.map((e) => (e.deckRef !== null && e.deckRef < 0 ? { ...e, deckRef: null } : e))
+		};
+	}
+
+	// Bronnenlijst voor het paneel en de bron-selects: ingest-bronnen eerst
+	// (volgorde = opts.decks), dan de lokale; `num` is het weergavenummer.
+	const sourceRows = $derived.by(() => {
+		const rows: {
+			ref: number;
+			name: string;
+			origin: string;
+			loading: boolean;
+			error: string | null;
+			note: string | null;
+		}[] = [];
+		opts.decks.forEach((id, i) => {
+			const st = ingestState[id];
+			rows.push({
+				ref: i + 1,
+				name: st?.deck?.name ?? id,
+				origin: 'ingest — reist mee in de URL',
+				loading: st?.loading ?? false,
+				error: st?.error ?? null,
+				note: null
+			});
+		});
+		localSources.forEach((s, i) => {
+			rows.push({
+				ref: -(i + 1),
+				name: s.prefill.name ?? (s.origin === 'code' ? 'Geplakte deck-code' : 'Geplakte decklijst'),
+				origin: `geplakte ${s.origin === 'code' ? 'deck-code' : 'decklijst'} — alleen dit apparaat`,
+				loading: false,
+				error: null,
+				note: s.note
+			});
+		});
+		return rows.map((r, i) => ({ ...r, num: i + 1 }));
+	});
+
+	/** Nieuwe bron aangenomen: bestaande blanco deck-/registration-vellen
+	 *  nemen hem over (het vertrouwde één-bron-gedrag: link plakken vulde de
+	 *  al gekozen vellen) — een vel dat al expliciet naar een andere bron
+	 *  wijst blijft ongemoeid. Nieuwe vellen volgen via lastRef. */
+	function adoptRef(ref: number) {
+		lastRef = ref;
+		for (const e of opts.list) {
+			if ((e.kind === 'deck' || e.kind === 'registration') && e.deckRef === null) e.deckRef = ref;
+		}
+	}
+
+	/** Bron weg: vellen die ernaar wezen worden blanco; hogere refs met
+	 *  hetzelfde teken schuiven één op zodat ze bij hún bron blijven horen. */
+	function remapAfterRemove(removed: number) {
+		const shift = (r: number | null): number | null => {
+			if (r === null) return null;
+			if (r === removed) return null;
+			if (removed > 0 && r > removed) return r - 1;
+			if (removed < 0 && r < removed) return r + 1;
+			return r;
+		};
+		for (const e of opts.list) e.deckRef = shift(e.deckRef);
+		lastRef = shift(lastRef);
+	}
+	function removeSource(ref: number) {
+		if (ref > 0) opts.decks.splice(ref - 1, 1);
+		else localSources.splice(-ref - 1, 1);
+		remapAfterRemove(ref);
+	}
 
 	// Personalia voor het registration sheet — bewust ALLEEN lokale $state,
 	// nooit in de URL en nergens gepersisteerd: persoonsgegevens horen niet in
@@ -130,49 +241,82 @@
 		}
 	}
 
-	/** Koppel een deck-id: in de opties (→ URL) en de lijst ophalen via de
-	 *  proxy. Een expliciete koppeling is de nieuwste keuze en wist daarom een
-	 *  eerdere plak-bron; valt de fetch uit, dan blijven de vellen blanco met
-	 *  een nette melding — de pagina werkt altijd door. */
-	async function chooseDeck(id: string) {
-		opts.deckId = id;
-		deckQuery = '';
-		deckResults = null;
-		deckSearchError = null;
-		localDeck = null;
-		localSource = null;
-		localNote = null;
-		linkedDeck = null;
-		linkedError = null;
-		deckLoading = true;
+	/** Ingest-bron toevoegen: id in opts.decks (→ URL) en de lijst ophalen via
+	 *  de proxy. Kent de ingest de id niet (404), dan probeert POST
+	 *  /scorepad/fetch het deck éénmalig van Piltover Archive te halen (#346) —
+	 *  pas als óók dat faalt blijft het vel blanco met een nette melding; de
+	 *  pagina werkt altijd door. */
+	async function addIngestSource(id: string) {
+		const existing = opts.decks.indexOf(id);
+		if (existing >= 0) {
+			adoptRef(existing + 1);
+			// Retry-pad (review #346): de foutmelding belooft "probeer straks" —
+			// dezelfde link opnieuw koppelen moet dan écht opnieuw laden in
+			// plaats van stil niets doen. Alleen bij een eerdere mislukking;
+			// een geladen of nog ladende bron blijft met rust.
+			const st = ingestState[id];
+			if (!st || (st.deck === null && !st.loading)) await loadIngestDeck(id);
+			return;
+		}
+		opts.decks.push(id);
+		adoptRef(opts.decks.length);
+		await loadIngestDeck(id);
+	}
+
+	/** Eén laadpoging voor een ingest-bron — gedeeld door toevoegen en retry. */
+	async function loadIngestDeck(id: string) {
+		ingestState[id] = { deck: null, error: null, loading: true };
 		try {
-			const res = await fetch(`/scorepad/decks/${id}`);
-			// Intussen losgekoppeld of vervangen? Dan is dit antwoord van niemand.
-			if (opts.deckId !== id) return;
+			let res = await fetch(`/scorepad/decks/${id}`);
+			if (res.status === 404) {
+				// Auto-fetch: nog niet in de ingest — één gerichte Piltover-fetch.
+				res = await fetch('/scorepad/fetch', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ id })
+				});
+			}
+			// Intussen verwijderd? Dan is dit antwoord van niemand.
+			if (!opts.decks.includes(id)) return;
 			if (!res.ok) {
-				linkedError = res.status === 404 ? 'notfound' : 'unavailable';
+				ingestState[id] = {
+					deck: null,
+					error:
+						res.status === 404
+							? 'Deck niet gevonden op Piltover Archive.'
+							: res.status === 400
+								? (((await res.json().catch(() => null)) as { error?: string } | null)?.error ??
+									'Geen geldige Piltover Archive deck-id.')
+								: 'Ophalen kan nu niet — probeer straks, of plak de decklijst als tekst.',
+					loading: false
+				};
 				return;
 			}
 			const d = (await res.json()) as { name: string | null; sections: DeckSectionInput[] };
-			if (opts.deckId !== id) return;
-			linkedDeck = fromDeckSections(d.name, d.sections);
+			if (!opts.decks.includes(id)) return;
+			ingestState[id] = { deck: fromDeckSections(d.name, d.sections), error: null, loading: false };
 		} catch {
-			if (opts.deckId === id) linkedError = 'unavailable';
-		} finally {
-			if (opts.deckId === id) deckLoading = false;
+			if (!opts.decks.includes(id)) return;
+			ingestState[id] = {
+				deck: null,
+				error: 'Ophalen kan nu niet — probeer straks, of plak de decklijst als tekst.',
+				loading: false
+			};
 		}
 	}
-	function unlinkDeck() {
-		opts.deckId = null;
-		linkedDeck = null;
-		linkedError = null;
-		deckLoading = false;
+	function chooseDeck(id: string) {
+		deckQuery = '';
+		deckResults = null;
+		deckSearchError = null;
+		void addIngestSource(id);
 	}
 
-	// Piltover-link of kale deck-id plakken.
+	// Piltover-link of kale deck-id plakken. De bezig-status dekt ook de
+	// auto-fetch: een Piltover-rondgang kan even duren.
 	let linkInput = $state('');
 	let linkError = $state<string | null>(null);
-	function linkFromInput() {
+	let linkBusy = $state(false);
+	async function linkFromInput() {
 		const id = piltoverDeckIdFromInput(linkInput);
 		if (id === null) {
 			linkError = 'Geen Piltover-link of deck-id herkend — plak de volledige /decks/view/…-link.';
@@ -180,10 +324,18 @@
 		}
 		linkError = null;
 		linkInput = '';
-		void chooseDeck(id);
+		linkBusy = true;
+		try {
+			await addIngestSource(id);
+		} finally {
+			linkBusy = false;
+		}
 	}
 
-	// Deck-code plakken → decode via de proxy → LOKALE prefill (niet in de URL).
+	// Deck-code plakken → decode via de proxy → LOKALE bron (niet in de URL).
+	// De verrijkte decode (#346) levert type/supertype mee, zodat
+	// fromDeckSections runes/legend/battlefields uit het maindeck licht en
+	// chosen-champion de CC-badge voedt.
 	let codeInput = $state('');
 	let codeError = $state<string | null>(null);
 	let codeBusy = $state(false);
@@ -211,13 +363,16 @@
 			}
 			codeError = null;
 			codeInput = '';
-			localDeck = fromDeckSections(null, body.sections);
-			localSource = 'code';
 			const unknown = body.unknownCount ?? 0;
-			localNote =
-				unknown > 0
-					? `${unknown} regel${unknown === 1 ? '' : 's'} niet aan een kaart gekoppeld — die staan als code op het vel.`
-					: null;
+			localSources.push({
+				origin: 'code',
+				prefill: fromDeckSections(null, body.sections),
+				note:
+					unknown > 0
+						? `${unknown} regel${unknown === 1 ? '' : 's'} niet aan een kaart gekoppeld — die staan als code op het vel.`
+						: null
+			});
+			adoptRef(-localSources.length);
 		} catch {
 			codeError = 'Deck-code lezen lukt nu niet.';
 		} finally {
@@ -225,7 +380,7 @@
 		}
 	}
 
-	// Decklijst-tekst plakken → lokale parser → LOKALE prefill (niet in de URL).
+	// Decklijst-tekst plakken → lokale parser → LOKALE bron (niet in de URL).
 	let textInput = $state('');
 	let textError = $state<string | null>(null);
 	function useDeckText() {
@@ -235,14 +390,9 @@
 			return;
 		}
 		textError = null;
-		localDeck = parsed;
-		localSource = 'tekst';
-		localNote = null;
-	}
-	function clearLocal() {
-		localDeck = null;
-		localSource = null;
-		localNote = null;
+		textInput = '';
+		localSources.push({ origin: 'tekst', prefill: parsed, note: null });
+		adoptRef(-localSources.length);
 	}
 
 	// Gekozen spelerkleuren als CSS-vars op de .ppage: overschrijven de
@@ -284,12 +434,12 @@
 		// verwijzen naar de oude lijst en gaan mee dicht. (afterNavigate
 		// vuurt niet op onze eigen replaceState, dus dit lust niet.)
 		opts = structuredClone(data.options);
-		// Het gekoppelde deck hoort bij de URL en volgt de navigatie mee; de
-		// plak-bron en personalia staan bewust NIET in de URL en blijven dus
-		// gewoon staan — de navigatie heeft daar niets over gezegd.
-		linkedDeck = data.deck;
-		linkedError = data.deckError;
-		deckLoading = false;
+		// De ingest-bronnen horen bij de URL en volgen de navigatie mee; de
+		// geplakte bronnen en personalia staan bewust NIET in de URL en blijven
+		// dus gewoon staan — de navigatie heeft daar niets over gezegd. lastRef
+		// wel wissen: die hoorde bij de samenstelling van vóór de navigatie.
+		ingestState = ingestFromData(data.decks);
+		lastRef = null;
 		sel.clear();
 		zoom = null;
 		// Een navigatie vervangt de samenstelling wisselend van buitenaf; een
@@ -298,7 +448,9 @@
 		undo = null;
 	});
 	$effect(() => {
-		const qs = serializeOptions(opts);
+		// urlOptions: lokale (negatieve) refs serialiseren als null — zie het
+		// deck-bronnen-blok bovenaan.
+		const qs = serializeOptions(urlOptions(opts));
 		if (!browser || !routerReady) return;
 		replaceState(qs ? `?${qs}` : '/scorepad', {});
 	});
@@ -309,11 +461,14 @@
 	const sel = new SvelteSet<number>();
 
 	function add(k: SheetKind) {
-		if (opts.list.length < MAX_SHEETS) opts.list.push(k);
+		// Nieuwe deck-vellen krijgen standaard de laatst toegevoegde bron;
+		// andere veltypen hébben geen bron (deckRef null, zie SheetEntry).
+		const deckRef = k === 'deck' || k === 'registration' ? lastRef : null;
+		if (opts.list.length < MAX_SHEETS) opts.list.push({ kind: k, deckRef });
 		sel.clear();
 	}
 	function removeLast(k: SheetKind) {
-		const i = opts.list.lastIndexOf(k);
+		const i = opts.list.findLastIndex((e) => e.kind === k);
 		if (i >= 0) opts.list.splice(i, 1);
 		sel.clear();
 	}
@@ -361,10 +516,13 @@
 		// Alleen een snapshot als er iets te verliezen valt; nogmaals Reset op
 		// een al-gereset pad mag de eerdere snapshot niet overschrijven met de
 		// standaardopties.
-		if (serializeOptions(opts) !== '') undo = $state.snapshot(opts) as ScorepadOptions;
+		if (serializeOptions(urlOptions(opts)) !== '') undo = $state.snapshot(opts) as ScorepadOptions;
 		// Reset vervangt de hele lijst — de selectie-indexen wijzen anders naar
-		// een lijst die niet meer bestaat (phantom-selectie, review #343).
+		// een lijst die niet meer bestaat (phantom-selectie, review #343). Ook
+		// lastRef gaat mee: een standaardbron die naar een gewiste ingest-bron
+		// wijst zou nieuwe deck-vellen een verweesde ref geven.
 		opts = defaultOptions();
+		lastRef = null;
 		sel.clear();
 	}
 	function restoreReset() {
@@ -378,7 +536,7 @@
 	// verdwijnt hij. Dit dekt álle mutatiepaden (chips, pickers, DnD) zonder
 	// elke handler afzonderlijk te hoeven raken.
 	$effect(() => {
-		if (undo !== null && serializeOptions(opts) !== '') undo = null;
+		if (undo !== null && serializeOptions(urlOptions(opts)) !== '') undo = null;
 	});
 
 	// Drag & drop: een niet-geselecteerde rij verslepen pakt alleen die rij;
@@ -471,10 +629,10 @@
 	const scale = $derived(pvw > 0 ? Math.min(1, cellW / (pageWmm * MM)) : 1);
 	const slotH = $derived(Math.ceil(210 * MM * scale));
 
-	function pageLabel(p: SheetPage | null): string {
+	function pageLabel(p: SheetPageEntry | null): string {
 		if (p === null) return 'leeg';
-		if (p === 'milestone2') return `${SHEET_INFO.milestone.label} — 2/2`;
-		return SHEET_INFO[p].label;
+		if (p.page === 'milestone2') return `${SHEET_INFO.milestone.label} — 2/2`;
+		return SHEET_INFO[p.page].label;
 	}
 
 	// ── Slepen in de preview ──
@@ -484,9 +642,9 @@
 	// zou daar dubbelzinnig zijn, dus daar staat het uit.
 	const pageEntry = $derived.by(() => {
 		const map: number[] = [];
-		opts.list.forEach((k, li) => {
+		opts.list.forEach((e, li) => {
 			map.push(li);
-			if (k === 'milestone') map.push(li);
+			if (e.kind === 'milestone') map.push(li);
 		});
 		return map;
 	});
@@ -653,7 +811,7 @@
 						<p class="onone">Nog niets gekozen — voeg hiernaast vellen toe.</p>
 					{:else}
 						<ol class="order">
-							{#each opts.list as k, i (i)}
+							{#each opts.list as entry, i (i)}
 								<!-- Drag & drop is een muis-extra; het toegankelijke pad zijn de
 								     checkbox en de knoppen. Vandaar bewust géén interactieve rol
 								     op de rij zelf. -->
@@ -670,7 +828,7 @@
 									<input
 										type="checkbox"
 										class="osel"
-										aria-label="Selecteer positie {i + 1} — {SHEET_INFO[k].label}"
+										aria-label="Selecteer positie {i + 1} — {SHEET_INFO[entry.kind].label}"
 										checked={sel.has(i)}
 										onchange={() => toggleSel(i)}
 									/>
@@ -678,9 +836,27 @@
 									<!-- shortLabel: onderscheid vooraan, zodat afkappen in deze smalle
 									     kolom nooit twee gelijk ogende regels geeft. Het paginatal staat
 									     als apart badge-element buiten de ellipsis. -->
-									<span class="olabel">{SHEET_INFO[k].shortLabel}</span>
-									{#if SHEET_INFO[k].pages > 1}
-										<span class="opag tnum">{SHEET_INFO[k].pages} pag.</span>
+									<span class="olabel">{SHEET_INFO[entry.kind].shortLabel}</span>
+									{#if SHEET_INFO[entry.kind].pages > 1}
+										<span class="opag tnum">{SHEET_INFO[entry.kind].pages} pag.</span>
+									{/if}
+									{#if (entry.kind === 'deck' || entry.kind === 'registration') && sourceRows.length > 0}
+										<!-- Bron per vel: 'value' als string zodat één select zowel
+										     'Blanco' (null) als positieve/negatieve refs kan dragen. -->
+										<select
+											class="osrc"
+											aria-label="Deck-bron — positie {i + 1}"
+											value={entry.deckRef === null ? '' : String(entry.deckRef)}
+											onchange={(e) => {
+												const v = e.currentTarget.value;
+												entry.deckRef = v === '' ? null : Number(v);
+											}}
+										>
+											<option value="">Blanco</option>
+											{#each sourceRows as s (s.ref)}
+												<option value={String(s.ref)}>{s.num} · {s.name}</option>
+											{/each}
+										</select>
 									{/if}
 									<span class="obtns">
 										<button
@@ -860,46 +1036,35 @@
 
 			{#if hasDeckSheet}
 				<div class="deckbron">
-					<p class="fglabel">Deck-bron</p>
+					<p class="fglabel">Deck-bronnen</p>
 					<p class="dbintro">
-						Vul de deck-vellen vooraf in met een decklijst — of laat alles leeg voor blanco
-						invulvellen.
+						Vul de deck-vellen vooraf in met één of meer decklijsten — wijs per vel een bron aan
+						in het Volgorde-paneel, of laat alles leeg voor blanco invulvellen.
 					</p>
 
-					{#if localDeck}
-						<p class="dbstatus">
-							Actieve bron: geplakte {localSource === 'code' ? 'deck-code' : 'decklijst'}{localDeck.name
-								? ` — "${localDeck.name}"`
-								: ''}. Alleen op dit apparaat, tot je herlaadt — dit reist niet mee in de URL.
-							{#if opts.deckId !== null}Het gekoppelde deck blijft staan en neemt het daarna weer
-								over.{/if}
-							<button type="button" class="link-btn" onclick={clearLocal}>Prefill wissen</button>
-						</p>
-						{#if localNote}<p class="dbnote">{localNote}</p>{/if}
-					{:else if opts.deckId !== null}
-						{#if deckLoading}
-							<p class="dbstatus">Deck laden…</p>
-						{:else if linkedDeck}
-							<p class="dbstatus">
-								Actieve bron: <strong>{linkedDeck.name ?? opts.deckId}</strong> uit de ingest — reist
-								mee in de URL, dus deelbaar en printbaar.
-								<button type="button" class="link-btn" onclick={unlinkDeck}>Loskoppelen</button>
-							</p>
-						{:else if linkedError === 'notfound'}
-							<p class="dberr">
-								Dit deck staat niet in de ingest — controleer de link, of zoek het hieronder op
-								naam. De vellen blijven blanco.
-								<button type="button" class="link-btn" onclick={unlinkDeck}>Loskoppelen</button>
-							</p>
-						{:else}
-							<p class="dberr">
-								Deck laden lukt nu niet — de bron is even niet bereikbaar; de vellen blijven
-								blanco.
-								<button type="button" class="link-btn" onclick={unlinkDeck}>Loskoppelen</button>
-							</p>
-						{/if}
+					{#if sourceRows.length === 0}
+						<p class="dbstatus">Geen deck-bron gekozen — de deck-vellen blijven blanco.</p>
 					{:else}
-						<p class="dbstatus">Geen deck gekozen — de deck-vellen blijven blanco.</p>
+						<ul class="dbsources">
+							{#each sourceRows as s (s.ref)}
+								<li>
+									<span class="dbsnum tnum">{s.num}</span>
+									<span class="dbsmain">
+										<span class="dbsname">{s.name}</span>
+										<span class="dbsorigin">{s.origin}</span>
+										{#if s.loading}<span class="dbsorigin">laden…</span>{/if}
+										{#if s.error}<span class="dberr">{s.error}</span>{/if}
+										{#if s.note}<span class="dbnote">{s.note}</span>{/if}
+									</span>
+									<button
+										type="button"
+										class="link-btn"
+										aria-label="Verwijder bron {s.num} — {s.name}"
+										onclick={() => removeSource(s.ref)}>Verwijder</button
+									>
+								</li>
+							{/each}
+						</ul>
 					{/if}
 
 					<div class="dbgrid">
@@ -921,7 +1086,7 @@
 									<ul class="dbhits">
 										{#each deckResults as d (d.id)}
 											<li>
-												<button type="button" onclick={() => void chooseDeck(d.id)}>
+												<button type="button" onclick={() => chooseDeck(d.id)}>
 													<span class="dbname">{d.name ?? d.id}</span>
 													<span class="dbcount tnum">{d.cardCount} kaarten</span>
 												</button>
@@ -941,10 +1106,17 @@
 									autocomplete="off"
 									bind:value={linkInput}
 									onkeydown={(e) => {
-										if (e.key === 'Enter') linkFromInput();
+										if (e.key === 'Enter') void linkFromInput();
 									}}
 								/>
-								<button type="button" class="dbbtn" onclick={linkFromInput}>Koppel</button>
+								<!-- Bezig-status: de auto-fetch doet zo nodig een echte
+								     Piltover-rondgang en kan even duren. -->
+								<button
+									type="button"
+									class="dbbtn"
+									disabled={linkBusy}
+									onclick={() => void linkFromInput()}>{linkBusy ? 'Ophalen…' : 'Koppel'}</button
+								>
 							</div>
 							{#if linkError}<p class="dberr">{linkError}</p>{/if}
 						</div>
@@ -1061,10 +1233,12 @@
 						bij 2v2) is de Victory Score — bij overshoot turf je gewoon door.
 					</li>
 					<li>
-						De deck-vellen (Deckoverzicht en Registration) kun je vooraf laten invullen: zoek een
-						deck in de ingest, of plak een Piltover-link, deck-code of decklijst-tekst. Een
-						ingest-deck reist mee in de URL; geplakte codes/lijsten en de personalia blijven
-						alleen op dit apparaat.
+						De deck-vellen (Deckoverzicht en Registration) kun je vooraf laten invullen — met
+						meerdere decks tegelijk: zoek decks in de ingest, of plak Piltover-links, deck-codes
+						of decklijst-tekst. Kent de ingest een geplakte link nog niet, dan wordt het deck
+						automatisch éénmalig van Piltover Archive opgehaald. Wijs per vel de bron aan in het
+						Volgorde-paneel. Ingest-decks reizen mee in de URL; geplakte codes/lijsten en de
+						personalia blijven alleen op dit apparaat.
 					</li>
 					<li>Je samenstelling zit in de URL, dus bookmarken of delen kan.</li>
 				</ol>
@@ -1182,33 +1356,33 @@
 	{/if}
 </main>
 
-{#snippet sheetOf(p: SheetPage | null)}
-	{#if p === 'match'}
-		<MatchSheet {bw} />
-	{:else if p === 'matchalt'}
-		<MatchAltSheet {bw} />
-	{:else if p === 'solo'}
-		<SoloSheet {bw} />
-	{:else if p === 'ffa'}
-		<FfaSheet {bw} />
-	{:else if p === 'duo'}
-		<DuoSheet {bw} />
-	{:else if p === 'tournament'}
-		<TournamentSheet {bw} />
-	{:else if p === 'reflection'}
-		<ReflectionSheet {bw} />
-	{:else if p === 'milestone'}
-		<MilestoneSheet {bw} part={1} />
-	{:else if p === 'milestone2'}
-		<MilestoneSheet {bw} part={2} />
-	{:else if p === 'notes'}
-		<NotesSheet {bw} style={opts.notesStyle} />
-	{:else if p === 'deck'}
-		<DeckSheet {bw} deck={activeDeck} />
-	{:else if p === 'registration'}
-		<RegistrationSheet {bw} deck={activeDeck} {person} />
-	{:else}
+{#snippet sheetOf(p: SheetPageEntry | null)}
+	{#if p === null}
 		<div class="empty" aria-hidden="true"></div>
+	{:else if p.page === 'match'}
+		<MatchSheet {bw} />
+	{:else if p.page === 'matchalt'}
+		<MatchAltSheet {bw} />
+	{:else if p.page === 'solo'}
+		<SoloSheet {bw} />
+	{:else if p.page === 'ffa'}
+		<FfaSheet {bw} />
+	{:else if p.page === 'duo'}
+		<DuoSheet {bw} />
+	{:else if p.page === 'tournament'}
+		<TournamentSheet {bw} />
+	{:else if p.page === 'reflection'}
+		<ReflectionSheet {bw} />
+	{:else if p.page === 'milestone'}
+		<MilestoneSheet {bw} part={1} />
+	{:else if p.page === 'milestone2'}
+		<MilestoneSheet {bw} part={2} />
+	{:else if p.page === 'notes'}
+		<NotesSheet {bw} style={opts.notesStyle} />
+	{:else if p.page === 'deck'}
+		<DeckSheet {bw} deck={prefillFor(p.deckRef)} />
+	{:else if p.page === 'registration'}
+		<RegistrationSheet {bw} deck={prefillFor(p.deckRef)} {person} />
 	{/if}
 {/snippet}
 
@@ -1376,6 +1550,22 @@
 		padding: 1px 6px;
 		white-space: nowrap;
 	}
+	/* Bron-select op deck-/registration-rijen: compact, kapt lange decknamen
+	   af — het volledige overzicht staat in het Deck-bronnen-paneel. */
+	.osrc {
+		flex: none;
+		max-width: 108px;
+		background: var(--surface-deep);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		color: var(--text);
+		font-size: 0.72rem;
+		font-family: inherit;
+		padding: 3px 4px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
 	.obtns {
 		display: inline-flex;
 		gap: 2px;
@@ -1477,6 +1667,52 @@
 		margin: 4px 0 0;
 		font-size: 0.76rem;
 		color: var(--err);
+	}
+	/* Bronnenlijst (#346): één rij per deck-bron — nummer (matcht het
+	   bron-select in het Volgorde-paneel), naam + herkomst, verwijderknop. */
+	.dbsources {
+		list-style: none;
+		margin: 0 0 12px;
+		padding: 0;
+	}
+	.dbsources li {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		padding: 5px 0;
+		border-bottom: 1px solid var(--border);
+	}
+	.dbsources li:last-child {
+		border-bottom: 0;
+	}
+	.dbsnum {
+		flex: none;
+		color: var(--muted);
+		font-size: 0.8rem;
+		min-width: 18px;
+		text-align: right;
+	}
+	.dbsmain {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+	.dbsname {
+		font-size: 0.86rem;
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.dbsorigin {
+		font-size: 0.72rem;
+		color: var(--muted);
+	}
+	.dbsmain .dberr,
+	.dbsmain .dbnote {
+		margin: 0;
 	}
 	/* De auto-marge van .link-btn hoort bij de actions-rij; in de statusregels
 	   staat de knop gewoon in de lopende tekst. */

@@ -18,9 +18,25 @@ export type SheetKind =
 	| 'deck'
 	| 'registration';
 
+/** Eén gekozen vel in de samenstelling (#346: meerdere decks per boekje).
+ *  `deckRef` wijst 1-based in ScorepadOptions.decks naar de deck-bron van dit
+ *  vel en is alleen betekenisvol op 'deck'/'registration' — elders altijd
+ *  null (een match-vel hééft geen deck-bron). */
+export interface SheetEntry {
+	kind: SheetKind;
+	deckRef: number | null;
+}
+
 /** Eén fysieke pagina. Milestone review beslaat twee pagina's; de tweede
  *  bestaat alleen in het paginaplan, niet als los te kiezen veltype. */
 export type SheetPage = SheetKind | 'milestone2';
+
+/** Eén fysieke pagina mét zijn deck-bron — het paginaplan draagt de deckRef
+ *  mee zodat de UI per vel de juiste prefill kan pakken. */
+export interface SheetPageEntry {
+	page: SheetPage;
+	deckRef: number | null;
+}
 
 export type Paper = 'a5' | 'a4';
 export type Ink = 'color' | 'bw';
@@ -30,7 +46,7 @@ export type Binding = 'none' | 'top' | 'side';
 
 export interface ScorepadOptions {
 	/** Geordende samenstelling — dit ís de afdrukvolgorde. */
-	list: SheetKind[];
+	list: SheetEntry[];
 	paper: Paper;
 	/** Alleen relevant bij A4: elk vel 2× naast elkaar (snijstapel — na het
 	 *  snijden twee gelijke stapels) i.p.v. de vellen op volgorde 2-up. */
@@ -42,10 +58,11 @@ export interface ScorepadOptions {
 	c1: string | null;
 	/** Spelerkleur P2 — zelfde vorm als c1. */
 	c2: string | null;
-	/** Piltover-deck-id voor vooraf ingevulde deck-vellen (#344); null = leeg
-	 *  vel. Alleen een veilige id-vorm ([A-Za-z0-9-], max 64) reist mee in de
-	 *  URL — al het andere valt stil terug op null. */
-	deckId: string | null;
+	/** Piltover-deck-ids voor vooraf ingevulde deck-vellen (#344/#346); vellen
+	 *  wijzen er met SheetEntry.deckRef (1-based) naartoe. Alleen een veilige
+	 *  id-vorm ([A-Za-z0-9-], max 64) reist mee in de URL — al het andere valt
+	 *  stil weg. */
+	decks: string[];
 }
 
 /** Standaard-spelerkleuren; spiegelen de --paper-p1/--paper-p2-tokens in
@@ -164,7 +181,7 @@ export const SHEET_INFO: Record<
 
 export function defaultOptions(): ScorepadOptions {
 	return {
-		list: ['match'],
+		list: [{ kind: 'match', deckRef: null }],
 		paper: 'a5',
 		duplicate: true,
 		ink: 'color',
@@ -172,7 +189,7 @@ export function defaultOptions(): ScorepadOptions {
 		binding: 'none',
 		c1: null,
 		c2: null,
-		deckId: null
+		decks: []
 	};
 }
 
@@ -185,21 +202,86 @@ function isKind(v: string): v is SheetKind {
 	return (SHEET_ORDER as readonly string[]).includes(v);
 }
 
+/** Veilige deck-id-vorm voor de URL — zelfde eis als het oude deck=-param. */
+const DECK_ID = /^[A-Za-z0-9-]{1,64}$/;
+
+/** Deck-id waar een deckRef (1-based) naar wijst; null bij geen of verweesde
+ *  ref — het vel valt dan terug op leeg, nooit een kapotte pagina. */
+export function deckIdAt(o: ScorepadOptions, deckRef: number | null): string | null {
+	return deckRef === null ? null : (o.decks[deckRef - 1] ?? null);
+}
+
 /** Tolerante parser: onbekende veltypen en rommelige aantallen vallen stil
  *  terug op iets bruikbaars — een gedeelde link mag nooit een kapotte pagina
- *  opleveren. `kind:n` is run-length ("match:2,reflection,match" = match,
- *  match, reflection, match), volgorde blijft behouden. */
+ *  opleveren. Grammatica per run: `kind[@ref][:n]` — run-length
+ *  ("match:2,reflection,match" = match, match, reflection, match; volgorde
+ *  blijft behouden), met `@ref` als 1-based verwijzing naar 'decks='
+ *  ("deck@1:2,registration@1,match,deck@2&decks=<id1>,<id2>"). Een @-ref
+ *  zonder bijbehorende decks-entry valt stil terug op null (leeg vel). */
 export function parseOptions(params: URLSearchParams): ScorepadOptions {
 	const o = defaultOptions();
 
+	// Deck-bronnen éérst: de sheets-refs verwijzen ernaar. Nieuwe vorm is
+	// 'decks=<id1>,<id2>'; het oude 'deck=<id>' (#344) blijft geldig als alias
+	// voor decks=<id> + ref 1 op alle deck-vellen, zodat gedeelde links van
+	// vóór #346 blijven werken. Ongeldige ids vallen stil weg; refMap onthoudt
+	// per RUWE positie waar een id terechtkwam, zodat '@2' na een weggevallen
+	// eerste id bij zíjn id blijft horen i.p.v. naar de verkeerde te schuiven.
+	const decksParam = params.get('decks');
+	const refMap: (number | null)[] = [];
+	let aliasRef = false;
+	if (decksParam !== null) {
+		for (const raw of decksParam.split(',')) {
+			if (!DECK_ID.test(raw)) {
+				refMap.push(null);
+				continue;
+			}
+			// Dedup mét ref-behoud: een dubbele id verwijst naar zijn eerste
+			// exemplaar. En hetzelfde plafond als de vellen (review #346):
+			// meer bronnen dan vellen kan per constructie nooit nuttig zijn,
+			// en onbegrensd betekende honderden parallelle rb-api-fetches per
+			// gecrafte URL — óók server-side bij SSR.
+			const dup = o.decks.indexOf(raw);
+			if (dup >= 0) {
+				refMap.push(dup + 1);
+				continue;
+			}
+			if (o.decks.length >= MAX_SHEETS) {
+				refMap.push(null);
+				continue;
+			}
+			o.decks.push(raw);
+			refMap.push(o.decks.length);
+		}
+	} else {
+		const deck = params.get('deck');
+		if (deck !== null && DECK_ID.test(deck)) {
+			o.decks = [deck];
+			aliasRef = true;
+		}
+	}
+
 	const sheets = params.get('sheets');
 	if (sheets !== null) {
-		const list: SheetKind[] = [];
+		const list: SheetEntry[] = [];
 		for (const part of sheets.split(',')) {
-			const [kind, num] = part.split(':');
+			const [head, num] = part.split(':');
+			const [kind, refRaw] = head.split('@');
 			if (!kind || !isKind(kind)) continue;
 			const n = clampCount(num === undefined ? 1 : Number(num));
-			for (let i = 0; i < n && list.length < MAX_SHEETS; i++) list.push(kind);
+			// deckRef alleen op deck-vellen; elders is '@' betekenisloos en
+			// wordt hij genegeerd. In alias-modus krijgt élk deck-vel ref 1 —
+			// dat wás het gedrag van het oude ene deck=-param.
+			let deckRef: number | null = null;
+			if (kind === 'deck' || kind === 'registration') {
+				if (aliasRef) {
+					deckRef = 1;
+				} else if (refRaw !== undefined) {
+					const r = Number(refRaw);
+					if (Number.isInteger(r) && r >= 1 && r <= refMap.length) deckRef = refMap[r - 1];
+				}
+			}
+			for (let i = 0; i < n && list.length < MAX_SHEETS; i++) list.push({ kind, deckRef });
 		}
 		o.list = list;
 	}
@@ -216,29 +298,37 @@ export function parseOptions(params: URLSearchParams): ScorepadOptions {
 	if (c1 !== null && /^[0-9a-fA-F]{6}$/.test(c1)) o.c1 = c1.toLowerCase();
 	const c2 = params.get('c2');
 	if (c2 !== null && /^[0-9a-fA-F]{6}$/.test(c2)) o.c2 = c2.toLowerCase();
-	// Deck-prefill (#344): alleen een veilige id-vorm telt; rommel valt stil
-	// terug op null (leeg deck-vel), nooit een kapotte pagina.
-	const deck = params.get('deck');
-	if (deck !== null && /^[A-Za-z0-9-]{1,64}$/.test(deck)) o.deckId = deck;
 	return o;
 }
 
 /** Compacte query-string; de standaardsituatie serialiseert naar '' zodat de
- *  kale URL schoon blijft. Opeenvolgende gelijke vellen worden run-length
- *  gecodeerd ("match:2,reflection"). */
+ *  kale URL schoon blijft. Run-length groepeert alleen over gelijke
+ *  (kind, deckRef)-paren ("deck@1:2,deck@2"); 'decks=' wordt alleen
+ *  geschreven als er deck-ids zijn. Er wordt altijd naar de nieuwe vorm
+ *  geserialiseerd — het oude 'deck='-param is alleen een parse-alias. */
 export function serializeOptions(o: ScorepadOptions): string {
 	const params = new URLSearchParams();
 	const d = defaultOptions();
 
-	const differs = o.list.length !== d.list.length || o.list.some((k, i) => k !== d.list[i]);
+	const differs =
+		o.list.length !== d.list.length ||
+		o.list.some((e, i) => e.kind !== d.list[i].kind || e.deckRef !== d.list[i].deckRef);
 	if (differs) {
 		const runs: string[] = [];
 		let i = 0;
 		while (i < o.list.length) {
 			let j = i;
-			while (j < o.list.length && o.list[j] === o.list[i]) j++;
+			while (
+				j < o.list.length &&
+				o.list[j].kind === o.list[i].kind &&
+				o.list[j].deckRef === o.list[i].deckRef
+			) {
+				j++;
+			}
 			const n = j - i;
-			runs.push(n === 1 ? o.list[i] : `${o.list[i]}:${n}`);
+			const head =
+				o.list[i].deckRef === null ? o.list[i].kind : `${o.list[i].kind}@${o.list[i].deckRef}`;
+			runs.push(n === 1 ? head : `${head}:${n}`);
 			i = j;
 		}
 		params.set('sheets', runs.join(','));
@@ -250,24 +340,32 @@ export function serializeOptions(o: ScorepadOptions): string {
 	if (o.binding !== d.binding) params.set('bind', o.binding);
 	if (o.c1 !== null) params.set('c1', o.c1);
 	if (o.c2 !== null) params.set('c2', o.c2);
-	if (o.deckId !== null) params.set('deck', o.deckId);
+	if (o.decks.length > 0) params.set('decks', o.decks.join(','));
 	return params.toString();
 }
 
-/** Alle fysieke pagina's in afdrukvolgorde (milestone → 2 pagina's). */
-export function expandPages(o: ScorepadOptions): SheetPage[] {
-	return o.list.flatMap<SheetPage>((k) => (k === 'milestone' ? [k, 'milestone2'] : [k]));
+/** Alle fysieke pagina's in afdrukvolgorde (milestone → 2 pagina's), elk mét
+ *  hun deck-bron. */
+export function expandPages(o: ScorepadOptions): SheetPageEntry[] {
+	return o.list.flatMap<SheetPageEntry>((e) =>
+		e.kind === 'milestone'
+			? [
+					{ page: 'milestone', deckRef: null },
+					{ page: 'milestone2', deckRef: null }
+				]
+			: [{ page: e.kind, deckRef: e.deckRef }]
+	);
 }
 
 /** Printpagina's: A5 → één vel per pagina; A4 → twee A5's naast elkaar.
  *  In snijstapel-modus wordt élk vel verdubbeld ([p, p] per pagina), zodat er
  *  na het snijden twee identieke stapels liggen; op volgorde wordt gewoon per
  *  twee gebundeld en kan het laatste vak leeg blijven (null). */
-export function pagePlan(o: ScorepadOptions): (SheetPage | null)[][] {
+export function pagePlan(o: ScorepadOptions): (SheetPageEntry | null)[][] {
 	const expanded = expandPages(o);
 	if (o.paper === 'a5') return expanded.map((p) => [p]);
 	if (o.duplicate) return expanded.map((p) => [p, p]);
-	const pages: (SheetPage | null)[][] = [];
+	const pages: (SheetPageEntry | null)[][] = [];
 	for (let i = 0; i < expanded.length; i += 2) {
 		pages.push([expanded[i], expanded[i + 1] ?? null]);
 	}

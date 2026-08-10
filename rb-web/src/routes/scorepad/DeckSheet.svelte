@@ -38,11 +38,14 @@
 	const items = $derived.by(() => {
 		const out: Item[] = [];
 		for (const s of SECTIONS) {
-			const rows = deck?.sections.find((x) => x.section === s.key)?.rows ?? [];
+			const sec = deck?.sections.find((x) => x.section === s.key);
+			const rows = sec?.rows ?? [];
 			// Prefill: alleen gevulde secties; blanco: het vaste aantal regels.
 			const n = deck === null ? s.blank : rows.length;
 			if (n === 0) continue;
-			out.push({ t: 'head', label: s.label });
+			// Sectietotaal in de kop bij prefill ('Main deck · 40', #346);
+			// blanco vellen houden de kale sectienaam.
+			out.push({ t: 'head', label: sec ? `${s.label} · ${sec.total}` : s.label });
 			for (let i = 0; i < n; i++) {
 				const r = rows[i];
 				out.push({

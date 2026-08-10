@@ -91,7 +91,9 @@ public class DeckCodeService(RbRulesDbContext db)
         var canonicalIds = linked.Select(l => l.Canonical).OfType<string>().Distinct().ToList();
         var cardFacts = await db.Cards.AsNoTracking()
             .Where(c => canonicalIds.Contains(c.RiftboundId))
-            .Select(c => new { c.RiftboundId, c.Name, c.ImageUrl })
+            // Type/Supertype reizen mee (#346): de code zelf kent geen
+            // PA-secties, dus de client hersectioneert op de kaartsoort.
+            .Select(c => new { c.RiftboundId, c.Name, c.ImageUrl, c.Type, c.Supertype })
             .ToDictionaryAsync(c => c.RiftboundId, ct);
 
         var context = await DeckLegalityContext.LoadAsync(db, format, ct);
@@ -110,7 +112,9 @@ public class DeckCodeService(RbRulesDbContext db)
                     .Select(l =>
                     {
                         var fact = l.Canonical is { } id ? cardFacts.GetValueOrDefault(id) : null;
-                        return new DeckCardView(l.CardCode, l.Count, l.Canonical, fact?.Name, fact?.ImageUrl);
+                        return new DeckCardView(
+                            l.CardCode, l.Count, l.Canonical, fact?.Name, fact?.ImageUrl,
+                            Type: fact?.Type, Supertype: fact?.Supertype);
                     })
                     .OrderBy(c => c.CardName ?? c.CardCode, StringComparer.Ordinal)]))
             .Where(s => s.Cards.Count > 0)
