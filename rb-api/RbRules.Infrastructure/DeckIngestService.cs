@@ -304,4 +304,30 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
         await db.SaveChangesAsync(ct);
         return new(0, 0, 0, 0, 0, 1, 0, false, reason);
     }
+
+    /// <summary>Herkoppel-pass (#355): draait de linker opnieuw over rijen die
+    /// bij een eerdere ingest niet gekoppeld raakten — zonder Piltover te
+    /// bevragen. Nodig omdat de bulk-run ongewijzigde decks overslaat (het
+    /// ok-ledger) en een linker-verbetering (zoals de ster-normalisatie van
+    /// #351) bestaande rijen anders nooit bereikt. Meldt geheeld én rest
+    /// (#282: tel wat er echt gelukt is).</summary>
+    public async Task<(int Healed, int Remaining)> RelinkUnlinkedAsync(CancellationToken ct = default)
+    {
+        var linker = new DeckCardLinker(await db.Cards.AsNoTracking()
+            .Select(c => new Card { RiftboundId = c.RiftboundId, Name = c.Name, VariantOf = c.VariantOf })
+            .ToListAsync(ct));
+        var unlinked = await db.DeckCards
+            .Where(c => c.CanonicalRiftboundId == null)
+            .ToListAsync(ct);
+        var healed = 0;
+        foreach (var row in unlinked)
+        {
+            var canonical = linker.ResolveCanonical(row.CardCode, null);
+            if (canonical is null) continue;
+            row.CanonicalRiftboundId = canonical;
+            healed++;
+        }
+        if (healed > 0) await db.SaveChangesAsync(ct);
+        return (healed, unlinked.Count - healed);
+    }
 }
