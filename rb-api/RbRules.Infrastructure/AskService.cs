@@ -177,7 +177,11 @@ public class AskService(
           [Reaction], [Assault 2] — nooit vet (**Action**) en nooit kaal; de
           site rendert de gebrackete vorm als kaart-badge. Neem de
           :rb_…:-icoontokens (kosten, might, runes) letterlijk over waar je
-          kaartteksten citeert.
+          kaartteksten citeert. De enige geldige tokenvormen zijn
+          `:rb_energy_0:` t/m `:rb_energy_12:`, `:rb_might:`, `:rb_exhaust:`
+          en `:rb_rune_fury|calm|mind|body|order|chaos|rainbow:` (dus
+          `:rb_rune_rainbow:`, niet `:rb_rainbow:`) — verzin geen andere
+          tokenvormen.
         - Verwijs nooit naar context-labels of bron-categorieën — geen
           "[kaartgegevens]", geen "(zie SPELBEGRIP)", geen "(GEVERIFIEERDE
           RULING)". Die labels zijn interne lagen-namen, geen leestekst.
