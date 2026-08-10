@@ -39,6 +39,10 @@
 				{ href: '/decks', label: 'Decks', dom: 'body' },
 				{ href: '/graph', label: 'Brein', dom: 'chaos' }
 			]
+		},
+		{
+			label: 'Aan tafel',
+			items: [{ href: '/scorepad', label: 'Score pad' }]
 		}
 	] as const;
 	const BOTTOM = [

@@ -1682,6 +1682,47 @@ de globale duur-vangrail).
   rendert altijd het grid — de bewaarde keuze komt pas in de browser binnen,
   wat een hydration-mismatch voorkomt.
 
+### 4.8 Score pad (`/scorepad`)
+
+- **Score pad-assembler** (#342) — stel een printbaar én digitaal (tablet +
+  stylus) Riftbound-scorepad samen. Negen veltypen in eigen Poracle-ontwerp
+  (concepten naar het RiftHub-matchsheet en de Codex-journal; commerciële
+  producten, dus concept overgenomen, vormgeving en bewoording van onszelf):
+  **Bo3 match sheet** (drie games, Conquer/Hold-punttracks 1–10 met de
+  Victory Score 8 omcirkeld, first player + battlefield-keuze per game, §486),
+  **Bo3 match sheet — variant B** (RiftHub-achtige getrapte indeling in eigen
+  Poracle-stijl: kleurbanden per game en een groot notes-vlak, zonder
+  battlefield/first-velden),
+  **losse game-kaart** (ruime rijen met een schrijfregel per gescoord punt,
+  §485), **free-for-all** (FFA3 §487 / FFA4 §488, vier kolommen), **2v2 Magma
+  Chamber** (per team één gedeelde track naar 11 — doorlopend tot 13 — waarop
+  per punt de scorende teammate én C/H geturfd wordt, §489), **toernooi-dagvel**
+  (acht rondes + record), **match reflection** en **milestone review**
+  (2 pagina's) als aftergame-evaluatie, en **notes** (dots of lijntjes). De
+  samenstelling is een geordende lijst (steppers + volgorde-paneel met
+  drag & drop, checkbox-multiselect — samen slepen of verwijderen — en
+  omhoog/omlaag/verwijderen als toetsenbord-pad) en leeft volledig in de
+  query-string (deelbaar en headless printbaar; run-length zoals
+  `sheets=match:2,reflection`). De preview kent twee standen: miniaturen
+  naast elkaar (overzicht, met paginanummer + velnaam) of groot onder
+  elkaar; miniaturen zijn klikbaar (lightbox-uitvergroting met
+  toetsenbordnavigatie) en sleepbaar om de volgorde te wijzigen. Printen
+  gaat via de browserdialoog: A5 los (de digitale editie) of A4-liggend 2-up
+  (snijstapel — elk vel dubbel — of op volgorde), kleur — met instelbare
+  spelerkleuren (`c1`/`c2` in de query-string, standaard de papier-tokens) —
+  of zwart-wit, en een ringband-marge (geen/boven/zijkant) voor perforatie of
+  spiraal. Een inklapbaar uitleg-blok op de pagina legt de werkwijze uit.
+  Na een UI/UX-review (workflow, alle bevindingen nagemeten): Name-velden op
+  de matchvellen en naam-boven-legend op 2v2, een Tbl-kolom
+  (Swiss-tafelnummers) op het toernooivel, P1/P2-tekstlabels op alle
+  kleur-gecodeerde boxparen (zwart-wit/kleurenblind-proof), liniatuur
+  (dots/lijnen/boxregels) als vector-primitieven zodat het printbestand niet
+  meer rastert, schrijfmaten op handschrift-ergonomie (regels >= 4mm,
+  turf-boxes 3.4mm), Reset met herstelregel en blokverplaats-knoppen op de
+  selectiebalk. Vellen zijn Engelstalig (speltaal), de assembler-UI
+  Nederlands. Volledig client-side — geen rb-api nodig. *Route* `/scorepad`
+  (nav-groep "Aan tafel").
+
 ---
 
 ## 5. Niet-functionele eisen

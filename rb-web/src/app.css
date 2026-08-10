@@ -53,6 +53,27 @@
 	--dom-chaos: #b05fd6;
 	--dom-order: #f5c518;
 	--dom-colorless: #8b91a0;
+
+	/* Papier-tokens (#342, /scorepad): scorevellen zijn altijd inkt-op-wit —
+	   ook wie in het donkere thema print krijgt wit papier, dus deze waarden
+	   wisselen bewust NIET met het thema. Spelerkleuren zijn hier functionele
+	   codering (speler 1 goud, speler 2 rood — de tafelconventie), geen
+	   decoratie; het goud is donkerder dan --accent omdat dunne gele lijnen op
+	   wit papier anders wegvallen. */
+	--paper: #ffffff;
+	--paper-ink: #1c1f27;
+	--paper-muted: #6a6f7a;
+	--paper-line: #b9bdc7;
+	--paper-line-soft: #e3e5ea;
+	--paper-p1: #a3790a;
+	/* Tekst-variant van P1-goud: --paper-p1 is als rand/balk prima maar haalt
+	   op wit geen leesbaar contrast voor microtekst; deze donkerder inkt komt
+	   op ~4.9:1. Alleen voor P1-goud als TEKSTKLEUR — randen, checkboxes en
+	   balken blijven --paper-p1. */
+	--paper-p1-ink: #8a6509;
+	--paper-p1-soft: #f5ecd2;
+	--paper-p2: #c03a40;
+	--paper-p2-soft: #f8e2e3;
 }
 
 /* Donker: koele graphite, geen zwart. Volgt OS-voorkeur... */
