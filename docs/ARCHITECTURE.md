@@ -1502,6 +1502,7 @@ sequenceDiagram
         A->>DB: deck-meta (alléén kaart-/lijstvraag mét herkende kaartnaam, #267)
     end
     A->>A: alle kanaalslots innen; RRF-fusie (bron-bias per vraagtype)
+    A->>DB: §-verwijzings-bijlading (#364: genoemde, ontbrekende secties — max 6)
     A->>A: prompt-piramide (officieel > primer > community > deck-meta)
     alt agentic-escalatie (gate: Ruling met 2+ kaarten / lege retrieval — of gebruiker: Grondig binnen dagtegoed)
         A->>AI: task=agentic (brein-tools)
@@ -1543,18 +1544,34 @@ Kernpunten (`AskService.cs`):
    query) — **deck-meta** (#267): het deck-gebruikssignaal van het
    kaartdossier via de gedeelde `DeckPopularityQuery`. Elke andere vraag
    doet géén enkele deck-query (hotpath-eis).
-4. **Prompt-piramide**: blokken staan in vaste volgorde officieel > primer
+4. **§-verwijzings-bijlading** (#364): ná de fusie/citatie-hydratie en vóór
+   de prompt-opbouw scant `AskService` de opgehaalde fragmentteksten én de
+   vraag op sectie-verwijzingen ("§811", "§ 355.6", "section 421",
+   "(§811.1)"; `SectionReferenceParser`, Domain — puur en apart getest).
+   Genoemde codes die in de regelindex bestaan maar nog niet in de context
+   zitten worden deterministisch bijgeladen als gewone citatie (mét
+   [n]-nummer, PDF-deeplink en ouderketen), met subcode-terugval ("§811.1"
+   → "811" als de subcode ontbreekt), gecapt op
+   `SectionReferenceParser.MaxBackfillSections` (6) en zonder recursie
+   (bijgeladen teksten worden niet opnieuw gescand). Dit is de goedkope,
+   streaming-compatibele variant van de tweede LLM-pass uit het issue: het
+   zit vóór de modelcall, dus beide routes delen het automatisch, en het
+   voorkomt "Onzeker — de volledige tekst van §X is niet meegeleverd"
+   terwijl de fragmenten er wél naar verwezen. Best-effort: uitval levert
+   een kanaal-marker in `AskTrace.Sections`; bij >0 bijladingen telt
+   `[§-bijgeladen: N]` daar mee.
+5. **Prompt-piramide**: blokken staan in vaste volgorde officieel > primer
    (laag 1) > community (laag 2) > deck-meta (laag 3, de zwakste — #267),
    elk expliciet gelabeld (`docs/KNOWLEDGE.md`).
-5. **Per-fase-instrumentatie** (#152): wandkloktijd van rewrite/embed/
+6. **Per-fase-instrumentatie** (#152): wandkloktijd van rewrite/embed/
    retrieval/AI als compacte JSON op `AskTrace.PhaseTimings` (`AskPhases`,
    Domain) — zichtbaar in de beheer-trace-uitklap en als gemiddelde
    fase-verdeling op `/api/ask/stats`. De fasen overlappen (parallelle
    pipeline), dus de som is bewust niet gelijk aan de totale duur.
-6. **Streaming** (#31): citaties/claims/vraagtype gaan vooraf via `onMeta`; het
+7. **Streaming** (#31): citaties/claims/vraagtype gaan vooraf via `onMeta`; het
    antwoord komt woord-voor-woord via NDJSON (`/api/ask/stream` →
    `RbAiClient.AskStreamAsync`).
-7. **Agentic escalatie** (#107, `docs/BRAIN.md` §2.4): pas ná de retrieval
+8. **Agentic escalatie** (#107, `docs/BRAIN.md` §2.4): pas ná de retrieval
    beslist `AgenticGate.Decide` of de vraag mag door-redeneren over het
    brein (flag `ASK_AGENTIC` = off/auto/force). Faalt de agent → **vangnet**:
    de klassieke single-pass draait alsnog. De agent kan ontdekte verbanden als
@@ -1583,7 +1600,7 @@ Kernpunten (`AskService.cs`):
    een reden in de respons-metadata (`Approach`/`ApproachReason`) — de UI
    toont daarop de "quota op — automatisch beantwoord"-melding; op het
    streamingpad reist de terugmelding al in het meta-frame mee.
-8. **Degradatie** (#100): valt de embedding uit (Ollama weg / model niet
+9. **Degradatie** (#100): valt de embedding uit (Ollama weg / model niet
    gepulld), dan vervallen alle vector-kanalen en draait de vraag door op FTS +
    naam/mechaniek/lexicaal — nooit een kale 500. Valt rb-ai uit, dan geeft
    `RbAiClient` null en toont `AskService` `UnavailableAnswer`.
@@ -1940,7 +1957,7 @@ aanroeper hem negeert). Tegen een opnemende test-driver zonder count-rij valt
 de telling terug op het deterministische deel; de count-lezing zelf is met een
 `SingleCountCursor`-fake gepind (mutatie "terug naar rows.Count" is rood).
 Aan de bron is het pad waarlangs zo'n zesde-soort-ref als rij kon landen
-gedicht: de agentic voorstellen-poort spiegelt de projectie (zie §6.1 punt 7).
+gedicht: de agentic voorstellen-poort spiegelt de projectie (zie §6.1 punt 8).
 
 `ProjectionLabelGuardTests` draait, net als G1-G5, op de UITGEVOERDE Cypher:
 
@@ -4374,7 +4391,7 @@ Concreet en toetsbaar. "Verwacht" = het gedrag dat de code garandeert.
   pad dat zo'n zesde-soort-ref als geldige rij kon laten landen — de agentic
   voorstellen-poort, die via `BrainService.NodeAsync` óók ruling/source/
   erratum/change/set/domain/tag resolveerde — begrensd op de vijf, lezend uit
-  dezelfde catalogus-bron (§6.1 punt 7). Restpunten die hier bewust blijven
+  dezelfde catalogus-bron (§6.1 punt 8). Restpunten die hier bewust blijven
   staan: (a) `DERIVED_FROM`
   matcht nog wél label-loos op `ref` — provenance, buiten de TBox, heterogene
   doelen; er is geen declaratie om af te dwingen; (b) `Mechanic` in de

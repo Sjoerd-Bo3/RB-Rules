@@ -637,7 +637,11 @@ de globale duur-vangrail).
   klikbare §-chips via de citatielijst, vet geschreven keywords worden
   alsnog badges, en een widget-marker midden in een zin wordt uit de zin
   geknipt (naam/§-chip inline, widget op een eigen regel — nooit meer een
-  gat). De volledige citatielijst onderaan is dichtgeklapt naslagwerk
+  gat). Verwijst een opgehaald fragment (of de vraag) naar een §-sectie die
+  de retrieval zelf niet ophaalde, dan wordt die sectie vóór de modelcall
+  deterministisch bijgeladen als gewone citatie (max 6 per vraag, #364) —
+  het antwoord strandt dus niet meer op "de tekst van §X is niet
+  meegeleverd". De volledige citatielijst onderaan is dichtgeklapt naslagwerk
   geworden (de regels staan al inline); misvattingen en community-consensus
   blijven open staan. Elke citatie toont
   ook "geldig sinds"/"laatst bijgewerkt \<datum\>" van haar bron (#168); bij
