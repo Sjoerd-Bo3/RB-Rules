@@ -13,6 +13,7 @@ import { deserialize } from '$app/forms';
 import type { ActionResult } from '@sveltejs/kit';
 import { applyFrame, parseFrames, type LiveAnswer } from '$lib/askStream';
 import {
+	appendThreadTurn,
 	ASK_CURRENT_KEY,
 	decodeSession,
 	encodeSession,
@@ -60,6 +61,11 @@ export class AskSession {
 	draft = $state('');
 	/** Het afgeronde (of onderbroken) antwoord dat de pagina toont. */
 	answer = $state<StoredAnswer | null>(null);
+	/** Weergave-thread (#365): de afgeronde beurten van dit gesprek, nieuwste
+	 *  achteraan — zodat bij doorvragen de eerdere vraag+antwoord-paren
+	 *  zichtbaar blijven. Puur weergave: de LLM-context blijft de 3-beurts
+	 *  `turns`-cap van het doorvraag-formulier. */
+	thread = $state<AskTurn[]>([]);
 	/** De groeiende tussenstand zolang de stream loopt. */
 	live = $state<LiveAnswer | null>(null);
 	busy = $state(false);
@@ -106,13 +112,17 @@ export class AskSession {
 		this.#restored = true;
 		if (this.busy || this.answer || this.live) return;
 		const stored = this.#read();
-		if (stored) this.answer = stored;
+		if (stored) {
+			this.answer = stored;
+			this.thread = stored.thread ?? [];
+		}
 	}
 
-	/** Antwoord van tafel (en uit de opslag). */
+	/** Gesprek van tafel (en uit de opslag) — inclusief de weergave-thread. */
 	clear() {
 		this.stopSpeech();
 		this.answer = null;
+		this.thread = [];
 		this.live = null;
 		this.error = null;
 		this.retry = null;
@@ -161,6 +171,11 @@ export class AskSession {
 		this.announce = '';
 		this.live = null;
 		this.answer = null;
+		// Hoofdvraag (leeg turns-veld) = nieuw gesprek: de weergave-thread leegt
+		// mee. Een doorvraag laat hem staan — de zojuist afgeronde beurt schuift
+		// er pas bij afronding (#settle/#interrupt) in, want `answer` gaat hier
+		// naar null en dat is precies waarom het vorige antwoord nu verdwijnt.
+		if (req.turns.length === 0) this.thread = [];
 		this.startedAt = Date.now();
 		this.stopSpeech();
 		this.#forget();
@@ -381,6 +396,12 @@ export class AskSession {
 			approachReason: data.approachReason ?? null,
 			interrupted: null
 		};
+		// Afgeronde beurt de weergave-thread in (#365); de laatste is tegelijk
+		// het volledige antwoordpaneel — de pagina toont hem daar niet dubbel.
+		this.thread = appendThreadTurn(this.thread, {
+			question: req.question,
+			answer: this.answer.answer
+		});
 		this.live = null;
 		if (req.clearQuestion) this.draft = '';
 		this.#save();
@@ -404,6 +425,13 @@ export class AskSession {
 			approachReason: live.approachReason,
 			interrupted: reason
 		};
+		// Ook een half antwoord mag de wéérgave-thread in (#365) — het gesprek
+		// is echt gevoerd. De context-`turns` voor een volgende doorvraag blijven
+		// ongemoeid: op een onderbroken antwoord bouw je niet verder.
+		this.thread = appendThreadTurn(this.thread, {
+			question: live.question,
+			answer: live.answer
+		});
 		this.live = null;
 		this.#save();
 		this.announce = 'Antwoord onderbroken.';
@@ -427,13 +455,19 @@ export class AskSession {
 			misconceptions: null,
 			questionType: live.questionType,
 			approachReason: live.approachReason,
-			interrupted: RELOAD_INTERRUPTED
+			interrupted: RELOAD_INTERRUPTED,
+			// De eerdere beurten reizen mee: een reload midden in een doorvraag
+			// mag de thread niet wissen (#365). De lopende beurt zelf zit er
+			// bewust nog niet in — die wordt bij restore het antwoordpaneel.
+			thread: this.thread
 		});
 	}
 
 	#save() {
 		this.#lastSave = Date.now();
-		if (this.answer) this.#write(this.answer);
+		// Thread als onderdeel van dezelfde momentopname (#365): één sleutel,
+		// één houdbaarheid — geen tweede opslagpad dat uit de pas kan lopen.
+		if (this.answer) this.#write({ ...this.answer, thread: this.thread });
 	}
 
 	#write(answer: StoredAnswer) {

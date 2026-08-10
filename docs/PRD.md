@@ -684,7 +684,10 @@ de globale duur-vangrail).
 - **Query-rewrite** — een goedkope voor-call normaliseert de zoekzin (typo's,
   synoniemen, NL→EN speltermen) vóór retrieval (#66).
 - **Doorvragen met context** — follow-up-vragen behouden de volledige context
-  (#41).
+  (#41). Sinds #365 blijven de eerdere vraag+antwoord-paren van het gesprek
+  chat-stijl zichtbaar als inklapbare thread boven het nieuwe antwoord
+  (nieuwste onderaan, gecapt op 6 beurten in weergave en opslag; de
+  LLM-context houdt de bestaande 3-beurts cap).
 - **Aanpak-keuze per vraag (alleen ingelogd)** — Auto (de AgenticGate
   beslist), Snel (geforceerde single-pass, nooit escaleren) of Grondig
   (de brein-agent forceren), met eerlijke verwachting ("±2 min, telt
