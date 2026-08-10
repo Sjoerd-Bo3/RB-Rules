@@ -1747,8 +1747,27 @@ de globale duur-vangrail).
   meer rastert, schrijfmaten op handschrift-ergonomie (regels >= 4mm,
   turf-boxes 3.4mm), Reset met herstelregel en blokverplaats-knoppen op de
   selectiebalk. Vellen zijn Engelstalig (speltaal), de assembler-UI
-  Nederlands. Volledig client-side — geen rb-api nodig. *Route* `/scorepad`
-  (nav-groep "Aan tafel").
+  Nederlands. De assembler zelf is client-side; alleen de deck-prefill
+  (hieronder, #344) praat via drie kleine `/scorepad`-proxy's met rb-api.
+  *Route* `/scorepad` (nav-groep "Aan tafel").
+- **Deck-vellen met prefill** (#344) — twee extra veltypen in de optiegroep
+  "Deck": het **Deckoverzicht** (compacte decklijst in twee kolommen plus
+  matchup-plannen, het vel naast de speelmat) en het **Registration sheet**
+  (toernooi-decklijst naar de Piltover Archive-opzet in eigen vormgeving,
+  met Chosen Champion-markering en judge-blok). Beide werken blanco óf
+  vooraf ingevuld via vier invoerwegen in het "Deck-bron"-paneel: zoeken in
+  de deck-ingest (debounced zoekveld met klikbare trefferlijst, naam +
+  kaarttelling), een Piltover-link of deck-id plakken, een deck-code plakken
+  (decode via rb-api) of een decklijst-tekst plakken (lokale parser, geen
+  API). Een gekozen ingest-deck reist als `deck=`-id mee in de query-string
+  (deelbaar en headless printbaar); geplakte codes en teksten zijn bewust
+  alléén lokale component-state — een deck-code is geen stabiele referentie
+  — en gelden tot herladen, met voorrang op het gekoppelde deck. De
+  personalia voor het registration sheet (naam, Riot ID, event, datum, …)
+  blijven om privacyredenen eveneens lokaal en komen nooit in de URL of op
+  de server. rb-api-uitval of een onbekend deck-id is het verwachte pad:
+  nette melding ("niet in de ingest" resp. "bron niet bereikbaar") en
+  blanco vellen — nooit een kapotte pagina.
 
 ---
 

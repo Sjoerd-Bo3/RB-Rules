@@ -1207,15 +1207,26 @@ Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner, met
 de client-side knoop-proxy `/graph/node?ref=` — #252: hover-preview en het
 detailpaneel ónder de graaf halen daar hun knoopgegevens, kaarten via
 `/api/cards/{id}` (+ `/dossier`), overige refs via `/api/brain/node`),
-`/rulings`, `/scorepad` (score pad-assembler, #342 — volledig client-only, geen
-rb-api: de samenstelling (geordende vellenlijst, papier, inkt, ringband-marge)
+`/rulings`, `/scorepad` (score pad-assembler, #342 — de samenstelling
+(geordende vellenlijst, papier, inkt, ringband-marge)
 leeft in de query-string en wordt met `replaceState` teruggeschreven — pas ná
 `afterNavigate`, want een `replaceState` vóór router-init gooit en een gooiende
 `$effect` sloopt de hele paginareactiviteit; printen gaat met `@page`-CSS
 (A5 staand / A4 liggend 2-up) uit de live preview zelf, en de vellen tekenen op
 de vaste `--paper-*`-tokens uit `app.css` — inkt-op-wit, bewust
 thema-onafhankelijk, spelerkleuren P1-goud/P2-rood als functionele codering met
-een zwart-wit-remap; zie `rb-web/STYLE-CONTRACT.md` §1),
+een zwart-wit-remap; zie `rb-web/STYLE-CONTRACT.md` §1. Sinds de deck-prefill
+(#344) niet meer volledig client-only: drie kleine proxy's — `GET
+/scorepad/decks` (zoeklijst), `GET /scorepad/decks/[id]` (prefill-detail,
+genormaliseerd door `$lib/deckPrefill.fromDeckSections`) en `POST
+/scorepad/decode` (deck-code, geeft rb-api's Problem-detail door) — praten met
+rb-api's `/api/decks*` en degraderen netjes (404/503 met fout-body; de pagina
+blijft met blanco vellen werken). Het gekozen deck-id reist als `deck=` in de
+query-string mee (de `+page.ts`-load haalt het deck dan relatief via de eigen
+proxy op, werkt in SSR én client, dus ook headless printbaar); geplakte
+deck-codes/decklijsten en de registration-personalia zijn bewust alléén lokale
+component-state — een code is geen stabiele referentie, en persoonsgegevens
+horen niet in query-strings),
 `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
 `/admin/kosten` — het live kosten-paneel (#328): server-load + eigen
 cookie-beveiligde poll-GET (zelfde aanpak als `/admin/status`), periode-chips

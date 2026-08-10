@@ -17,6 +17,13 @@
 		type SheetKind,
 		type SheetPage
 	} from '$lib/scorepad';
+	import {
+		fromDeckSections,
+		parseDeckText,
+		piltoverDeckIdFromInput,
+		type DeckPrefill,
+		type DeckSectionInput
+	} from '$lib/deckPrefill';
 	import MatchSheet from './MatchSheet.svelte';
 	import MatchAltSheet from './MatchAltSheet.svelte';
 	import SoloSheet from './SoloSheet.svelte';
@@ -26,6 +33,9 @@
 	import ReflectionSheet from './ReflectionSheet.svelte';
 	import MilestoneSheet from './MilestoneSheet.svelte';
 	import NotesSheet from './NotesSheet.svelte';
+	import DeckSheet from './DeckSheet.svelte';
+	import RegistrationSheet from './RegistrationSheet.svelte';
+	import type { RegistrationPerson } from './RegistrationSheet.svelte';
 
 	let { data }: PageProps = $props();
 
@@ -46,6 +56,194 @@
 		) as Record<SheetKind, number>
 	);
 	const hasNotes = $derived(opts.list.includes('notes'));
+	const hasDeckSheet = $derived(opts.list.includes('deck') || opts.list.includes('registration'));
+	const hasRegistration = $derived(opts.list.includes('registration'));
+
+	// ── Deck-bron (#344): twee soorten bron voor de deck-/registration-vellen.
+	// Het GEKOPPELDE deck (opts.deckId) reist mee in de URL — deelbaar en
+	// headless printbaar; zijn opgehaalde lijst staat hier. De LOKALE bron
+	// (geplakte deck-code of decklijst-tekst) is bewust alléén component-state
+	// en komt nooit in de URL: een code is geen stabiele referentie. De lokale
+	// bron wint van het gekoppelde deck zolang hij er is.
+	// svelte-ignore state_referenced_locally
+	let linkedDeck = $state(data.deck);
+	// svelte-ignore state_referenced_locally
+	let linkedError = $state(data.deckError);
+	let deckLoading = $state(false);
+	let localDeck = $state<DeckPrefill | null>(null);
+	let localSource = $state<'code' | 'tekst' | null>(null);
+	let localNote = $state<string | null>(null);
+	const activeDeck = $derived(localDeck ?? linkedDeck);
+
+	// Personalia voor het registration sheet — bewust ALLEEN lokale $state,
+	// nooit in de URL en nergens gepersisteerd: persoonsgegevens horen niet in
+	// query-strings (gedeelde links, serverlogs, browsergeschiedenis). Weg bij
+	// herladen — dat is de privacy-keuze; het vel is dan gewoon weer blanco.
+	let person = $state<RegistrationPerson>({
+		firstName: '',
+		lastName: '',
+		riotId: '',
+		event: '',
+		location: '',
+		date: '',
+		designer: ''
+	});
+
+	// Zoeken in de deck-ingest: debounce ~300ms, en een volgnummer zodat een
+	// traag antwoord op een oude query nooit een nieuwere overschrijft.
+	let deckQuery = $state('');
+	let deckResults = $state<{ id: string; name: string | null; cardCount: number }[] | null>(null);
+	let deckSearchError = $state<string | null>(null);
+	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+	let searchSeq = 0;
+	function onDeckQuery(v: string) {
+		deckQuery = v;
+		clearTimeout(searchTimer);
+		searchSeq++;
+		const q = v.trim();
+		if (!q) {
+			deckResults = null;
+			deckSearchError = null;
+			return;
+		}
+		searchTimer = setTimeout(() => void searchDecks(q, searchSeq), 300);
+	}
+	async function searchDecks(q: string, seq: number) {
+		try {
+			const res = await fetch(`/scorepad/decks?q=${encodeURIComponent(q)}`);
+			const body = (await res.json()) as {
+				items?: { id: string; name: string | null; cardCount: number }[];
+				error?: string;
+			};
+			if (seq !== searchSeq) return; // verouderd antwoord — negeren
+			if (!res.ok || !body.items) {
+				deckResults = null;
+				deckSearchError = body.error ?? 'Decks zoeken lukt nu niet.';
+				return;
+			}
+			deckResults = body.items;
+			deckSearchError = null;
+		} catch {
+			if (seq !== searchSeq) return;
+			deckResults = null;
+			deckSearchError = 'Decks zoeken lukt nu niet — rb-api is niet bereikbaar.';
+		}
+	}
+
+	/** Koppel een deck-id: in de opties (→ URL) en de lijst ophalen via de
+	 *  proxy. Een expliciete koppeling is de nieuwste keuze en wist daarom een
+	 *  eerdere plak-bron; valt de fetch uit, dan blijven de vellen blanco met
+	 *  een nette melding — de pagina werkt altijd door. */
+	async function chooseDeck(id: string) {
+		opts.deckId = id;
+		deckQuery = '';
+		deckResults = null;
+		deckSearchError = null;
+		localDeck = null;
+		localSource = null;
+		localNote = null;
+		linkedDeck = null;
+		linkedError = null;
+		deckLoading = true;
+		try {
+			const res = await fetch(`/scorepad/decks/${id}`);
+			// Intussen losgekoppeld of vervangen? Dan is dit antwoord van niemand.
+			if (opts.deckId !== id) return;
+			if (!res.ok) {
+				linkedError = res.status === 404 ? 'notfound' : 'unavailable';
+				return;
+			}
+			const d = (await res.json()) as { name: string | null; sections: DeckSectionInput[] };
+			if (opts.deckId !== id) return;
+			linkedDeck = fromDeckSections(d.name, d.sections);
+		} catch {
+			if (opts.deckId === id) linkedError = 'unavailable';
+		} finally {
+			if (opts.deckId === id) deckLoading = false;
+		}
+	}
+	function unlinkDeck() {
+		opts.deckId = null;
+		linkedDeck = null;
+		linkedError = null;
+		deckLoading = false;
+	}
+
+	// Piltover-link of kale deck-id plakken.
+	let linkInput = $state('');
+	let linkError = $state<string | null>(null);
+	function linkFromInput() {
+		const id = piltoverDeckIdFromInput(linkInput);
+		if (id === null) {
+			linkError = 'Geen Piltover-link of deck-id herkend — plak de volledige /decks/view/…-link.';
+			return;
+		}
+		linkError = null;
+		linkInput = '';
+		void chooseDeck(id);
+	}
+
+	// Deck-code plakken → decode via de proxy → LOKALE prefill (niet in de URL).
+	let codeInput = $state('');
+	let codeError = $state<string | null>(null);
+	let codeBusy = $state(false);
+	async function decodeCode() {
+		const code = codeInput.trim();
+		if (!code) {
+			codeError = 'Plak eerst een deck-code.';
+			return;
+		}
+		codeBusy = true;
+		try {
+			const res = await fetch('/scorepad/decode', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ code })
+			});
+			const body = (await res.json()) as {
+				sections?: DeckSectionInput[];
+				unknownCount?: number;
+				error?: string;
+			};
+			if (!res.ok || !body.sections) {
+				codeError = body.error ?? 'Deck-code lezen mislukt.';
+				return;
+			}
+			codeError = null;
+			codeInput = '';
+			localDeck = fromDeckSections(null, body.sections);
+			localSource = 'code';
+			const unknown = body.unknownCount ?? 0;
+			localNote =
+				unknown > 0
+					? `${unknown} regel${unknown === 1 ? '' : 's'} niet aan een kaart gekoppeld — die staan als code op het vel.`
+					: null;
+		} catch {
+			codeError = 'Deck-code lezen lukt nu niet.';
+		} finally {
+			codeBusy = false;
+		}
+	}
+
+	// Decklijst-tekst plakken → lokale parser → LOKALE prefill (niet in de URL).
+	let textInput = $state('');
+	let textError = $state<string | null>(null);
+	function useDeckText() {
+		const parsed = parseDeckText(textInput);
+		if (parsed.sections.length === 0) {
+			textError = 'Geen kaartregels herkend — één kaart per regel, bv. "3x Vi".';
+			return;
+		}
+		textError = null;
+		localDeck = parsed;
+		localSource = 'tekst';
+		localNote = null;
+	}
+	function clearLocal() {
+		localDeck = null;
+		localSource = null;
+		localNote = null;
+	}
 
 	// Gekozen spelerkleuren als CSS-vars op de .ppage: overschrijven de
 	// --paper-p1/--paper-p2-tokens plus hun -soft-tint (dezelfde lichte meng
@@ -86,6 +284,12 @@
 		// verwijzen naar de oude lijst en gaan mee dicht. (afterNavigate
 		// vuurt niet op onze eigen replaceState, dus dit lust niet.)
 		opts = structuredClone(data.options);
+		// Het gekoppelde deck hoort bij de URL en volgt de navigatie mee; de
+		// plak-bron en personalia staan bewust NIET in de URL en blijven dus
+		// gewoon staan — de navigatie heeft daar niets over gezegd.
+		linkedDeck = data.deck;
+		linkedError = data.deckError;
+		deckLoading = false;
 		sel.clear();
 		zoom = null;
 		// Een navigatie vervangt de samenstelling wisselend van buitenaf; een
@@ -231,10 +435,20 @@
 		insertAt = null;
 	}
 
-	const GROUPS: { title: string; kinds: SheetKind[] }[] = [
-		{ title: 'Tijdens het spel', kinds: SHEET_ORDER.filter((k) => SHEET_INFO[k].group === 'spel') },
-		{ title: 'Na het spel', kinds: SHEET_ORDER.filter((k) => SHEET_INFO[k].group === 'na') }
-	];
+	// Afgeleid uit SHEET_INFO: een nieuw veltype met een bestaande groep
+	// verschijnt vanzelf in de juiste kolom, een nieuwe groep dwingt hier een
+	// titel af via het Record-type.
+	const GROUP_TITLES: Record<(typeof SHEET_INFO)[SheetKind]['group'], string> = {
+		spel: 'Tijdens het spel',
+		na: 'Na het spel',
+		deck: 'Deck'
+	};
+	const GROUPS: { title: string; kinds: SheetKind[] }[] = (
+		Object.keys(GROUP_TITLES) as (keyof typeof GROUP_TITLES)[]
+	).map((g) => ({
+		title: GROUP_TITLES[g],
+		kinds: SHEET_ORDER.filter((k) => SHEET_INFO[k].group === g)
+	}));
 
 	// Preview-weergave: 'grid' zet de pagina's als miniaturen naast elkaar
 	// (overzicht), 'full' toont ze groot onder elkaar. Puur een kijkstand —
@@ -644,6 +858,154 @@
 				</div>
 			</div>
 
+			{#if hasDeckSheet}
+				<div class="deckbron">
+					<p class="fglabel">Deck-bron</p>
+					<p class="dbintro">
+						Vul de deck-vellen vooraf in met een decklijst — of laat alles leeg voor blanco
+						invulvellen.
+					</p>
+
+					{#if localDeck}
+						<p class="dbstatus">
+							Actieve bron: geplakte {localSource === 'code' ? 'deck-code' : 'decklijst'}{localDeck.name
+								? ` — "${localDeck.name}"`
+								: ''}. Alleen op dit apparaat, tot je herlaadt — dit reist niet mee in de URL.
+							{#if opts.deckId !== null}Het gekoppelde deck blijft staan en neemt het daarna weer
+								over.{/if}
+							<button type="button" class="link-btn" onclick={clearLocal}>Prefill wissen</button>
+						</p>
+						{#if localNote}<p class="dbnote">{localNote}</p>{/if}
+					{:else if opts.deckId !== null}
+						{#if deckLoading}
+							<p class="dbstatus">Deck laden…</p>
+						{:else if linkedDeck}
+							<p class="dbstatus">
+								Actieve bron: <strong>{linkedDeck.name ?? opts.deckId}</strong> uit de ingest — reist
+								mee in de URL, dus deelbaar en printbaar.
+								<button type="button" class="link-btn" onclick={unlinkDeck}>Loskoppelen</button>
+							</p>
+						{:else if linkedError === 'notfound'}
+							<p class="dberr">
+								Dit deck staat niet in de ingest — controleer de link, of zoek het hieronder op
+								naam. De vellen blijven blanco.
+								<button type="button" class="link-btn" onclick={unlinkDeck}>Loskoppelen</button>
+							</p>
+						{:else}
+							<p class="dberr">
+								Deck laden lukt nu niet — de bron is even niet bereikbaar; de vellen blijven
+								blanco.
+								<button type="button" class="link-btn" onclick={unlinkDeck}>Loskoppelen</button>
+							</p>
+						{/if}
+					{:else}
+						<p class="dbstatus">Geen deck gekozen — de deck-vellen blijven blanco.</p>
+					{/if}
+
+					<div class="dbgrid">
+						<div class="dbway">
+							<label class="dblabel" for="deck-search">Zoek in de ingest</label>
+							<input
+								id="deck-search"
+								type="search"
+								placeholder="Decknaam…"
+								autocomplete="off"
+								value={deckQuery}
+								oninput={(e) => onDeckQuery(e.currentTarget.value)}
+							/>
+							{#if deckSearchError}<p class="dberr">{deckSearchError}</p>{/if}
+							{#if deckResults !== null && !deckSearchError}
+								{#if deckResults.length === 0}
+									<p class="dbnote">Geen decks gevonden.</p>
+								{:else}
+									<ul class="dbhits">
+										{#each deckResults as d (d.id)}
+											<li>
+												<button type="button" onclick={() => void chooseDeck(d.id)}>
+													<span class="dbname">{d.name ?? d.id}</span>
+													<span class="dbcount tnum">{d.cardCount} kaarten</span>
+												</button>
+											</li>
+										{/each}
+									</ul>
+								{/if}
+							{/if}
+						</div>
+						<div class="dbway">
+							<label class="dblabel" for="deck-link">Piltover-link of deck-id</label>
+							<div class="dbrow">
+								<input
+									id="deck-link"
+									type="text"
+									placeholder="…/decks/view/…"
+									autocomplete="off"
+									bind:value={linkInput}
+									onkeydown={(e) => {
+										if (e.key === 'Enter') linkFromInput();
+									}}
+								/>
+								<button type="button" class="dbbtn" onclick={linkFromInput}>Koppel</button>
+							</div>
+							{#if linkError}<p class="dberr">{linkError}</p>{/if}
+						</div>
+						<div class="dbway">
+							<label class="dblabel" for="deck-code">Deck-code</label>
+							<div class="dbrow">
+								<input
+									id="deck-code"
+									type="text"
+									placeholder="Deck-code…"
+									autocomplete="off"
+									bind:value={codeInput}
+									onkeydown={(e) => {
+										if (e.key === 'Enter') void decodeCode();
+									}}
+								/>
+								<button type="button" class="dbbtn" disabled={codeBusy} onclick={() => void decodeCode()}
+									>Lees</button
+								>
+							</div>
+							{#if codeError}<p class="dberr">{codeError}</p>{/if}
+						</div>
+						<div class="dbway">
+							<label class="dblabel" for="deck-text">Decklijst plakken</label>
+							<textarea
+								id="deck-text"
+								rows="4"
+								placeholder={'3x Cardname\nSideboard:\n1 Cardname'}
+								bind:value={textInput}
+							></textarea>
+							<div class="dbrow">
+								<button type="button" class="dbbtn" onclick={useDeckText}>Gebruik lijst</button>
+							</div>
+							{#if textError}<p class="dberr">{textError}</p>{/if}
+						</div>
+					</div>
+				</div>
+			{/if}
+
+			{#if hasRegistration}
+				<div class="deckbron">
+					<p class="fglabel">Registration — personalia</p>
+					<p class="dbintro">
+						Deze velden blijven op dit apparaat en komen nooit in de URL of op de server —
+						persoonsgegevens horen niet in deelbare links. Leeg laten kan altijd: dan vul je ze
+						met pen in.
+					</p>
+					<div class="persongrid">
+						<label class="pfield"
+							>First name <input type="text" bind:value={person.firstName} /></label
+						>
+						<label class="pfield">Last name <input type="text" bind:value={person.lastName} /></label>
+						<label class="pfield">Riot ID <input type="text" bind:value={person.riotId} /></label>
+						<label class="pfield">Event <input type="text" bind:value={person.event} /></label>
+						<label class="pfield">Location <input type="text" bind:value={person.location} /></label>
+						<label class="pfield">Date <input type="text" bind:value={person.date} /></label>
+						<label class="pfield">Designer <input type="text" bind:value={person.designer} /></label>
+					</div>
+				</div>
+			{/if}
+
 			<div class="actions">
 				<button type="button" class="print" disabled={plan.length === 0} onclick={() => window.print()}
 					>Print / bewaar als PDF</button
@@ -697,6 +1059,12 @@
 					<li>
 						Op de vellen is C een punt door Conquer en H een punt door Hold; de omcirkelde 8 (11
 						bij 2v2) is de Victory Score — bij overshoot turf je gewoon door.
+					</li>
+					<li>
+						De deck-vellen (Deckoverzicht en Registration) kun je vooraf laten invullen: zoek een
+						deck in de ingest, of plak een Piltover-link, deck-code of decklijst-tekst. Een
+						ingest-deck reist mee in de URL; geplakte codes/lijsten en de personalia blijven
+						alleen op dit apparaat.
 					</li>
 					<li>Je samenstelling zit in de URL, dus bookmarken of delen kan.</li>
 				</ol>
@@ -835,6 +1203,10 @@
 		<MilestoneSheet {bw} part={2} />
 	{:else if p === 'notes'}
 		<NotesSheet {bw} style={opts.notesStyle} />
+	{:else if p === 'deck'}
+		<DeckSheet {bw} deck={activeDeck} />
+	{:else if p === 'registration'}
+		<RegistrationSheet {bw} deck={activeDeck} {person} />
 	{:else}
 		<div class="empty" aria-hidden="true"></div>
 	{/if}
@@ -1078,6 +1450,153 @@
 	/* De auto-marge van .link-btn (uit de actions-rij) is hier niet gewenst. */
 	.pcolors .link-btn {
 		margin-left: 0;
+	}
+
+	/* ── Deck-bron (#344): vier invoerwegen naar een voorgevuld deck-vel, plus
+	   de lokale personalia voor het registration sheet. ── */
+	.deckbron {
+		margin-top: 16px;
+		padding-top: 14px;
+		border-top: 1px solid var(--border);
+	}
+	.dbintro {
+		margin: 0 0 10px;
+		font-size: 0.78rem;
+		color: var(--muted);
+	}
+	.dbstatus {
+		margin: 0 0 10px;
+		font-size: 0.85rem;
+	}
+	.dbnote {
+		margin: 4px 0 0;
+		font-size: 0.76rem;
+		color: var(--muted);
+	}
+	.dberr {
+		margin: 4px 0 0;
+		font-size: 0.76rem;
+		color: var(--err);
+	}
+	/* De auto-marge van .link-btn hoort bij de actions-rij; in de statusregels
+	   staat de knop gewoon in de lopende tekst. */
+	.deckbron .link-btn {
+		margin-left: 0;
+		padding: 0 2px;
+		text-decoration: underline;
+	}
+	.dbgrid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+		gap: 12px 24px;
+	}
+	.dblabel {
+		display: block;
+		margin-bottom: 4px;
+		font-size: 0.76rem;
+		font-weight: 600;
+		color: var(--muted);
+	}
+	.dbway input,
+	.dbway textarea {
+		width: 100%;
+		background: var(--surface-deep);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		color: var(--text);
+		padding: 7px 10px;
+		font-size: 0.85rem;
+		font-family: inherit;
+	}
+	.dbway textarea {
+		resize: vertical;
+		margin-bottom: 6px;
+	}
+	.dbrow {
+		display: flex;
+		gap: 6px;
+	}
+	.dbbtn {
+		flex: none;
+		background: var(--surface-deep);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		color: var(--text);
+		padding: 7px 12px;
+		font-size: 0.8rem;
+		cursor: pointer;
+	}
+	.dbbtn:hover {
+		border-color: var(--border-strong);
+	}
+	.dbbtn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+	/* Trefferlijst van de ingest-zoek: klikbare rijen, naam + kaarttelling. */
+	.dbhits {
+		list-style: none;
+		margin: 6px 0 0;
+		padding: 0;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		overflow: hidden;
+		max-height: 220px;
+		overflow-y: auto;
+	}
+	.dbhits li + li {
+		border-top: 1px solid var(--border);
+	}
+	.dbhits button {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 8px;
+		width: 100%;
+		background: none;
+		border: 0;
+		color: var(--text);
+		padding: 6px 10px;
+		font-size: 0.82rem;
+		text-align: left;
+		cursor: pointer;
+	}
+	.dbhits button:hover {
+		background: var(--accent-soft);
+	}
+	.dbname {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.dbcount {
+		flex: none;
+		color: var(--muted);
+		font-size: 0.74rem;
+	}
+	.persongrid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+		gap: 8px 16px;
+	}
+	.pfield {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		font-size: 0.76rem;
+		font-weight: 600;
+		color: var(--muted);
+	}
+	.pfield input {
+		background: var(--surface-deep);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		color: var(--text);
+		padding: 7px 10px;
+		font-size: 0.85rem;
+		font-weight: 400;
+		font-family: inherit;
 	}
 
 	.actions {

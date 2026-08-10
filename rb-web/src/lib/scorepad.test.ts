@@ -78,6 +78,36 @@ describe('scorepad-opties', () => {
 		expect(parsed.list.length).toBe(MAX_SHEETS);
 	});
 
+	it('deck-veltypen staan achteraan en maken de rondgang mee, mét deck-param', () => {
+		const qs = 'sheets=deck%2Cregistration&deck=0b154c76-14c9-4d7a-9d3f-2a06fe63b1af';
+		const parsed = parseOptions(new URLSearchParams(qs));
+		expect(parsed.list).toEqual(['deck', 'registration']);
+		expect(parsed.deckId).toBe('0b154c76-14c9-4d7a-9d3f-2a06fe63b1af');
+		expect(serializeOptions(parsed)).toBe(qs);
+		expect(SHEET_ORDER.slice(-2)).toEqual(['deck', 'registration']);
+		expect(SHEET_INFO.deck.group).toBe('deck');
+		expect(SHEET_INFO.registration.group).toBe('deck');
+	});
+
+	it('een deck-param zonder deck-vel blijft bewaard — de keuze en de prefill staan los', () => {
+		const parsed = parseOptions(new URLSearchParams('deck=abcd1234'));
+		expect(parsed.deckId).toBe('abcd1234');
+		expect(serializeOptions(parsed)).toBe('deck=abcd1234');
+	});
+
+	it('wijst rommel in de deck-param af en serialiseert null niet', () => {
+		expect(defaultOptions().deckId).toBeNull();
+		expect(parseOptions(new URLSearchParams('deck=')).deckId).toBeNull();
+		expect(parseOptions(new URLSearchParams('deck=a b')).deckId).toBeNull();
+		expect(parseOptions(new URLSearchParams('deck=a%2Fb')).deckId).toBeNull();
+		expect(parseOptions(new URLSearchParams('deck=%3Cscript%3E')).deckId).toBeNull();
+		// Grens: 64 tekens mag nog, 65 niet — uitgeschreven zodat een
+		// meebewegende constante dit niet stil groen houdt (#293-les).
+		expect(parseOptions(new URLSearchParams(`deck=${'a'.repeat(64)}`)).deckId).toBe('a'.repeat(64));
+		expect(parseOptions(new URLSearchParams(`deck=${'a'.repeat(65)}`)).deckId).toBeNull();
+		expect(serializeOptions(defaultOptions())).toBe('');
+	});
+
 	it('shortLabels zijn onderling uniek — het volgorde-paneel moet vooraan al onderscheiden', () => {
 		// Het volgorde-paneel kapt lange labels af; als twee veltypen met
 		// dezelfde tekst beginnen, ogen ze daar identiek. shortLabel bestaat
