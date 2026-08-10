@@ -1,7 +1,7 @@
 # Product Requirements Document — RB-Rules
 
 Levend product-document voor de Riftbound Rules Companion (live op
-<https://riftbound-v2.bo3.dev>). Het beschrijft *wat* het product is en voor
+<https://poracle.nl>, voorheen riftbound-v2.bo3.dev). Het beschrijft *wat* het product is en voor
 *wie*, wélke features vandaag op `main` staan, en waar het heen gaat. Het is
 bewust gescheiden van het *hoe*: de architectuur staat in
 `docs/ARCHITECTURE.md` (arc42, eveneens #134) met `docs/BRAIN.md` en

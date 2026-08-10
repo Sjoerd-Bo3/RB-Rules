@@ -1,7 +1,7 @@
 # Architectuur — RB-Rules (arc42)
 
 Dit document beschrijft de architectuur van RB-Rules (Riftbound Rules
-Companion, live op https://riftbound-v2.bo3.dev) volgens de arc42-structuur.
+Companion, live op https://poracle.nl — riftbound-v2.bo3.dev verwijst door) volgens de arc42-structuur.
 Het beschrijft de staat van `main` op dit moment. Elke bewering is bedoeld
 verifieerbaar in de repo; waar mogelijk staat het bronbestand erbij.
 
@@ -140,7 +140,7 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
 flowchart LR
     players["Spelers / judges"]
     admin["Beheerder"]
-    subgraph rb["RB-Rules (riftbound-v2.bo3.dev)"]
+    subgraph rb["RB-Rules (poracle.nl)"]
       web["rb-web"]
       api["rb-api"]
       ai["rb-ai"]
@@ -3188,7 +3188,9 @@ Keten (`.github/workflows/v2-ci.yml`, `v2-deploy.yml`,
    antwoorden (retry ~3 min), anders faalt de run zichtbaar met `ps` + logs.
 
 Topologie op de VM (`docker-compose.yml`): centrale **Caddy** (extern netwerk)
-reverse-proxyt `riftbound-v2.bo3.dev` naar rb-web; alle services hebben
+reverse-proxyt `poracle.nl` (en `www.`) naar rb-web, met een 301 vanaf het
+oude `riftbound-v2.bo3.dev` (#349 — let op: passkeys en web-push zijn aan de
+origin gebonden en moeten op het nieuwe domein opnieuw); alle services hebben
 memory-limits, healthchecks en log-rotatie (10m×3). **Watchtower staat
 expliciet uit** op de v2-services (`com.centurylinklabs.watchtower.enable:
 false`) zodat er één updatemechanisme is (#45). Datavolumes als `/mnt/data`-

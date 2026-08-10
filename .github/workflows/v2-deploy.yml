@@ -28,7 +28,7 @@ name: v2 deploy to VM
 #   POSTGRES_PASSWORD, NEO4J_PASSWORD, ADMIN_PASSWORD,
 #   CLAUDE_CODE_OAUTH_TOKEN — voor bootstrap
 # Zonder DEPLOY_SSH_KEY wordt de job netjes overgeslagen.
-# DNS (riftbound-v2.bo3.dev → VM-IP) blijft handmatig bij de registrar.
+# DNS (poracle.nl → VM-IP, TransIP) blijft handmatig bij de registrar.
 on:
   workflow_run:
     workflows: ["v2 CI & publish"]
@@ -56,7 +56,7 @@ env:
   VM_HOST: 20.123.137.64
   VM_USER: sjoerd
   VM_PATH: /home/sjoerd/compose/rb-rules-v2
-  DOMAIN: riftbound-v2.bo3.dev
+  DOMAIN: poracle.nl
   # workflow_run → pin de commit-SHA van de triggerende publish;
   # workflow_dispatch → de image_tag-input (default latest).
   IMAGE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.image_tag || 'latest' }}

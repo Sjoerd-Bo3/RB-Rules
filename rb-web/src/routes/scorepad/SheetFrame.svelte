@@ -38,7 +38,7 @@
 	{@render children()}
 
 	<footer class="sh-foot">
-		Unofficial fan-made score sheet — Poracle · riftbound-v2.bo3.dev — not affiliated with Riot
+		Unofficial fan-made score sheet — Poracle · poracle.nl — not affiliated with Riot
 		Games
 	</footer>
 </article>

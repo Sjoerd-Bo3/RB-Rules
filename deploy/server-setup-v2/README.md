@@ -15,7 +15,7 @@ docker compose --project-name rb-rules-v2 exec ollama ollama pull bge-m3
 ## Caddy-route
 Testfase (subdomein):
 ```
-riftbound-v2.bo3.dev {
+poracle.nl, www.poracle.nl {
 	encode gzip
 	header {
 		Strict-Transport-Security "max-age=31536000"
