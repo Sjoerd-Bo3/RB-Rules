@@ -19,6 +19,26 @@ public class DeckCardLinkerTests
     ]);
 
     [Fact]
+    public void ResolveCanonical_PaSterResolvetNaarStarPrinting()
+    {
+        // PA schrijft "UNL-233*" waar ons id "unl-233-star" is (#351); de
+        // star-printing is een variant, dus het antwoord is haar canonieke id.
+        Assert.Equal("unl-233-219", Linker().ResolveCanonical("UNL-233*", null));
+    }
+
+    [Fact]
+    public void ResolveCanonical_PaSterZonderStarPrintingValtTerugOpBasis()
+    {
+        Assert.Equal("unl-203-219", Linker().ResolveCanonical("UNL-203*", null));
+    }
+
+    [Fact]
+    public void ResolveCanonical_OnbekendeSterBlijftNull()
+    {
+        Assert.Null(Linker().ResolveCanonical("UNL-999*", null));
+    }
+
+    [Fact]
     public void PrintingCode_StriptDeSetgrootte()
     {
         Assert.Equal("ogn-126a", DeckCardLinker.PrintingCode("ogn-126a-298"));
