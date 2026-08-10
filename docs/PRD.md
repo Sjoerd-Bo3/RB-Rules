@@ -631,7 +631,15 @@ de globale duur-vangrail).
   het antwoord toont de regeltekst standaard (compacte §-chip die naar de
   sectiepagina linkt, PDF-link erbij; #360); gebrackete keywords
   (`[Action]`, `[Assault 2]`) renderen overal — antwoorden, oordeel-banner,
-  kaartteksten, regelcitaten — als chip in kaartstijl (#359). Elke citatie toont
+  kaartteksten, regelcitaten — als badge in gedrukte kaartstijl (#359).
+  Verwijzingen worden deterministisch genormaliseerd (#363, werkt ook voor
+  oude antwoorden in de geschiedenis): `[n]`-nummers en kale §-codes worden
+  klikbare §-chips via de citatielijst, vet geschreven keywords worden
+  alsnog badges, en een widget-marker midden in een zin wordt uit de zin
+  geknipt (naam/§-chip inline, widget op een eigen regel — nooit meer een
+  gat). De volledige citatielijst onderaan is dichtgeklapt naslagwerk
+  geworden (de regels staan al inline); misvattingen en community-consensus
+  blijven open staan. Elke citatie toont
   ook "geldig sinds"/"laatst bijgewerkt \<datum\>" van haar bron (#168); bij
   twee even gezaghebbende (gelijke TrustTier) fragmenten die in de fusie-
   rangorde naast elkaar staan, krijgt het recentste voorrang.

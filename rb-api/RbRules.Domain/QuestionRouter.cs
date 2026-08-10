@@ -109,8 +109,12 @@ public static partial class QuestionRouter
             """,
         _ => """
             VRAAGTYPE: ruling/interactie. Gebruik het volledige format:
-            Oordeel → Zekerheid → Uitleg (stappen in spelvolgorde, elk met
-            [n]-citaat) → Let op.
+            Oordeel → Zekerheid → Uitleg → Let op.
+            Laat de kopjes in de Uitleg de inhoud volgen: beschrijft het
+            antwoord een verloop in de tijd, gebruik dan 'Stap N — …' in
+            spelvolgorde; zijn het losse gevallen of uitzonderingen, gebruik
+            dan 'Geval N — …' of een beschrijvende kop — nooit 'Stap' zonder
+            echte volgorde. Elk kopje met [n]-citaat.
             """,
     };
 }

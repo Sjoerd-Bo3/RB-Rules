@@ -1376,7 +1376,14 @@ kaartafbeeldingen gemeten kleurfamilies (teal/magenta/lime/grijs-default,
 `KEYWORD_KIND`); het matchen is bewust een vorm-patroon i.p.v. een allowlist,
 zodat nieuwe sets meeliften, en `RbText` kent `keywords={false}` voor
 review-oppervlakken die de brontekst letterlijk moeten tonen; `markdown.ts`
-biedt daarnaast `renderInlineMarkdown` voor de oordeel-banner), `cardImage.ts` (#269/#270 — verhouding, alt-tekst,
+biedt daarnaast `renderInlineMarkdown` voor de oordeel-banner, en interne
+links — de §-chips — openen sinds #363 in de app zelf i.p.v. een nieuw
+tabblad; `answerFormat.ts` draagt de deterministische afdwing-laag van #363:
+`normalizeAnswerRefs` — één gecombineerde pass die `[n]`/`[n→§x]`/kale
+§-codes via de citatielijst omzet naar §-links en `**Keyword**` naar de
+gebrackete vorm tegen het gesloten `KNOWN_KEYWORDS`-vocabulaire — en
+`prepareAnswerMarkers`, dat mid-zin- en dubbele widget-markers herschrijft
+zodat een gedropte marker nooit meer een gat in de zin achterlaat), `cardImage.ts` (#269/#270 — verhouding, alt-tekst,
 laadkleur en "New"-markering per kaart; één plek voor het deckgrid, de
 kaartlijst, de kaartpagina en de kaartwidget),
 `answerFormat.ts`, `changeCard.ts`, `passkeys.ts`, `quota.ts`, `ranges.ts`

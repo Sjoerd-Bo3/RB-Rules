@@ -157,6 +157,10 @@ public class AskService(
         - Schrijf 'Oordeel' en 'Zekerheid' exact als losse regels in de vorm
           `**Oordeel:** …` en `**Zekerheid:** …` — géén ##-koppen daarvoor,
           geen scheidingslijnen (---). De overige kopjes wél als ### koppen.
+        - Begin het Zekerheid-label altijd met precies één van `Bevestigd`,
+          `Afgeleid`, `Community-consensus` of `Onzeker`, optioneel gevolgd
+          door " — toelichting" (bv. `**Zekerheid:** Bevestigd — §308.1 is
+          expliciet`). Geen andere kopwoorden zoals "Zeker" of "Hoog".
         - Baseer je uitsluitend op de meegegeven context-fragmenten en
           kaartgegevens. Ontbreekt het antwoord daarin: Zekerheid = Onzeker,
           en zeg wat er nodig is. Nooit gokken zonder dat label.
@@ -169,11 +173,22 @@ public class AskService(
           lijst- of legaliteitsvragen — en presenteer zo'n kaart nooit als nu
           speelbaar.
         - Kort is beter: geen inleiding, geen herhaling van de vraag.
+        - Schrijf keywords áltijd gebracket zoals op de kaart: [Action],
+          [Reaction], [Assault 2] — nooit vet (**Action**) en nooit kaal; de
+          site rendert de gebrackete vorm als kaart-badge. Neem de
+          :rb_…:-icoontokens (kosten, might, runes) letterlijk over waar je
+          kaartteksten citeert.
+        - Verwijs nooit naar context-labels of bron-categorieën — geen
+          "[kaartgegevens]", geen "(zie SPELBEGRIP)", geen "(GEVERIFIEERDE
+          RULING)". Die labels zijn interne lagen-namen, geen leestekst.
+          Noem de kaartnaam, de §-code of de bron zelf ("een geverifieerde
+          ruling bevestigt dat …").
 
         CITATEN — de site toont de meegegeven fragmenten zelf als uitklapbare
         citatielijst onder het antwoord; die lijst is de enige plek waar de
         regelsecties staan. Verwijs in de lopende tekst met [1], [2], … (de
-        nummers van de fragmenten) op de plek waar je op een fragment leunt.
+        nummers van de fragmenten) op de plek waar je op een fragment leunt —
+        de site zet die om naar klikbare §-verwijzingen.
         Bouw NOOIT een eigen "Regelbasis"-sectie, markdown-tabel of opsomming
         die alleen §-nummers/bronnen herhaalt — dat dubbelt de lijst onderaan.
 
@@ -183,7 +198,8 @@ public class AskService(
         lezen; betrek daarna alleen zekere waarnemingen in het oordeel.
 
         WIDGETS — het antwoord wordt gerenderd met interactieve blokken.
-        Plaats markers op een eigen regel:
+        Plaats markers ALTIJD op een eigen regel, nooit midden in een zin
+        (de site moet een marker anders uit de zin knippen):
         - [[rule:466.2.c]] direct onder de stap die op die sectie leunt —
           de site toont daar een uitklapbaar regelblok met volledige tekst,
           ouderregels en PDF-link. Alleen voor §-codes uit de context.

@@ -23,9 +23,15 @@ marked.use({
 	renderer: {
 		link({ href, text }) {
 			const url = safeUrl(href);
-			return url
-				? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`
-				: text;
+			if (!url) return text;
+			// Interne links (§-verwijzingen, #363) navigeren in de app zelf;
+			// alleen externe bronnen openen in een nieuw tabblad. Let op:
+			// '//host' is protocol-relatief en dus een EXTERNE, LLM-stuurbare
+			// bestemming — '/' alleen is niet genoeg (review #363).
+			const internal = (url.startsWith('/') && !url.startsWith('//')) || url.startsWith('#');
+			return internal
+				? `<a href="${escapeAttr(url)}">${text}</a>`
+				: `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 		},
 		image({ text }) {
 			return text; // geen externe afbeeldingen in antwoorden

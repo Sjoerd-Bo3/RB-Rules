@@ -343,6 +343,24 @@ a { color: inherit; }
 .kw-magenta { background: #cc356e; }
 .kw-lime { background: #94b22d; color: #1c1c1c; }
 
+/* §-verwijzingen in antwoorden (#363): normalizeAnswerRefs zet [n]/§-codes om
+   naar interne links /rules/… — die renderen als mini-chip in de stijl van de
+   sec-badge van de regelwidget, zodat een verwijzing er overal hetzelfde
+   uitziet. Geldt in de antwoord-markdown én de oordeel-banner. */
+.md a[href^='/rules/'],
+.verdict a[href^='/rules/'] {
+	display: inline-block;
+	font-weight: 700;
+	font-size: 0.82em;
+	line-height: 1.5;
+	color: var(--ok);
+	background: var(--ok-soft);
+	border-radius: 999px;
+	padding: 0 0.55em;
+	text-decoration: none;
+	white-space: nowrap;
+}
+
 @media (prefers-color-scheme: dark) {
 	.tok-glyph-might,
 	.tok-glyph-exhaust {
