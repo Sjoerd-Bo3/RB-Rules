@@ -18,6 +18,19 @@ export const ASK_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 export const RELOAD_INTERRUPTED =
 	'Het herladen van de pagina onderbrak dit antwoord — het is mogelijk onvolledig.';
 
+/** Weergave-thread (#365): maximaal zoveel afgeronde beurten bewaren. Hard
+ *  gecapt omdat dit meepersisteert naar localStorage — schrijffouten daar
+ *  worden stil geslikt, dus onbegrensde groei zou onzichtbaar zijn. Los van
+ *  de 3-beurts LLM-context-cap: dit is alleen wat de bezoeker terugziet. */
+export const THREAD_MAX_TURNS = 6;
+
+/** Schuift een afgeronde beurt achteraan de weergave-thread. Bewust alleen
+ *  vraag + antwoord (geen citaties/kaarten): de thread is een geheugensteun,
+ *  geen tweede antwoordpaneel — en hij moet klein blijven in de opslag. */
+export function appendThreadTurn(thread: AskTurn[], turn: AskTurn): AskTurn[] {
+	return [...thread, { question: turn.question, answer: turn.answer }].slice(-THREAD_MAX_TURNS);
+}
+
 /** Het antwoord zoals de pagina het toont. Eén vorm voor alle wegen ernaartoe
  *  (streaming-slotframe, niet-streamende action, hersteld uit opslag), zodat
  *  het antwoordpaneel maar één bron kent. */
@@ -34,6 +47,9 @@ export interface StoredAnswer {
 	/** Niet-null ⇒ onvolledig antwoord (verbinding weg, zelf gestopt, of door
 	 *  een reload afgebroken); de tekst is de melding die erbij hoort. */
 	interrupted: string | null;
+	/** Weergave-thread (#365): de afgeronde beurten van dit gesprek, nieuwste
+	 *  achteraan. Optioneel: opslag van vóór deze versie mist het veld. */
+	thread?: AskTurn[];
 }
 
 interface StoredSession {
@@ -77,6 +93,24 @@ export function decodeSession(raw: string | null | undefined, now = Date.now()):
 		misconceptions: Array.isArray(answer.misconceptions) ? answer.misconceptions : null,
 		questionType: typeof answer.questionType === 'string' ? answer.questionType : null,
 		approachReason: typeof answer.approachReason === 'string' ? answer.approachReason : null,
-		interrupted: typeof answer.interrupted === 'string' ? answer.interrupted : null
+		interrupted: typeof answer.interrupted === 'string' ? answer.interrupted : null,
+		thread: decodeThread(answer.thread)
 	};
+}
+
+/** Thread defensief teruglezen: ontbreekt (oude opslag) of klopt niet ⇒ leeg.
+ *  Per beurt alleen vraag + antwoord overnemen, en dezelfde cap als bij het
+ *  schrijven — wat er ook in de opslag beland is. */
+function decodeThread(raw: unknown): AskTurn[] {
+	if (!Array.isArray(raw)) return [];
+	return raw
+		.filter(
+			(t): t is AskTurn =>
+				Boolean(t) &&
+				typeof t === 'object' &&
+				typeof (t as AskTurn).question === 'string' &&
+				typeof (t as AskTurn).answer === 'string'
+		)
+		.map((t) => ({ question: t.question, answer: t.answer }))
+		.slice(-THREAD_MAX_TURNS);
 }

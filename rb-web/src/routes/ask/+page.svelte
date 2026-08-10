@@ -113,6 +113,19 @@
 	});
 	const nextHistory = $derived(JSON.stringify(nextTurns));
 
+	// Thread-weergave (#365): eerdere vraag+antwoord-paren van dit gesprek
+	// blijven zichtbaar boven het nieuwe antwoord, chat-stijl. De store schuift
+	// de afgeronde beurt er zelf in — staat die beurt nu als volledig
+	// antwoordpaneel op de pagina, dan hoort hij hierboven niet nóg een keer.
+	const olderTurns = $derived.by<AskTurn[]>(() => {
+		const thread = askSession.thread;
+		if (!thread.length) return thread;
+		const last = thread[thread.length - 1];
+		if (current && last.question === current.question && last.answer === current.answer)
+			return thread.slice(0, -1);
+		return thread;
+	});
+
 	// Board-state-foto: client verkleint naar max 1600px JPEG vóór upload.
 	let photoInput = $state<HTMLInputElement | null>(null);
 	let photoPreview = $state<string | null>(null);
@@ -348,6 +361,23 @@
 	</form>
 	{/if}
 
+	{#if olderTurns.length}
+		<!-- Thread (#365): eerdere beurten van dit gesprek, nieuwste onderaan —
+		     ingeklapt op de vraag na, zodat het nieuwe antwoord de aandacht
+		     houdt. Zonder citaties: RuleWidget degradeert netjes naar §-links. -->
+		<section class="thread" aria-label="Eerder in dit gesprek">
+			{#each olderTurns as t, i (i)}
+				<details class="cite thread-turn" open={i === olderTurns.length - 1}>
+					<summary>
+						<span class="meta">Vraag: </span>
+						<span class="cite-essence">{t.question}</span>
+					</summary>
+					<AnswerView answer={t.answer} />
+				</details>
+			{/each}
+		</section>
+	{/if}
+
 	{#if busy && !live?.answer}
 		<div class="panel waiting">
 			<span class="spin"></span>
@@ -407,9 +437,10 @@
 					<button type="button" class="fb speech" onclick={() => askSession.toggleSpeech()}>
 						{askSession.speaking ? 'Stop voorlezen' : 'Lees voor'}
 					</button>
-					<!-- Het antwoord blijft staan tot je een nieuwe vraag stelt (#248),
-					     dus hoort er een manier te zijn om het weg te halen. -->
-					<button type="button" class="fb speech" onclick={() => askSession.clear()}>Wissen</button>
+					<!-- Het gesprek blijft staan tot je een nieuwe hoofdvraag stelt
+					     (#248), dus hoort er een manier te zijn om het weg te halen —
+					     inclusief de thread erboven (#365), vandaar "Gesprek". -->
+					<button type="button" class="fb speech" onclick={() => askSession.clear()}>Gesprek wissen</button>
 				</p>
 			{/if}
 			{#if answerNotice}<p class="approach-notice">{answerNotice}</p>{/if}
@@ -817,6 +848,16 @@
 		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 	}
 	.cite[open] .cite-essence { display: none; }
+	/* Thread (#365): eerdere beurten als compacte, inklapbare kaarten boven het
+	   nieuwe antwoord. Anders dan bij citaties is de essence hier de vráág, en
+	   het antwoord de body — open moet de vraag dus zichtbaar blijven, nu
+	   volledig uitgeschreven in plaats van getruncate. */
+	.thread { margin-bottom: 16px; }
+	.thread-turn { padding: 10px 14px; }
+	.thread-turn[open] .cite-essence {
+		display: block; white-space: normal; overflow: visible;
+		font-weight: 600;
+	}
 	/* Community-consensus (#51): visueel onderscheiden van de officiële
 	   citaties — accentrand + badge; de summary wrapt zodat 390px nooit
 	   horizontaal scrollt. */
