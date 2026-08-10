@@ -1369,12 +1369,15 @@ de globale duur-vangrail).
   automatisch mee (sinds #332 breed afgedwongen, zie de volgende bullet).
   Meetpunt: de volgende fable-run + audit hoort deze betwist-klasse naar ~0 te
   brengen.
-- **Poorten-iteratie 2: de vier rest-klassen uit de populatie-audit** (#335) —
-  de volledige era-3-audit (16 oordelen: 11 bevestigd, 5 afgekeurd; precisie
-  16% → 27% → 55% over de tijdperken) wees vier scherpe rest-klassen aan, elk
-  nu een eigen deterministische poort met eigen status_reason, geteld in het
-  run-detail en gekalibreerd op de 16 echte audit-rijen plus een corpus-meting
-  over 1429 kaartteksten. (A) `endpoint_presence`: een mechanic-agent moet in
+- **Poorten-iteratie 2: vier rest-klassen uit de populatie-audit** (#335) —
+  de volledige era-3-audit (20 oordelen: 11 bevestigd, 9 afgekeurd = 55%;
+  precisie 16% → 27% → 55% over de tijdperken) wees vier scherpe rest-klassen
+  aan die 5 van de 9 afkeuringen verklaren — de overige 4 vallen buiten deze
+  iteratie en blijven bewust ongedekt (de eerlijke restpost voor een volgende
+  ronde). Elke klasse is een eigen deterministische poort met eigen
+  status_reason, geteld in het run-detail en gekalibreerd op de 16
+  fixture-rijen uit die audit (11 bevestigd + de 5 in-klasse afkeuringen) plus
+  een corpus-meting over 1429 kaartteksten. (A) `endpoint_presence`: een mechanic-agent moet in
   keyword-gedaante in het dragende bewijs staan — Burn↔Flow promoveerde op een
   kleine-letter-prozamatch. (B) Werkwoord-achtige keywords (Ready, Recycle —
   gemeten 0× gebracket) tellen in de woordvormpoort alleen nog gebracket:
