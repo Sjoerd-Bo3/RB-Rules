@@ -7,6 +7,14 @@ public record DeckIngestResult(
     int Shards, int FailedShards, int InSitemap, int Fetched, int Saved, int Failed,
     int UnknownCards, bool CapHit, string Message);
 
+/// <summary>Uitkomst van één deck-fetch+parse+opslag. NotFound staat apart
+/// van FetchFailed omdat de on-demand-route (#346) er een ander antwoord van
+/// maakt: "bestaat niet (meer) op PA" is een 404, al het overige een 502.</summary>
+public enum DeckIngestOutcome { Saved, NotFound, FetchFailed, ParseFailed, SaveFailed }
+
+public record DeckIngestOneResult(
+    DeckIngestOutcome Outcome, string? Detail, int UnknownCards);
+
 /// <summary>Deck-ingest van Piltover Archive (#15, Piltover-first): sitemap
 /// → publieke deck-pagina's → deck/deck_card, met attributie (bron-URL per
 /// deck). Robots-afspraak is hard: alléén /sitemap* en /decks/view/{uuid} —
@@ -41,7 +49,7 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
 
         // 1. Sitemap-index → shards → deck-uuids met lastmod.
         progress?.Invoke("sitemap-index ophalen");
-        var (index, indexError) = await FetchAsync($"{BaseUrl}/sitemap.xml", ct);
+        var (index, indexError, _) = await FetchAsync($"{BaseUrl}/sitemap.xml", ct);
         if (index is null)
             return await FailRunAsync($"sitemap-index niet opgehaald: {indexError}", ct);
         var shardUrls = PiltoverSitemap.ShardUrls(index);
@@ -53,7 +61,7 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
         for (var i = 0; i < shardUrls.Count; i++)
         {
             progress?.Invoke($"sitemap-shard {i + 1}/{shardUrls.Count} ophalen ({entries.Count} decks gevonden)");
-            var (shard, shardError) = await FetchAsync(shardUrls[i], ct);
+            var (shard, shardError, _) = await FetchAsync(shardUrls[i], ct);
             if (shard is null)
             {
                 // Eén kapotte shard kost alleen zijn eigen decks — die komen
@@ -112,60 +120,15 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
         {
             ct.ThrowIfCancellationRequested();
             progress?.Invoke($"deck {i + 1}/{queue.Count} ophalen — {saved} opgeslagen, {failed} mislukt");
-            var uuid = queue[i].Uuid;
-            var url = $"{BaseUrl}/decks/view/{uuid}";
-            var (html, fetchError) = await FetchAsync(url, ct);
-            if (html is null)
+            var one = await IngestDeckAsync(queue[i].Uuid, linker, ct);
+            if (one.Outcome == DeckIngestOutcome.Saved)
             {
-                failed++;
-                db.RunLogs.Add(new RunLog
-                {
-                    Kind = LedgerKind, Ref = $"deck:{uuid}", Status = "error",
-                    Detail = $"pagina niet opgehaald: {fetchError}",
-                });
-                await db.SaveChangesAsync(ct);
-                continue;
-            }
-
-            var parsed = PiltoverDeckPage.Parse(html);
-            if (parsed is null)
-            {
-                failed++;
-                db.RunLogs.Add(new RunLog
-                {
-                    Kind = LedgerKind, Ref = $"deck:{uuid}", Status = "error",
-                    Detail = "geen deck-object in de pagina gevonden (formaat gewijzigd?)",
-                });
-                await db.SaveChangesAsync(ct);
-                continue;
-            }
-
-            try
-            {
-                var unknown = await SaveDeckAsync(parsed, url, linker, ct);
-                unknownCards += unknown;
                 saved++;
+                unknownCards += one.UnknownCards;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            else
             {
-                // Ook het opslaan zelf is per deck gecontaineerd (review-fix
-                // #15): een DbUpdateException (bv. door Postgres geweigerde
-                // userdata) zou anders de hele run aborteren én — omdat het
-                // grootboek-"ok" mee terugrolt — elke volgende run
-                // deterministisch op ditzelfde deck laten stranden.
                 failed++;
-                // De vergiftigde entiteiten (Added/Modified/Deleted uit het
-                // upsert-pad) mogen niet in de gedeelde context blijven
-                // hangen, anders faalt elke volgende SaveChanges mee
-                // (RecordMetric-patroon uit AskService, hier volledig omdat
-                // het update-pad ook Modified/Deleted rijen draagt).
-                db.ChangeTracker.Clear();
-                db.RunLogs.Add(new RunLog
-                {
-                    Kind = LedgerKind, Ref = $"deck:{uuid}", Status = "error",
-                    Detail = $"opslaan mislukt: {ex.Message}",
-                });
-                await db.SaveChangesAsync(ct);
             }
         }
 
@@ -181,6 +144,71 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
                 : "");
         return new(shardUrls.Count, failedShards, entries.Count, queue.Count, saved, failed,
             unknownCards, capHit, message);
+    }
+
+    /// <summary>Eén deck ophalen, parsen en opslaan — de per-deck-kern van de
+    /// run, herbruikbaar voor de on-demand-route (#346) zodat die geen eigen
+    /// kopie van fetch/parse/upsert draagt. Fouten zijn data: elke uitkomst
+    /// (ook succes) landt in het run_log-grootboek, precies zoals in de
+    /// bulk-run, zodat de sitemap-run een on-demand opgehaald deck herkent en
+    /// niet opnieuw fetcht.</summary>
+    public async Task<DeckIngestOneResult> IngestDeckAsync(
+        string uuid, DeckCardLinker linker, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/decks/view/{uuid}";
+        var (html, fetchError, status) = await FetchAsync(url, ct);
+        if (html is null)
+        {
+            var detail = $"pagina niet opgehaald: {fetchError}";
+            await LogDeckErrorAsync(uuid, detail, ct);
+            // Een 404 is geen storing maar een antwoord: dit deck bestaat
+            // niet (meer) op PA — de on-demand-route maakt er een 404 van.
+            return new(
+                status == System.Net.HttpStatusCode.NotFound
+                    ? DeckIngestOutcome.NotFound
+                    : DeckIngestOutcome.FetchFailed,
+                detail, 0);
+        }
+
+        var parsed = PiltoverDeckPage.Parse(html);
+        if (parsed is null)
+        {
+            const string detail = "geen deck-object in de pagina gevonden (formaat gewijzigd?)";
+            await LogDeckErrorAsync(uuid, detail, ct);
+            return new(DeckIngestOutcome.ParseFailed, detail, 0);
+        }
+
+        try
+        {
+            var unknown = await SaveDeckAsync(parsed, url, linker, ct);
+            return new(DeckIngestOutcome.Saved, null, unknown);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Ook het opslaan zelf is per deck gecontaineerd (review-fix
+            // #15): een DbUpdateException (bv. door Postgres geweigerde
+            // userdata) zou anders de hele run aborteren én — omdat het
+            // grootboek-"ok" mee terugrolt — elke volgende run
+            // deterministisch op ditzelfde deck laten stranden.
+            // De vergiftigde entiteiten (Added/Modified/Deleted uit het
+            // upsert-pad) mogen niet in de gedeelde context blijven
+            // hangen, anders faalt elke volgende SaveChanges mee
+            // (RecordMetric-patroon uit AskService, hier volledig omdat
+            // het update-pad ook Modified/Deleted rijen draagt).
+            db.ChangeTracker.Clear();
+            var detail = $"opslaan mislukt: {ex.Message}";
+            await LogDeckErrorAsync(uuid, detail, ct);
+            return new(DeckIngestOutcome.SaveFailed, detail, 0);
+        }
+    }
+
+    private async Task LogDeckErrorAsync(string uuid, string detail, CancellationToken ct)
+    {
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = LedgerKind, Ref = $"deck:{uuid}", Status = "error", Detail = detail,
+        });
+        await db.SaveChangesAsync(ct);
     }
 
     /// <summary>Upsert op PaId; de kaartregels worden integraal vervangen en
@@ -237,8 +265,11 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
 
     /// <summary>Externe fetch met browser-UA (PA geeft 403 op kale clients) en
     /// throttle vóór elk vervolg-request. Fouten komen als tekst terug — de
-    /// aanroeper beslist wat een fout betekent (fouten zijn data).</summary>
-    private async Task<(string? Body, string? Error)> FetchAsync(string url, CancellationToken ct)
+    /// aanroeper beslist wat een fout betekent (fouten zijn data). De
+    /// statuscode reist mee zodat IngestDeckAsync een 404 (deck weg) van een
+    /// storing kan onderscheiden; bij transportfouten is hij null.</summary>
+    private async Task<(string? Body, string? Error, System.Net.HttpStatusCode? Status)> FetchAsync(
+        string url, CancellationToken ct)
     {
         if (!_firstRequest && Throttle > TimeSpan.Zero)
             await Task.Delay(Throttle, ct);
@@ -248,16 +279,17 @@ public class DeckIngestService(RbRulesDbContext db, HttpClient http)
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
             req.Headers.TryAddWithoutValidation("User-Agent", IngestService.BrowserUserAgent);
             using var res = await http.SendAsync(req, ct);
-            if (!res.IsSuccessStatusCode) return (null, $"HTTP {(int)res.StatusCode}");
-            return (await res.Content.ReadAsStringAsync(ct), null);
+            if (!res.IsSuccessStatusCode)
+                return (null, $"HTTP {(int)res.StatusCode}", res.StatusCode);
+            return (await res.Content.ReadAsStringAsync(ct), null, res.StatusCode);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return (null, "timeout");
+            return (null, "timeout", null);
         }
         catch (HttpRequestException ex)
         {
-            return (null, ex.Message);
+            return (null, ex.Message, null);
         }
     }
 

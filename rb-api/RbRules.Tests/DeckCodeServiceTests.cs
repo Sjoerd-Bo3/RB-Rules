@@ -57,6 +57,43 @@ public class DeckCodeServiceTests
         Assert.Equal("incomplete", result.Deck.Legality.Status);
     }
 
+    /// <summary>Verrijking voor hersectionering (#346): de code kent alleen
+    /// maindeck/sideboard/champion, dus rb-web heeft Type en Supertype nodig
+    /// om runes/legend/battlefields uit het maindeck te lichten. Gekoppelde
+    /// kaarten dragen ze; ongekoppelde blijven null (onbekend is data).</summary>
+    [Fact]
+    public async Task DecodeAsync_GekoppeldeKaartDraagtTypeEnSupertype_OngekoppeldBlijftNull()
+    {
+        using var db = NewDb();
+        if (db.CardSets.Find("ogn") is null)
+            db.CardSets.Add(new CardSet { SetId = "ogn", Name = "Origins", PublishedOn = new DateOnly(2025, 1, 1) });
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-050-298", Name = "Poppy, Keeper of the Hammer",
+            SetId = "ogn", Type = "Unit", Supertype = "Champion",
+        });
+        db.Cards.Add(new Card
+        {
+            RiftboundId = "ogn-126-298", Name = "Body Rune", SetId = "ogn", Type = "Rune",
+        });
+        await db.SaveChangesAsync();
+
+        var code = DeckCode.Encode(new DeckList(
+            [new("OGN-050", 3), new("OGN-126", 8), new("OGN-999", 1)], []));
+        var result = await new DeckCodeService(db).DecodeAsync(code);
+
+        var cards = result.Deck!.Sections.Single(s => s.Section == "maindeck").Cards;
+        var champion = cards.Single(c => c.CardCode == "OGN-050");
+        Assert.Equal("Unit", champion.Type);
+        Assert.Equal("Champion", champion.Supertype);
+        var rune = cards.Single(c => c.CardCode == "OGN-126");
+        Assert.Equal("Rune", rune.Type);
+        Assert.Null(rune.Supertype);
+        var onbekend = cards.Single(c => c.CardCode == "OGN-999");
+        Assert.Null(onbekend.Type);
+        Assert.Null(onbekend.Supertype);
+    }
+
     [Fact]
     public async Task DecodeAsync_AltArtInDeCode_ResolvedNaarDeCanoniekeKaart()
     {

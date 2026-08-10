@@ -43,7 +43,12 @@ public record DeckCardView(
     // Presentatie per kaart (#269/#270): battlefields zijn liggend, dus de
     // tegel rekent zijn verhouding uit de echte maat i.p.v. één hardgecodeerde.
     int? ImageWidth = null, int? ImageHeight = null,
-    string? ImageAltText = null, string? ImageColorPrimary = null);
+    string? ImageAltText = null, string? ImageColorPrimary = null,
+    // Hersectionering aan de client-kant (#346): een deck-code kent alleen
+    // maindeck/sideboard/champion, dus rb-web heeft Type (Legend/Battlefield/
+    // Rune/...) en Supertype (Champion) nodig om runes en legend uit het
+    // maindeck te lichten. Null zolang de kaart niet gekoppeld is.
+    string? Type = null, string? Supertype = null);
 
 public record DeckSectionView(string Section, IReadOnlyList<DeckCardView> Cards);
 

@@ -1037,8 +1037,17 @@ automaat omdat elke run drafts oplevert die een mens moet reviewen (#187).
 Belangrijke endpointgroepen (`Endpoints/*.cs`): `/api/cards*`, `/api/decks*`
 (#15 fase 3 spoor A: lijst/facetten/detail, read-only — lijst met
 `legality`/`q` erbij sinds #265; `POST /api/decks/decode` leest een geplakte
-deck-code uit (#264) en is het enige niet-GET-deck-endpoint: het schrijft
-niets, een ongeldige code is een 400 met uitleg), `/api/rules*`,
+deck-code uit (#264; sinds #346 met `type`/`supertype` per kaartregel zodat
+rb-web de code-secties kan hersectioneren) en schrijft niets — een ongeldige
+code is een 400 met uitleg; `POST /api/decks/fetch` (#346) haalt één deck
+on-demand van Piltover Archive als de ingest het nog niet kent:
+`DeckFetchService` valideert de uuid strikt (rommel bereikt PA nooit),
+leest een bekend deck gewoon uit de DB en gebruikt anders exact het
+bulk-ingest-pad (`DeckIngestService.IngestDeckAsync` — zelfde parser, zelfde
+upsert/run_log, alléén de publieke `/decks/view/{uuid}`-pagina conform de
+robots-afspraak, browser-UA verplicht), achter een eigen
+`deckfetch`-rate-limit per client-ip; 400 ongeldige id / 404 weg op PA / 502
+PA-storing als Problem met detail), `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
 contradictions), `/api/ask` + `/api/ask/stream` + `/api/ask/history` (eigen
 ask-geschiedenis op user_id/ip_hash, geen id-parameter, #157) +
@@ -1216,17 +1225,23 @@ leeft in de query-string en wordt met `replaceState` teruggeschreven — pas ná
 de vaste `--paper-*`-tokens uit `app.css` — inkt-op-wit, bewust
 thema-onafhankelijk, spelerkleuren P1-goud/P2-rood als functionele codering met
 een zwart-wit-remap; zie `rb-web/STYLE-CONTRACT.md` §1. Sinds de deck-prefill
-(#344) niet meer volledig client-only: drie kleine proxy's — `GET
+(#344) niet meer volledig client-only: vier kleine proxy's — `GET
 /scorepad/decks` (zoeklijst), `GET /scorepad/decks/[id]` (prefill-detail,
-genormaliseerd door `$lib/deckPrefill.fromDeckSections`) en `POST
-/scorepad/decode` (deck-code, geeft rb-api's Problem-detail door) — praten met
-rb-api's `/api/decks*` en degraderen netjes (404/503 met fout-body; de pagina
-blijft met blanco vellen werken). Het gekozen deck-id reist als `deck=` in de
-query-string mee (de `+page.ts`-load haalt het deck dan relatief via de eigen
-proxy op, werkt in SSR én client, dus ook headless printbaar); geplakte
-deck-codes/decklijsten en de registration-personalia zijn bewust alléén lokale
-component-state — een code is geen stabiele referentie, en persoonsgegevens
-horen niet in query-strings),
+genormaliseerd door `$lib/deckPrefill.fromDeckSections`), `POST
+/scorepad/decode` (deck-code, geeft rb-api's Problem-detail door) en `POST
+/scorepad/fetch` (#346: on-demand Piltover-fetch van een onbekend deck-id,
+proxyt `POST /api/decks/fetch` met hetzelfde foutdoorgifte-patroon als
+decode en slankt het antwoord af naar de `decks/[id]`-vorm) — praten met
+rb-api's `/api/decks*` en degraderen netjes (400/404/503 met fout-body; de
+pagina blijft met blanco vellen werken). Sinds #346 meerdere deck-bronnen
+tegelijk: ingest-decks reizen als `decks=`-ids met `deck@ref`-verwijzingen in
+de `sheets=`-grammatica mee (het oude `deck=` blijft parse-alias; de
+`+page.ts`-load haalt alle decks parallel en per bron fout-tolerant via de
+eigen proxy op, werkt in SSR én client, dus ook headless printbaar); geplakte
+deck-codes/decklijsten krijgen negatieve refs die bewust nooit serialiseren
+en zijn — net als de registration-personalia — alléén lokale component-state:
+een code is geen stabiele referentie, en persoonsgegevens horen niet in
+query-strings),
 `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
 `/admin/kosten` — het live kosten-paneel (#328): server-load + eigen
 cookie-beveiligde poll-GET (zelfde aanpak als `/admin/status`), periode-chips

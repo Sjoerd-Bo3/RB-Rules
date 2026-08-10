@@ -3,8 +3,21 @@ import {
 	fromDeckSections,
 	parseDeckText,
 	piltoverDeckIdFromInput,
+	sectionTotal,
 	type DeckPrefill
 } from './deckPrefill';
+
+describe('sectionTotal', () => {
+	it('telt de aantallen op; leeg is 0', () => {
+		expect(sectionTotal([])).toBe(0);
+		expect(
+			sectionTotal([
+				{ qty: 3, name: 'A' },
+				{ qty: 9, name: 'B' }
+			])
+		).toBe(12);
+	});
+});
 
 describe('fromDeckSections', () => {
 	it('normaliseert secties in de vaste volgorde en laat lege secties weg', () => {
@@ -17,9 +30,9 @@ describe('fromDeckSections', () => {
 		expect(prefill).toEqual({
 			name: 'Jinx Aggro',
 			sections: [
-				{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }] },
-				{ section: 'battlefields', rows: [{ qty: 2, name: 'The Rift' }] },
-				{ section: 'maindeck', rows: [{ qty: 3, name: 'Get Excited!' }] }
+				{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }], total: 1 },
+				{ section: 'battlefields', rows: [{ qty: 2, name: 'The Rift' }], total: 2 },
+				{ section: 'maindeck', rows: [{ qty: 3, name: 'Get Excited!' }], total: 3 }
 			]
 		} satisfies DeckPrefill);
 	});
@@ -59,6 +72,128 @@ describe('fromDeckSections', () => {
 		]);
 		expect(prefill.sections[0].section).toBe('maindeck');
 	});
+
+	it("telt 'chosen-champion' als champions-sectie", () => {
+		const prefill = fromDeckSections(null, [
+			{ section: 'chosen-champion', cards: [{ cardCode: 'OGN-060', quantity: 1, cardName: 'Vi' }] },
+			{ section: 'maindeck', cards: [{ cardCode: 'OGN-100', quantity: 3, cardName: 'Filler' }] }
+		]);
+		expect(prefill.sections).toEqual([
+			{ section: 'champions', rows: [{ qty: 1, name: 'Vi' }], total: 1 },
+			{ section: 'maindeck', rows: [{ qty: 3, name: 'Filler' }], total: 3 }
+		]);
+	});
+
+	it('hersectioneert op kaarttype: legend/battlefields/runes uit maindeck, champion-kopieën blijven', () => {
+		// De gedecodeerde vorm (#346): alles behalve sideboard/chosen-champion
+		// hangt in maindeck — de type-informatie zet legend, battlefields en
+		// runes alsnog goed. Supertype Champion verplaatst NIET: kopieën van de
+		// champion horen in het maindeck, alleen de chosen-champion-sectie is de CC.
+		const prefill = fromDeckSections('Decoded', [
+			{
+				section: 'maindeck',
+				cards: [
+					{ cardCode: 'OGN-001', quantity: 1, cardName: 'Jinx', type: 'Legend' },
+					{ cardCode: 'OGN-050', quantity: 3, cardName: 'Get Excited!', type: 'Spell' },
+					{
+						cardCode: 'OGN-060',
+						quantity: 3,
+						cardName: 'Jinx, Loose Cannon',
+						type: 'Unit',
+						supertype: 'Champion'
+					},
+					{ cardCode: 'OGN-200', quantity: 3, cardName: 'The Rift', type: 'Battlefield' },
+					{ cardCode: 'OGN-300', quantity: 9, cardName: 'Fury Rune', type: 'Rune' },
+					{ cardCode: 'OGN-301', quantity: 3, cardName: 'Body Rune', type: 'Rune' }
+				]
+			},
+			{
+				section: 'chosen-champion',
+				cards: [
+					{
+						cardCode: 'OGN-060',
+						quantity: 1,
+						cardName: 'Jinx, Loose Cannon',
+						type: 'Unit',
+						supertype: 'Champion'
+					}
+				]
+			},
+			{ section: 'sideboard', cards: [{ cardCode: 'OGN-070', quantity: 2, cardName: 'Tech', type: 'Spell' }] }
+		]);
+		expect(prefill).toEqual({
+			name: 'Decoded',
+			sections: [
+				{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }], total: 1 },
+				{ section: 'champions', rows: [{ qty: 1, name: 'Jinx, Loose Cannon' }], total: 1 },
+				{ section: 'battlefields', rows: [{ qty: 3, name: 'The Rift' }], total: 3 },
+				{
+					section: 'runes',
+					rows: [
+						{ qty: 9, name: 'Fury Rune' },
+						{ qty: 3, name: 'Body Rune' }
+					],
+					total: 12
+				},
+				{
+					section: 'maindeck',
+					rows: [
+						{ qty: 3, name: 'Get Excited!' },
+						{ qty: 3, name: 'Jinx, Loose Cannon' }
+					],
+					total: 6
+				},
+				{ section: 'sideboard', rows: [{ qty: 2, name: 'Tech' }], total: 2 }
+			]
+		} satisfies DeckPrefill);
+	});
+
+	it('voegt verplaatste rijen samen met een al bestaande doelsectie', () => {
+		const prefill = fromDeckSections(null, [
+			{ section: 'runes', cards: [{ cardCode: 'R-1', quantity: 6, cardName: 'Calm Rune' }] },
+			{ section: 'maindeck', cards: [{ cardCode: 'R-2', quantity: 6, cardName: 'Mind Rune', type: 'Rune' }] }
+		]);
+		expect(prefill.sections).toEqual([
+			{
+				section: 'runes',
+				rows: [
+					{ qty: 6, name: 'Calm Rune' },
+					{ qty: 6, name: 'Mind Rune' }
+				],
+				total: 12
+			}
+		]);
+	});
+
+	it('hersectioneert NIET vanuit de sideboard: een battlefield of rune daar blijft daar', () => {
+		// Review #346 (high): battlefield-swaps zijn een gangbare
+		// sideboard-strategie; verplaatsen liet de kaart stil van het
+		// registratievel verdwijnen (battlefields is daar op drie rijen gekapt).
+		const prefill = fromDeckSections('Swap', [
+			{
+				section: 'maindeck',
+				cards: [{ cardCode: 'OGN-001', quantity: 6, cardName: 'Body Rune', type: 'Rune' }]
+			},
+			{
+				section: 'sideboard',
+				cards: [
+					{ cardCode: 'OGN-200', quantity: 1, cardName: 'Risen Altar', type: 'Battlefield' },
+					{ cardCode: 'OGN-002', quantity: 2, cardName: 'Order Rune', type: 'Rune' }
+				]
+			}
+		]);
+		expect(prefill.sections).toEqual([
+			{ section: 'runes', rows: [{ qty: 6, name: 'Body Rune' }], total: 6 },
+			{
+				section: 'sideboard',
+				rows: [
+					{ qty: 1, name: 'Risen Altar' },
+					{ qty: 2, name: 'Order Rune' }
+				],
+				total: 3
+			}
+		]);
+	});
 });
 
 describe('parseDeckText', () => {
@@ -74,7 +209,8 @@ describe('parseDeckText', () => {
 						{ qty: 2, name: 'Mysterious Portal' },
 						{ qty: 4, name: 'Flame Chompers' },
 						{ qty: 1, name: 'Jinx' }
-					]
+					],
+					total: 10
 				}
 			]
 		} satisfies DeckPrefill);
@@ -84,9 +220,9 @@ describe('parseDeckText', () => {
 		const text = ['Sideboard:', '2x Tech Card', 'LEGEND', '1x Jinx', 'Main Deck:', '3 Filler'].join('\n');
 		const prefill = parseDeckText(text);
 		expect(prefill.sections).toEqual([
-			{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }] },
-			{ section: 'maindeck', rows: [{ qty: 3, name: 'Filler' }] },
-			{ section: 'sideboard', rows: [{ qty: 2, name: 'Tech Card' }] }
+			{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }], total: 1 },
+			{ section: 'maindeck', rows: [{ qty: 3, name: 'Filler' }], total: 3 },
+			{ section: 'sideboard', rows: [{ qty: 2, name: 'Tech Card' }], total: 2 }
 		]);
 	});
 
@@ -94,13 +230,14 @@ describe('parseDeckText', () => {
 		const text = ['Deck:', '1x Eerste', 'Runes:', '2x Rune', 'Maindeck:', '1x Tweede'].join('\n');
 		const prefill = parseDeckText(text);
 		expect(prefill.sections).toEqual([
-			{ section: 'runes', rows: [{ qty: 2, name: 'Rune' }] },
+			{ section: 'runes', rows: [{ qty: 2, name: 'Rune' }], total: 2 },
 			{
 				section: 'maindeck',
 				rows: [
 					{ qty: 1, name: 'Eerste' },
 					{ qty: 1, name: 'Tweede' }
-				]
+				],
+				total: 2
 			}
 		]);
 	});
@@ -114,8 +251,39 @@ describe('parseDeckText', () => {
 	it('hangt onbekende koppen als eigen sectie achteraan', () => {
 		const prefill = parseDeckText('Removal:\n2x Zap\nLegend:\n1x Jinx');
 		expect(prefill.sections).toEqual([
-			{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }] },
-			{ section: 'removal', rows: [{ qty: 2, name: 'Zap' }] }
+			{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }], total: 1 },
+			{ section: 'removal', rows: [{ qty: 2, name: 'Zap' }], total: 2 }
+		]);
+	});
+
+	it('kale runenamen zonder sectiekop komen bij runes terecht', () => {
+		// De zes runenamen zijn uniek — zonder kop is 'maindeck' maar een
+		// aanname en is de naam zelf het sterkste signaal.
+		const prefill = parseDeckText('3x Get Excited!\n9 Fury Rune\nbody rune x3\nJinx');
+		expect(prefill.sections).toEqual([
+			{
+				section: 'runes',
+				rows: [
+					{ qty: 9, name: 'Fury Rune' },
+					{ qty: 3, name: 'body rune' }
+				],
+				total: 12
+			},
+			{
+				section: 'maindeck',
+				rows: [
+					{ qty: 3, name: 'Get Excited!' },
+					{ qty: 1, name: 'Jinx' }
+				],
+				total: 4
+			}
+		]);
+	});
+
+	it('een expliciete sectiekop wint van de runen-heuristiek', () => {
+		const prefill = parseDeckText('Sideboard:\n3x Fury Rune');
+		expect(prefill.sections).toEqual([
+			{ section: 'sideboard', rows: [{ qty: 3, name: 'Fury Rune' }], total: 3 }
 		]);
 	});
 
@@ -128,7 +296,8 @@ describe('parseDeckText', () => {
 				rows: [
 					{ qty: 3, name: 'Get Excited!' },
 					{ qty: 1, name: 'Jinx' }
-				]
+				],
+				total: 4
 			}
 		]);
 	});
@@ -144,7 +313,9 @@ describe('parseDeckText', () => {
 
 	it('overleeft Windows-regeleindes', () => {
 		const prefill = parseDeckText('Legend:\r\n1x Jinx\r\n');
-		expect(prefill.sections).toEqual([{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }] }]);
+		expect(prefill.sections).toEqual([
+			{ section: 'legend', rows: [{ qty: 1, name: 'Jinx' }], total: 1 }
+		]);
 	});
 
 	it('rondgang: geplakte tekst en API-secties leveren dezelfde prefill op', () => {

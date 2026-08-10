@@ -8,7 +8,7 @@ import { API_BASE } from '$lib/api';
 // deck-code.") is hier het nuttige antwoord. rb-api plat is een verwacht pad:
 // 503 met een nette melding, geen exception naar buiten.
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 	let code = '';
 	try {
 		const body: unknown = await request.json();
@@ -24,7 +24,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	try {
 		res = await fetch(`${API_BASE}/api/decks/decode`, {
 			method: 'POST',
-			headers: { 'content-type': 'application/json' },
+			// Client-IP mee zoals bij de andere proxies — mocht decode ooit een
+			// rate-limit krijgen, dan partitioneert die meteen goed.
+			headers: { 'content-type': 'application/json', 'x-client-ip': getClientAddress() },
 			body: JSON.stringify({ code })
 		});
 	} catch {

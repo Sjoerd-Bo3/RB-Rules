@@ -85,6 +85,14 @@
 
 	const initial = $derived((person?.lastName ?? '').trim().charAt(0).toUpperCase());
 	const deckName = $derived(person?.deckName ?? deck?.name ?? '');
+
+	// Sectietotalen voor de koppen bij prefill (#346): 'Main deck · 40' i.p.v.
+	// de invul-microcopy ('40 cards min'). Alleen bij een GEVULDE sectie —
+	// mist de bron een sectie (decklijst zonder legend), dan blijft de
+	// microcopy staan: dat deel wordt daar juist met pen ingevuld.
+	// Main telt champions mee: de CC-rijen staan bovenaan het main deck.
+	const secTotal = (key: string) => deck?.sections.find((s) => s.section === key)?.total ?? 0;
+	const mainTotal = $derived(secTotal('champions') + secTotal('maindeck'));
 </script>
 
 {#snippet cardRow(r: Row)}
@@ -145,11 +153,19 @@
 
 	<div class="cols">
 		<div class="col">
-			<div class="sec csec first"><span>Legend</span></div>
+			<div class="sec csec first">
+				<span>Legend{secTotal('legend') > 0 ? ` · ${secTotal('legend')}` : ''}</span>
+			</div>
 			{#each legendRows as r, i (i)}{@render cardRow(r)}{/each}
-			<div class="sec csec"><span>Battlefields</span><span class="sec-note">3 required</span></div>
+			<div class="sec csec">
+				<span>Battlefields{secTotal('battlefields') > 0 ? ` · ${secTotal('battlefields')}` : ''}</span>
+				{#if secTotal('battlefields') === 0}<span class="sec-note">3 required</span>{/if}
+			</div>
 			{#each bfRows as r, i (i)}{@render cardRow(r)}{/each}
-			<div class="sec csec"><span>Main deck</span><span class="sec-note">40 cards min</span></div>
+			<div class="sec csec">
+				<span>Main deck{mainTotal > 0 ? ` · ${mainTotal}` : ''}</span>
+				{#if mainTotal === 0}<span class="sec-note">40 cards min</span>{/if}
+			</div>
 			<div class="dhead"><span class="hq">#</span><span class="hn">Card name</span></div>
 			{#each leftMain as r, i (i)}{@render cardRow(r)}{/each}
 		</div>
@@ -158,9 +174,15 @@
 			<div class="dhead"><span class="hq">#</span><span class="hn">Card name</span></div>
 			{#each contRows as r, i (i)}{@render cardRow(r)}{/each}
 			{#if moreCount > 0}<div class="more">+{moreCount} more — see full list online</div>{/if}
-			<div class="sec csec"><span>Runes</span><span class="sec-note">12 runes</span></div>
+			<div class="sec csec">
+				<span>Runes{secTotal('runes') > 0 ? ` · ${secTotal('runes')}` : ''}</span>
+				{#if secTotal('runes') === 0}<span class="sec-note">12 runes</span>{/if}
+			</div>
 			{#each runeRows as r, i (i)}{@render cardRow(r)}{/each}
-			<div class="sec csec"><span>Sideboard</span><span class="sec-note">0–8 cards</span></div>
+			<div class="sec csec">
+				<span>Sideboard{secTotal('sideboard') > 0 ? ` · ${secTotal('sideboard')}` : ''}</span>
+				{#if secTotal('sideboard') === 0}<span class="sec-note">0–8 cards</span>{/if}
+			</div>
 			{#each sbRows as r, i (i)}{@render cardRow(r)}{/each}
 
 			<div class="official">

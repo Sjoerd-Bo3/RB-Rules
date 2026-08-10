@@ -1723,24 +1723,39 @@ de globale duur-vangrail).
   Nederlands. De assembler zelf is client-side; alleen de deck-prefill
   (hieronder, #344) praat via drie kleine `/scorepad`-proxy's met rb-api.
   *Route* `/scorepad` (nav-groep "Aan tafel").
-- **Deck-vellen met prefill** (#344) — twee extra veltypen in de optiegroep
-  "Deck": het **Deckoverzicht** (compacte decklijst in twee kolommen plus
-  matchup-plannen, het vel naast de speelmat) en het **Registration sheet**
-  (toernooi-decklijst naar de Piltover Archive-opzet in eigen vormgeving,
-  met Chosen Champion-markering en judge-blok). Beide werken blanco óf
-  vooraf ingevuld via vier invoerwegen in het "Deck-bron"-paneel: zoeken in
+- **Deck-vellen met prefill** (#344, multi-deck #346) — twee extra veltypen
+  in de optiegroep "Deck": het **Deckoverzicht** (compacte decklijst in twee
+  kolommen plus matchup-plannen, het vel naast de speelmat) en het
+  **Registration sheet** (toernooi-decklijst naar de Piltover Archive-opzet
+  in eigen vormgeving, met Chosen Champion-markering en judge-blok). Beide
+  werken blanco óf vooraf ingevuld via vier invoerwegen in het
+  "Deck-bronnen"-paneel, dat sinds #346 een LIJST bronnen beheert: zoeken in
   de deck-ingest (debounced zoekveld met klikbare trefferlijst, naam +
   kaarttelling), een Piltover-link of deck-id plakken, een deck-code plakken
   (decode via rb-api) of een decklijst-tekst plakken (lokale parser, geen
-  API). Een gekozen ingest-deck reist als `deck=`-id mee in de query-string
-  (deelbaar en headless printbaar); geplakte codes en teksten zijn bewust
-  alléén lokale component-state — een deck-code is geen stabiele referentie
-  — en gelden tot herladen, met voorrang op het gekoppelde deck. De
-  personalia voor het registration sheet (naam, Riot ID, event, datum, …)
-  blijven om privacyredenen eveneens lokaal en komen nooit in de URL of op
-  de server. rb-api-uitval of een onbekend deck-id is het verwachte pad:
-  nette melding ("niet in de ingest" resp. "bron niet bereikbaar") en
-  blanco vellen — nooit een kapotte pagina.
+  API). Elk deck-/registration-vel wijst met een compact bron-select in het
+  Volgorde-paneel naar zijn eigen bron (meerdere decks in één boekje);
+  nieuwe deck-vellen krijgen standaard de laatst toegevoegde bron.
+  Ingest-decks reizen als `decks=`-ids plus `deck@ref`-verwijzingen mee in
+  de query-string (deelbaar en headless printbaar; het oude `deck=` blijft
+  een parse-alias); geplakte codes en teksten zijn bewust alléén lokale
+  component-state — een deck-code is geen stabiele referentie — en
+  serialiseren nooit. Een geplakte Piltover-link die de ingest nog niet kent
+  wordt **automatisch éénmalig opgehaald** (POST `/scorepad/fetch` → rb-api
+  POST `/api/decks/fetch`, met bezig-status op de knop); pas als ook dat
+  faalt volgt de nette melding ("Deck niet gevonden op Piltover Archive"
+  resp. "Ophalen kan nu niet — plak de decklijst als tekst"). De decode
+  levert `type`/`supertype` per kaart mee, zodat runes/legend/battlefields
+  uit het maindeck van de code naar hun eigen sectie **gehersectioneerd**
+  worden en `chosen-champion` de CC-badge voedt; kale runenamen in geplakte
+  tekst ("6 Body Rune" zonder kop) landen via een naamheuristiek ook in de
+  runes-sectie. Sectiekoppen tonen bij prefill het sectietotaal ("Main deck
+  · 40"); blanco vellen (of ontbrekende secties) houden de
+  invul-microcopy ("40 cards min"). De personalia voor het registration
+  sheet (naam, Riot ID, event, datum, …) blijven om privacyredenen eveneens
+  lokaal en komen nooit in de URL of op de server. rb-api-uitval of een
+  onbekend deck-id is het verwachte pad: nette melding per bron en blanco
+  vellen — nooit een kapotte pagina.
 
 ---
 

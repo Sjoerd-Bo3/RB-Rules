@@ -108,6 +108,12 @@ public record RelationBulkDecideRequest(
 /// NRE-500.</summary>
 public record DeckDecodeRequest(string? Code, string? Format);
 
+/// <summary>On-demand deck-fetch (#346): de PA-deck-uuid, plus optioneel het
+/// legaliteits-format (default "constructed"). Id nullable — rommel of een
+/// lege body geeft een nette 400 uit
+/// <see cref="RbRules.Infrastructure.DeckFetchService.FetchAsync"/>.</summary>
+public record DeckFetchRequest(string? Id, string? Format);
+
 /// <summary>Eén te zetten instelling (#254): een sleutel uit
 /// <see cref="RbRules.Domain.ManagedSettingsCatalog"/>. <see cref="Value"/> leeg/null
 /// = terug naar de env-/codewaarde (override weg).</summary>
