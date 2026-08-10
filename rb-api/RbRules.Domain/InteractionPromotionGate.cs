@@ -56,10 +56,23 @@ public enum InteractionGateOutcome
 /// pad berekent hem VERPLICHT — <c>InteractionPromotionRequest</c> heeft er geen
 /// default voor, zodat de typechecker afdwingt dat geen aanroeper de poort
 /// stilzwijgend overslaat (#300-les).</param>
-/// <param name="PatientWordFormSupport">Poort B (#330): staat het keyword-doel
-/// van een toekennende claim in keyword-VORM in het bewijs
-/// (<see cref="KeywordWordForm"/>)? Default true = niet van toepassing; zelfde
-/// verplichting op het request als bij <paramref name="KindAnchorSupport"/>.</param>
+/// <param name="PatientWordFormSupport">Poort B (#330, verbreed in #335 naar
+/// REQUIRES + verb-like catalogus): staat het keyword-doel van een toekennende/
+/// vereisende claim in keyword-VORM in het bewijs (<see cref="KeywordWordForm"/>)?
+/// Default true = niet van toepassing; zelfde verplichting op het request als bij
+/// <paramref name="KindAnchorSupport"/>.</param>
+/// <param name="EndpointPresenceSupport">Klasse A (#335): staat een mechanic-AGENT
+/// in keyword-gedaante in het dragende bewijs
+/// (<see cref="InteractionEndpointPresence"/>)? Default true = niet van
+/// toepassing; verplicht veld op het request.</param>
+/// <param name="RequiresNotOptional">Klasse C2 (#335): draagt het dragende bewijs
+/// van een REQUIRES-claim minstens één anker-zin zónder may/optional(ly)
+/// (<see cref="RequiresOptionality"/>)? Default true = niet van toepassing;
+/// verplicht veld op het request.</param>
+/// <param name="ResourcePatientSupport">Klasse D (#335): draagt het bewijs van een
+/// GRANTS/MODIFIES-claim op een resource-patient de gebrackete keyword-vorm
+/// (<see cref="ResourceMechanics"/>)? Default true = niet van toepassing;
+/// verplicht veld op het request.</param>
 public sealed record InteractionGateSignals(
     bool SchemaValid,
     string? SchemaReason,
@@ -72,23 +85,38 @@ public sealed record InteractionGateSignals(
     bool RolesDistinct = true,
     bool IsCardOwnKeywordPair = false,
     bool KindAnchorSupport = true,
-    bool PatientWordFormSupport = true)
+    bool PatientWordFormSupport = true,
+    bool EndpointPresenceSupport = true,
+    bool RequiresNotOptional = true,
+    bool ResourcePatientSupport = true)
 {
     /// <summary>Is er deterministische steun náást het verdict?</summary>
     public bool HasDeterministicSupport =>
         LexicalSupport || (ConsensusThreshold > 0 && ConsensusCount >= ConsensusThreshold);
 }
 
-/// <summary>Machine-leesbare namen van de soort-poorten (#330) — de waarde van
-/// <see cref="InteractionGateResult.DegradedBy"/> en het label in run-detail en
-/// status_reason. Bewust korte, stabiele tokens: beheer telt erop.</summary>
+/// <summary>Machine-leesbare namen van de soort-poorten (#330/#335) — de waarde
+/// van <see cref="InteractionGateResult.DegradedBy"/> en het label in run-detail
+/// en status_reason. Bewust korte, stabiele tokens: beheer telt erop.</summary>
 public static class InteractionGatePorts
 {
-    /// <summary>Poort A: kind-anker ontbreekt in het dragende bewijs.</summary>
+    /// <summary>Poort A (#330): kind-anker ontbreekt in het dragende bewijs.</summary>
     public const string KindAnchor = "kind_anchor";
 
-    /// <summary>Poort B: keyword-doel staat alleen in werkwoord-/prozavorm.</summary>
+    /// <summary>Poort B (#330): keyword-doel staat alleen in werkwoord-/prozavorm.</summary>
     public const string WordForm = "word_form";
+
+    /// <summary>Klasse A (#335): mechanic-agent komt niet in keyword-gedaante in
+    /// het dragende bewijs voor.</summary>
+    public const string EndpointPresence = "endpoint_presence";
+
+    /// <summary>Klasse C2 (#335): elk REQUIRES-anker staat in een zin met
+    /// may/optional(ly) — optioneel is geen vereiste.</summary>
+    public const string Optionality = "optionality";
+
+    /// <summary>Klasse D (#335): GRANTS/MODIFIES op een resource-patient zonder
+    /// gebrackete keyword-vorm in het bewijs.</summary>
+    public const string ResourcePatient = "resource_patient";
 }
 
 /// <summary>De poort-beslissing: de tier + een memo die zégt welke poort
@@ -190,7 +218,9 @@ public static class InteractionPromotionGate
         if (!s.LlmVerdictInteracts)
         {
             var durable = s.HasDeterministicSupport
-                && s.KindAnchorSupport && s.PatientWordFormSupport;
+                && s.KindAnchorSupport && s.PatientWordFormSupport
+                && s.EndpointPresenceSupport && s.RequiresNotOptional
+                && s.ResourcePatientSupport;
             return new(InteractionGateOutcome.Rejected,
                 s.HasDeterministicSupport
                     ? "LLM-verdict: geen noemenswaardige interactie (ondanks deterministische steun)"
@@ -199,18 +229,21 @@ public static class InteractionPromotionGate
         }
 
         // 4. Verdict positief + deterministische steun → promoveren, TENZIJ een
-        //    soort-poort (#330) strandt: dan Candidate (reviewqueue), nooit stil weg —
-        //    zelfde soft-pad als de #324-bewijstier. Volgorde is bewust B vóór A: de
-        //    woordvormpoort is de specifiekere diagnose ("recycle is hier een
-        //    werkwoord, geen toegekend keyword") en wint daarom de status_reason
-        //    wanneer een claim op allebei strandt.
+        //    soort-poort (#330/#335) strandt: dan Candidate (reviewqueue), nooit stil
+        //    weg — zelfde soft-pad als de #324-bewijstier. Volgorde is bewust van
+        //    specifiek naar generiek: B vóór het kind-anker (#330: "recycle is hier
+        //    een werkwoord" is de scherpere diagnose), dan de #335-klassen —
+        //    resource_patient en optionality zijn per constructie disjunct van het
+        //    kind-anker-pad (beide veronderstellen een gevonden anker), en
+        //    endpoint_presence sluit als meest generieke aanwezigheids-check de rij.
         if (s.HasDeterministicSupport)
         {
             if (!s.PatientWordFormSupport)
                 return new(InteractionGateOutcome.Candidate,
                     "word_form-poort (#330): het keyword-doel staat alleen als werkwoord/" +
                     "prozavorm in het bewijs, niet in keyword-vorm ([…] of hoofdletter-term " +
-                    "buiten zinsbegin) — kandidaat, wacht op review",
+                    "buiten zinsbegin; verb-like keywords eisen de gebrackete vorm, #335) — " +
+                    "kandidaat, wacht op review",
                     DegradedBy: InteractionGatePorts.WordForm);
             if (!s.KindAnchorSupport)
                 return new(InteractionGateOutcome.Candidate,
@@ -218,6 +251,26 @@ public static class InteractionPromotionGate
                     "voor deze relatiesoort — co-occurrence zegt niet wélke relatie; " +
                     "kandidaat, wacht op review",
                     DegradedBy: InteractionGatePorts.KindAnchor);
+            if (!s.ResourcePatientSupport)
+                return new(InteractionGateOutcome.Candidate,
+                    "resource_patient-poort (#335): het doel is een resource-mechanic (geen " +
+                    "toekenbaar unit-keyword) en het bewijs spreekt in hoeveelheden — een " +
+                    "GRANTS/MODIFIES-claim eist hier de gebrackete keyword-vorm; kandidaat, " +
+                    "wacht op review",
+                    DegradedBy: InteractionGatePorts.ResourcePatient);
+            if (!s.RequiresNotOptional)
+                return new(InteractionGateOutcome.Candidate,
+                    "optionality-poort (#335): elk REQUIRES-anker in het dragende bewijs " +
+                    "staat in een zin met may/optional(ly) — een optionele kost is geen " +
+                    "vereiste; kandidaat, wacht op review",
+                    DegradedBy: InteractionGatePorts.Optionality);
+            if (!s.EndpointPresenceSupport)
+                return new(InteractionGateOutcome.Candidate,
+                    "endpoint_presence-poort (#335): het agent-keyword komt in het dragende " +
+                    "bewijs niet in keyword-gedaante voor (gebracket of met hoofdletter) — " +
+                    "co-occurrence met alleen een werkwoord-/prozavorm draagt de claim " +
+                    "niet; kandidaat, wacht op review",
+                    DegradedBy: InteractionGatePorts.EndpointPresence);
 
             var support = s.LexicalSupport
                 ? "bewijszin gevonden"

@@ -196,22 +196,37 @@ public class InteractionKindAnchorTests
     }
 
     [Fact]
-    public void AppearsAsKeyword_GekapitaliseerdWerkwoordMiddenInZin_KomtErdoor_Restrisico() =>
-        // GEDOCUMENTEERD RESTRISICO: Riot kapitaliseert spelwerkwoorden ook
-        // midden in een zin (§436.1: "whether or not to Recycle it") — die vorm
-        // passeert de poort. Noodzakelijke voorwaarde, geen voldoende.
-        Assert.True(KeywordWordForm.AppearsAsKeyword(
+    public void AppearsAsKeyword_GekapitaliseerdWerkwoord_VerbLikeCatalogusDichtHetLek()
+    {
+        // Het #331-restrisico ("Riot kapitaliseert spelwerkwoorden ook midden in
+        // een zin", §436.1) is in de era-3-audit gematerialiseerd ("Ready me",
+        // Hungry Wolf) en in #335 gedicht: voor de verb-like keywords (Ready,
+        // Recycle — gemeten 0× gebracket in 1429 kaartteksten) telt alléén de
+        // gebrackete vorm.
+        Assert.False(KeywordWordForm.AppearsAsKeyword(
             "Predicting a card is the act of looking at a single card from the top of the " +
             "Main Deck and choosing whether or not to Recycle it.", "Recycle"));
+        Assert.False(KeywordWordForm.AppearsAsKeyword(
+            ":rb_rune_order:: Ready me and give me +1 :rb_might: this turn.", "Ready"));
+        // De gebrackete vorm blijft de legitieme route voor verb-like keywords.
+        Assert.True(KeywordWordForm.AppearsAsKeyword("This grants [Recycle].", "Recycle"));
+        // Buiten de catalogus blijft het restrisico bestaan (en gedocumenteerd):
+        // een gekapitaliseerd werkwoord midden in de zin passeert nog steeds.
+        Assert.True(KeywordWordForm.AppearsAsKeyword(
+            "On its Deathknell, Channel 2 runes exhausted.", "Channel"));
+    }
 
     [Fact]
-    public void Applies_AlleenGrantsMetMechanicPatient()
+    public void Applies_GrantsEnRequiresMetMechanicPatient()
     {
         Assert.True(KeywordWordForm.Applies("GRANTS", EntityType.Mechanic));
-        // Andere soorten: de prozavorm is daar normaal bewijs ("Deflect prevents
-        // Assault damage").
+        // #335-C1: REQUIRES doet mee sinds de kind-omleiding (Predict↔Recycle
+        // strandde als GRANTS en kwam als REQUIRES door de onbewaakte deur terug).
+        Assert.True(KeywordWordForm.Applies("REQUIRES", EntityType.Mechanic));
+        // COUNTERS/MODIFIES bewust niet: de prozavorm is daar normaal bewijs
+        // ("Deflect prevents Assault damage"; "channel 1 rune exhausted" —
+        // Siphoning Strike, bevestigde era-3-promotie).
         Assert.False(KeywordWordForm.Applies("COUNTERS", EntityType.Mechanic));
-        Assert.False(KeywordWordForm.Applies("REQUIRES", EntityType.Mechanic));
         Assert.False(KeywordWordForm.Applies("MODIFIES", EntityType.Mechanic));
         // Kaart-doelen hebben geen keyword-vorm.
         Assert.False(KeywordWordForm.Applies("GRANTS", EntityType.Unit));

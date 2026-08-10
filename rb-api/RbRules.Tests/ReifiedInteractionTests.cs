@@ -397,15 +397,20 @@ public class ReifiedInteractionTests
         string kind = "COUNTERS", bool lexical = false, int consensus = 0, bool verdict = true,
         string agent = "card:a", string patient = "card:b",
         IReadOnlyList<InteractionConditionInput>? conditions = null,
-        string? governedBy = null, bool kindAnchor = true, bool wordForm = true) =>
+        string? governedBy = null, bool kindAnchor = true, bool wordForm = true,
+        bool endpointPresence = true, bool requiresNotOptional = true,
+        bool resourcePatient = true) =>
         new(agent, agentType, patient, patientType, kind,
             DerivedFromRef: governedBy ?? "section:core-rules-pdf/7.4",
             GovernedByRef: governedBy,
             Conditions: conditions ?? [],
             LexicalSupport: lexical, ConsensusCount: consensus, LlmVerdictInteracts: verdict,
-            // Soort-poorten (#330): verplichte velden; deze tests toetsen de overige
-            // poorten en geven ze default door als "gehaald".
-            KindAnchorSupport: kindAnchor, PatientWordFormSupport: wordForm);
+            // Soort-poorten (#330/#335): verplichte velden; deze tests toetsen de
+            // overige poorten en geven ze default door als "gehaald".
+            KindAnchorSupport: kindAnchor, PatientWordFormSupport: wordForm,
+            EndpointPresenceSupport: endpointPresence,
+            RequiresNotOptional: requiresNotOptional,
+            ResourcePatientSupport: resourcePatient);
 
     [Fact]
     public async Task Service_PromotedPath_WritesInteractionAssertionDecision()
@@ -777,6 +782,81 @@ public class ReifiedInteractionTests
         Assert.Equal(InteractionStatus.Verified, after.Status);     // orde: promoted < verified
         var memo = await db.InteractionDecisions.SingleAsync(d => d.InteractionId == after.Id);
         Assert.Contains("#313", memo.Memo);
+    }
+
+    [Fact]
+    public async Task Service_NieuwePoortStrandtBijHerMine_BestaandePromotieBlijftStaan()
+    {
+        // De #335-poorten lopen door dezelfde demotiegarantie (#313/#332) als de
+        // #330-poorten: een her-voorstel dat op resource_patient strandt laat een
+        // bestaande promotie ongemoeid — memo, geen demotie.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var promoted = await svc.PromoteAsync(Req(lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, promoted.Outcome);
+
+        var degraded = await svc.PromoteAsync(Req(
+            lexical: true, verdict: true, resourcePatient: false), runId);
+        Assert.Equal(InteractionGateOutcome.Candidate, degraded.Outcome);
+        Assert.Equal("resource_patient", degraded.DegradedBy);
+
+        var after = await db.Interactions.SingleAsync();
+        Assert.Equal(InteractionStatus.Promoted, after.Status);   // NIET gedemoveerd
+        var memo = await db.InteractionDecisions
+            .Where(d => d.InteractionId == after.Id && d.Outcome == InteractionStatus.Candidate)
+            .SingleAsync();
+        Assert.Contains("#313", memo.Memo);
+    }
+
+    // ── Soort-wissel-telemetrie (#335-C3) ─────────────────────────────────────
+
+    [Fact]
+    public async Task Service_SoortWissel_MeldtDeGestrandeBroertjesSoort()
+    {
+        // De dedupe-sleutel bevat Kind: een her-voorstel onder een ándere soort
+        // omzeilt de upsert-historie van zijn gestrande broertje. Dat is
+        // telemetrie (nooit stil), geen poort — een soort-correctie is legitiem.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var first = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault", kind: "GRANTS",
+            lexical: false, consensus: 1, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Candidate, first.Outcome);
+        Assert.Null(first.KindSwitchedFrom);   // nog geen broertje
+
+        var second = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault", kind: "REQUIRES",
+            lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, second.Outcome);
+        Assert.Equal("GRANTS", second.KindSwitchedFrom);
+    }
+
+    [Fact]
+    public async Task Service_GepromoveerdBroertje_IsGeenSoortWisselHistorie()
+    {
+        // Twee soorten kunnen legitiem naast elkaar bestaan: alleen strand-/
+        // afkeur-historie (candidate/hypothese/rejected/tombstone) telt als wissel.
+        await using var db = NewDb();
+        var runId = await SeedRunAsync(db);
+        var svc = new InteractionPromotionService(db);
+
+        var promoted = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault", kind: "REQUIRES",
+            lexical: true, verdict: true), runId);
+        Assert.Equal(InteractionGateOutcome.Promoted, promoted.Outcome);
+
+        var second = await svc.PromoteAsync(Req(
+            agentType: EntityType.Mechanic, patientType: EntityType.Mechanic,
+            agent: "mechanic:Deflect", patient: "mechanic:Assault", kind: "GRANTS",
+            lexical: true, verdict: true), runId);
+        Assert.Null(second.KindSwitchedFrom);
     }
 
     [Fact]
