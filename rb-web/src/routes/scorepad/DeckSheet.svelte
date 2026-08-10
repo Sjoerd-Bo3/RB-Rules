@@ -58,10 +58,57 @@
 		return out;
 	});
 
-	// Flow: vul links tot het mm-budget, dan rechts; een sectiekop telt mee
-	// met minstens één regel eronder (nooit een wees onderaan de kolom). Past
-	// het daarna nog niet, dan wijken de laatste regels voor de "+N more"-lijn.
+	const itemH = (it: Item) => (it.t === 'head' ? HEAD_MM : ROW_MM);
+
+	/** Sectielabel dat geldt vlak vóór index i (voor het vervolg-kopje). */
+	function labelBefore(i: number): string {
+		for (let j = i - 1; j >= 0; j--) {
+			const it = items[j];
+			if (it.t === 'head') return it.label;
+		}
+		return '';
+	}
+
+	// Slimmer verdelen (feedback Sjoerd op #346): niet links volstoppen tot
+	// het kolombudget en de rest rechts laten bungelen, maar het breekpunt
+	// kiezen dat het HOOGTEVERSCHIL tussen de kolommen minimaliseert. Regels
+	// blijven: nooit breken direct ná een sectiekop (wees), een mid-sectie-
+	// breuk krijgt rechts een vervolg-kopje (telt mee in de balans), en
+	// CAP_MM blijft het harde plafond per kolom — past het nergens binnen
+	// twee kolommen, dan valt alles terug op vul-tot-cap met de
+	// "+N more"-afkap.
 	const cols = $derived.by(() => {
+		const total = items.reduce((s, it) => s + itemH(it), 0);
+		let best = -1;
+		let bestDiff = Infinity;
+		let acc = 0;
+		for (let i = 0; i < items.length - 1; i++) {
+			acc += itemH(items[i]);
+			if (items[i].t === 'head') continue;
+			const next = items[i + 1];
+			const contHead = next.t === 'row' ? HEAD_MM : 0;
+			const left = acc;
+			const right = total - acc + contHead;
+			if (left > CAP_MM || right > CAP_MM) continue;
+			const diff = Math.abs(left - right);
+			if (diff < bestDiff) {
+				bestDiff = diff;
+				best = i + 1;
+			}
+		}
+
+		if (best >= 0) {
+			const c: [Item[], Item[]] = [items.slice(0, best), []];
+			const first = items[best];
+			if (first?.t === 'row') {
+				const lbl = labelBefore(best);
+				if (lbl) c[1].push({ t: 'head', label: `${lbl} — cont.` });
+			}
+			c[1].push(...items.slice(best));
+			return c;
+		}
+
+		// Extreme lijst: het oude greedy pad met de afkap als noodrem.
 		const c: [Item[], Item[]] = [[], []];
 		let ci = 0;
 		let used = 0;
@@ -69,15 +116,12 @@
 		for (let i = 0; i < items.length; i++) {
 			const it = items[i];
 			if (it.t === 'head') curLabel = it.label;
-			const h = it.t === 'head' ? HEAD_MM : ROW_MM;
+			const h = itemH(it);
 			const need = it.t === 'head' ? HEAD_MM + ROW_MM : h;
 			if (used + need > CAP_MM) {
 				if (ci === 0) {
 					ci = 1;
 					used = 0;
-					// Stromen rijen mid-sectie door naar kolom 2, dan een
-					// vervolg-kopje erboven — zonder kop lezen ze als zwevende
-					// regels (PDF-check #344, Ambessa-lijst).
 					if (it.t === 'row' && curLabel) {
 						c[1].push({ t: 'head', label: `${curLabel} — cont.` });
 						used += HEAD_MM;
