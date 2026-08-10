@@ -14,7 +14,9 @@ export type SheetKind =
 	| 'tournament'
 	| 'reflection'
 	| 'milestone'
-	| 'notes';
+	| 'notes'
+	| 'deck'
+	| 'registration';
 
 /** Eén fysieke pagina. Milestone review beslaat twee pagina's; de tweede
  *  bestaat alleen in het paginaplan, niet als los te kiezen veltype. */
@@ -40,6 +42,10 @@ export interface ScorepadOptions {
 	c1: string | null;
 	/** Spelerkleur P2 — zelfde vorm als c1. */
 	c2: string | null;
+	/** Piltover-deck-id voor vooraf ingevulde deck-vellen (#344); null = leeg
+	 *  vel. Alleen een veilige id-vorm ([A-Za-z0-9-], max 64) reist mee in de
+	 *  URL — al het andere valt stil terug op null. */
+	deckId: string | null;
 }
 
 /** Standaard-spelerkleuren; spiegelen de --paper-p1/--paper-p2-tokens in
@@ -63,7 +69,9 @@ export const SHEET_ORDER: readonly SheetKind[] = [
 	'tournament',
 	'reflection',
 	'milestone',
-	'notes'
+	'notes',
+	'deck',
+	'registration'
 ];
 
 /** UI-metadata (Nederlands; de vellen zelf zijn Engelstalig, zoals al het
@@ -73,7 +81,7 @@ export const SHEET_ORDER: readonly SheetKind[] = [
  *  oplevert ("Match sheet…" vs "Match sheet…"). */
 export const SHEET_INFO: Record<
 	SheetKind,
-	{ label: string; shortLabel: string; hint: string; group: 'spel' | 'na'; pages: number }
+	{ label: string; shortLabel: string; hint: string; group: 'spel' | 'na' | 'deck'; pages: number }
 > = {
 	match: {
 		label: 'Match sheet (Bo3)',
@@ -137,6 +145,20 @@ export const SHEET_INFO: Record<
 		hint: 'Losse notitiepagina (dots of lijntjes)',
 		group: 'na',
 		pages: 1
+	},
+	deck: {
+		label: 'Deckoverzicht',
+		shortLabel: 'Deck',
+		hint: 'Decklijst compact + matchup-notities — leeg of vooraf ingevuld',
+		group: 'deck',
+		pages: 1
+	},
+	registration: {
+		label: 'Registration sheet',
+		shortLabel: 'Registration',
+		hint: 'Toernooi-decklijst (Piltover-opzet): legend, battlefields, main, runes, sideboard + judge-blok',
+		group: 'deck',
+		pages: 1
 	}
 };
 
@@ -149,7 +171,8 @@ export function defaultOptions(): ScorepadOptions {
 		notesStyle: 'dots',
 		binding: 'none',
 		c1: null,
-		c2: null
+		c2: null,
+		deckId: null
 	};
 }
 
@@ -193,6 +216,10 @@ export function parseOptions(params: URLSearchParams): ScorepadOptions {
 	if (c1 !== null && /^[0-9a-fA-F]{6}$/.test(c1)) o.c1 = c1.toLowerCase();
 	const c2 = params.get('c2');
 	if (c2 !== null && /^[0-9a-fA-F]{6}$/.test(c2)) o.c2 = c2.toLowerCase();
+	// Deck-prefill (#344): alleen een veilige id-vorm telt; rommel valt stil
+	// terug op null (leeg deck-vel), nooit een kapotte pagina.
+	const deck = params.get('deck');
+	if (deck !== null && /^[A-Za-z0-9-]{1,64}$/.test(deck)) o.deckId = deck;
 	return o;
 }
 
@@ -223,6 +250,7 @@ export function serializeOptions(o: ScorepadOptions): string {
 	if (o.binding !== d.binding) params.set('bind', o.binding);
 	if (o.c1 !== null) params.set('c1', o.c1);
 	if (o.c2 !== null) params.set('c2', o.c2);
+	if (o.deckId !== null) params.set('deck', o.deckId);
 	return params.toString();
 }
 
