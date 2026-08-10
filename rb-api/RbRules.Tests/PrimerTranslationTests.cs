@@ -126,6 +126,65 @@ public class PrimerTranslationTests
     }
 
     [Fact]
+    public void Glossary_DektDeKeywordFamiliesVanDeKaartenbak()
+    {
+        // #362: het glossarium is een handmatige lijst die per set moet
+        // meegroeien. Deze literals zijn de distinct-mechanics-meting op prod
+        // (2026-08) mínus de vier bewust weggelaten families (Action, Add,
+        // Repeat, Unique — zie de Glossary-doc en de zinsbegin-test hieronder).
+        // Uitgeschreven literals, geen verwijzing naar de productielijst: een
+        // test tegen de constante die hij bewaakt schuift mee (#293-les).
+        foreach (var term in new[]
+                 {
+                     "Accelerate", "Ambush", "Backline", "Buff", "Burn",
+                     "Deathknell", "Deflect", "Empower", "Flow", "Ganking",
+                     "Hidden", "Hunt", "Legion", "Level", "Mighty", "Predict",
+                     "Quick-Draw", "Shield", "Stun", "Tank", "Temporary",
+                     "Vision", "Weaponmaster", "XP",
+                 })
+            Assert.Contains(term, PrimerTranslation.Glossary);
+    }
+
+    [Fact]
+    public void Leaks_VertaaldUnlKeyword_WordtGevangen()
+    {
+        // #362: UNL bracht [Ambush] (o.a. Lord Broadmane unl-012-219). Een
+        // vertaling die er "hinderlaag" van maakt moet stranden…
+        const string english =
+            "A Unit with Ambush may be played as a Reaction to a Battlefield "
+            + "where you have Units (§310.2).";
+        const string translated =
+            "Een Unit met hinderlaag mag je als Reaction spelen naar een "
+            + "Battlefield waar je Units hebt (§310.2).";
+        Assert.Contains("Ambush", PrimerTranslation.Leaks(english, translated));
+
+        // …en de vertaling die de spelterm bewaart, telt gewoon als goed.
+        const string kept =
+            "Een Unit met Ambush mag je als Reaction spelen naar een "
+            + "Battlefield waar je Units hebt (§310.2).";
+        Assert.Empty(PrimerTranslation.Leaks(english, kept));
+    }
+
+    [Fact]
+    public void Leaks_GewoonEngelsZinsbeginwoord_BlijftVertaalbaar()
+    {
+        // De bewuste weglatingen (#362): "Add", "Repeat", "Action" en "Unique"
+        // zijn óók gewoon Engels dat een zin met hoofdletter kan openen. Deze
+        // correcte vertaling moet leeg blijven — wie een van die vier tóch aan
+        // het glossarium toevoegt, maakt deze test bewust rood en herweegt
+        // eerst het valse-lek-risico (een lek gooit de héle vertaling weg).
+        const string english =
+            "Add one Rune to your pool each turn (§201.2). Repeat this until "
+            + "your pool is full. Actions you can take include playing Units. "
+            + "Unique to Riftbound is the Battlefield system.";
+        const string dutch =
+            "Voeg elke beurt één Rune aan je pool toe (§201.2). Herhaal dit "
+            + "tot je pool vol is. Acties die je kunt nemen zijn onder meer "
+            + "Units spelen. Uniek aan Riftbound is het Battlefield-systeem.";
+        Assert.Empty(PrimerTranslation.Leaks(english, dutch));
+    }
+
+    [Fact]
     public void DutchTitle_GeeftDeNederlandseConceptnaam_MetSpeltermenIntact()
     {
         Assert.Equal("De beurtstructuur",
