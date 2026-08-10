@@ -13,6 +13,21 @@ describe('renderMarkdown — keywords en tokens in antwoorden (#359)', () => {
 	});
 });
 
+describe('renderMarkdown — linkclassificatie (review #363)', () => {
+	it('behandelt protocol-relatieve URL\'s (//host) als extern: nieuw tabblad + noopener', () => {
+		// '//evil.com' begint met '/' maar is een externe, LLM-stuurbare link.
+		const html = renderMarkdown('[klik](//evil.com)');
+		expect(html).toContain('target="_blank"');
+		expect(html).toContain('rel="noopener noreferrer"');
+	});
+
+	it('houdt echte interne paden intern (geen nieuw tabblad)', () => {
+		const html = renderMarkdown('[§ 348](/rules/348)');
+		expect(html).toContain('href="/rules/348"');
+		expect(html).not.toContain('target="_blank"');
+	});
+});
+
 describe('renderInlineMarkdown — oordeel-banner (#359)', () => {
 	it('rendert vet als <strong> in plaats van letterlijke sterretjes', () => {
 		const html = renderInlineMarkdown('het **Action**- of **Reaction**-keyword');

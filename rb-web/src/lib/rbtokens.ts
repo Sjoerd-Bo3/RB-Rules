@@ -101,6 +101,24 @@ const KEYWORD_KIND: Record<string, string> = {
 	// een ongemeten nieuw keyword er automatisch bij hoort.
 };
 
+/** Gesloten keyword-vocabulaire (basisvormen, distinct mechanics uit de
+ *  prod-DB, 2026-08-10) — voor de vet→gebracket-normalisatie in antwoorden
+ *  (#363): alleen woorden uit deze lijst worden omgeschreven, zodat gewone
+ *  vette nadruk ("**belangrijk**") met rust gelaten wordt. Het BADGE-matchen
+ *  blijft bewust een vorm-patroon (zie KEYWORD_RE) zodat nieuwe sets
+ *  meeliften; dit vocabulaire is alleen de omschrijf-poort. */
+export const KNOWN_KEYWORDS = new Set([
+	'accelerate', 'action', 'add', 'ambush', 'assault', 'backline', 'buff', 'burn',
+	'deathknell', 'deflect', 'empower', 'equip', 'flow', 'ganking', 'hidden', 'hunt',
+	'legion', 'level', 'mighty', 'predict', 'quick-draw', 'reaction', 'recycle',
+	'repeat', 'shield', 'stun', 'tank', 'temporary', 'unique', 'vision', 'weaponmaster'
+]);
+
+/** Is dit (met optionele magnitude, bv. "Assault 2") een bekend keyword? */
+export function isKnownKeyword(term: string): boolean {
+	return KNOWN_KEYWORDS.has(term.replace(/ \d+$/, '').toLowerCase());
+}
+
 function keywordHtml(kw: string): string {
 	const base = kw.replace(/ \d+$/, '').toLowerCase();
 	const kind = KEYWORD_KIND[base] ?? '';
