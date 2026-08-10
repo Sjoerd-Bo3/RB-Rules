@@ -1210,7 +1210,12 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
 
 Paginastructuur (`rb-web/src/routes/`): `/` (**Overzicht-dashboard**, #214),
 `/wijzigingen` (de volledige wijzigingen-feed, #214 — verhuisd van de root),
-`/rules` (+ `/rules/[code]`), `/primer`, `/ask` (+ `/ask/stream`), `/cards`
+`/rules` (+ `/rules/[code]`, en de kleine JSON-proxy `GET
+/rules/[code]/preview` — #370: de hover-popover op §-chips in /ask-antwoorden
+haalt daar client-side een compacte sectie-preview (code, tekst, ouders,
+bronnaam) langs hetzelfde rb-api-pad als de sectiepagina,
+`/api/rules/section/{code}`; 404 blijft 404, rest wordt 502), `/primer`,
+`/ask` (+ `/ask/stream`), `/cards`
 (+ `/cards/[id]` + `explain`), `/decks` (+ `/decks/[id]`, #15 fase 3 spoor A:
 browser + legaliteitsbadge, detail met decklijst per sectie en deep-link naar
 Piltover Archive — read-only, geen editor), `/graph` ("Brein"-verkenner, met
@@ -1386,7 +1391,14 @@ gebrackete vorm tegen het gesloten `KNOWN_KEYWORDS`-vocabulaire — en
 zodat een gedropte marker nooit meer een gat in de zin achterlaat), `cardImage.ts` (#269/#270 — verhouding, alt-tekst,
 laadkleur en "New"-markering per kaart; één plek voor het deckgrid, de
 kaartlijst, de kaartpagina en de kaartwidget),
-`answerFormat.ts`, `changeCard.ts`, `passkeys.ts`, `quota.ts`, `ranges.ts`
+`answerFormat.ts`, `rulePreview.ts` (#370 — pure bouwstenen voor de
+§-chip-hover-popover in `AnswerView`: href→code-extractie, pure
+viewport-positionering, citatie-lookup en een gedeelde fetch-cache met één
+in-flight per code die een 404 als antwoord cachet maar een transportfout
+niet; de popover-state zelf blijft lokaal in `AnswerView`, dat één
+gedelegeerde mouseover/focusin-handler op zijn wrapper hangt in plaats van de
+`{@html}`-chips te muteren, en de popover niet toont op media zonder hover),
+`changeCard.ts`, `passkeys.ts`, `quota.ts`, `ranges.ts`
 (compacte reeksweergave, #145), `graphNode.ts` (ref-splitsing, knoop-label/
 -samenvatting en doorklik-links van de graph-verkenner — gedeeld door de
 `/graph`-pagina en haar `/graph/node`-proxy, #252), `types.ts`

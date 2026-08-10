@@ -637,7 +637,10 @@ de globale duur-vangrail).
   klikbare §-chips via de citatielijst, vet geschreven keywords worden
   alsnog badges, en een widget-marker midden in een zin wordt uit de zin
   geknipt (naam/§-chip inline, widget op een eigen regel — nooit meer een
-  gat). De volledige citatielijst onderaan is dichtgeklapt naslagwerk
+  gat). Elke §-chip toont bij hover of toetsenbord-focus een compacte
+  popover met de regeltekst en directe ouderregel — uit de citaties of
+  anders via één gecachete preview-fetch; klikken blijft navigeren (#370).
+  De volledige citatielijst onderaan is dichtgeklapt naslagwerk
   geworden (de regels staan al inline); misvattingen en community-consensus
   blijven open staan. Elke citatie toont
   ook "geldig sinds"/"laatst bijgewerkt \<datum\>" van haar bron (#168); bij
