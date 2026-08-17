@@ -46,6 +46,7 @@
 		}
 	] as const;
 	const BOTTOM = [
+		{ href: '/hoe-het-werkt', label: 'Hoe het werkt' },
 		{ href: '/account', label: 'Account' },
 		{ href: '/admin', label: 'Beheer' }
 	];
@@ -147,7 +148,7 @@
 <footer class="site-footer">
 	<p>
 		Onofficiële referentie — automatisch bijgehouden uit de officiële Riftbound-bronnen. Geen
-		onderdeel van Riot Games.
+		onderdeel van Riot Games. <a href="/hoe-het-werkt">Hoe het werkt</a>
 	</p>
 </footer>
 

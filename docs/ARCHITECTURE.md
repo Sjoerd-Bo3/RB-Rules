@@ -1050,7 +1050,13 @@ robots-afspraak, browser-UA verplicht), achter een eigen
 `deckfetch`-rate-limit per client-ip; 400 ongeldige id / 404 weg op PA / 502
 PA-storing als Problem met detail), `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
-contradictions), `/api/ask` + `/api/ask/stream` + `/api/ask/history` (eigen
+contradictions, en sinds #379 `ontologie` — een publieke, IO-loze projectie van
+`OntologySchema` + de gegenereerde `InferenceRuleRegistry` via
+`OntologyPublicProjection`, zodat de uitlegpagina de klassen, relaties,
+disjunctheid en afleidingsregels LIVE toont in plaats van een overgetypte kopie
+die veroudert; edge-namen, kardinaliteit en de reïficatie-vlag komen
+één-op-één uit het schema, de Cypher van de inferentieregels bewust niet),
+`/api/ask` + `/api/ask/stream` + `/api/ask/history` (eigen
 ask-geschiedenis op user_id/ip_hash, geen id-parameter, #157) +
 `/api/ask/ruling` (in-chat ruling vastleggen, autoriteit bepaalt verified vs
 pending, #166), `/api/auth/*`
@@ -1248,6 +1254,11 @@ deck-codes/decklijsten krijgen negatieve refs die bewust nooit serialiseren
 en zijn — net als de registration-personalia — alléén lokale component-state:
 een code is geen stabiele referentie, en persoonsgegevens horen niet in
 query-strings),
+`/hoe-het-werkt` (publieke uitlegpagina, #379 — de keten van bron tot antwoord
+in negen hoofdstukken, bedoeld om aan derden te laten zien; server-load haalt
+`/api/stats` en `/api/brain/ontologie` best-effort op, dus de ontologie-tabel en
+de telstanden zijn live en de prozauitleg blijft leesbaar als rb-api hapert.
+Bereikbaar via de zijbalk-voet én de site-footer),
 `/account` (+ passkey/verify), `/admin` (+ `/admin/status`,
 `/admin/kosten` — het live kosten-paneel (#328): server-load + eigen
 cookie-beveiligde poll-GET (zelfde aanpak als `/admin/status`), periode-chips
