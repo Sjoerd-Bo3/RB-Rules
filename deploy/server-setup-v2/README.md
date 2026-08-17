@@ -28,37 +28,57 @@ docker compose --project-name rb-rules-v2 exec ollama ollama pull bge-m3
 > moderne machine verifieert dat prima, dus je ziet het niet met een losse
 > `curl` — je moet naar de keten kijken, niet naar de exitcode.
 >
-> Zet daarom in het **globale blok** van de centrale Caddyfile:
-> ```
-> {
-> 	cert_issuer acme {
-> 		preferred_chains {
-> 			root_common_name "ISRG Root X1"
-> 		}
-> 	}
-> }
-> ```
-> Daarna de bestaande certificaten weggooien en opnieuw laten uitgeven — alleen
-> een `reload` is niet genoeg, want een geldig cert wordt niet vervangen:
-> ```bash
-> docker exec caddy caddy reload --config /etc/caddy/Caddyfile
-> docker exec caddy rm -rf /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/poracle.nl \
->                          /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/www.poracle.nl
-> docker restart caddy
-> ```
-> Verifiëren (de keten moet nu op `R1x`/`E`-intermediates en ISRG Root X1
-> eindigen, zónder Root YE):
-> ```bash
-> openssl s_client -connect poracle.nl:443 -servername poracle.nl -showcerts </dev/null 2>/dev/null \
->   | grep -E "^ [0-9]+ s:|^   i:"
-> ```
-> Deze pin mag weg zodra Root YE in de trust stores van Apple, Chrome, Microsoft
-> en Mozilla zit — niet eerder.
+> De pin staat in `caddy/poracle.caddy` (zie hieronder) en wordt door de
+> deploy-workflow uitgerold. Hij mag weg zodra Root YE in de trust stores van
+> Apple, Chrome, Microsoft en Mozilla zit — niet eerder.
 
-Testfase (subdomein):
+De siteconfig van poracle.nl leeft **in de repo**: `caddy/poracle.caddy`.
+`v2-deploy.yml` synct die bij elke deploy naar `~/compose/caddy/conf.d/`,
+valideert (`caddy validate`) en herlaadt. Wijzig hem dus hier, niet op de VM.
+
+**Eenmalig op de VM** — de centrale Caddyfile moet de map inlezen, en het oude
+handmatige blok moet weg (anders declareren twee blokken hetzelfde domein en
+weigert Caddy te laden):
+
+```bash
+mkdir -p ~/compose/caddy/conf.d
+printf '\nimport conf.d/*.caddy\n' >> ~/compose/caddy/Caddyfile
+# haal het bestaande 'poracle.nl, www.poracle.nl { … }'-blok uit ~/compose/caddy/Caddyfile
+docker exec caddy caddy validate --config /etc/caddy/Caddyfile
+```
+
+Let op dat de caddy-container de map ook ziet: mount `~/compose/caddy` op
+`/etc/caddy` (niet alleen de Caddyfile zelf). De workflow controleert dat en
+faalt met die melding als het niet zo is.
+
+**Na een wijziging in `preferred_chains`** geldt de nieuwe keten pas bij de
+volgende uitgifte — Caddy vervangt een nog geldig certificaat niet. Draai dan
+`v2-deploy.yml` via *Run workflow* met **`renew_tls = true`**: die stap gooit de
+certificaten van `poracle.nl` en `www.poracle.nl` weg en herstart Caddy. Bewust
+opt-in: Let's Encrypt staat maar een beperkt aantal duplicaat-certificaten per
+week toe, dus dit bij elke merge doen levert binnen een dag géén certificaat op.
+
+De stap **Verifieer TLS-keten** draait wél bij elke deploy en leest de
+werkelijk geserveerde keten uit; ziet hij `Root YE`/`Root YR`, dan waarschuwt
+hij met de vervolgstap. Handmatig hetzelfde:
+
+```bash
+openssl s_client -connect poracle.nl:443 -servername poracle.nl -showcerts </dev/null 2>/dev/null \
+  | grep -E "^ [0-9]+ s:|^   i:"
+```
+
+De volledige inhoud van `caddy/poracle.caddy` (hier ter referentie — de file in
+de repo is leidend):
 ```
 poracle.nl, www.poracle.nl {
 	encode gzip
+	tls {
+		issuer acme {
+			preferred_chains {
+				root_common_name "ISRG Root X1"
+			}
+		}
+	}
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options nosniff
