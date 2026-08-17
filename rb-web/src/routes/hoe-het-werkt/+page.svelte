@@ -83,7 +83,10 @@
 				<span class="tile-l">wijzigingen (14 dagen)</span>
 			</div>
 		</div>
-		<p class="meta small">Deze cijfers komen rechtstreeks uit de database, net als de rest van deze pagina.</p>
+		<p class="meta small">
+			Deze cijfers komen rechtstreeks uit de database, de ontologie-tabellen verderop rechtstreeks
+			uit het schema in de code. De uitleg eromheen is met de hand geschreven.
+		</p>
 	</header>
 
 	<section class="kort">
@@ -101,9 +104,11 @@
 	<section id="bronnen">
 		<h2>1. Bronnen binnenhalen</h2>
 		<p>
-			Alles begint bij Riot zelf. Poracle bezoekt de officiële Rules Hub, vindt daar de PDF's
-			(Core Rules, Tournament Rules, ban- en errata-aankondigingen) en haalt de kaartgegevens
-			uit de officiële kaartgallery. Dat gebeurt op een vaste ronde, niet met de hand.
+			Alles begint bij Riot zelf. Poracle bezoekt de officiële Rules Hub en zoekt daar elke ronde
+			opnieuw de actuele Core Rules- en Tournament Rules-PDF's op, want die links wisselen per
+			versie. De banlijst leest Poracle uit de tekst van de Rules Hub zelf; de errata en patch
+			notes komen uit de officiële nieuwsartikelen per set, en de kaartgegevens uit de officiële
+			kaartgallery. Dat gebeurt op een vaste ronde, niet met de hand.
 		</p>
 		<p>
 			Belangrijk detail: we bewaren niet alleen de nieuwste versie, maar ook wát er veranderde.
@@ -179,15 +184,21 @@
 		<p>
 			Die "kaart" heeft in werkelijkheid 1024 dimensies in plaats van twee, en de opslag zit in
 			Postgres met de pgvector-uitbreiding. Om niet elke keer alle punten te hoeven vergelijken
-			ligt er een HNSW-index overheen: een gelaagd netwerk van kortere en langere sprongen,
-			waarmee de buren gevonden worden zonder de hele verzameling af te lopen.
+			ligt er over de grootste verzamelingen — regels, kaarten en community-inzichten — een
+			HNSW-index: een gelaagd netwerk van kortere en langere sprongen, waarmee de buren gevonden
+			worden zonder de hele verzameling af te lopen. De twee kleinere verzamelingen, spelbegrip
+			en rulings, hebben zo'n index niet: die zijn kort genoeg om nog gewoon punt voor punt te
+			vergelijken.
 		</p>
 		<div class="note">
 			<p>
 				<strong>Eén model, één maat.</strong> Vectoren van verschillende modellen zijn
 				onvergelijkbaar — hetzelfde woord komt bij een ander model ergens anders te liggen.
-				Poracle legt daarom bij elke vector vast welk model hem maakte. Wisselt het model,
-				dan worden de vectoren opnieuw berekend in plaats van stiekem gemengd.
+				Poracle legt daarom bij de vectoren vast welk model ze maakte, en de kolom heeft een
+				vaste maat: een model met een andere dimensie wordt hard geweigerd in plaats van er
+				stilletjes naast te gaan liggen. Wisselt het model, dan is opnieuw berekenen een
+				expliciete stap: kaarten pakt de embed-job vanzelf op, de andere lagen volgen bij hun
+				eerstvolgende herindexering of hergeneratie.
 			</p>
 		</div>
 
@@ -221,7 +232,10 @@
 		<p>
 			Bij Poracle staat die afspraak in code, op één plek, en is ze machine-leesbaar. Uit
 			diezelfde bron komen de validatieregels, de afleidingsregels en de tabel hieronder. Een
-			relatie die hier niet staat, bestaat niet.
+			verband over Riftbound zelf dat hier niet staat, bestaat niet. Wat de graaf daarnaast nog
+			vastlegt is herkomst en eigen boekhouding — welke bron een bewering staaft, uit welke
+			ronde ze komt, welke entiteit met welke is samengevoegd — en dat valt bewust buiten de
+			ontologie, omdat het niets over het spel beweert.
 		</p>
 
 		{#if ont}
@@ -318,9 +332,12 @@
 			ontologie is daarom geversioneerd, met vaste regels voor wat een versie-ophoging
 			rechtvaardigt: nieuwe kaarten en keywords zijn gewoon nieuwe gevallen binnen het
 			bestaande schema, een nieuw relatietype is een uitbreiding, en het splitsen van een
-			klasse of het wijzigen van een uitsluiting is een breuk die de hele graaf opnieuw laat
-			toetsen. Een wijziging in de code zonder bijbehorende versiebeslissing laat de build
-			falen — precies zoals een databasemigratie dat doet.
+			klasse of het wijzigen van een uitsluiting is een breuk: het schema krijgt een nieuw
+			hoofdversienummer, het teken dat alles wat al in de graaf staat opnieuw tegen dat schema
+			getoetst moet worden. Wijzigt de structuur van het schema zonder dat de vastgelegde
+			momentopname wordt bijgewerkt, dan faalt de build — precies zoals een databasemigratie
+			dat doet. Bij dat bijwerken hoort de bewuste keuze welk deel van het versienummer
+			opschuift.
 		</p>
 	</section>
 
@@ -344,10 +361,14 @@
 		<p>
 			Het aardige van een graaf met een ontologie eronder is dat er conclusies uit volgen. Een
 			voorbeeld: draagt een kaart de mechaniek <em>Deflect</em>, en definieert § 809.1 wat
-			Deflect doet, dan valt die kaart onder die regel. Dat feit staat nergens ingetypt — het
-			volgt uit twee andere feiten. Poracle leidt zulke ketens systematisch af, en elke
-			afgeleide verbinding draagt een stempel: welke regel hem maakte en in welke ronde.
-			Afgeleide kennis is nooit bron; bij een herbouw wordt ze opnieuw afgeleid.
+			Deflect doet, dan valt die kaart onder die regel — zonder dat iemand dat feit intypt; het
+			volgt uit twee andere feiten. De regels die zulke ketens aflopen worden automatisch uit de
+			ontologie gegenereerd en staan klaar, maar juist deze keten levert vandaag nog niets op:
+			de graaf legt de tweede stap — van mechaniek naar regelsectie — nog niet vast. Wat er nu
+			wél uit volgt is de terugweg van een verbinding die maar één kant op is vastgelegd: werkt
+			kaart A in op kaart B, dan geldt die verbinding ook andersom. Elke afgeleide verbinding
+			draagt een stempel: welke regel hem maakte en in welke ronde. Afgeleide kennis is nooit
+			bron; bij een herbouw wordt ze opnieuw afgeleid.
 		</p>
 		{#if ont && ont.inferenties.length}
 			<p class="meta small">
@@ -415,17 +436,20 @@
 		<p>
 			Welke vorm dat uitlopen krijgt hangt af van de vraag. Een scherpe interactievraag over
 			twee kaarten vraagt om een korte, gerichte uitbreiding rond die twee. Een brede vraag
-			("hoe werkt de gevechtsfase eigenlijk?") heeft juist samenvattende concepten nodig in
-			plaats van losse knopen. Een "waarom"-vraag vraagt om een pad tussen twee punten. En een
-			ban-vraag heeft helemaal geen graaf nodig: de banlijst opzoeken is exacter.
+			("hoe werkt de gevechtsfase in het algemeen?") heeft juist samenvattende concepten nodig
+			in plaats van losse knopen. Een "waarom"-vraag vraagt om een pad tussen twee punten. En
+			een ban-vraag heeft helemaal geen graaf nodig: de banlijst opzoeken is exacter.
 		</p>
 		<div class="note">
 			<p>
-				<strong>Het stevigste pad, niet het kortste.</strong> Als de graaf een keten als
-				onderbouwing levert, telt niet het minste aantal stappen. Elke stap kost
-				1&nbsp;/&nbsp;(betrouwbaarheid&nbsp;×&nbsp;zekerheid), en het pad met de laagste
-				totaalkosten wint. Een korte route over een zwak onderbouwde verbinding is dus
-				"langer" dan een omweg over officiële regels.
+				<strong>De kortste keten, met de stevigheid erbij.</strong> Als de graaf een keten als
+				onderbouwing levert, zoekt hij de kortste verbinding tussen twee ankers en toont die
+				stap voor stap. Bij elke stap legt Poracle vast hoe zwaar de betrokken kennislaag
+				weegt en hoe zeker de verbinding is, zodat zichtbaar blijft waar een keten op zwak
+				bewijs leunt — en zodat die weging meetelt in de vraag of een antwoord genoeg
+				officiële dekking heeft. Het pad kiezen op die stevigheid in plaats van op lengte —
+				elke stap kost dan 1&nbsp;/&nbsp;(betrouwbaarheid&nbsp;×&nbsp;zekerheid) — is
+				uitgewerkt en getest, maar staat nog niet aan.
 			</p>
 		</div>
 		<p class="meta small">
@@ -448,7 +472,7 @@
 				<thead><tr><th>Laag</th><th>Wat het is</th><th>Gewicht</th></tr></thead>
 				<tbody>
 					<tr><td>Officieel</td><td>Regels, kaartgegevens, toernooiregels</td><td class="tnum">1,00</td></tr>
-					<tr><td>Geverifieerde ruling</td><td>Ruling of erratum, door een mens nagekeken</td><td class="tnum">0,85</td></tr>
+					<tr><td>Geverifieerde ruling</td><td>Ruling of erratum, automatisch tegen de bron getoetst; twijfelgevallen eerst langs de beheerder</td><td class="tnum">0,85</td></tr>
 					<tr><td>Spelbegrip</td><td>Uit de regels gedestilleerde uitleg</td><td class="tnum">0,65</td></tr>
 					<tr><td>Community</td><td>Interpretatie van spelers, met bron en bijval</td><td class="tnum">0,45</td></tr>
 					<tr><td>Meta</td><td>Tactiek en deckgebruik; veroudert het snelst</td><td class="tnum">0,25</td></tr>
@@ -482,13 +506,16 @@
 		</p>
 		<ul class="format">
 			<li><strong>Oordeel</strong> — het antwoord in één zin</li>
-			<li><strong>Zekerheid</strong> — hoe stellig, en waarom</li>
-			<li><strong>Uitleg</strong> — de redenering</li>
-			<li><strong>Regelbasis</strong> — de secties waarop het steunt</li>
+			<li>
+				<strong>Zekerheid</strong> — Bevestigd, Afgeleid, Community-consensus of Onzeker, met
+				toelichting
+			</li>
+			<li><strong>Uitleg</strong> — de redenering, met [1], [2] op de plek waar ze op een fragment leunt</li>
 			<li><strong>Let op</strong> — de randgevallen die het omdraaien</li>
 		</ul>
 		<p>
-			Citaties zijn uitklapbaar en tonen naast de geciteerde sectie ook de bovenliggende
+			De regelsecties zelf staan niet in het antwoord maar in de citatielijst eronder — bewust op
+			één plek. Citaties zijn uitklapbaar en tonen naast de geciteerde sectie ook de bovenliggende
 			regel, want een sectie los gelezen betekent vaak iets anders. Genoemde kaarten en regels
 			verschijnen als aanklikbare blokken in plaats van kale tekst. En achter de schermen legt
 			Poracle per vraag vast welke lagen meededen en hoe lang elke stap duurde — zichtbaar in
@@ -522,8 +549,8 @@
 		<p>
 			Daar komt bij dat één kaart meerdere drukken kan hebben: alternatieve art, een herdruk in
 			een latere set. Dat zijn geen verschillende kaarten. Poracle kiest per kaartnaam één
-			canonieke druk en hangt alle kennis daaraan, zodat een ban of erratum op de ene druk
-			zichtbaar is vanaf alle andere.
+			canonieke druk en hangt de afgeleide kennis — mechanieken, rulings, relaties, ban-historie
+			— daaraan. Een ban op één druk geldt daardoor voor álle drukken van dezelfde kaart.
 		</p>
 		<h3>Voorwaarde 2: gelijkheid als gewogen bewering</h3>
 		<p>
