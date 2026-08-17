@@ -907,7 +907,7 @@ de globale duur-vangrail).
   Status; alleen de beheerder (X-Admin-Key) kan de actie triggeren. Een
   al `verified` of `rejected` item degradeert/heropent nooit via dit pad.
 
-- **Uitlegpagina** (#379) — `/hoe-het-werkt`: een publieke, deelbare uitleg van
+- **Uitlegpagina** (PR #378) — `/hoe-het-werkt`: een publieke, deelbare uitleg van
   de hele keten (bron → secties → hybride zoek → ontologie → graaf → GraphRAG →
   trust-poort → antwoord), plus een hoofdstuk over het koppelen van meerdere
   kennisgrafen en een expliciete "waar het niet voor is". Twee dingen komen live

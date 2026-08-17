@@ -13,6 +13,48 @@ docker compose --project-name rb-rules-v2 exec ollama ollama pull bge-m3
 ```
 
 ## Caddy-route
+
+> **Pin de certificaatketen op ISRG Root X1 (#379).** Let's Encrypt heeft in
+> november 2025 een nieuwe "Generation Y"-hiërarchie uitgerold (roots **ISRG
+> Root YE** en **Root YR**, intermediates YE1–YE3 en YR1–YR3). Die roots zitten
+> nog in géén enkele grote trust store; Let's Encrypt zegt dat zelf:
+> *"Chains which terminate at Root YE or Root YR are not expected to work with
+> any of the major trust stores."* Pakt Caddy zo'n keten, dan krijgt de bezoeker
+> `ERR_CERT_AUTHORITY_INVALID` — ook al is er een cross-sign naar het wél
+> vertrouwde X1, want lang niet elke client bouwt dat langere pad.
+>
+> Dat is precies wat er op poracle.nl gebeurde: de geserveerde keten liep
+> `poracle.nl → YE2 → Root YE → Root X2 → Root X1` (www liep via YE1). Vanaf een
+> moderne machine verifieert dat prima, dus je ziet het niet met een losse
+> `curl` — je moet naar de keten kijken, niet naar de exitcode.
+>
+> Zet daarom in het **globale blok** van de centrale Caddyfile:
+> ```
+> {
+> 	cert_issuer acme {
+> 		preferred_chains {
+> 			root_common_name "ISRG Root X1"
+> 		}
+> 	}
+> }
+> ```
+> Daarna de bestaande certificaten weggooien en opnieuw laten uitgeven — alleen
+> een `reload` is niet genoeg, want een geldig cert wordt niet vervangen:
+> ```bash
+> docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+> docker exec caddy rm -rf /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/poracle.nl \
+>                          /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/www.poracle.nl
+> docker restart caddy
+> ```
+> Verifiëren (de keten moet nu op `R1x`/`E`-intermediates en ISRG Root X1
+> eindigen, zónder Root YE):
+> ```bash
+> openssl s_client -connect poracle.nl:443 -servername poracle.nl -showcerts </dev/null 2>/dev/null \
+>   | grep -E "^ [0-9]+ s:|^   i:"
+> ```
+> Deze pin mag weg zodra Root YE in de trust stores van Apple, Chrome, Microsoft
+> en Mozilla zit — niet eerder.
+
 Testfase (subdomein):
 ```
 poracle.nl, www.poracle.nl {

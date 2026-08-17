@@ -1050,7 +1050,7 @@ robots-afspraak, browser-UA verplicht), achter een eigen
 `deckfetch`-rate-limit per client-ip; 400 ongeldige id / 404 weg op PA / 502
 PA-storing als Problem met detail), `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
-contradictions, en sinds #379 `ontologie` — een publieke, IO-loze projectie van
+contradictions, en sinds PR #378 `ontologie` — een publieke, IO-loze projectie van
 `OntologySchema` + de gegenereerde `InferenceRuleRegistry` via
 `OntologyPublicProjection`, zodat de uitlegpagina de klassen, relaties,
 disjunctheid en afleidingsregels LIVE toont in plaats van een overgetypte kopie
@@ -1254,7 +1254,7 @@ deck-codes/decklijsten krijgen negatieve refs die bewust nooit serialiseren
 en zijn — net als de registration-personalia — alléén lokale component-state:
 een code is geen stabiele referentie, en persoonsgegevens horen niet in
 query-strings),
-`/hoe-het-werkt` (publieke uitlegpagina, #379 — de keten van bron tot antwoord
+`/hoe-het-werkt` (publieke uitlegpagina, PR #378 — de keten van bron tot antwoord
 in negen hoofdstukken, bedoeld om aan derden te laten zien; server-load haalt
 `/api/stats` en `/api/brain/ontologie` best-effort op, dus de ontologie-tabel en
 de telstanden zijn live en de prozauitleg blijft leesbaar als rb-api hapert.
