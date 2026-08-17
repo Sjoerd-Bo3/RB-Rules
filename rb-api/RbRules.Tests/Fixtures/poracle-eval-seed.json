@@ -1,0 +1,98 @@
+{
+  "note": "VOORBEELD / SEED — Poracle-brein eval-harness (#231, Fase 7). Dit is GEEN gecureerde productie-gouden-set: het zijn 5 illustratieve Riftbound-cases die de EvalCase-vorm, de vier meetlagen en de levenscyclus (cold-start-shadow + errata-verval) demonstreren. De bedrade harness leest gecureerde cases uit Postgres eval_case; rb-ai levert kandidaten uit set/errata-diffs aan via de reviewqueue. Ids zijn structurele placeholders (card:/mechanic:/section:/interaction:), niet noodzakelijk echte graaf-ids.",
+  "cases": [
+    {
+      "id": "eval-factoid-mountain-drake-cost",
+      "question": "Wat is de energiekost van Mountain Drake?",
+      "queryType": "Factoid",
+      "status": "active",
+      "validFrom": "2026-01-01",
+      "validUntil": null,
+      "supersededByErratum": null,
+      "goldSupport": ["card:mountain-drake", "card:mountain-drake#energy"],
+      "expectedCitations": ["card:mountain-drake"],
+      "forbiddenClaims": []
+    },
+    {
+      "id": "eval-inference-deflect-showdown",
+      "question": "Werkt Deflect nog tijdens een showdown?",
+      "queryType": "Inference",
+      "status": "active",
+      "validFrom": "2026-01-01",
+      "validUntil": null,
+      "supersededByErratum": null,
+      "goldSupport": [
+        "mechanic:deflect",
+        "section:core-rules-pdf/7.4",
+        "interaction:deflect-showdown#window-showdown"
+      ],
+      "expectedCitations": ["section:core-rules-pdf/7.4"],
+      "forbiddenClaims": [
+        {
+          "id": "fc-deflect-prevents-all",
+          "text": "Deflect voorkomt alle schade tijdens een showdown.",
+          "supersededByErratum": null
+        }
+      ]
+    },
+    {
+      "id": "eval-comparison-stun-vs-exhaust",
+      "question": "Wat is het verschil tussen Stun en Exhaust?",
+      "queryType": "Comparison",
+      "status": "active",
+      "validFrom": "2026-01-01",
+      "validUntil": null,
+      "supersededByErratum": null,
+      "goldSupport": [
+        "mechanic:stun",
+        "mechanic:exhaust",
+        "section:core-rules-pdf/glossary-stun",
+        "section:core-rules-pdf/glossary-exhaust"
+      ],
+      "expectedCitations": [
+        "section:core-rules-pdf/glossary-stun",
+        "section:core-rules-pdf/glossary-exhaust"
+      ],
+      "forbiddenClaims": []
+    },
+    {
+      "id": "eval-temporal-exhausted-block-errata",
+      "question": "Kan een exhausted unit nog blocken?",
+      "queryType": "Temporal",
+      "status": "active",
+      "validFrom": "2026-01-01",
+      "validUntil": null,
+      "supersededByErratum": null,
+      "goldSupport": ["mechanic:exhaust", "section:core-rules-pdf/6.2"],
+      "expectedCitations": ["section:core-rules-pdf/6.2"],
+      "forbiddenClaims": [
+        {
+          "id": "fc-exhausted-cannot-block",
+          "text": "Exhausted units kunnen niet blocken.",
+          "supersededByErratum": "errata-2026-03-showdown"
+        }
+      ]
+    },
+    {
+      "id": "eval-shadow-set2-overload",
+      "question": "Wat doet het keyword Overload op een set-2-kaart?",
+      "queryType": "Factoid",
+      "status": "shadow",
+      "validFrom": "2026-07-01",
+      "validUntil": null,
+      "supersededByErratum": null,
+      "goldSupport": [
+        "mechanic:overload#proposed",
+        "section:core-rules-pdf/set2-glossary-overload"
+      ],
+      "expectedCitations": ["section:core-rules-pdf/set2-glossary-overload"],
+      "forbiddenClaims": [
+        {
+          "id": "fc-overload-costs-nothing",
+          "text": "Overload kost geen extra energie.",
+          "supersededByErratum": null
+        }
+      ]
+    }
+  ]
+}

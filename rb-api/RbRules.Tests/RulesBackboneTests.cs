@@ -167,4 +167,25 @@ public class BanErrataExtractorTests
         Assert.Empty(BanErrataExtractor.ParseBans("geen json"));
         Assert.Empty(BanErrataExtractor.ParseErrata("{}"));
     }
+
+    [Fact]
+    public void BuildErrataInput_CarriesSourceNameAsSetContext()
+    {
+        // #94: de per-set-pagina's benoemen hun set niet altijd in de lopende
+        // tekst — de bronnaam draagt die context de extractie in.
+        var input = BanErrataExtractor.BuildErrataInput(
+            "Origins Card Errata (officieel)", "Adaptatron: nieuwe tekst.");
+        Assert.StartsWith("Bron: Origins Card Errata (officieel)\n\n", input);
+        Assert.EndsWith("Adaptatron: nieuwe tekst.", input);
+    }
+
+    [Fact]
+    public void BuildErrataInput_TruncatesLongPages()
+    {
+        var input = BanErrataExtractor.BuildErrataInput(
+            "Bron X", new string('a', BanErrataExtractor.MaxPageTextLength + 500));
+        Assert.Equal(
+            "Bron: Bron X\n\n".Length + BanErrataExtractor.MaxPageTextLength,
+            input.Length);
+    }
 }

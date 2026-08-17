@@ -1,55 +1,112 @@
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { api } from '$lib/api';
+import { adminApi, authed } from '$lib/server/admin';
+import { firePrewarm } from '$lib/prewarm';
+import { quotaMessage } from '$lib/quota';
+import { USER_COOKIE, userHeaders } from '$lib/server/user';
+import type {
+	AskCard,
+	AskCitation,
+	AskClaim,
+	AskMisconception,
+	AskResult
+} from '$lib/types';
+
+// Quota-fouten van rb-api (#42) vertaald naar een bruikbare melding — de
+// api()-helper geeft alleen de status door. De teksten staan in $lib/quota,
+// gedeeld met het streamingpad (#31).
+function quotaError(msg: string, fallback: string): string {
+	const status = [429, 401, 403].find((s) => msg.includes(String(s)));
+	return (status !== undefined && quotaMessage(status)) || fallback;
+}
 
 export interface AskStats {
 	count: number;
 	avgMs?: number;
 	medianMs?: number;
 	p90Ms?: number;
+	/** Fase-verdeling (#152): gemiddelde per fase over de recentste traces
+	 *  mét timings; null/afwezig zolang er nog geen gemeten vragen zijn. */
+	phases?: {
+		count: number;
+		rewriteMs: number;
+		embedMs: number;
+		retrievalMs: number;
+		aiMs: number;
+	} | null;
 }
 
-export const load: PageServerLoad = async () => {
-	try {
-		return { stats: await api<AskStats>('/api/ask/stats') };
-	} catch {
-		return { stats: { count: 0 } as AskStats };
+/** Aanpak-keuze (#153): het stukje accountinfo dat het vraagformulier nodig
+ *  heeft — alleen aanwezig voor een ingelogde bezoeker. */
+export interface AskAccount {
+	dailyAgenticQuota: number;
+	agenticToday: number;
+}
+
+/** Eigen ask-geschiedenis (#157): user_id (ingelogd) of ip_hash (anoniem) —
+ *  rb-api bepaalt de scope zelf uit de request, hier geen parameter nodig. */
+export interface AskHistoryItem {
+	id: number;
+	question: string;
+	createdAt: string;
+	questionType: string | null;
+	answer: string | null;
+	agentic: boolean;
+}
+
+export const load: PageServerLoad = async ({ cookies, getClientAddress }) => {
+	// Voorverwarmsignaal (#154), fire-and-forget: mag het renderen nooit
+	// vertragen of laten falen ($lib/prewarm slikt alles). Sinds de
+	// login-poort (#328) alleen voor ingelogde bezoekers — een anonieme
+	// paginalaad kan toch geen vraag meer stellen en hoeft dus geen
+	// SDK-subprocess op de VM te booten.
+	const userAuthHeaders = userHeaders(cookies);
+	const headers = { 'x-client-ip': getClientAddress(), ...userAuthHeaders };
+	if (cookies.get(USER_COOKIE)) {
+		// Sessietoken mee: rb-api gate't prewarm sinds de review óók
+		// server-side (zelfde login-poort als de AI-paden).
+		firePrewarm(() => api('/api/ask/prewarm', { method: 'POST', headers }));
 	}
+	// Duurstatistiek en eigen geschiedenis (#157) parallel — beide best-effort.
+	const [stats, askHistory] = await Promise.all([
+		api<AskStats>('/api/ask/stats').catch(() => ({ count: 0 }) as AskStats),
+		api<AskHistoryItem[]>('/api/ask/history', { headers }).catch(() => [] as AskHistoryItem[])
+	]);
+	// Ingelogd (#153): dagtegoed voor Grondig ophalen — best-effort, want
+	// zonder account werkt de pagina gewoon (dan is er geen keuze en beslist
+	// de server sowieso Auto).
+	let account: AskAccount | null = null;
+	if (cookies.get(USER_COOKIE)) {
+		try {
+			const me = await api<AskAccount>('/api/auth/me', { headers: userAuthHeaders });
+			account = { dailyAgenticQuota: me.dailyAgenticQuota, agenticToday: me.agenticToday };
+		} catch {
+			account = null;
+		}
+	}
+	// loggedIn voor de privacy-melding in het geschiedenis-paneel (#157) —
+	// geen extra accountcall nodig, alleen of er een sessietoken meeging.
+	// isAdmin (#166): bepaalt of "Vastleggen als ruling" direct verifieert —
+	// zelfde rb_admin-cookiecheck als het beheer, geen extra rb-api-call.
+	return {
+		stats,
+		account,
+		askHistory,
+		loggedIn: 'X-User-Token' in userAuthHeaders,
+		isAdmin: authed(cookies)
+	};
 };
 
-interface Citation {
-	n: number;
-	sourceName: string;
-	url: string;
-	section: string | null;
-	trust: number;
-	text: string | null;
-	pdfUrl: string | null;
-	page: number | null;
-	parents: { code: string; text: string }[] | null;
-}
-export interface AskCard {
-	riftboundId: string;
-	name: string;
-	type: string | null;
-	supertype: string | null;
-	domains: string[];
-	energy: number | null;
-	might: number | null;
-	textPlain: string | null;
-	mechanics: string[] | null;
-	imageUrl: string | null;
-	banned: boolean;
-}
-interface AskResult {
-	answer: string;
-	citations: Citation[];
-	cards: AskCard[];
-	questionType: string;
-}
-
 export const actions: Actions = {
-	ask: async ({ request, getClientAddress }) => {
+	ask: async ({ request, getClientAddress, cookies }) => {
+		// Login-poort (#328), server-side: anoniem komt hier niet langs — ook
+		// niet met een gemanipuleerde store of een handgemaakte POST. rb-api
+		// heeft dezelfde poort (defense-in-depth); dit is de laag die de
+		// bezoeker een nette Nederlandse melding geeft.
+		if (!cookies.get(USER_COOKIE)) {
+			return fail(401, { error: 'Log in om de vraagbaak te gebruiken.' });
+		}
 		const form = await request.formData();
 		const question = String(form.get('question') ?? '').trim();
 		if (!question) return fail(400, { error: 'Stel eerst een vraag.' });
@@ -62,6 +119,10 @@ export const actions: Actions = {
 			history = [];
 		}
 		history = history.slice(-3);
+
+		// Aanpak-keuze (#153): reist als request-veld mee; rb-api is de
+		// meester (anoniem of onbekende waarde = Auto), dus hier geen poort.
+		const approach = String(form.get('approach') ?? '').trim() || undefined;
 
 		// Optionele board-state-foto — client verkleint al, dit is de vangrail.
 		let images: { mediaType: string; data: string }[] | undefined;
@@ -77,17 +138,21 @@ export const actions: Actions = {
 		try {
 			const result = await api<AskResult>('/api/ask', {
 				method: 'POST',
-				headers: { 'x-client-ip': getClientAddress() },
+				// Ingelogd (#42): sessietoken mee — dan telt de vraag tegen het
+				// eigen dagquotum in plaats van de anonieme IP-limiet.
+				headers: { 'x-client-ip': getClientAddress(), ...userHeaders(cookies) },
 				body: JSON.stringify({
 					question,
 					images,
-					history: history.length ? history : undefined
+					history: history.length ? history : undefined,
+					approach
 				})
 			});
 			return { question, history, hadPhoto: Boolean(images), ...result };
 		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
 			return fail(500, {
-				error: `Vraag mislukt (${e instanceof Error ? e.message : e})`,
+				error: quotaError(msg, `Vraag mislukt (${msg})`),
 				question,
 				history
 			});
@@ -95,39 +160,125 @@ export const actions: Actions = {
 	},
 	// Self-learning (#24): feedback wordt een correctie in de reviewqueue;
 	// na verificatie door de beheerder stuurt hij toekomstige antwoorden.
-	feedback: async ({ request, getClientAddress }) => {
+	feedback: async ({ request, getClientAddress, cookies }) => {
 		const form = await request.formData();
 		const question = String(form.get('question') ?? '').trim();
 		const verdict = String(form.get('verdict') ?? '');
 		const text = String(form.get('text') ?? '').trim() || undefined;
 		const answer = String(form.get('answer') ?? '');
-		let citations: Citation[] = [];
+		let citations: AskCitation[] = [];
 		let cards: AskCard[] = [];
+		let claims: AskClaim[] = [];
+		let misconceptions: AskMisconception[] = [];
 		try {
 			citations = JSON.parse(String(form.get('citations') ?? '[]'));
 			cards = JSON.parse(String(form.get('cards') ?? '[]'));
+			claims = JSON.parse(String(form.get('claims') ?? '[]'));
+			misconceptions = JSON.parse(String(form.get('misconceptions') ?? '[]'));
 		} catch {
 			/* corrupt doorgegeven state — dan zonder */
 		}
 		// Ook bij fouten antwoord+citaties teruggeven, anders verdwijnt het
 		// zojuist gegeven antwoord van de pagina.
 		if (!question || !['up', 'down'].includes(verdict)) {
-			return fail(400, { error: 'Ongeldige feedback.', question, answer, citations, cards });
+			return fail(400, {
+				error: 'Ongeldige feedback.',
+				question,
+				answer,
+				citations,
+				cards,
+				claims,
+				misconceptions
+			});
 		}
 		try {
 			await api('/api/corrections', {
 				method: 'POST',
-				headers: { 'x-client-ip': getClientAddress() },
+				headers: { 'x-client-ip': getClientAddress(), ...userHeaders(cookies) },
 				body: JSON.stringify({ question, verdict, text })
 			});
-			return { question, answer, citations, cards, feedbackSent: verdict };
+			return { question, answer, citations, cards, claims, misconceptions, feedbackSent: verdict };
 		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
 			return fail(500, {
-				error: `Feedback versturen mislukt (${e instanceof Error ? e.message : e})`,
+				error: quotaError(msg, `Feedback versturen mislukt (${msg})`),
 				question,
 				answer,
 				citations,
-				cards
+				cards,
+				claims,
+				misconceptions
+			});
+		}
+	},
+	// In-chat ruling vastleggen (#166): autoriteit bepaalt de route — rb-api
+	// beslist server-authoritatief (X-Admin-Key resp. X-User-Token), hier
+	// alleen welke credentials meegaan. Anoniem: de knop is al niet zichtbaar
+	// (+page.svelte), en rb-api wijst het sowieso af (401).
+	ruling: async ({ request, cookies, getClientAddress }) => {
+		const form = await request.formData();
+		const statement = String(form.get('statement') ?? '').trim();
+		const scope = String(form.get('scope') ?? 'answer').trim();
+		const topicRef = String(form.get('topicRef') ?? '').trim() || undefined;
+		const sourceRef = String(form.get('sourceRef') ?? '').trim();
+		const question = String(form.get('question') ?? '').trim() || undefined;
+		const answer = String(form.get('answer') ?? '');
+		let citations: AskCitation[] = [];
+		let cards: AskCard[] = [];
+		let claims: AskClaim[] = [];
+		let misconceptions: AskMisconception[] = [];
+		try {
+			citations = JSON.parse(String(form.get('citations') ?? '[]'));
+			cards = JSON.parse(String(form.get('cards') ?? '[]'));
+			claims = JSON.parse(String(form.get('claims') ?? '[]'));
+			misconceptions = JSON.parse(String(form.get('misconceptions') ?? '[]'));
+		} catch {
+			/* corrupt doorgegeven state — dan zonder */
+		}
+		// Het antwoord blijft zichtbaar ná deze action (zelfde reden als
+		// feedback hierboven): zonder deze velden terug te geven verdwijnt het
+		// zojuist gegeven antwoord van de pagina.
+		const context = { question, answer, citations, cards, claims, misconceptions };
+
+		if (!statement) return fail(400, { rulingError: 'Vul een uitspraak in.', ...context });
+		if (!sourceRef) {
+			return fail(400, {
+				rulingError: 'Een bronverwijzing (waar besloten) is verplicht.',
+				...context
+			});
+		}
+		if ((scope === 'card' || scope === 'rule_section') && !topicRef) {
+			return fail(400, {
+				rulingError:
+					scope === 'card' ? 'Kies een kaart voor deze scope.' : 'Kies een §-sectie voor deze scope.',
+				...context
+			});
+		}
+
+		const admin = authed(cookies);
+		const loggedIn = Boolean(cookies.get(USER_COOKIE));
+		if (!admin && !loggedIn) {
+			return fail(401, {
+				rulingError: 'Log in (of als beheerder) om een ruling vast te leggen.',
+				...context
+			});
+		}
+
+		const body = JSON.stringify({ statement, scope, topicRef, sourceRef, question });
+		try {
+			const result = admin
+				? await adminApi<{ verified: boolean }>('/api/ask/ruling', { method: 'POST', body })
+				: await api<{ verified: boolean }>('/api/ask/ruling', {
+						method: 'POST',
+						headers: { 'x-client-ip': getClientAddress(), ...userHeaders(cookies) },
+						body
+					});
+			return { rulingSaved: true, rulingVerified: result.verified, ...context };
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			return fail(500, {
+				rulingError: quotaError(msg, `Vastleggen mislukt (${msg})`),
+				...context
 			});
 		}
 	}

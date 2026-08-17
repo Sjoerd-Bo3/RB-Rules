@@ -23,9 +23,15 @@ marked.use({
 	renderer: {
 		link({ href, text }) {
 			const url = safeUrl(href);
-			return url
-				? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`
-				: text;
+			if (!url) return text;
+			// Interne links (§-verwijzingen, #363) navigeren in de app zelf;
+			// alleen externe bronnen openen in een nieuw tabblad. Let op:
+			// '//host' is protocol-relatief en dus een EXTERNE, LLM-stuurbare
+			// bestemming — '/' alleen is niet genoeg (review #363).
+			const internal = (url.startsWith('/') && !url.startsWith('//')) || url.startsWith('#');
+			return internal
+				? `<a href="${escapeAttr(url)}">${text}</a>`
+				: `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 		},
 		image({ text }) {
 			return text; // geen externe afbeeldingen in antwoorden
@@ -36,5 +42,13 @@ marked.use({
 export function renderMarkdown(src: string): string {
 	const html = marked.parse(escapeHtml(src), { async: false, gfm: true, breaks: true });
 	// Antwoorden citeren kaartteksten — icon-tokens ook hier als echte iconen.
+	return iconifyTokens(html);
+}
+
+/** Eén-regel-variant voor de oordeel-banner (#359): inline-markdown (vet,
+ *  cursief, code) zonder blok-elementen, met dezelfde escaping en dezelfde
+ *  token-/keyword-behandeling als de rest van het antwoord. */
+export function renderInlineMarkdown(src: string): string {
+	const html = marked.parseInline(escapeHtml(src), { async: false, gfm: true }) as string;
 	return iconifyTokens(html);
 }

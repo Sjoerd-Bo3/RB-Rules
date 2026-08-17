@@ -29,6 +29,15 @@ antwoordformat scheidt "Regelbasis" (laag 0) van "Community-consensus"
 - "How to Play – Quick Start Guide" en "Gameplay Guide – Core Rules" —
   officiële Riot-artikelen, het learn-to-play-"boekje" in webvorm; als
   bronnen `how-to-play` en `gameplay-guide` in het register (trust 1)
+- "Deckbuilding Primer" — officieel Riot-artikel over deckconstructie;
+  bron `deckbuilding-primer` (trust 1)
+- "How to Play – Proving Grounds" PDF van UVS Games (Riots organized-play-
+  partner) — bron `uvs-how-to-play-pdf` (trust 2: partnermateriaal, niet
+  door Riot zelf gepubliceerd)
+- Community-beginnersgidsen: riftbound.gg en Fanfinity — bronnen
+  `beginners-guide-riftboundgg` en `beginners-guide-fanfinity` (trust 3;
+  community-claims volgen de corroboratie-regels van #50). Alle vier de
+  startbronnen uit #63 zijn op 2026-07-11 geverifieerd, ook vanaf de VM.
 - De officiële Learn to Play-video (YouTube DMXztr0OOXc, gelinkt vanaf de
   how-to-play-pagina) — transcript als primer-input in de claims-pipeline
 - Het gedrukte boekje/learn-to-play-kaartjes uit de pakjes staan níet als
@@ -39,9 +48,10 @@ antwoordformat scheidt "Regelbasis" (laag 0) van "Community-consensus"
   runes/energy, showdowns & combat, prioriteit en reacties, zones en
   kaartstromen, winnen/scoren, elk kern-keyword praktisch uitgelegd.
 - **Generatie**: LLM destilleert ze uit de volledige regelindex (per concept:
-  relevante §'s → samenvatting mét §-verwijzingen). Opslag als
-  `knowledge_doc` met kind="primer", embeddings, en een review-status
-  (dezelfde verify-flow als corrections — de beheerder keurt ze).
+  relevante §'s → samenvatting mét §-verwijzingen, Engels — #187: afgeleide
+  kennis in de brontaal). Opslag als `knowledge_doc` met kind="primer",
+  embeddings, en een review-status (dezelfde verify-flow als corrections —
+  de beheerder keurt ze).
 - **Gebruik**: een gecomprimeerde primer (~1.500 tokens) gaat áltijd mee als
   achtergrondblok in /ask; daarnaast doen primer-docs mee in retrieval.
 - **Onderhoud**: bij een regelwijziging (change met severity high/medium)
@@ -53,7 +63,8 @@ Datamodel:
 
 ```
 claim: id, topic_type (card|mechanic|section|concept), topic_ref,
-       statement (geparafraseerd, NL), first_seen, last_seen,
+       statement (geparafraseerd, Engels — #187: afgeleide kennis in de
+       brontaal, dicht bij de officiële bewoording), first_seen, last_seen,
        corroboration (aantal onafhankelijke bronnen),
        trust_score (gewogen: bron-trust × corroboratie),
        status (unreviewed|accepted|rejected|superseded), embedding
@@ -82,12 +93,45 @@ Retrieval: geaccepteerde claims doen mee als eigen kanaal in /ask, met in de
 prompt per claim: `[community, 4 bronnen, trust 0.8] "…"`. De router bepaalt
 het gewicht (ruling: laag; conventie-/tactiekvraag: hoog).
 
+### Websearch via rb-ai (#64) — bouwsteen voor de bronnenjacht (#63)
+
+De rb-ai-sidecar kent een opt-in task-type `research`: een `/ask`-call met
+`task: "research"` draait als agent mét WebSearch/WebFetch (alle andere
+task-types blijven bewust zonder web-toegang — kosten/latency, #42). Het
+resultaatcontract is afgedwongen in de systeem-prompt (zie
+`rb-ai/src/ai.ts`, `RESEARCH_CONTRACT`): het antwoord eindigt altijd met een
+`Bronnen:`-sectie met volledige URL's van daadwerkelijk geraadpleegde
+pagina's; onbevestigde beweringen worden expliciet zo benoemd.
+
+Beoogd gebruik door #63 (rb-api-kant, nog te bouwen):
+
+1. Een periodieke job in rb-api stelt via `RbAiClient.AskAsync(prompt,
+   system, task: "research")` een gerichte zoekvraag ("nieuwe
+   Riftbound-regelbronnen/judge-uitleg sinds …").
+2. rb-ai zoekt/leest het web en antwoordt met samenvatting + `Bronnen:`-URL's.
+3. rb-api parseert de URL's en zet ze als **registervoorstel** in de
+   bestaande source-registry-reviewqueue (nooit rechtstreeks als bron
+   opnemen; trust-toekenning blijft bij de beheerder).
+
+Randvoorwaarden die al in rb-ai zijn geregeld: harde timeout op
+research-calls (5 min, AbortController), en het bestaande degradatiepad —
+faalt SDK of web-tooling, dan geeft de sidecar een nette fout en levert
+`RbAiClient` `null`, de job logt dat in `run_log` en gaat door. Let op:
+sommige sites weigeren datacenter-IP's (Cloudflare); een lege of gedeeltelijke
+oogst is dus een verwacht resultaat, geen bug. Webresultaten komen per
+definitie binnen als community-/meta-laag, nooit als officiële laag.
+
 ## Laag 3 — Meta & tactiek
 
-Bouwt op decks-backlog (#15): archetype-detectie uit decklijsten,
-combo-frequentie (co-occurrence die we al minen als INTERACTS_WITH),
-guide-extractie via dezelfde claims-pipeline met topic_type="tactic".
-Graph-edges: Card—STAPLE_IN→Archetype. Pas oppakken als laag 1+2 staan.
+Bouwt op decks-backlog (#15). Eerste snede staat (#267): het
+deck-gebruikssignaal uit de Piltover Archive-bank (aandeel recente decks,
+gemiddeld aantal exemplaren, top-co-occurrence — `DeckPopularityQuery`,
+gedeeld met het kaartdossier) gaat als expliciet gelabeld laag-3-blok mee
+in /ask, uitsluitend bij kaart-/lijstvragen mét herkende kaartnaam
+(`DeckMetaRetrieval`, Domain — de hotpath doet anders geen deck-query).
+Nog open: archetype-detectie uit decklijsten (onderzoeksproject, geen
+feature), guide-extractie via dezelfde claims-pipeline met
+topic_type="tactic", en graph-edges Card—STAPLE_IN→Archetype.
 
 ## Wat dit oplevert voor het geobserveerde probleem
 
@@ -108,6 +152,65 @@ Graph-edges: Card—STAPLE_IN→Archetype. Pas oppakken als laag 1+2 staan.
   nacht. Corroboratie-clustering is embeddings-werk (lokaal, gratis).
 - **Bron-hygiëne**: bronnen leven in het bestaande register met trust/rank;
   een bron die structureel door errata wordt tegengesproken zakt in trust.
+- **Zelfcontrole is geen kwaliteitsmeting** (#255): de accept-ratio van een
+  eigen promotie-poort is zelfreferentieel — een pijplijn die tautologieën
+  promoveert scoort er uitstekend op. Gepromoveerde brein-feiten (nu: de
+  gereïficeerde interacties) krijgen daarom een steekproef-audit door een
+  STERKER model (1 op de N, beheerd instelbaar): klopt het feit, en wordt het
+  gedragen door het bewijs waarop het promoveerde? Het oordeel is een aparte
+  audit-regel met eigen provenance (model + promptversie + datum) en volgt de
+  rode draad van alle lagen: een LLM-oordeel draagt nooit alleen een promotie
+  of degradatie — een negatief oordeel wordt zichtbaar in de reviewqueue, de
+  beheerder beslist. De gemeten precisie staat in de observability náást de
+  poort-ratio, expliciet gelabeld als steekproef.
+- **Bewijs draagt een claim alleen op zijn eigen niveau** (#324, gevonden door
+  de eerste steekproef-audit): de kennispiramide zegt WIE er mag spreken
+  (officieel > community), dit principe zegt WAAROVER. Een kaarttekst is
+  officiële tekst, maar ze bewijst hooguit iets over die kaart zelf — een
+  kaart-specifiek effect dat twee keywords verbindt is geen eigenschap van die
+  keywords. Daarom eist de promotiepoort van de interactie-mining per
+  claim-niveau de passende bewijssoort: **mechanic↔mechanic** promoveert alleen
+  met een bewijszin uit regel-/definitietekst (trust-tier-1: een
+  RuleSection-chunk of de officiële keyword-definitie); **card↔X** promoveert op
+  de eigen kaarttekst, want dat ís daar het juiste bewijsniveau. Bewijs van het
+  verkeerde niveau maakt een voorstel niet stil weg maar hooguit kandidaat
+  (reviewqueue) — en het mag óók geen duurzame verwerping (tombstone) dragen:
+  wat niet sterk genoeg is om te promoveren, is niet sterk genoeg om permanent
+  te sluiten.
+- **Bewijs draagt een claim alleen als het ook de SOORT uitdrukt** (#330, het
+  verlengstuk van het #324-principe, gevonden door de audit op de eerste
+  fable-batch): het niveau zegt WAAROVER bewijs mag spreken, de soort zegt WAT
+  het dan beweert. Tier-1-co-occurrence ("deze twee keywords staan samen in
+  §727.1.b") waarborgt het niveau maar niet de relatiesoort — het model
+  overclaimde daarop stelselmatig GRANTS/MODIFIES/COUNTERS. Daarom eist de
+  promotiepoort deterministisch dat het drágende bewijs de geclaimde soort
+  lexicaal uitdrukt (gesloten anker-catalogus per soort, gekalibreerd op de
+  echte audit-paren) en dat een toegekend keyword er in keyword-VORM staat
+  (gebracket of hoofdletter-term — "you may recycle it" is het werkwoord, geen
+  toekenning van [Recycle]). Zelfde soft-pad als het niveau-principe: stranden
+  is kandidaat worden, nooit stil verdwijnen, nooit een tombstone — en
+  bestaande promoties degraderen nooit automatisch mee (#332, de brede
+  garantie): élke her-mine-uitkomst die zwakker is dan de bestaande status —
+  kandidaat, hypothese óf verwerping over een promoted- of verified-rij —
+  laat de rij ongemoeid en schrijft alleen een beslissings-memo, zonder
+  tombstone (wat de rij niet mag verlagen, mag haar sleutel ook niet duurzaam
+  sluiten). Degradaties van promoties komen uit de audit + reviewqueue, nooit
+  uit de poort zelf — al kan de reviewqueue die beslissing vandaag alleen nog
+  tónen, niet uitvoeren (de uitvoerbare degradatie-actie is #338).
+- **Een woordmatch is nog geen keyword-vermelding** (#335, iteratie 2 op het
+  soort-principe, gekalibreerd op de volledige era-3-populatie-audit): gedrukte
+  teksten gebruiken dezelfde woorden als werkwoord ("Ready me", "may recycle
+  it", "you may burn…"), als hoeveelheids-taal over een resource ("spend 3
+  XP") én als echte keyword-vermelding ([Reaction], "has 3 XP" als
+  gedefinieerde term). Bewijs draagt een claim alleen in de passende GEDAANTE:
+  een mechanic-agent moet als keyword herkenbaar in het bewijs staan,
+  werkwoord-achtige keywords tellen alleen gebracket, een optionele kost is
+  geen vereiste (may/optionally ondermijnt het REQUIRES-anker), en
+  hoeveelheids-taal over een resource (XP is geen Game Object) draagt geen
+  GRANTS/MODIFIES-claim over het mechanisme. De catalogi zijn data en
+  kalibreren op audit-oordelen, niet op één corpus-telling — Channel meet net
+  als Ready 0× gebracket maar is een bevestigde grant. Zelfde soft-pad als
+  altijd: stranden is kandidaat worden, met de klasse als zichtbare reden.
 
 ## Evolutie-raamwerk: de bank groeit met het spel mee
 
@@ -170,102 +273,6 @@ een geconfigureerde MCP-server, maxTurns omhoog). Dezelfde brein-API is
 daarna de bouwsteen voor alles wat we nog verzinnen: interactie-ontdekking,
 deck-advies, "wat verandert er voor mijn deck door deze errata", enz.
 
-## Ontologie, vectoren en graph — hoe ze zich verhouden
-
-**Was:** de vector-kant droeg alles en de graaf was *write-only* — Neo4j werd
-geschreven maar nergens gelezen, `/api/graph/neighbors` draaide op Postgres,
-en `RuleSection`-knopen bestonden alleen als constraint.
-
-**Nu (gebouwd):** de graaf wordt gelezen én levert eigen kennis.
-`GraphQueryService` bedient de verkenner, de bewijsketen tussen twee kaarten
-en de uitbreiding in `/ask`; regelsecties (met `PARENT_OF`), primer-concepten,
-errata en bans staan als knopen in de graaf; en Neo4j leidt `GOVERNED_BY`
-zelf af uit `HAS_MECHANIC` + `DEFINES`. Valt Neo4j weg, dan beantwoordt
-Postgres dezelfde vraag met minder diepte en zegt het antwoord welke engine
-het leverde. De ontologie staat expliciet in `GraphOntology` en is publiek
-opvraagbaar via `/api/graph/ontology` — de uitlegpagina `/hoe-het-werkt`
-leest hem live, zodat die uitleg niet kan verouderen.
-
-Nog open (zie #377): federatie met externe graven, `SAME_AS`-resolutie en de
-brein-API (#53).
-
-### Wat elk medium goed kan
-
-| | pgvector (semantisch) | Neo4j (structureel) |
-|---|---|---|
-| Beantwoordt | "wat lijkt hierop / gaat hier ongeveer over" | "wat hangt hier aantoonbaar aan vast, via welke stappen" |
-| Sterk in | onbekende formulering, synoniemen, NL↔EN, fuzzy intentie | exacte samenhang, meerstaps-paden, tellen over relaties |
-| Zwak in | bewijs leveren, meerstaps-redenering, volledigheid | vrije tekst en onbekende formuleringen |
-
-Ze zijn complementair. Het patroon dat we willen (GraphRAG): **vector vindt
-het startpunt, de graph breidt uit en bewijst.** Voor een ruling: de
-embedding van de vraag levert kandidaat-secties en -kaarten; de graph haalt
-daar ouderregels, errata, bans, gedeelde mechanieken en geverifieerde
-interacties bij; die verbonden set gaat als context naar het LLM, met het
-pad als bewijs. Vandaag doen we alleen de eerste helft.
-
-### Ontologie: van impliciet naar expliciet
-
-Onze ontologie bestaat, maar impliciet — verspreid over C#-types,
-Cypher-strings en promptteksten. Expliciet maken betekent één plek die
-vastlegt welke entiteitstypen bestaan, welke relaties tussen welke typen
-geldig zijn, welke eigenschappen verplicht zijn en welke afleidregels
-gelden. Dat levert drie dingen op die we missen: validatie bij het schrijven,
-uitbreidbaarheid (nieuw type = registratie, geen code-archeologie) en
-inferentie.
-
-```
-Entiteiten: Card · Set · Domain · Tag · Mechanic · Keyword · RuleSection ·
-            Concept (primer) · Erratum · BanEntry · Change · Source ·
-            Claim · Archetype · Deck
-
-Relaties:   Card-[:HAS_MECHANIC|HAS_DOMAIN|HAS_TAG]->…      (bestaat)
-            Card-[:FROM_SET]->Set                            (bestaat)
-            Card-[:INTERACTS_WITH {kind, verified}]->Card    (bestaat)
-            RuleSection-[:PARENT_OF]->RuleSection            (gebouwd)
-            RuleSection-[:DEFINES]->Mechanic                 (gebouwd)
-            Card-[:GOVERNED_BY]->RuleSection                 (gebouwd, afgeleid)
-            Concept-[:EXPLAINS]->RuleSection                 (gebouwd)
-            Erratum-[:AMENDS]->Card · BanEntry-[:BANS]->Card (gebouwd)
-            Change-[:AFFECTS]->RuleSection|Card              ← open
-            Claim-[:ABOUT]->… · Claim-[:SUPPORTED_BY]->Source ← open (#50)
-            Card-[:STAPLE_IN]->Archetype                     ← open (na #15)
-
-Varianten krijgen bewust géén eigen knoop: alt-arts en herdrukken zijn in
-het spel dezelfde kaart, dus de graaf werkt op de canonieke printing. Dat is
-meteen de entity-resolution-regel voor koppeling met externe graven.
-
-Inferentie: keyword op kaart + sectie die keyword definieert ⇒ GOVERNED_BY
-            ban op printing ⇒ ban op de hele variantgroep
-            change raakt sectie ⇒ afhankelijke Concepts/Claims te herzien
-```
-
-Elke edge draagt provenance (bron, wanneer, door welke job of gebruiker).
-Dat is het verschil tussen een grafiek en een *kennis*graaf.
-
-### Meerdere graphs koppelen
-
-Zodra er meer dan één graaf is (kaart-/regelgraaf, deck- en metagraaf,
-community-claims, extern materiaal zoals het LoL-universum of een
-toernooidatabase), verbind je die via drie mechanismen:
-
-1. **Stabiele identiteiten.** Eén canonieke sleutel per entiteit
-   (`card:ogn-056-298`, `rule:core/601.2.d`). Zonder stabiele sleutel is
-   koppelen giswerk. Onze variantgroepering is hier al een vorm van.
-2. **Entity resolution + `SAME_AS`.** Externe graven noemen dezelfde
-   entiteit anders ("Teemo" in het LoL-universum versus onze kaart-Teemo).
-   Match op naam + type + context (eventueel embedding-ondersteund) en leg
-   de uitkomst vast als expliciete `SAME_AS`-edge mét betrouwbaarheid —
-   nooit id's stilzwijgend gelijkstellen.
-3. **Federatie versus materialisatie.** Federatie bevraagt de andere graaf
-   live (actueel, afhankelijk van beschikbaarheid); materialisatie kopieert
-   de relevante subgraaf periodiek binnen (snel, maar veroudert). Voor ons:
-   eigen kennis materialiseren, externe bronnen federeren of gecached
-   materialiseren met `last_seen`.
-
-De brein-API (#53) abstraheert hierover: één antwoord, met pad en herkomst,
-ongeacht in welke graaf het feit staat.
-
 ## Uitvoeringsvolgorde
 
 1. **Primer** (#49) — grootste begripwinst per uur werk.
@@ -276,4 +283,5 @@ ongeacht in welke graaf het feit staat.
    kennis-gaten-rapport (#52).
 5. **Brein-API + agentic ask**: unified graph-schema + tools voor de
    ask-agent (#53).
-6. Meta-laag na decks (#15).
+6. Meta-laag na decks (#15) — eerste snede gedaan (#267, deck-meta-blok
+   in /ask).

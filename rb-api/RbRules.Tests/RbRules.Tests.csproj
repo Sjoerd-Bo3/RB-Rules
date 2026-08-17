@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.9" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
@@ -22,6 +23,15 @@
     <ProjectReference Include="..\RbRules.Api\RbRules.Api.csproj" />
     <ProjectReference Include="..\RbRules.Domain\RbRules.Domain.csproj" />
     <ProjectReference Include="..\RbRules.Infrastructure\RbRules.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Echte snapshots van live bronnen (conventie: fixtures spiegelen de
+         echte data-vormen, geen versimpelde verzinsels). -->
+    <!-- Eval-harness-seed (#231): woont in RbRules.Tests/Fixtures zodat het
+         binnen de Docker-build-context (rb-api/) valt; de glob hierboven
+         kopieert het naar output als Fixtures/poracle-eval-seed.json. -->
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

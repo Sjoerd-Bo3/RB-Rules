@@ -29,6 +29,10 @@ public static class CardEndpoints
                 {
                     c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
                     c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+                    // Presentatie (#269/#270): verhouding per kaart, alt-tekst
+                    // en de laadkleur — battlefields zijn liggend.
+                    c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary,
+                    c.Flags,
                 })
                 .ToListAsync();
 
@@ -39,11 +43,15 @@ public static class CardEndpoints
                 .GroupBy(c => c.VariantOf!)
                 .Select(g => new { Id = g.Key, N = g.Count() })
                 .ToDictionaryAsync(x => x.Id, x => x.N);
+            var legality = await SetLegalityLookupAsync(db);
             return Results.Ok(cards.Select(c => new
             {
                 c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
                 c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+                c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary, c.Flags,
                 Variants = variantCounts.GetValueOrDefault(c.RiftboundId),
+                LegalFrom = legality.DateOf(c.SetId),
+                Legality = legality.KeyOf(c.SetId),
             }));
         });
 
@@ -68,71 +76,19 @@ public static class CardEndpoints
             });
         });
 
-        app.MapGet("/api/cards/{id}", async (string id, RbRulesDbContext db) =>
-        {
-            var c = await db.Cards.AsNoTracking()
-                .FirstOrDefaultAsync(x => x.RiftboundId == id);
-            if (c is null) return Results.NotFound();
-            // Ban geldt voor de hele variantgroep (#44) — een ban op één
-            // printing is op alle printings zichtbaar.
-            var bannedGroups = await BanLookup.BannedCanonicalIdsAsync(db);
-            var banned = BanLookup.IsBanned(bannedGroups, c);
-            var erratum = await db.Errata
-                .Where(e => e.CardRiftboundId == id)
-                .OrderByDescending(e => e.DetectedAt)
-                .Select(e => e.NewText)
-                .FirstOrDefaultAsync();
-            // Alle printings van deze kaart (alt-art/showcase/promo/herdruk).
-            var canonicalId = c.VariantOf ?? c.RiftboundId;
-            var versions = await db.Cards
-                .Where(x => x.RiftboundId != c.RiftboundId &&
-                            (x.RiftboundId == canonicalId || x.VariantOf == canonicalId))
-                .OrderBy(x => x.RiftboundId)
-                .Select(x => new
-                {
-                    x.RiftboundId, x.SetId, x.SetLabel, x.Rarity, x.CollectorNumber, x.ImageUrl,
-                })
-                .ToListAsync();
-            // Mining draait alleen op canonieke printings — varianten tonen de
-            // analyse van hun canonieke kaart (zelfde tekst, zelfde spel-gedrag).
-            var canonical = c.VariantOf is null ? null : await db.Cards.FindAsync(c.VariantOf);
-            return Results.Ok(new
-            {
-                c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
-                c.Energy, c.Might, c.Power, c.SetId, c.SetLabel, c.CollectorNumber,
-                c.TextPlain, c.ImageUrl, c.Tags,
-                Mechanics = c.Mechanics ?? canonical?.Mechanics,
-                Triggers = c.Triggers ?? canonical?.Triggers,
-                Effects = c.Effects ?? canonical?.Effects,
-                c.UpdatedAt, Banned = banned, ErrataText = erratum,
-                c.VariantOf, Versions = versions,
-            });
-        });
+        app.MapGet("/api/cards/{id}", async (string id, CardDetailService details) =>
+            await details.GetAsync(id) is { } detail
+                ? Results.Ok(detail)
+                : Results.NotFound());
 
         // ── Interacties (S3) ───────────────────────────────────────────
-        app.MapGet("/api/cards/{id}/interactions", async (string id, RbRulesDbContext db) =>
-        {
-            var rows = await db.CardInteractions
-                .Where(x => x.CardAId == id || x.CardBId == id)
-                .OrderBy(x => x.Kind)
-                .Take(40)
-                .ToListAsync();
-            var otherIds = rows.Select(r => r.CardAId == id ? r.CardBId : r.CardAId).ToList();
-            var names = await db.Cards
-                .Where(c => otherIds.Contains(c.RiftboundId))
-                .ToDictionaryAsync(c => c.RiftboundId, c => c.Name);
-            return Results.Ok(rows.Select(r =>
-            {
-                var otherId = r.CardAId == id ? r.CardBId : r.CardAId;
-                return new
-                {
-                    OtherId = otherId,
-                    OtherName = names.GetValueOrDefault(otherId, otherId),
-                    r.Kind,
-                    r.Explanation,
-                };
-            }));
-        });
+        // Variantgroep-bewust (#57): een alt-art-pagina toont de interacties
+        // van zijn canonieke kaart.
+        app.MapGet("/api/cards/{id}/interactions", async (
+                string id, InteractionService interactions) =>
+            await interactions.NeighborsForCardAsync(id, take: 40) is { } neighbors
+                ? Results.Ok(neighbors)
+                : Results.NotFound());
 
         // ── Semantisch kaartzoeken (S1) ────────────────────────────────
         app.MapGet("/api/cards/search", async (
@@ -155,131 +111,85 @@ public static class CardEndpoints
                 {
                     c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
                     c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+                    c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary, c.Flags,
                     Distance = c.Embedding!.CosineDistance(queryVector),
                 })
                 .ToListAsync();
-            return Results.Ok(results);
+            var legality = await SetLegalityLookupAsync(db);
+            return Results.Ok(results.Select(c => new
+            {
+                c.RiftboundId, c.Name, c.Type, c.Supertype, c.Rarity, c.Domains,
+                c.Energy, c.Might, c.SetId, c.TextPlain, c.ImageUrl,
+                c.ImageWidth, c.ImageHeight, c.ImageAltText, c.ImageColorPrimary, c.Flags,
+                c.Distance,
+                LegalFrom = legality.DateOf(c.SetId),
+                Legality = legality.KeyOf(c.SetId),
+            }));
         });
 
         app.MapGet("/api/cards/{id}/similar", async (
-            string id, int? limit, RbRulesDbContext db) =>
+            string id, int? limit, CardSimilarityService similarity) =>
         {
-            var card = await db.Cards.FindAsync(id);
-            if (card is null) return Results.NotFound();
-            // Varianten hebben geen eigen embedding — anker op de canonieke printing,
-            // met als vangnet elke printing van dezelfde naam die wél geëmbed is.
-            var anchorCard = card;
-            if (anchorCard.Embedding is null && card.VariantOf is not null)
-                anchorCard = await db.Cards.FindAsync(card.VariantOf) ?? card;
-            if (anchorCard.Embedding is null)
-                anchorCard = await db.Cards
-                    .FirstOrDefaultAsync(c => c.Name == card.Name && c.Embedding != null) ?? anchorCard;
-            if (anchorCard.Embedding is null)
+            var result = await similarity.SimilarAsync(id, Math.Clamp(limit ?? 10, 1, 30));
+            if (!result.Found) return Results.NotFound();
+            if (!result.HasEmbedding)
                 return Results.BadRequest(new { error = "kaart heeft nog geen embedding" });
-            card = anchorCard;
-
-            var anchor = card.Embedding;
-            var rows = await db.Cards
-                .Where(c => c.Embedding != null && c.RiftboundId != id
-                            && c.VariantOf == null && c.Name != card.Name)
-                .OrderBy(c => c.Embedding!.CosineDistance(anchor))
-                .Take(Math.Clamp(limit ?? 10, 1, 30))
-                .Select(c => new
-                {
-                    c.RiftboundId, c.Name, c.Type, c.Domains, c.Mechanics,
-                    c.Energy, c.Might, c.ImageUrl,
-                    Distance = c.Embedding!.CosineDistance(anchor),
-                })
-                .ToListAsync();
-
-            // "Waarom vergelijkbaar": gedeelde facetten + tekst-gelijkenis expliciet maken.
-            var results = rows.Select(c => new
-            {
-                c.RiftboundId, c.Name, c.Type, c.Domains, c.Energy, c.Might, c.ImageUrl,
-                Similarity = Math.Round((1 - c.Distance) * 100),
-                SharedMechanics = (c.Mechanics ?? []).Intersect(card.Mechanics ?? []).ToArray(),
-                SharedDomains = c.Domains.Intersect(card.Domains).ToArray(),
-                SameType = c.Type != null && c.Type == card.Type,
-            });
-            return Results.Ok(results);
+            return Results.Ok(result.Items);
         });
 
         // Waarom lijken twee kaarten op elkaar? LLM-uitleg met cache (#30).
         app.MapGet("/api/cards/{id}/similar/{otherId}/explain", async (
-            string id, string otherId, RbRulesDbContext db, RbAiClient ai) =>
+            string id, string otherId, SimilarityExplainService explain) =>
         {
-            var (a, b) = CardText.OrderedPair(id, otherId);
-            var cached = await db.SimilarityExplanations
-                .FirstOrDefaultAsync(e => e.CardAId == a && e.CardBId == b);
-            if (cached is not null) return Results.Ok(new { explanation = cached.Text, cached = true });
-
-            var cardA = await db.Cards.FindAsync(id);
-            var cardB = await db.Cards.FindAsync(otherId);
-            if (cardA is null || cardB is null) return Results.NotFound();
-
-            var raw = await ai.AskAsync(
-                $"Kaart 1: {CardText.DescribeForPrompt(cardA)}\n\nKaart 2: {CardText.DescribeForPrompt(cardB)}",
-                """
-                Je legt in één of twee Nederlandse zinnen uit op welk semantisch vlak twee
-                Riftbound-kaarten op elkaar lijken: welk gedrag, welke rol of welk
-                spelplan delen ze? Wees concreet ("beide sturen units terug naar de
-                base") en noem geen voor de hand liggende metadata zoals set of rarity.
-                Antwoord met alleen die uitleg, zonder inleiding.
-                """);
-            if (raw is null)
+            var result = await explain.ExplainAsync(id, otherId);
+            if (!result.Found) return Results.NotFound();
+            if (result.Explanation is null)
                 return Results.Problem(title: "AI niet beschikbaar", statusCode: 503);
+            return Results.Ok(new { explanation = result.Explanation, cached = result.Cached });
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>()
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>(); // #328: LLM-pad
 
-            db.SimilarityExplanations.Add(new SimilarityExplanation
-            {
-                CardAId = a, CardBId = b, Text = raw.Trim(), Model = "rb-ai",
-            });
-            try { await db.SaveChangesAsync(); }
-            catch (DbUpdateException) { /* race met parallel verzoek — cache bestaat al */ }
-            return Results.Ok(new { explanation = raw.Trim(), cached = false });
-        }).RequireRateLimiting("llm");
-
+        // Graph-verkenner (#29): buren van een kaart via gedeelde mechanieken,
+        // domeinen en geverifieerde interacties.
+        app.MapGet("/api/graph/neighbors", async (string card, GraphQueryService graph) =>
+            await graph.NeighborsAsync(card) is { } neighbors
+                ? Results.Ok(neighbors)
+                : Results.NotFound());
 
         // Regels & errata die bij deze kaart horen (voor de kaartpagina).
-        app.MapGet("/api/cards/{id}/rules", async (string id, RbRulesDbContext db) =>
-        {
-            var card = await db.Cards.FindAsync(id);
-            if (card is null) return Results.NotFound();
+        app.MapGet("/api/cards/{id}/rules", async (string id, CardDetailService details) =>
+            await details.RulesAsync(id) is { } links
+                ? Results.Ok(links)
+                : Results.NotFound());
 
-            var errata = await db.Errata
-                .Where(e => e.CardRiftboundId == id)
-                .OrderByDescending(e => e.DetectedAt)
-                .Select(e => new { e.NewText, e.SourceUrl, e.DetectedAt })
-                .ToListAsync();
-
-            // Relevante regelsecties via de kaart-embedding (semantisch dichtstbij).
-            // Varianten lenen de embedding van hun canonieke printing.
-            var embeddingSource = card;
-            if (embeddingSource.Embedding is null && card.VariantOf is not null)
-                embeddingSource = await db.Cards.FindAsync(card.VariantOf) ?? card;
-            object relevantRules = Array.Empty<object>();
-            if (embeddingSource.Embedding is not null)
-            {
-                var anchor = embeddingSource.Embedding;
-                relevantRules = await db.RuleChunks
-                    .Where(c => c.Embedding != null && c.SectionCode != null)
-                    .OrderBy(c => c.Embedding!.CosineDistance(anchor))
-                    .Take(3)
-                    .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
-                    {
-                        Section = c.SectionCode,
-                        Snippet = c.Text.Substring(0, Math.Min(c.Text.Length, 260)),
-                        SourceName = s.Name,
-                        s.Url,
-                    })
-                    .ToListAsync();
-            }
-
-            return Results.Ok(new { Errata = errata, RelevantRules = relevantRules });
-        });
+        // Kaart-dossier (#127): rulings, claims, brein-relaties en
+        // ban-historie — de databank-laag boven op de kaartfeiten.
+        app.MapGet("/api/cards/{id}/dossier", async (string id, CardDetailService details) =>
+            await details.DossierAsync(id) is { } dossier
+                ? Results.Ok(dossier)
+                : Results.NotFound());
     }
 
-    private static IQueryable<RbRules.Domain.Card> ApplyCardFilters(
-        IQueryable<RbRules.Domain.Card> query,
+    /// <summary>Set-releasedatums één keer laden (handvol rijen) en per kaart
+    /// vertalen naar een legaliteitsstatus (#22).</summary>
+    private static async Task<LegalityLookup> SetLegalityLookupAsync(RbRulesDbContext db)
+    {
+        var dates = await db.CardSets.AsNoTracking()
+            .ToDictionaryAsync(s => s.SetId, s => s.PublishedOn);
+        return new(dates, DateOnly.FromDateTime(DateTime.UtcNow));
+    }
+
+    private sealed record LegalityLookup(Dictionary<string, DateOnly?> Dates, DateOnly Today)
+    {
+        public DateOnly? DateOf(string? setId) =>
+            setId is null ? null : Dates.GetValueOrDefault(setId);
+
+        public string KeyOf(string? setId) =>
+            SetLegality.Key(SetLegality.StatusFor(DateOf(setId), Today));
+    }
+
+    private static IQueryable<Card> ApplyCardFilters(
+        IQueryable<Card> query,
         string? domain, string? type, string? set, string? rarity,
         string? mechanic, int? maxEnergy)
     {

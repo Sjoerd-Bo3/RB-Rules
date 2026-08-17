@@ -1,0 +1,523 @@
+using RbRules.Domain.Ontology;
+
+namespace RbRules.Tests;
+
+/// <summary>Ontologie-schema v0 (brein-fundament): de deterministische
+/// schema-poort <see cref="OntologyValidationService"/> en de afleidingen op
+/// <see cref="OntologySchema"/>. Dekt domain/range mét subclass-polymorfie,
+/// disjointness, kardinaliteit, de reïficatie-dwang en de transitieve/
+/// acyclische eigenschappen — plus de interne consistentie van het register
+/// zelf (de ÉNE bron waaruit later TBox/prompt-enums/constraints komen).</summary>
+public class OntologySchemaTests
+{
+    // ── Domain / range ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidateTriple_DomeinEnRangeKloppen_IsGeldig()
+    {
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Keyword, RelationType.Invokes, EntityType.Mechanic);
+
+        Assert.True(r.IsValid);
+        Assert.Null(r.Reason);
+        Assert.Empty(r.Violations);
+    }
+
+    [Fact]
+    public void ValidateTriple_SubjectBuitenDomein_GeeftDomainMismatch()
+    {
+        // INVOKES verlangt Keyword→Mechanic; een Mechanic als subject valt buiten.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Mechanic, RelationType.Invokes, EntityType.Mechanic);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.DomainMismatch);
+    }
+
+    [Fact]
+    public void ValidateTriple_ObjectBuitenRange_GeeftRangeMismatch()
+    {
+        // HAS_MECHANIC verlangt Card→Mechanic; een Keyword als object valt buiten.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Unit, RelationType.HasMechanic, EntityType.Keyword);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.RangeMismatch);
+    }
+
+    // ── Subclass-polymorfie ──────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidateTriple_UnitVoldoetAanCardDomein_IsGeldig()
+    {
+        // HAS_DOMAIN heeft domein Card; een Unit (⊑ Card) moet voldoen zonder join.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Unit, RelationType.HasDomain, EntityType.Domain);
+
+        Assert.True(r.IsValid);
+    }
+
+    [Fact]
+    public void ValidateTriple_UnitVoldoetAanObjectDomein_IsGeldig()
+    {
+        // HAS_STATUS heeft domein Object; een Unit is via multi-parent ook Object.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Unit, RelationType.HasStatus, EntityType.Status);
+
+        Assert.True(r.IsValid);
+    }
+
+    [Fact]
+    public void ValidateTriple_SpellIsGeenObject_FaaltOpObjectDomein()
+    {
+        // Spell is een Card maar DISJUNCT van Object → voldoet niet aan HAS_STATUS.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Spell, RelationType.HasStatus, EntityType.Status);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.DomainMismatch);
+    }
+
+    [Fact]
+    public void IsA_IsReflexiefEnTransitief()
+    {
+        Assert.True(OntologySchema.IsA(EntityType.Unit, EntityType.Unit));   // reflexief
+        Assert.True(OntologySchema.IsA(EntityType.Unit, EntityType.Card));   // direct
+        Assert.True(OntologySchema.IsA(EntityType.Unit, EntityType.Object)); // multi-parent
+        Assert.True(OntologySchema.IsA(EntityType.Unit, EntityType.Thing));  // transitief
+        Assert.False(OntologySchema.IsA(EntityType.Spell, EntityType.Object));
+    }
+
+    // ── Disjointness ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidateEntityLabels_KeywordEnMechanicSamen_IsDisjointnessSchending()
+    {
+        var r = OntologyValidationService.ValidateEntityLabels(
+            [EntityType.Keyword, EntityType.Mechanic]);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.Disjointness);
+    }
+
+    [Fact]
+    public void ValidateEntityLabels_UnitEnSpellSamen_ErftDisjointnessViaObject()
+    {
+        // Unit ⊑ Object en Object ⟂ Spell → Unit ⟂ Spell (overerving telt mee).
+        var r = OntologyValidationService.ValidateEntityLabels(
+            [EntityType.Unit, EntityType.Spell]);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.Disjointness);
+    }
+
+    [Fact]
+    public void ValidateEntityLabels_GeldigMultiLabel_IsGeldig()
+    {
+        // De canonieke object-kaart labels: :Object:Card:Unit — geen disjointness.
+        var r = OntologyValidationService.ValidateEntityLabels(
+            [EntityType.Object, EntityType.Card, EntityType.Unit]);
+
+        Assert.True(r.IsValid);
+    }
+
+    [Fact]
+    public void AreDisjoint_DekkAlleGedeclareerdeAssen()
+    {
+        Assert.True(OntologySchema.AreDisjoint(EntityType.Keyword, EntityType.Mechanic));
+        Assert.True(OntologySchema.AreDisjoint(EntityType.Keyword, EntityType.Status));
+        Assert.True(OntologySchema.AreDisjoint(EntityType.Mechanic, EntityType.Status));
+        Assert.True(OntologySchema.AreDisjoint(EntityType.Spell, EntityType.Object));
+        Assert.False(OntologySchema.AreDisjoint(EntityType.Keyword, EntityType.Zone));
+    }
+
+    // ── Kardinaliteit ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidateTriple_ErrataOfEerste_IsGeldig()
+    {
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Erratum, RelationType.ErrataOf, EntityType.Card);
+
+        Assert.True(r.IsValid);
+    }
+
+    [Fact]
+    public void ValidateTriple_ErrataOfTweede_SchendtFunctioneel()
+    {
+        // ERRATA_OF is functioneel (precies 1): een tweede uitgaande edge vanuit
+        // hetzelfde Erratum overschrijdt de bovengrens.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Erratum, RelationType.ErrataOf, EntityType.Card,
+            new TripleContext(ExistingOutgoingCount: 1));
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.CardinalityExceeded);
+    }
+
+    [Fact]
+    public void ValidateTriple_FromSetTweede_SchendtFunctioneel()
+    {
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Card, RelationType.FromSet, EntityType.Set,
+            new TripleContext(ExistingOutgoingCount: 1));
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.CardinalityExceeded);
+    }
+
+    [Fact]
+    public void ValidateTriple_HasMechanicMeervoudig_IsGeldig()
+    {
+        // HAS_MECHANIC is 0..* — een tweede edge is prima.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Unit, RelationType.HasMechanic, EntityType.Mechanic,
+            new TripleContext(ExistingOutgoingCount: 3));
+
+        Assert.True(r.IsValid);
+    }
+
+    // ── Reïficatie-dwang ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidateTriple_CountersAlsKaleEdge_WordtAfgekeurd()
+    {
+        // COUNTERS is gekwalificeerd → verboden als kale edge, moet via Interaction.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Keyword, RelationType.Counters, EntityType.Keyword);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.ReificationRequired);
+    }
+
+    [Theory]
+    [InlineData(RelationType.Counters)]
+    [InlineData(RelationType.Modifies)]
+    [InlineData(RelationType.Grants)]
+    [InlineData(RelationType.Requires)]
+    public void ValidateTriple_GekwalificeerdeRelatieKaal_WordtAfgekeurd(RelationType relation)
+    {
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Card, relation, EntityType.Card);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.ReificationRequired);
+    }
+
+    [Fact]
+    public void ValidateTriple_CountersGereïficeerd_IsGeldig()
+    {
+        // Dezelfde relatie is wél toegestaan als ze via een Interaction is gereïficeerd.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Keyword, RelationType.Counters, EntityType.Keyword,
+            new TripleContext(Reified: true));
+
+        Assert.True(r.IsValid);
+    }
+
+    // ── Transitieve / acyclische eigenschappen ───────────────────────────────
+
+    [Fact]
+    public void ValidateTriple_SubclassOfDieCyclusSluit_WordtAfgekeurd()
+    {
+        // Unit ⊑ Object geldt al; Object ⊑ Unit beweren zou een cyclus sluiten.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Object, RelationType.SubclassOf, EntityType.Unit);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.SubclassCycle);
+    }
+
+    [Fact]
+    public void ValidateTriple_SubclassOfSpellObject_SchendtDisjointness()
+    {
+        // Spell ⊑ Object zou de bindende disjointness Spell ⟂ Object breken.
+        var r = OntologyValidationService.ValidateTriple(
+            EntityType.Spell, RelationType.SubclassOf, EntityType.Object);
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.Disjointness);
+    }
+
+    [Fact]
+    public void RelatieEigenschappen_TransitiefAcyclischSymmetrischFunctioneel()
+    {
+        // SUPERSEDES is sinds #296 Erratum → Card en dus NIET meer transitief:
+        // geen Card is een Erratum, dus de relatie kan per constructie nooit
+        // componeren — een transitive-trait zou een belofte zijn waarop een
+        // toekomstige reasoner-regel bouwt zonder dat er ooit een keten bestaat.
+        Assert.False(OntologySchema.Relations[RelationType.Supersedes].Traits
+            .HasFlag(RelationTraits.Transitive));
+        Assert.True(OntologySchema.Relations[RelationType.Supersedes].Traits
+            .HasFlag(RelationTraits.Acyclic));
+        Assert.True(OntologySchema.Relations[RelationType.Supersedes].IsFunctional);
+        // PART_OF (#304) draagt de mereologie-eigenschappen die SUPERSEDES verloor.
+        Assert.True(OntologySchema.Relations[RelationType.PartOf].Traits
+            .HasFlag(RelationTraits.Transitive | RelationTraits.Acyclic));
+        Assert.True(OntologySchema.Relations[RelationType.SubclassOf].Traits
+            .HasFlag(RelationTraits.Transitive | RelationTraits.Acyclic));
+        Assert.True(OntologySchema.Relations[RelationType.Contradicts].Traits
+            .HasFlag(RelationTraits.Symmetric));
+        Assert.True(OntologySchema.Relations[RelationType.ErrataOf].IsFunctional);
+        Assert.True(OntologySchema.Relations[RelationType.FromSet].IsFunctional);
+    }
+
+    // ── #304/#296: de declaraties volgen de METING op de live graaf ──────────
+    // Bewust UITGESCHREVEN literals (geen vergelijking met de constante die ze
+    // bewaken — die schuift mee): een mutatie die een range terugzet op de oude,
+    // onjuiste waarde hoort hier rood te zijn.
+
+    [Fact]
+    public void Schema_HasRole_RangeIsGemetenCardMechanic_NooitKeyword()
+    {
+        var hasRole = OntologySchema.Relations[RelationType.HasRole];
+
+        Assert.Equal("HAS_ROLE", hasRole.EdgeName);
+        Assert.Equal([EntityType.Interaction], hasRole.Domain);
+        // De meting: 492 × Card, 274 × Mechanic, nul × Keyword. De docs, de miner
+        // en de validator beweerden alle drie Keyword — dat mag er nooit stil in terug.
+        Assert.Equal(2, hasRole.Range.Count);
+        Assert.Contains(EntityType.Card, hasRole.Range);
+        Assert.Contains(EntityType.Mechanic, hasRole.Range);
+        Assert.DoesNotContain(EntityType.Keyword, hasRole.Range);
+        Assert.Contains("role", hasRole.Parameters);
+    }
+
+    [Fact]
+    public void Schema_Supersedes_IsGemetenErratumNaarCard()
+    {
+        var supersedes = OntologySchema.Relations[RelationType.Supersedes];
+
+        Assert.Equal([EntityType.Erratum], supersedes.Domain);
+        Assert.Equal([EntityType.Card], supersedes.Range);
+        // De oude declaratie (NormativeSource → NormativeSource) was onwaar over
+        // de graaf die we bouwen (#296).
+        Assert.DoesNotContain(EntityType.NormativeSource, supersedes.Range);
+    }
+
+    [Fact]
+    public void Schema_FromSet_VervangtDeDodeIntroducedInDeclaratie()
+    {
+        var fromSet = OntologySchema.Relations[RelationType.FromSet];
+
+        Assert.Equal("FROM_SET", fromSet.EdgeName);
+        Assert.Equal([EntityType.Card], fromSet.Domain);   // gemeten: alleen kaarten
+        Assert.Equal([EntityType.Set], fromSet.Range);
+        // De oude naam mag niet als tweede ingang terugsluipen — één relatie, één
+        // naam (zelfde regel als HAS_KEYWORD/IN_DOMAIN in #274).
+        Assert.Null(OntologySchema.RelationByEdgeName("INTRODUCED_IN"));
+    }
+
+    [Fact]
+    public void Schema_OverigeNr304Relaties_DragenDeGemetenVormen()
+    {
+        var about = OntologySchema.Relations[RelationType.About];
+        Assert.Equal(0, about.MinCardinality);
+        Assert.Equal([EntityType.Claim, EntityType.Ruling], about.Domain);
+        Assert.Equal(
+            [EntityType.Card, EntityType.Mechanic, EntityType.RuleSection, EntityType.Concept],
+            about.Range);
+
+        var partOf = OntologySchema.Relations[RelationType.PartOf];
+        Assert.Equal([EntityType.RuleSection], partOf.Domain);
+        Assert.Equal([EntityType.RuleSection], partOf.Range);
+        Assert.Equal(1, partOf.MaxCardinality);            // hoogstens één directe ouder
+
+        var explains = OntologySchema.Relations[RelationType.Explains];
+        Assert.Equal([EntityType.Concept], explains.Domain);
+        Assert.Equal([EntityType.RuleSection], explains.Range);
+
+        var hasTag = OntologySchema.Relations[RelationType.HasTag];
+        Assert.Equal([EntityType.Card], hasTag.Domain);
+        Assert.Equal([EntityType.Tag], hasTag.Range);
+
+        var requiresCondition = OntologySchema.Relations[RelationType.RequiresCondition];
+        Assert.Equal([EntityType.Interaction], requiresCondition.Domain);
+        Assert.Equal([EntityType.Condition], requiresCondition.Range);
+    }
+
+    [Fact]
+    public void Schema_TagIsGeenConcept()
+    {
+        // De klasse-beslissing uit #304: een tag (factie/tribe) draagt geen regels,
+        // dus Tag hangt direct onder Thing. Tag ⊑ Concept zou bovendien een dode
+        // HAS_TAG ∘ GOVERNED_BY-reasonerketen genereren (zie de keten-test in
+        // InferenceRuleRegistryTests).
+        Assert.True(OntologySchema.IsA(EntityType.Tag, EntityType.Thing));
+        Assert.False(OntologySchema.IsA(EntityType.Tag, EntityType.Concept));
+    }
+
+    // ── String-poort (rauwe LLM-output) ──────────────────────────────────────
+
+    [Fact]
+    public void ValidateTriple_StringVariantMetEdgeNaam_ResolvedNamenGeenUnknown()
+    {
+        var r = OntologyValidationService.ValidateTriple("keyword", "HAS_MECHANIC", "Mechanic");
+
+        // "keyword" HAS_MECHANIC "Mechanic": Keyword is geen Card → domain faalt,
+        // maar de namen resolven wél (geen Unknown*).
+        Assert.DoesNotContain(r.Violations, v =>
+            v.Code is OntologyViolationCode.UnknownEntityType or OntologyViolationCode.UnknownRelation);
+    }
+
+    [Fact]
+    public void ValidateTriple_StringVariantGeldigeTriple_IsGeldig()
+    {
+        var r = OntologyValidationService.ValidateTriple("Unit", "HAS_DOMAIN", "Domain");
+        Assert.True(r.IsValid);
+    }
+
+    [Fact]
+    public void ValidateTriple_OnbekendType_GeeftUnknownEntityType()
+    {
+        var r = OntologyValidationService.ValidateTriple("Sorcery", "HAS_MECHANIC", "Mechanic");
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownEntityType);
+    }
+
+    [Fact]
+    public void ValidateTriple_OnbekendeRelatie_GeeftUnknownRelation()
+    {
+        var r = OntologyValidationService.ValidateTriple("Card", "DESTROYS", "Card");
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownRelation);
+    }
+
+    // ── Enum-poort verwerpt numeriek/combo (#224 review-fix) ──────────────────
+    // Enum.TryParse slikt óók kale getallen ("5" → Gear) en OR-combinaties
+    // ("Card,Unit" → Unit): dat zou malformed rb-ai-output (gelekte index/id,
+    // aan-elkaar-geplakte labels) stil laten passeren i.p.v. Unknown* te geven.
+
+    [Theory]
+    [InlineData("5")]     // numeriek → zou anders Gear worden
+    [InlineData("3")]     // numeriek → zou anders Battlefield worden
+    [InlineData("Card,Unit")]   // OR-combinatie → zou anders Unit worden
+    [InlineData("0")]
+    public void ParseEntityType_NumeriekOfCombo_IsNull(string raw)
+    {
+        Assert.Null(OntologySchema.ParseEntityType(raw));
+    }
+
+    [Fact]
+    public void ParseEntityType_ExacteNaamHoofdletterongevoelig_Resolvet()
+    {
+        // De guard mag legitieme (case-insensitieve) namen niet breken.
+        Assert.Equal(EntityType.Gear, OntologySchema.ParseEntityType("gear"));
+        Assert.Equal(EntityType.Unit, OntologySchema.ParseEntityType("  Unit  "));
+    }
+
+    [Theory]
+    [InlineData("5")]                     // numeriek → zou anders Invokes (index) worden
+    [InlineData("Invokes,HasMechanic")]   // OR-combinatie → zou anders Invokes worden
+    public void ValidateTriple_NumeriekOfComboRelatie_GeeftUnknownRelation(string relation)
+    {
+        var r = OntologyValidationService.ValidateTriple("Keyword", relation, "Mechanic");
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownRelation);
+        // Cruciaal: het mag NIET stil als geldig of als domain/range-mismatch passeren.
+        Assert.DoesNotContain(r.Violations, v =>
+            v.Code is OntologyViolationCode.DomainMismatch or OntologyViolationCode.RangeMismatch);
+    }
+
+    [Fact]
+    public void ValidateTriple_NumeriekType_GeeftUnknownEntityType()
+    {
+        var r = OntologyValidationService.ValidateTriple("5", "HAS_MECHANIC", "Mechanic");
+
+        Assert.False(r.IsValid);
+        Assert.Contains(r.Violations, v => v.Code == OntologyViolationCode.UnknownEntityType);
+    }
+
+    // ── Register-integriteit (de ÉNE bron) ───────────────────────────────────
+
+    [Fact]
+    public void Schema_KlassenhiërarchieIsAcyclisch()
+    {
+        // Ancestors termineert alleen als de hiërarchie acyclisch is; check per klasse
+        // dat een type niet zijn eigen voorouder is.
+        foreach (var type in Enum.GetValues<EntityType>())
+        {
+            Assert.True(OntologySchema.Classes.ContainsKey(type), $"{type} ontbreekt in het register.");
+            Assert.DoesNotContain(type, OntologySchema.Ancestors(type));
+        }
+    }
+
+    [Fact]
+    public void Schema_AlleDirecteOudersBestaanEnLopenNaarThing()
+    {
+        foreach (var cls in OntologySchema.Classes.Values)
+        {
+            foreach (var parent in cls.DirectParents)
+                Assert.True(OntologySchema.Classes.ContainsKey(parent),
+                    $"Ouder {parent} van {cls.Type} ontbreekt.");
+            if (cls.Type != EntityType.Thing)
+                Assert.True(OntologySchema.IsA(cls.Type, EntityType.Thing),
+                    $"{cls.Type} is niet verbonden met Thing.");
+        }
+    }
+
+    [Fact]
+    public void Schema_GedeclareerdeDisjointeParenZijnGeenSubklasseRelaties()
+    {
+        // Een disjoint paar mag geen subklasse-relatie hebben, anders is de klasse
+        // onvervulbaar (Spell ⟂ Object mag niet samengaan met Spell ⊑ Object).
+        foreach (var (a, b) in OntologySchema.DisjointPairs)
+        {
+            Assert.False(OntologySchema.IsA(a, b), $"{a} is subklasse van disjuncte {b}.");
+            Assert.False(OntologySchema.IsA(b, a), $"{b} is subklasse van disjuncte {a}.");
+        }
+    }
+
+    [Fact]
+    public void Schema_HasMechanicBehoudtMagnitudeParameter()
+    {
+        // De magnitude-qualifier mag niet weggestript worden (Tank N, Accelerate N).
+        Assert.Contains("magnitude", OntologySchema.Relations[RelationType.HasMechanic].Parameters);
+    }
+
+    [Fact]
+    public void Schema_AlleRelatiesHebbenUniekeEdgeNaam()
+    {
+        var names = OntologySchema.Relations.Values.Select(r => r.EdgeName).ToList();
+        Assert.Equal(names.Count, names.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    [Fact]
+    public void Schema_NormativeSourceTakDraagtAuthorityRankClaimNiet()
+    {
+        // Kennispiramide type-afdwingbaar: RuleSection/Ruling/Erratum ⊑ NormativeSource,
+        // Claim staat er bewust buiten.
+        Assert.True(OntologySchema.IsA(EntityType.Ruling, EntityType.NormativeSource));
+        Assert.True(OntologySchema.IsA(EntityType.Erratum, EntityType.NormativeSource));
+        Assert.False(OntologySchema.IsA(EntityType.Claim, EntityType.NormativeSource));
+    }
+
+    [Fact]
+    public void Schema_ElkeRelationTypeIsGeregistreerd()
+    {
+        // Borgt Defect 2 (#224) toekomstbestendig, analoog aan de EntityType-dekking
+        // in Schema_KlassenhiërarchieIsAcyclisch: een nieuwe enum-waarde zonder
+        // registratie faalt hier, niet pas met een KeyNotFoundException op de hot-path.
+        foreach (var rel in Enum.GetValues<RelationType>())
+            Assert.True(OntologySchema.Relations.ContainsKey(rel),
+                $"{rel} ontbreekt in het relatie-register.");
+    }
+
+    [Fact]
+    public void Schema_GeenKlasseErftBeideZijdenVanEenDisjointPaar()
+    {
+        // Onvervulbare-klasse-check: als een klasse via overerving zowel A als B
+        // van een disjoint paar {A,B} zou zijn, is ze leeg (onvervulbaar). Nu
+        // schoon; beschermt toekomstige uitbreidingen van de hiërarchie.
+        foreach (var type in Enum.GetValues<EntityType>())
+        {
+            var closure = new HashSet<EntityType>(OntologySchema.Ancestors(type)) { type };
+            foreach (var (a, b) in OntologySchema.DisjointPairs)
+                Assert.False(closure.Contains(a) && closure.Contains(b),
+                    $"{type} erft zowel {a} als disjuncte {b} → onvervulbare klasse.");
+        }
+    }
+}

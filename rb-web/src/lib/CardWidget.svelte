@@ -1,5 +1,6 @@
 <script lang="ts">
 	import RbText from '$lib/RbText.svelte';
+	import { cardAlt, cardAspect } from '$lib/cardImage';
 
 	interface CardLike {
 		riftboundId: string;
@@ -13,6 +14,15 @@
 		mechanics: string[] | null;
 		imageUrl: string | null;
 		banned: boolean;
+		// Set-legaliteit (#68); optioneel zodat oudere payloads blijven werken.
+		setName?: string | null;
+		legalFrom?: string | null;
+		legality?: 'legal' | 'upcoming' | 'announced';
+		// Presentatie (#269/#270): verhouding en alt-tekst per kaart —
+		// battlefields zijn liggend.
+		imageWidth?: number | null;
+		imageHeight?: number | null;
+		imageAltText?: string | null;
 	}
 
 	let { name, cards }: { name: string; cards: CardLike[] } = $props();
@@ -25,9 +35,24 @@
 
 {#if card}
 	<a class="card-widget" href="/cards/{card.riftboundId}">
-		{#if card.imageUrl}<img src={card.imageUrl} alt={card.name} loading="lazy" />{/if}
+		{#if card.imageUrl}
+			<img
+				src={card.imageUrl}
+				alt={cardAlt(card)}
+				loading="lazy"
+				style="aspect-ratio: {cardAspect(card)}"
+			/>
+		{/if}
 		<span class="body">
-			<span class="name">{card.name} {#if card.banned}<span class="ban">Verboden</span>{/if}</span>
+			<span class="name">
+				{card.name}
+				{#if card.banned}<span class="ban">Verboden</span>{/if}
+				<!-- Alleen bij een bekende toekomstige releasedatum een claim;
+				     "datum onbekend" kan ook een allang verschenen set zijn (#68). -->
+				{#if card.legality === 'upcoming'}
+					<span class="soon">Nog niet legaal — komt{card.setName ? ` in ${card.setName}` : ''}{card.legalFrom ? ` op ${new Date(card.legalFrom).toLocaleDateString('nl-NL')}` : ''}</span>
+				{/if}
+			</span>
 			<span class="meta">
 				{[card.supertype, card.type].filter(Boolean).join(' ')} · {card.domains.join('/') || '—'}
 				{#if card.energy !== null}· Energy {card.energy}{/if}
@@ -48,12 +73,20 @@
 		color: inherit; text-decoration: none;
 	}
 	.card-widget:hover { border-color: var(--border-strong); }
-	img { width: 74px; border-radius: 6px; border: 1px solid var(--border); flex-shrink: 0; }
+	img {
+		width: 74px; border-radius: 6px; border: 1px solid var(--border); flex-shrink: 0;
+		/* Hoogte volgt de verhouding van de kaart zelf (#269). */
+		height: auto; object-fit: contain;
+	}
 	.body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 	.name { font-weight: 700; }
 	.ban {
 		font-size: 0.68rem; text-transform: uppercase; margin-left: 6px;
 		background: var(--err-soft); color: var(--err); border-radius: 999px; padding: 1px 8px;
+	}
+	.soon {
+		font-size: 0.68rem; margin-left: 6px;
+		background: var(--warn-soft); color: var(--warn); border-radius: 999px; padding: 1px 8px;
 	}
 	.meta { color: var(--muted); font-size: 0.82rem; }
 	.text { font-size: 0.86rem; line-height: 1.5; }

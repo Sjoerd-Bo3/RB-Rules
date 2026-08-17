@@ -12,6 +12,18 @@ public static class EmbeddingConfig
     public const string Model = "bge-m3";
 }
 
+/// <summary>Gedeeld embedding-contract (fase 0a, #233): elke embedding-dragende
+/// tabel biedt vector + model + content-hash. Zo kan de provenance-audit één
+/// getypeerde, EF-vertaalbare query per tabel draaien (filter direct op de
+/// entiteit-kolommen) i.p.v. een record-projectie die niet naar SQL vertaalt
+/// (#233-review).</summary>
+public interface IEmbeddable
+{
+    Vector? Embedding { get; }
+    string? EmbeddingModel { get; }
+    string? EmbeddingContentHash { get; }
+}
+
 public class Source
 {
     public required string Id { get; set; }
@@ -25,6 +37,98 @@ public class Source
     public bool Enabled { get; set; } = true;
     public string? LastHash { get; set; }
     public DateTimeOffset? LastChecked { get; set; }
+    /// <summary>Herkomst (#167): welke <see cref="SourceFeed"/> deze bron
+    /// ontdekte via de feed-crawl (alleen het AutoApprove-pad vult dit).
+    /// Null = handmatig/legacy toegevoegd, of via de scout/hub-ontdekking
+    /// (een ander, ouder ontdekkingspad met een eigen reviewqueue).</summary>
+    public string? FeedId { get; set; }
+    /// <summary>Temporele precedentie (#168): publicatiedatum van het artikel
+    /// zelf, uit de bron-feed (<see cref="RiotNewsFeed.RiotNewsArticle.Date"/>)
+    /// — alleen gevuld voor via <see cref="SourceFeed"/> AutoApprove ontdekte
+    /// bronnen; een handmatig/legacy toegevoegde bron kent haar eigen
+    /// publicatiedatum niet en blijft null (nooit raden).</summary>
+    public DateTimeOffset? PublishedAt { get; set; }
+    /// <summary>Temporele precedentie (#168): wanneer de scan voor het laatst
+    /// een écht gewijzigde inhoud detecteerde (niet elke <see
+    /// cref="LastChecked"/> — alleen een reële content-wijziging, zelfde
+    /// moment als het bijbehorende <see cref="Change"/>-item). Null = nog
+    /// nooit een wijziging gezien sinds deze kolom bestaat.</summary>
+    public DateTimeOffset? UpdatedAt { get; set; }
+    /// <summary>Bron-type-classificatie (#188 increment 2, <see
+    /// cref="RbRules.Domain.SourceContentKind"/>): "faq" | "patch-notes" |
+    /// "other" — een LLM-BESLISSING i.p.v. de oude keyword-heuristiek (<see
+    /// cref="ClarificationSources"/>). Gezet bij de scan van een trust-1-bron
+    /// (<see cref="RbRules.Infrastructure.IngestService"/>). Null = nog niet
+    /// geclassificeerd — consumers vallen dan terug op de heuristiek (<see
+    /// cref="RbRules.Domain.SourceContentKind.Resolve"/>), zodat bestaande
+    /// bronnen blijven werken totdat ze opnieuw gescand zijn.</summary>
+    public string? ContentKind { get; set; }
+    /// <summary>Herkomst van <see cref="ContentKind"/>: "llm", "heuristic"
+    /// (AI-uitval of onbruikbaar LLM-antwoord bij de classificatie-poging) of
+    /// "admin" (expliciete override via het source-PATCH-pad, #188-review —
+    /// <see cref="RbRules.Domain.SourceContentKind.TryApplyOverride"/>).
+    /// Een heuristische classificatie mag een latere scan alsnog naar een
+    /// LLM-oordeel upgraden (nooit stilzwijgend andersom — een LLM- of
+    /// admin-oordeel wordt niet opnieuw overschreven; "admin" telt in de
+    /// consensus-poort van de patch-notes-retractie bovendien als menselijke
+    /// bevestiging). Null zolang <see cref="ContentKind"/> zelf null is.</summary>
+    public string? ContentKindSource { get; set; }
+    /// <summary>Negeren met reden (#180): een BEWUSTE beoordeling dat deze
+    /// bron niets aan het systeem toevoegt (merch/toernooi-/preorder-
+    /// artikelen die de feed-crawl toch als trust-1 registreert) — nadrukkelijk
+    /// iets anders dan <see cref="Enabled"/> ("tijdelijk uit"): een genegeerde
+    /// bron kan <see cref="Enabled"/> op true laten staan, de scan-lus
+    /// (<see cref="RbRules.Infrastructure.IngestService"/>) slaat 'm sowieso
+    /// over. Null = niet genegeerd. Negeren is geen delete: bestaande
+    /// Document/Change-rijen blijven onaangeroerd, en net als de #167-
+    /// tombstone voor een verwijderde feed-bron blijft de rij zelf bestaan
+    /// zodat FeedCrawlService 'm nooit stilzwijgend heradopteert of
+    /// hercreëert (de known-URL-dedup ziet de rij gewoon nog staan).</summary>
+    public DateTimeOffset? IgnoredAt { get; set; }
+    /// <summary>Vrije tekst, alleen zinvol samen met <see cref="IgnoredAt"/>
+    /// (null zolang die null is) — bv. "merch/preorder-artikel, geen
+    /// regelbron" of "levert na meerdere scans niets op".</summary>
+    public string? IgnoreReason { get; set; }
+    /// <summary>Strip-versionering (#205-review): de <see
+    /// cref="TextUtils.BoilerplateVersion"/> waarmee <see cref="LastHash"/>
+    /// (en het bijbehorende laatste Document) is berekend. Elke wijziging
+    /// aan <see cref="TextUtils.StripBoilerplate"/> verandert de gestripte
+    /// tekst — en dus de hash — van élke bron tegelijk; zonder dit veld zou
+    /// zo'n verbetering één golf junk-"changes" over het hele register
+    /// geven (de diff toont dan alleen de weggevallen boilerplate). Wijkt
+    /// dit veld af van de actuele versie, dan doet de scan een STILLE
+    /// rebaseline (nieuwe baseline zonder diff/Change — zie
+    /// <see cref="RbRules.Infrastructure.IngestService"/>). Null (alle
+    /// rijen van vóór dit veld) telt als verouderd: elke bron rebaselinet
+    /// exact één keer, automatisch, bij de eerstvolgende scan.</summary>
+    public int? StripVersion { get; set; }
+}
+
+/// <summary>Bron-feed (#167): een index-pagina die periodiek wordt afgespeurd
+/// op nieuwe artikel-URL's — een feed IS geen inhoudelijke bron; hij
+/// <em>ontdekt</em> bronnen. <see cref="AutoApprove"/> onderscheidt een
+/// vertrouwde/officiële feed (nieuw artikel ⇒ meteen een <see cref="Source"/>
+/// in het register, enabled) van een minder vertrouwde (⇒ <see
+/// cref="SourceProposal"/> in de reviewqueue). <see cref="CategoryFilter"/>
+/// is een komma-gescheiden lijst toegestane categorieën (het
+/// &lt;categorie&gt;-padsegment in playriftbound.com/en-us/news/&lt;categorie&gt;/
+/// &lt;slug&gt;) — null/leeg = alle categorieën, ook artikelen zonder
+/// categorie-segment. <see cref="LastHash"/> is puur een goedkope
+/// skip-optimalisatie (ongewijzigde pagina ⇒ geen nieuwe artikelen mogelijk);
+/// de echte idempotentie zit in de per-URL-dedupe tegen het bronnenregister
+/// en de reviewqueue, dus een per-request wisselende linkvolgorde (zoals de
+/// Rules Hub laat zien) kan hier nooit dubbele bronnen of ruis opleveren.</summary>
+public class SourceFeed
+{
+    public required string Id { get; set; }
+    public required string Name { get; set; }
+    public required string Url { get; set; }
+    public bool Enabled { get; set; } = true;
+    public bool AutoApprove { get; set; }
+    public string? CategoryFilter { get; set; }
+    public required string Cadence { get; set; }       // daily | weekly
+    public DateTimeOffset? LastChecked { get; set; }
+    public string? LastHash { get; set; }
 }
 
 public class Document
@@ -37,6 +141,17 @@ public class Document
     /// <summary>Werkelijke bestands-URL bij PDF-bronnen (de bron-URL is de
     /// ontdek-pagina) — basis voor deeplinks als "…rules.pdf#page=12".</summary>
     public string? FileUrl { get; set; }
+    /// <summary>Wanneer de claims-pipeline (#50) dit document verwerkte;
+    /// null = nog niet. Een nieuwe documentversie (bronwijziging) krijgt een
+    /// eigen rij en wordt dus vanzelf opnieuw gemined.</summary>
+    public DateTimeOffset? ClaimsMinedAt { get; set; }
+    /// <summary>Wanneer de concept-extractie voor FAQ-/clarificatie-artikelen
+    /// (#177, ClarificationMiningService) dit document verwerkte; null = nog
+    /// niet (of geen clarificatie-bron). Zelfde #92/#93-patroon als
+    /// ClaimsMinedAt: pas gezet ná een volledig geslaagde run, zodat een
+    /// gedeeltelijke of mislukte poging vanzelf terugkomt; een nieuwe
+    /// documentversie krijgt een eigen rij en wordt dus opnieuw gemined.</summary>
+    public DateTimeOffset? ClarifiedAt { get; set; }
     public DateTimeOffset RetrievedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -45,12 +160,25 @@ public class Change
     public long Id { get; set; }
     public required string SourceId { get; set; }
     public Source? Source { get; set; }
-    public string ChangeType { get; set; } = "unknown"; // ban|errata|core-rule|tournament-rule|set-release|editorial
+    // clarification (#177): sjabloon-change bij de eerste scan van een
+    // FAQ-/clarificatie-artikel (er is nog geen vorige versie om te diffen).
+    public string ChangeType { get; set; } = "unknown"; // ban|errata|core-rule|tournament-rule|set-release|editorial|clarification
     public string Severity { get; set; } = "medium";    // high|medium|low
     public string? Summary { get; set; }
     public string? Meaning { get; set; }
     public string? Diff { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Changeconsolidatie (#206): verwijst naar de PRIMAIRE change
+    /// als dit item hetzelfde gebeurtenis vanuit een andere bron bevestigt
+    /// (bv. een community-melding van dezelfde ban die de Rules Hub al
+    /// meldde). Null = dit item is zelf geen bevestiging (ofwel de primaire
+    /// van een geconsolideerd paar, ofwel (nog) ongekoppeld). Wijst ALTIJD
+    /// naar de wortel-primaire, nooit naar een andere secundaire — er
+    /// ontstaan bewust geen ketens (<see cref="ChangeConsolidationService"/>).
+    /// Beide rijen blijven bestaan (herleidbaarheid); consolidatie is een
+    /// presentatie-koppeling, geen inhoudelijke waarheid (die blijft bij de
+    /// structured BanEntry-/errata-precedentie, #168).</summary>
+    public long? ConsolidatedWithId { get; set; }
 }
 
 public class Conflict
@@ -67,15 +195,53 @@ public class Conflict
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class Correction
+public class Correction : IEmbeddable
 {
     public long Id { get; set; }
-    public required string Scope { get; set; }          // card | rule_section | answer
+    // card | rule_section | answer (chat-ruling/review-notitie-scopes) |
+    // mechanic | concept (#177, ClarificationMiningService — RulingsTopics
+    // kent beide al als gedeeld filter-vocabulaire, dus geen migratie nodig)
+    // | claim | relation (review-notitie-promotie, #124 — bucketen als
+    // "answer" in RulingsTopics, geen eigen filterknop).
+    public required string Scope { get; set; }
     public required string Ref { get; set; }
     public required string Text { get; set; }
     public string? Question { get; set; }
     public string? Provenance { get; set; }
-    public string Status { get; set; } = "unverified";  // unverified|verified
+    /// <summary>"Waar besloten" (#166): URL (UrlGuard-gecheckt) of vrije
+    /// citatie (Discord-thread, officiële post, toernooi + datum) — verplicht
+    /// bij in-chat-rulings, optioneel voor oudere/andere ontstaanswegen van
+    /// een Correction. Sanitize gebeurt bij weergave, niet bij opslag.</summary>
+    public string? SourceRef { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): het model waarmee
+    /// <see cref="Embedding"/> is berekend (verwacht bge-m3) en de SHA-256 van de
+    /// exacte geëmbedde tekst (<see cref="EmbeddingProvenance"/>). Beide null
+    /// zolang de rij niet (opnieuw) geëmbed is; de Ring-A-gate telt embeddings
+    /// zonder deze herkomst.</summary>
+    public string? EmbeddingModel { get; set; }
+    public string? EmbeddingContentHash { get; set; }
+    // unverified | verified | rejected. "rejected" (#177 hybride poort) is een
+    // tombstone: een beheerder-afwijzing van een pending clarify-item die de
+    // mining respecteert (zie ClarificationMiningService — een rejected rij op
+    // hetzelfde concept wordt nooit heropend). De self-learning-feedback en de
+    // chat-/review-rulings gebruiken alleen unverified/verified.
+    public string Status { get; set; } = "unverified";
+    /// <summary>Reden dat een item (nog) niet verified is (#177 hybride poort):
+    /// bv. "citaat niet terug te vinden in de bron" of "onderwerp niet
+    /// herkend". Voedt de reviewqueue zodat de beheerder ziet waaróm iets ter
+    /// review staat; null voor handmatig/verified aangemaakte correcties.</summary>
+    public string? StatusReason { get; set; }
+    /// <summary>Beheerder-opmerking (#184, zelfde patroon als
+    /// <see cref="Claim.ReviewNote"/>/<see cref="Relation.ReviewNote"/>) —
+    /// blijft bij het item staan (traceerbaar) en triggert een her-evaluatie
+    /// (<see cref="RbRules.Infrastructure.CorrectionReevaluationService"/>)
+    /// van dít ene item. Mag een anker-correctie bevatten (bv.
+    /// "mechanic:Recall") die een fout-aangeankerd of onherkend onderwerp
+    /// overschrijft. Een volgende clarify-mining-her-mine
+    /// (<see cref="RbRules.Infrastructure.ClarificationMiningService"/>)
+    /// respecteert een gezette ReviewNote: Status/StatusReason worden dan
+    /// niet stilzwijgend teruggedraaid.</summary>
+    public string? ReviewNote { get; set; }
     public Vector? Embedding { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? VerifiedAt { get; set; }
@@ -86,14 +252,11 @@ public class CardSet
     public required string SetId { get; set; }          // 'OGN'
     public required string Name { get; set; }
     public DateOnly? PublishedOn { get; set; }
-    /// <summary>Vanaf wanneer de set legal is in constructed (#22);
-    /// null = nog niet aangekondigd/bekend (reveal-fase).</summary>
-    public DateOnly? LegalFrom { get; set; }
     public int? CardCount { get; set; }
     public DateTimeOffset SyncedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class Card
+public class Card : IEmbeddable
 {
     public required string RiftboundId { get; set; }    // 'ogn-011-298'
     public required string Name { get; set; }
@@ -110,6 +273,47 @@ public class Card
     public string? TextPlain { get; set; }
     public string? ImageUrl { get; set; }
     public string[] Tags { get; set; } = [];            // facties/tribes — GEEN mechanieken
+
+    // ── Presentatievelden uit de bron (#270) ────────────────────────────────
+    // Riot levert deze bij élke gallery-kaart; voor de kaarten die alléén via
+    // riftcodex binnenkomen (JDG-promo's) vult die bron aan wat hij heeft en
+    // leidt CardPresentation de rest lokaal af. Voorrang: Riot schrijft
+    // onvoorwaardelijk, een aanvulling vult alleen lege velden (CardMerge).
+
+    /// <summary>Riots publieke kaartcode ("UNL-205/219") — wat op de kaart
+    /// zelf staat, niet ons interne RiftboundId.</summary>
+    public string? PublicCode { get; set; }
+    /// <summary>Illustrator, als krediet bij de afbeelding ("Envar Studio").</summary>
+    public string? Illustrator { get; set; }
+    /// <summary>Vaste might-bonus van een signature-kaart (+N); los van
+    /// <see cref="Might"/>, dat de basiswaarde is.</summary>
+    public int? MightBonus { get; set; }
+    /// <summary>Los "Effect"-blok naast de gewone kaarttekst (gear/attachments):
+    /// officiële Riot-tekst, met dezelfde :rb_…:-tokens als TextPlain. Niet te
+    /// verwarren met <see cref="Effects"/>, dat LLM-geminede clausules zijn.</summary>
+    public string? EffectPlain { get; set; }
+    /// <summary>Riot-markers op de kaart in de gallery; nu alleen "New".
+    /// Vluchtig van aard — verandert mee met elke sync.</summary>
+    public string[] Flags { get; set; } = [];
+
+    /// <summary>Afmetingen van de kaartafbeelding. Battlefields zijn liggend
+    /// (1039x744), de rest staand (744x1039) — de tegels in de UI rekenen hun
+    /// aspect-ratio hieruit, zodat niets bijgesneden wordt (#269).</summary>
+    public int? ImageWidth { get; set; }
+    public int? ImageHeight { get; set; }
+    /// <summary>Dominante kleuren van de afbeelding (hex), door Riot
+    /// meegeleverd — gebruikt als placeholder zolang de afbeelding laadt.</summary>
+    public string? ImageColorPrimary { get; set; }
+    public string? ImageColorSecondary { get; set; }
+    /// <summary>Alt-tekst voor de kaartafbeelding: Riots eigen
+    /// accessibilityText waar die er is, anders lokaal samengesteld
+    /// (<see cref="CardPresentation.ComposeAltText"/>).
+    /// HARDE GRENS (#270): dit veld hoort uitsluitend in een <c>alt=</c>. Het
+    /// mag nooit als Riots officiële kaarttekst getoond worden en gaat nooit
+    /// de kennisbank of een LLM-prompt in — afgeleid is niet officieel.
+    /// <see cref="CardText.Compose"/> en <see cref="CardText.DescribeForPrompt"/>
+    /// laten het daarom bewust links liggen.</summary>
+    public string? ImageAltText { get; set; }
     /// <summary>F3: LLM-geminede spelmechanieken (Accelerate, Tank, …).
     /// null = nog niet gemined; [] = gemined, niets gevonden.</summary>
     public string[]? Mechanics { get; set; }
@@ -120,13 +324,54 @@ public class Card
     /// <summary>S1-fundament: kaart-embedding voor semantisch zoeken.</summary>
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }         // provenance (model-wissel-guard)
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de exacte
+    /// geëmbedde tekst — de her-embed-sleutel (tekst gewijzigd ⇒ hash wijzigt).</summary>
+    public string? EmbeddingContentHash { get; set; }
+    /// <summary>Embedding-provenance, deel 2 (#299): op hoeveel tekens de
+    /// EMBED-INVOER gekapt was toen deze vector berekend werd, of null als de
+    /// vector de volledige tekst dekt (de normale toestand).
+    ///
+    /// WAAROM DIT EEN KOLOM IS EN GEEN LOGREGEL. Een gekapte vector is materieel
+    /// een provenance-VARIANT: hij zegt iets anders dan de andere vectoren in
+    /// dezelfde kolom, want hij kent alleen de eerste N tekens. Tot #299 stond
+    /// dat alleen in de run-melding — per RUN, nooit per RIJ — en run_log-rijen
+    /// verouderen. Over een half jaar was "welke vectoren zijn partieel?" dus
+    /// onbeantwoordbaar, en zelfs niet te reconstrueren: het budget kan intussen
+    /// verschoven zijn, dus de kaplengte van tóén is nergens meer af te leiden.
+    /// Vandaar de kaplengte zelf en niet een vlag — met een verhoogd budget is
+    /// direct te zien welke rijen daar baat bij hebben.
+    ///
+    /// EF-vertaalbaar en dus bruikbaar als filter:
+    /// <c>Where(c =&gt; c.EmbeddingTruncatedAt != null)</c> geeft precies de
+    /// her-embeddeerbare rijen zodra het budget omhoog kan. Wordt bij ELKE
+    /// (her)embed geschreven, óók naar null — anders blijft een rij die intussen
+    /// wél past voor altijd als partieel gemarkeerd.</summary>
+    public int? EmbeddingTruncatedAt { get; set; }
     /// <summary>Alt-art/promo/herdruk-groepering: null = canonieke printing,
     /// anders het RiftboundId van de canonieke kaart met dezelfde naam.</summary>
     public string? VariantOf { get; set; }
+    /// <summary>Voortgangs-watermark van de brein-interactie-mining (#249-review):
+    /// gezet zodra de EXTRACTIE voor deze kaart geslaagd is (rb-ai antwoordde, de
+    /// envelop parseerde) — ook wanneer er niets promoveerde. Null = nog te doen.
+    ///
+    /// Dit veld verving het Assertion-als-watermark, dat het onderscheid principieel
+    /// niet kon maken: een Assertion ontstaat alléén op het accept-pad, dus een kaart
+    /// die niets oplevert (alle paren kaart↔eigen-keyword, alles verworpen, minder dan
+    /// twee aangeboden refs) liet géén spoor achter en bleef aan de kop van de
+    /// <c>OrderBy(RiftboundId)</c>-wachtrij staan — de gecapte job herkauwde eeuwig
+    /// dezelfde kop en het drain-signaal bleef permanent false. rb-ai-uitval en een
+    /// kapotte envelop zetten dit veld bewust NIET: die kaart moet juist terugkomen.
+    ///
+    /// Her-minen is daarmee een expliciete stap (veld leegmaken), zoals de
+    /// abonnement-tokenkost vereist (#232).</summary>
+    public DateTimeOffset? InteractionsMinedAt { get; set; }
+    /// <summary>De <see cref="MiningRun"/> die het watermark zette — provenance voor
+    /// een gerichte her-mine (bv. na een prompt-versie-bump).</summary>
+    public string? InteractionsMinedByRunId { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public class RuleChunk
+public class RuleChunk : IEmbeddable
 {
     public long Id { get; set; }
     public long DocumentId { get; set; }
@@ -140,16 +385,41 @@ public class RuleChunk
     public required string Text { get; set; }
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
+    /// <summary>Kaplengte van de embed-invoer, of null als de vector de volledige
+    /// tekst dekt — zie <see cref="Card.EmbeddingTruncatedAt"/> (#299). Juist hier
+    /// nodig: <c>RuleSectionParser.MaxSectionLength</c> (2400) is een streefwaarde,
+    /// geen grens — <c>SplitLong</c> knipt op zinsgrens en laat één langere zin heel,
+    /// en Card Errata heeft al een chunk van 3908 tekens. <see cref="Text"/> zelf
+    /// blijft altijd volledig; alleen de vector kijkt naar de eerste N tekens.</summary>
+    public int? EmbeddingTruncatedAt { get; set; }
 }
 
 public class RunLog
 {
     public long Id { get; set; }
-    public required string Kind { get; set; }           // scan|cards|embed|conflicts|graph
+    public required string Kind { get; set; }           // scan|cards|embed|conflicts|graph|setting
     public string? Ref { get; set; }
     public required string Status { get; set; }         // ok|changed|new|unchanged|error|info
     public string? Detail { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Beheerde instelling (#254): één override op een instelling die tot nu toe
+/// alleen via de VM-omgeving te zetten was. ONTBREKEN is de normale toestand — zonder
+/// rij geldt de bestaande env-/codewaarde, dus een lege tabel = exact het huidige
+/// gedrag. <see cref="Key"/> komt uit <see cref="ManagedSettingsCatalog"/> en
+/// <see cref="Value"/> is de genormaliseerde opslagvorm ("true"/"false", "22",
+/// "Europe/Amsterdam"). <see cref="UpdatedBy"/> is de beheerder-identiteit; de admin
+/// deelt één wachtwoord, dus in de praktijk "beheer" — het spoor met de oude en
+/// nieuwe waarde staat in <c>run_log</c> (Kind="setting").</summary>
+public class Setting
+{
+    public required string Key { get; set; }
+    public required string Value { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public string? UpdatedBy { get; set; }
 }
 
 /// <summary>Gecachete LLM-uitleg waarom twee kaarten op elkaar lijken (#30).
@@ -173,24 +443,68 @@ public class AskMetric
     public string? QuestionType { get; set; }
     public bool HadImage { get; set; }
     public bool Ok { get; set; } = true;
+    /// <summary>Ingelogde vrager (#42) — voedt de per-account-dagquota en het
+    /// kosten-overzicht in het beheer. Null = anonieme vraag.</summary>
+    public long? UserId { get; set; }
+    /// <summary>cheap|hard|agentic — het pad dat het antwoord écht leverde
+    /// (kostenindicatie, #42/#107). AskTrace kent het model ook, maar die
+    /// tabel bewaart alleen de laatste 200 traces; hier blijft de verdeling
+    /// over langere periodes optelbaar.</summary>
+    public string? Model { get; set; }
+    /// <summary>Agentic ask (#107, docs/BRAIN.md §2.4): het antwoord kwam
+    /// daadwerkelijk van de agent — zo toont de duurstatistiek beide paden
+    /// apart. Vangnet-inzet (agent faalde, single-pass antwoordde) telt als
+    /// false en is herkenbaar aan de marker in AskTrace.BrainSteps.</summary>
+    public bool Agentic { get; set; }
+    /// <summary>Wie de escalatie afdwong (#153): "gate" of "user"; null =
+    /// niet geëscaleerd. Staat óók bij vangnet-inzet (de poging is gedaan):
+    /// "user"-rijen zijn de teller voor het Grondig-dagquotum — bewust
+    /// inclusief mislukte pogingen, conservatief net als het vraagquotum.</summary>
+    public string? EscalatedBy { get; set; }
+    /// <summary>Echte token-tellingen per vraag (#121), opgeteld over álle
+    /// LLM-calls die de vraag kostte (rewrite + antwoord; bij agentic alle
+    /// beurten incl. tool-overhead — input telt rb-ai's cache-tokens mee).
+    /// Null = geen enkele call gaf usage terug (oude rb-ai of AI-uitval):
+    /// onbekend is niet hetzelfde als 0.</summary>
+    public long? InputTokens { get; set; }
+    public long? OutputTokens { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 /// <summary>Kennisbank-document (docs/KNOWLEDGE.md). Kind "primer" =
 /// gedistilleerd spelbegrip; draft → door de beheerder approved, daarna
 /// doet het doc mee in de /ask-context.</summary>
-public class KnowledgeDoc
+public class KnowledgeDoc : IEmbeddable
 {
     public long Id { get; set; }
     public required string Kind { get; set; }           // primer | (later: claim-samenvatting …)
     public required string Topic { get; set; }          // PrimerTopics.Key
     public required string Title { get; set; }
     public required string Body { get; set; }
+    /// <summary>Nederlandse weergavetekst (#266) van <see cref="Body"/>. De
+    /// Engelse body blijft canoniek — retrieval, embedding en /ask-context
+    /// gebruiken uitsluitend die; dit veld bestaat alleen om de bezoeker een
+    /// Nederlandse pagina te tonen. Null = nog geen (bruikbare) vertaling: de
+    /// UI toont dan het Engels, nooit een leeg vak.</summary>
+    public string? BodyNl { get; set; }
     /// <summary>§-codes waarop het doc gebaseerd is, komma-gescheiden.</summary>
     public string? SectionRefs { get; set; }
     public string Status { get; set; } = "draft";       // draft | approved
     public Vector? Embedding { get; set; }
     public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
+    /// <summary>Kaplengte van de embed-invoer, of null als de vector de volledige
+    /// tekst dekt — zie <see cref="Card.EmbeddingTruncatedAt"/> (#299). Staat hier
+    /// omdat dit dé aanroepplek is die #301 "de reële" noemt: een reviewer plakt een
+    /// primer-body en die gaat rechtstreeks, ongemeten, de embed-laag in. De kap
+    /// voorkomt sindsdien de OOM-kill; deze kolom zorgt dat de reviewer niet
+    /// bedrogen uitkomt met een vector die maar de helft van zijn tekst kent.</summary>
+    public int? EmbeddingTruncatedAt { get; set; }
+    /// <summary>Wanneer de relatie-mining (#116) dit doc als anker verwerkte;
+    /// null = nog niet. Zelf-invaliderend: een run pakt docs waarvan
+    /// relations_mined_at vóór updated_at ligt vanzelf opnieuw op.</summary>
+    public DateTimeOffset? RelationsMinedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -201,6 +515,9 @@ public class AskTrace
     public long Id { get; set; }
     public required string Question { get; set; }
     public string? QuestionType { get; set; }
+    /// <summary>#66: LLM-herformulering waarmee gezocht is (zoekzin, queries,
+    /// lexicale termen); null = rewrite mislukt, gezocht met de rauwe vraag.</summary>
+    public string? RewrittenQuery { get; set; }
     public string? SourceBias { get; set; }
     public bool MentionsCard { get; set; }
     /// <summary>Herkende mechaniek-keywords, komma-gescheiden.</summary>
@@ -211,12 +528,138 @@ public class AskTrace
     public string? ContextCards { get; set; }
     /// <summary>Titels van de primer-docs die als spelbegrip meegingen.</summary>
     public string? PrimerDocs { get; set; }
+    /// <summary>Community-claims (kennislaag 2, #51) die als context meegingen,
+    /// als "topicType:topicRef", komma-gescheiden.</summary>
+    public string? CommunityClaims { get; set; }
     public int VerifiedRulings { get; set; }
-    public string? Model { get; set; }                  // cheap|hard
+    public string? Model { get; set; }                  // cheap|hard|agentic
     public bool HadImage { get; set; }
     public int DurationMs { get; set; }
+    /// <summary>Agentic ask (#107): het antwoord kwam daadwerkelijk van de
+    /// agent (docs/BRAIN.md §2.4). Escalaties die op het vangnet eindigden
+    /// staan op false en zijn herkenbaar aan de marker in BrainSteps.</summary>
+    public bool Agentic { get; set; }
+    /// <summary>Wie de escalatie afdwong (#153): "gate" of "user"; null =
+    /// niet geëscaleerd — de badge "agentic (gate/gebruiker)" in de
+    /// beheer-traces.</summary>
+    public string? EscalatedBy { get; set; }
+    /// <summary>Brein-stappen van de agent (#107): één regel per tool-call
+    /// (toolnaam + argumenten), zoals rb-ai ze teruggeeft — bij vangnet-inzet
+    /// de vóór de uitval al gedane stappen plus een expliciete marker; null
+    /// zolang de vraag niet escaleerde.</summary>
+    public string? BrainSteps { get; set; }
+    /// <summary>Het volledige gesprek in de trace (#143): de definitieve
+    /// antwoordtekst zoals de vrager hem kreeg — op het streamingpad het
+    /// slotframe, bij AI-uitval de eerlijke UnavailableAnswer (Ok=false).</summary>
+    public string? Answer { get; set; }
+    /// <summary>JSON-snapshot van de eerdere beurten `[{question, answer}]`
+    /// (#143) — exact de gecapte doorvraag-context die als GESPREK-blok in de
+    /// prompt meeging (#41); null bij een eerste vraag.</summary>
+    public string? History { get; set; }
+    /// <summary>Per-fase-wandkloktijden als compacte JSON (#152, vorm:
+    /// <see cref="AskPhases"/>) — rewrite/embed/retrieval/AI naast de totale
+    /// DurationMs, zodat het beheer ziet wáár de tijd van een vraag zit.
+    /// Null bij traces van vóór de meting.</summary>
+    public string? PhaseTimings { get; set; }
     public bool Ok { get; set; } = true;
+    /// <summary>Ingelogde vrager (#42); null = anoniem.</summary>
+    public long? UserId { get; set; }
+    /// <summary>Privacy-nette IP-koppeling (#157): HMAC-SHA256 van het
+    /// client-IP (IpHashing.Hash), nooit het rauwe IP. Null als
+    /// ASK_IP_HASH_SECRET ontbreekt of het IP niet vastgesteld kon worden —
+    /// zo'n vraag telt dan niet mee in de anonieme ask-geschiedenis (#157).</summary>
+    public string? IpHash { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Account voor de publieke site (#42): e-mail + magic-link, bewust
+/// zonder wachtwoorden. Quota zijn per gebruiker instelbaar in het beheer.</summary>
+public class AppUser
+{
+    public long Id { get; set; }
+    /// <summary>Genormaliseerd (lowercase) — zie Accounts.NormalizeEmail.</summary>
+    public required string Email { get; set; }
+    public bool Blocked { get; set; }
+    /// <summary>Vragen per UTC-dag op /api/ask (foto-vragen tellen ook mee).</summary>
+    public int DailyQuota { get; set; } = 30;
+    /// <summary>Foto-vragen per UTC-dag — die forceren het dure model.</summary>
+    public int DailyPhotoQuota { get; set; } = 5;
+    /// <summary>Zelf geforceerde Grondig-vragen per UTC-dag (#153) — die
+    /// forceren de brein-agent. Alleen gehonoreerde gebruikerskeuzes tellen
+    /// (metric-rijen met EscalatedBy "user"); gate-escalaties niet.</summary>
+    public int DailyAgenticQuota { get; set; } = 5;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? LastLoginAt { get; set; }
+    /// <summary>WebAuthn user handle (#109): willekeurige bytes die het account
+    /// richting authenticators identificeren — bewust niet het e-mailadres
+    /// (spec: geen PII in de handle) en stabiel per account, zodat meerdere
+    /// passkeys bij de authenticator als één account verschijnen. Null zolang
+    /// het account nog geen passkey-registratie heeft gedaan.</summary>
+    public byte[]? PasskeyHandle { get; set; }
+}
+
+/// <summary>Passkey-credential (WebAuthn, #109): de publieke sleutel waarmee
+/// een authenticator (Face ID, vingerafdruk, security key) zich bewijst.
+/// SignCount is de replay-teller (Passkeys.IsSignCountValid); Aaguid
+/// identificeert het authenticator-type. Meerdere per account is juist de
+/// bedoeling (telefoon + laptop).</summary>
+public class PasskeyCredential
+{
+    public long Id { get; set; }
+    public long UserId { get; set; }
+    public AppUser? User { get; set; }
+    public required byte[] CredentialId { get; set; }
+    public required byte[] PublicKey { get; set; }
+    /// <summary>WebAuthn-teller is een uint32; long omdat Postgres geen
+    /// unsigned kent. Cast naar uint richting fido2-net-lib.</summary>
+    public long SignCount { get; set; }
+    public Guid Aaguid { get; set; }
+    public required string Name { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? LastUsedAt { get; set; }
+}
+
+/// <summary>Lopende WebAuthn-ceremonie (#109): de server-side challenge, kort
+/// geldig en single-use — zelfde hygiëne als login_token (alleen de hash van
+/// het client-token in de database). OptionsJson bewaart de volledige opties
+/// omdat fido2-net-lib die nodig heeft om het antwoord te verifiëren.</summary>
+public class PasskeyChallenge
+{
+    public long Id { get; set; }
+    public required string TokenHash { get; set; }
+    /// <summary>Passkeys.RegisterKind of Passkeys.LoginKind.</summary>
+    public required string Kind { get; set; }
+    /// <summary>Registratie van een nieuw account: de gekozen identifier.</summary>
+    public string? Email { get; set; }
+    /// <summary>Registratie van een extra passkey bij een bestaand account.</summary>
+    public long? UserId { get; set; }
+    public required string OptionsJson { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; }
+}
+
+/// <summary>Ingelogde sessie (#42): rb-web bewaart het token in een httpOnly-
+/// cookie en stuurt het als X-User-Token mee; hier staat alleen de hash.</summary>
+public class UserSession
+{
+    public long Id { get; set; }
+    public long UserId { get; set; }
+    public AppUser? User { get; set; }
+    public required string TokenHash { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; }
+}
+
+/// <summary>Eenmalige magic-link (#42): kort geldig, single-use, alleen de
+/// hash opgeslagen. Per adres is maar één link tegelijk actief.</summary>
+public class LoginToken
+{
+    public long Id { get; set; }
+    public required string Email { get; set; }
+    public required string TokenHash { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? UsedAt { get; set; }
 }
 
 public class PushSubscription
@@ -250,6 +693,103 @@ public class Erratum
     public required string NewText { get; set; }
     public required string SourceUrl { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+    /// <summary>Temporele precedentie (#168): vanaf wanneer deze errata-tekst
+    /// gold, afgeleid van de bron die haar publiceerde (<see
+    /// cref="Source.UpdatedAt"/> ?? <see cref="Source.PublishedAt"/> van de
+    /// bron achter <see cref="SourceUrl"/>). Null als die bron geen datum
+    /// draagt — nooit raden. Tie-breaker bij meerdere errata over dezelfde
+    /// kaart (zie <see cref="Precedence"/>): hoogste TrustTier, dan nieuwste
+    /// EffectiveFrom wint.</summary>
+    public DateOnly? EffectiveFrom { get; set; }
+}
+
+/// <summary>Kennislaag 2 (#50): een geparafraseerde community-bewering over
+/// hoe een regel/kaart/mechaniek/conventie in de praktijk werkt, met
+/// corroboratie (hoeveel onafhankelijke bronnen hetzelfde zeggen) en een
+/// gewogen trust-score. Interpretatief — officieel (laag 0) wint altijd.</summary>
+public class Claim : IEmbeddable
+{
+    public long Id { get; set; }
+    public required string TopicType { get; set; }      // card|mechanic|section|concept
+    public required string TopicRef { get; set; }       // kaartnaam/mechaniek/§-code/concept
+    /// <summary>De bewering, geparafraseerd in het NL (auteursrecht: nooit
+    /// overgenomen tekst — het korte citaat leeft bij de bron).</summary>
+    public required string Statement { get; set; }
+    /// <summary>Aantal onafhankelijke bronnen dat hetzelfde beweert.</summary>
+    public int Corroboration { get; set; } = 1;
+    /// <summary>Gewogen bron-trust × corroboratie (0..1), zie ClaimScoring.</summary>
+    public double TrustScore { get; set; }
+    public string Status { get; set; } = "unreviewed";  // unreviewed|accepted|rejected|superseded
+    /// <summary>Toelichting bij rejected/superseded (bijv. de officiële § die
+    /// de claim tegenspreekt — "officieel wint altijd").</summary>
+    public string? StatusReason { get; set; }
+    /// <summary>Toets tegen officiële §'s: unchecked|confirmed|contradicted|unclear.</summary>
+    public string OfficialStatus { get; set; } = "unchecked";
+    /// <summary>Beheerder-notitie bij het reviewen (#124, "zo zit het wél") —
+    /// blijft bij het item staan en is via de promotie-actie door te zetten
+    /// als geverifieerde ruling (Correction), zodat de kennis antwoorden stuurt.</summary>
+    public string? ReviewNote { get; set; }
+    /// <summary>Archief (#124): gearchiveerd = uit de default-reviewweergave,
+    /// terugvindbaar via de archief-chip. Puur beheer-zicht — een accepted
+    /// claim blijft gewoon meedoen in /ask, gearchiveerd of niet.</summary>
+    public DateTimeOffset? ArchivedAt { get; set; }
+    public Vector? Embedding { get; set; }
+    public string? EmbeddingModel { get; set; }
+    /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
+    public string? EmbeddingContentHash { get; set; }
+    public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset LastSeen { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Bewijsvoering per claim: welke bron beweerde dit, waar, en met
+/// welk kort citaat. Eén bron telt één keer mee in de corroboratie.</summary>
+public class ClaimSource
+{
+    public long Id { get; set; }
+    public long ClaimId { get; set; }
+    public Claim? Claim { get; set; }
+    public required string SourceId { get; set; }
+    public required string Url { get; set; }
+    /// <summary>Kort letterlijk citaat als bewijs (auteursrecht: parafrase +
+    /// kort citaat + bronlink, geen overgenomen teksten).</summary>
+    public string? QuoteExcerpt { get; set; }
+    public DateTimeOffset SeenAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Bronvoorstel uit de bronnenjacht (#63): een webvondst van de
+/// scout als reviewqueue-item. Accepteren zet de bron met veilige defaults
+/// (uitgeschakeld!) in het register; verwerpen houdt de URL uit volgende
+/// runs. Niets gaat automatisch aan — trust-toekenning en activeren blijven
+/// een beheerdersbeslissing (docs/KNOWLEDGE.md: bron-trust is heilig).</summary>
+public class SourceProposal
+{
+    public long Id { get; set; }
+    public required string Url { get; set; }
+    public required string Name { get; set; }
+    /// <summary>Type-inschatting van de scout: official | partner | community.</summary>
+    public required string Type { get; set; }
+    /// <summary>Waarom deze bron de kennisbank zou versterken (LLM, NL).</summary>
+    public required string Motivation { get; set; }
+    public string Status { get; set; } = "proposed";    // proposed|accepted|rejected
+    public DateTimeOffset FoundAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ReviewedAt { get; set; }
+}
+
+/// <summary>Evolutie-raamwerk (#52): groeiend mechaniek-vocabulaire. De miner
+/// rapporteert bracketed termen uit kaartteksten die niet in het vocabulaire
+/// staan als kandidaat; de beheerder accepteert of verwerpt ze. Geaccepteerde
+/// termen tellen mee in het mining-vocabulaire en de betrokken kaarten worden
+/// opnieuw gemined — zo kent het systeem "Overwhelm" op de dag dat de eerste
+/// kaart ermee verschijnt.</summary>
+public class MechanicKeyword
+{
+    public long Id { get; set; }
+    public required string Term { get; set; }
+    public string Status { get; set; } = "candidate";   // candidate|accepted|rejected
+    /// <summary>In hoeveel kaartteksten de term voorkomt (review-sortering).</summary>
+    public int Occurrences { get; set; }
+    public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ReviewedAt { get; set; }
 }
 
 /// <summary>S3: LLM-geverifieerde kaart↔kaart-interactie (kandidaten komen uit
@@ -262,4 +802,206 @@ public class CardInteraction
     public required string Kind { get; set; }       // combo | synergy | counter | nonbo
     public required string Explanation { get; set; }
     public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Dynamische LLM-relatie tussen twee brein-knopen (#116): het
+/// INTERACTS_WITH/claims-patroon veralgemeniseerd. Van/naar zijn BrainRefs
+/// (docs/BRAIN.md §2.1) over álle kennislagen heen; het kind is een open maar
+/// gereviewd vocabulaire (RelationKind). LLM-relaties gaan NOOIT rechtstreeks
+/// de graph in: Postgres is de bron, de graph-rebuild projecteert alleen
+/// accepted/unreviewed relaties waarvan het kind geaccepteerd is.</summary>
+public class Relation
+{
+    public long Id { get; set; }
+    public required string FromRef { get; set; }        // bv. "mechanic:Deflect"
+    public required string ToRef { get; set; }          // bv. "section:core-rules-pdf/7.4"
+    /// <summary>Genormaliseerd kind-label (RelationMiner.NormalizeKind),
+    /// bv. "counters" of "wordt beperkt door".</summary>
+    public required string Kind { get; set; }
+    /// <summary>Waarom deze relatie bestaat (LLM, NL) — gaat als property mee
+    /// de graph in zodat tools de relatie kunnen duiden.</summary>
+    public required string Explanation { get; set; }
+    /// <summary>Bewijsbron/anker van de mining, bv. "concept:combat" of
+    /// "mechanics-overzicht" — herleidbaarheid per voorstel.</summary>
+    public required string Provenance { get; set; }
+    /// <summary>Trust van de bewijsbron (0..1, ClaimScoring-schaal) — de
+    /// kennispiramide blijft leidend, ook op relaties.</summary>
+    public double Trust { get; set; }
+    public string Status { get; set; } = "unreviewed";  // unreviewed|accepted|rejected
+    /// <summary>Beheerder-notitie bij het reviewen (#124) — zichtbaar bij het
+    /// item (verwerp-reden) en promoveerbaar tot geverifieerde ruling.</summary>
+    public string? ReviewNote { get; set; }
+    /// <summary>Archief (#124): uit de default-reviewweergave, terugvindbaar
+    /// via de archief-chip. Puur beheer-zicht — de graph-projectie kijkt
+    /// alleen naar Status, niet naar het archief.</summary>
+    public DateTimeOffset? ArchivedAt { get; set; }
+    public DateTimeOffset DetectedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ReviewedAt { get; set; }
+
+    /// <summary>LLM-triage-aanbeveling (#199 v1, <see
+    /// cref="RbRules.Infrastructure.RelationTriageService"/>): "accept" |
+    /// "reject" | "unsure", null = nog niet getriaged. Puur een aanbeveling —
+    /// GEEN autoriteitspad: alleen een mens wijzigt <see cref="Status"/>
+    /// (rechtstreeks of via de bulk-actie, die per item hetzelfde
+    /// accept-/reject-pad aanroept). Blijft staan ná accept/reject zodat de
+    /// herkomst van de beslissing zichtbaar blijft (#199 eis 4); een
+    /// mens-beoordeeld voorstel (Status niet meer "unreviewed") wordt nooit
+    /// opnieuw getriaged.</summary>
+    public string? Recommendation { get; set; }
+    /// <summary>Één zin (Engels — afgeleide kennis, #187) die de aanbeveling
+    /// motiveert, met de geraadpleegde refs erin gevouwen (geen aparte kolom
+    /// voor refs — het datamodel blijft bewust tot drie nullable velden).</summary>
+    public string? RecommendationReason { get; set; }
+    public DateTimeOffset? RecommendedAt { get; set; }
+}
+
+/// <summary>Community-deck van Piltover Archive (#15, Piltover-first): wij
+/// bouwen geen eigen deckbuilder maar spiegelen hun publieke deck-pagina's,
+/// met prominente attributie (SourceUrl deep-linkt terug). Fundament voor de
+/// meta-laag (kennispiramide-laag 3).</summary>
+public class Deck
+{
+    public long Id { get; set; }
+    /// <summary>PA-deck-uuid (uit /decks/view/{uuid}) — de identiteit voor
+    /// idempotente her-runs; uniek geïndexeerd.</summary>
+    public required string PaId { get; set; }
+    public string? Name { get; set; }
+    /// <summary>Attributie: de publieke PA-pagina waar dit deck vandaan komt.</summary>
+    public required string SourceUrl { get; set; }
+    /// <summary>Deck-domeinen (via de legend) — string[] net als card.domains,
+    /// zodat facet-queries over kaarten en decks uniform blijven (geen csv).</summary>
+    public string[] Domains { get; set; } = [];
+    public DateTimeOffset? PaCreatedAt { get; set; }
+    /// <summary>PA's updatedAt — samen met de sitemap-lastmod de basis om
+    /// alleen echt gewijzigde decks opnieuw op te halen.</summary>
+    public DateTimeOffset? PaUpdatedAt { get; set; }
+    public int Views { get; set; }
+    public int Likes { get; set; }
+    public DateTimeOffset FetchedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Kaartregel binnen een PA-deck. CardCode is het PA-variantnummer
+/// ("OGN-126a"); CanonicalRiftboundId is onze canonieke kaart via de
+/// variantgroepering (DeckCardLinker), null zolang wij de kaart niet kennen
+/// (onbekend is data, geen crash — de ingest telt ze per run).</summary>
+public class DeckCard
+{
+    public long Id { get; set; }
+    public long DeckId { get; set; }
+    public Deck? Deck { get; set; }
+    /// <summary>legend|champions|battlefields|runes|maindeck|sideboard|bench.</summary>
+    public required string Section { get; set; }
+    public required string CardCode { get; set; }
+    public string? CanonicalRiftboundId { get; set; }
+    public int Quantity { get; set; }
+}
+
+/// <summary>Kandidaat-vocabulaire voor relatie-kinds (#116, patroon
+/// MechanicKeyword uit #52): de LLM mag nieuwe kinds voorstellen; onbekende
+/// kinds landen hier als kandidaat. Pas geaccepteerde kinds (plus de
+/// seed-lijst in RelationMiner) doen mee in de graph-projectie.</summary>
+public class RelationKind
+{
+    public long Id { get; set; }
+    /// <summary>Genormaliseerd (RelationMiner.NormalizeKind).</summary>
+    public required string Kind { get; set; }
+    public string Status { get; set; } = "candidate";   // candidate|accepted|rejected
+    /// <summary>Aantal opgeslagen relatievoorstellen met dit kind
+    /// (review-sortering op impact).</summary>
+    public int Occurrences { get; set; }
+    public DateTimeOffset FirstSeen { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ReviewedAt { get; set; }
+}
+
+/// <summary>Benchmark-vraag (#158, de scheidsrechter-judge-test): vaste,
+/// extern aangeleverde meerkeuzevraag. Seed-import via BenchmarkSeed
+/// (Program.cs-startup, idempotent op ExternalKey — zelfde patroon als
+/// SourceSeed): ontbrekende sleutels komen erbij zodra Sjoerd een nieuw deel
+/// van de set aanlevert, bestaande rijen blijven ongemoeid. CorrectIndex is
+/// meestal nog null — de officiële antwoordsleutel volgt in delen; zónder
+/// sleutel mag een run de vraag wél stellen en het antwoord tonen, maar
+/// NOOIT als correct/fout scoren (zie BenchmarkService/BenchmarkRun).</summary>
+public class BenchmarkQuestion
+{
+    public long Id { get; set; }
+    /// <summary>Stabiele idempotentie-sleutel voor de seed (bv. "judge-1") —
+    /// zelfde rol als Source.Id.</summary>
+    public required string ExternalKey { get; set; }
+    public required string Category { get; set; }         // "judge"
+    public required string Question { get; set; }
+    /// <summary>Geordende opties (A/B/C/…) — de index is de sleutel voor
+    /// CorrectIndex en voor de letter die de agent kiest (BenchmarkPrompt).</summary>
+    public required string[] Options { get; set; }
+    /// <summary>0-based; null = nog geen officiële sleutel.</summary>
+    public int? CorrectIndex { get; set; }
+    /// <summary>Optionele toelichting/regelbasis-referentie voor bij het bekijken.</summary>
+    public string? Explanation { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>Eén benchmarkrun (#158): de vaste vragenset door de bestaande
+/// /ask-pipeline met de isolatie-vlag aan (AskService.AskOptions.Benchmark) —
+/// geen ask_trace/ask_metric-rij, geen agentic-relatie-terugkoppeling (#120).
+/// Score/tellingen liggen hier vast bij afronding zodat run-over-run
+/// vergelijken geen herberekening nodig heeft.
+///
+/// Model-sweep (#174, uitbreiding op #158): drie extra, puur additieve
+/// velden — allemaal null voor een gewone single-model run via het
+/// jobs-paneel (het bestaande "benchmark"-pad blijft ongewijzigd).</summary>
+public class BenchmarkRun
+{
+    public long Id { get; set; }
+    /// <summary>Vrij label (model-context e.d.); null bij een gewone
+    /// handmatige run via het jobs-paneel.</summary>
+    public string? Label { get; set; }
+    public int QuestionCount { get; set; }
+    /// <summary>Aantal vragen mét officiële sleutel (CorrectIndex != null) op
+    /// het moment van deze run — de noemer van ScorePercent.</summary>
+    public int KeyedCount { get; set; }
+    public int CorrectCount { get; set; }
+    /// <summary>% correct over de gekeyde vragen; null zolang geen enkele
+    /// vraag een sleutel heeft (nog niets te scoren, wel te bekijken).</summary>
+    public double? ScorePercent { get; set; }
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? CompletedAt { get; set; }
+    /// <summary>Model-sweep (#174): het rb-ai-modelId dat déze run gebruikte
+    /// (bv. "claude-opus-4-8") — meegegeven als AskOptions.Model. Null buiten
+    /// een sweep (het standaardmodel van de gewone benchmark-job).</summary>
+    public string? Model { get; set; }
+    /// <summary>Model-sweep (#174): 1 of 2 — welke van de twee herhalingen
+    /// binnen ditzelfde model dit is (de consistentie-check uit issue #174:
+    /// scoren de twee runs gelijk, of was de eerste een toevalstreffer?).
+    /// Null buiten een sweep.</summary>
+    public int? RunIndex { get; set; }
+    /// <summary>Model-sweep (#174): groepeert alle (model, run_index)-rijen
+    /// van één sweep — alle runs met dezelfde SweepId horen bij dezelfde
+    /// vergelijking en delen dezelfde vragenset-snapshot. Gezet op de
+    /// UTC-starttijd van de sweep in milliseconden (dubbelt meteen als
+    /// sorteerbare "wanneer"-waarde voor het verloop-over-tijd-overzicht).
+    /// Null voor een niet-sweep-run.</summary>
+    public long? SweepId { get; set; }
+}
+
+/// <summary>Antwoord van één vraag binnen een run (#158): het volledige
+/// scheidsrechter-antwoord (met de gecommitteerde-keuze-instructie uit
+/// BenchmarkPrompt) plus de door de deterministische parser herkende letter.
+/// Correct is uitsluitend null wanneer de vraag geen sleutel heeft — een
+/// parse-mislukking op een wél gekeyde vraag levert gewoon false op
+/// (ChosenIndex null ≠ CorrectIndex), nooit een crash van de run.</summary>
+public class BenchmarkResult
+{
+    public long Id { get; set; }
+    public long RunId { get; set; }
+    public BenchmarkRun? Run { get; set; }
+    public long QuestionId { get; set; }
+    public BenchmarkQuestion? Question { get; set; }
+    public required string Answer { get; set; }
+    /// <summary>0-based; null = de deterministische parser vond geen
+    /// eenduidige letter in het antwoord (geen match ⇒ null, geen fout).</summary>
+    public int? ChosenIndex { get; set; }
+    public bool? Correct { get; set; }
+    public int DurationMs { get; set; }
+    public long? InputTokens { get; set; }
+    public long? OutputTokens { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

@@ -8,12 +8,22 @@ namespace RbRules.Infrastructure;
 public static class BanLookup
 {
     /// <summary>Canonieke groeps-id's waarvan (een printing van) de kaart op
-    /// de banlijst staat.</summary>
+    /// de banlijst staat, ongeacht format — voor de kaartpagina volstaat één
+    /// ban-status voor de hele kaart.</summary>
+    public static Task<HashSet<string>> BannedCanonicalIdsAsync(
+        RbRulesDbContext db, CancellationToken ct = default) =>
+        BannedCanonicalIdsAsync(db, format: null, ct);
+
+    /// <summary>Zelfde opzoeking, maar geschaald naar één format (#15
+    /// deck-browser: een deck is per format legaal/illegaal, dus een ban in
+    /// een ander format telt daar niet mee). <paramref name="format"/> null
+    /// betekent "elk format", net als de niet-geschaalde overload.</summary>
     public static async Task<HashSet<string>> BannedCanonicalIdsAsync(
-        RbRulesDbContext db, CancellationToken ct = default)
+        RbRulesDbContext db, string? format, CancellationToken ct = default)
     {
-        var rows = await db.BanEntries.AsNoTracking()
-            .Where(b => b.CardRiftboundId != null)
+        var bans = db.BanEntries.AsNoTracking().Where(b => b.CardRiftboundId != null);
+        if (format is not null) bans = bans.Where(b => b.Format == format);
+        var rows = await bans
             .Join(db.Cards, b => b.CardRiftboundId, c => c.RiftboundId,
                 (b, c) => c.VariantOf ?? c.RiftboundId)
             .ToListAsync(ct);

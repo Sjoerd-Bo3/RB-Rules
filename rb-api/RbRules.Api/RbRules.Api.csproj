@@ -7,6 +7,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
+    <!--
+      Directe pin puur om NU1903 (GHSA-v5pm-xwqc-g5wc, CVE-2026-49451) te sluiten:
+      Microsoft.AspNetCore.OpenApi 10.0.9 declareert Microsoft.OpenApi 2.0.0 als
+      ondergrens, en NuGet kiest de laagste die past — dus komt 2.0.0 binnen. Ook
+      de nieuwste 10.0.10 declareert nog 2.0.0, dus de parent bumpen helpt niet;
+      een directe verwijzing wint van de transitieve en is de smalste fix.
+      2.7.5 is de eerste gepatchte 2.x. Weghalen zodra Microsoft.AspNetCore.OpenApi
+      zelf >= 2.7.5 eist.
+    -->
+    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import RbText from '$lib/RbText.svelte';
+
 	interface Parent { code: string; text: string }
 	interface CitationLike {
 		section: string | null;
@@ -14,51 +16,113 @@
 	const cite = $derived(citations.find((c) => c.section === code) ?? null);
 </script>
 
+<!-- #360: regeltekst standaard zichtbaar (geen details/summary meer) en
+     compact — de §-chip linkt zelf naar de sectiepagina, de bronnaam en
+     bijwerkdatum verhuisden naar de citatielijst onderaan het antwoord
+     (daar stonden ze al). De regeltekst gaat door RbText zodat glyphs en
+     keyword-chips ook in citaten werken (#359). -->
 {#if cite}
-	<details class="rule-widget">
-		<summary>
-			<span class="sec-badge">§ {code}</span>
-			<span class="src">{cite.sourceName}</span>
-			<span class="hint-open">lees de regel</span>
-		</summary>
+	<div class="rule-widget">
+		<p class="head">
+			<a class="sec-badge" href="/rules/{encodeURIComponent(code)}" title={cite.sourceName}>
+				§ {code}</a>
+			{#if cite.pdfUrl}
+				<a
+					class="pdf"
+					href="{cite.pdfUrl}{cite.page ? `#page=${cite.page}` : ''}"
+					target="_blank"
+					rel="noopener">PDF{cite.page ? ` p. ${cite.page}` : ''}</a>
+			{/if}
+		</p>
 		{#if cite.parents?.length}
 			<div class="parents">
 				{#each cite.parents as p (p.code)}
-					<p><a href="/rules/{encodeURIComponent(p.code)}">§ {p.code}</a> {p.text}</p>
+					<p>
+						<a href="/rules/{encodeURIComponent(p.code)}">§ {p.code}</a>
+						<RbText text={p.text} />
+					</p>
 				{/each}
 			</div>
 		{/if}
-		{#if cite.text}<p class="body">{cite.text}</p>{/if}
-		<p class="links">
-			<a href="/rules/{encodeURIComponent(code)}">Sectiepagina</a>
-			{#if cite.pdfUrl}
-				· <a href="{cite.pdfUrl}{cite.page ? `#page=${cite.page}` : ''}" target="_blank" rel="noopener">
-					Officiële PDF{cite.page ? ` (p. ${cite.page})` : ''}</a>
-			{/if}
-		</p>
-	</details>
+		{#if cite.text}<p class="body"><RbText text={cite.text} /></p>{/if}
+	</div>
 {:else}
-	<p class="rule-fallback"><a href="/rules/{encodeURIComponent(code)}">§ {code} — bekijk de regel</a></p>
+	<!-- Zonder bijpassende citatie (model noemt een § buiten de lijst): zelfde
+	     vorm, zodat het geen losse zwevende link is (melding Sjoerd, #360).
+	     Eén anchor — badge en tekst samen — anders twee tab-stops naar
+	     dezelfde URL (review). -->
+	<p class="rule-fallback">
+		<a href="/rules/{encodeURIComponent(code)}">
+			<span class="sec-badge">§ {code}</span>
+			<span class="more">bekijk de regel</span>
+		</a>
+	</p>
 {/if}
 
 <style>
 	.rule-widget {
-		background: var(--surface-deep); border: 1px solid var(--ok);
-		border-radius: 10px; padding: 8px 14px; margin: 10px 0;
+		background: var(--surface-deep);
+		border: 1px solid var(--border);
+		border-left: 3px solid var(--ok);
+		border-radius: 8px;
+		padding: 7px 12px 8px;
+		margin: 8px 0;
 	}
-	summary { cursor: pointer; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+	.head {
+		margin: 0;
+		display: flex;
+		gap: 10px;
+		align-items: baseline;
+	}
 	.sec-badge {
-		font-weight: 700; color: var(--ok); background: var(--ok-soft);
-		border-radius: 999px; padding: 2px 10px; font-size: 0.85rem;
+		font-weight: 700;
+		color: var(--ok);
+		background: var(--ok-soft);
+		border-radius: 999px;
+		padding: 1px 9px;
+		font-size: 0.8rem;
+		text-decoration: none;
 	}
-	.src { color: var(--muted); font-size: 0.82rem; }
-	.hint-open { margin-left: auto; color: var(--muted); font-size: 0.78rem; }
-	.parents { border-left: 2px solid var(--border); padding-left: 10px; margin: 8px 0 0; }
-	.parents p { margin: 4px 0; color: var(--muted); font-size: 0.85rem; }
-	.parents a { color: var(--muted); font-weight: 700; text-decoration: none; }
-	.body { margin: 8px 0 4px; line-height: 1.6; }
-	.links { margin: 6px 0 2px; font-size: 0.85rem; }
-	.links a { color: var(--ok); text-decoration: none; font-weight: 600; }
-	.rule-fallback { margin: 8px 0; }
-	.rule-fallback a { color: var(--ok); font-weight: 600; }
+	.pdf {
+		margin-left: auto;
+		color: var(--muted);
+		font-size: 0.78rem;
+		text-decoration: none;
+	}
+	.pdf:hover {
+		color: var(--ok);
+	}
+	.parents {
+		margin: 5px 0 0;
+	}
+	.parents p {
+		margin: 2px 0;
+		color: var(--muted);
+		font-size: 0.82rem;
+		line-height: 1.45;
+	}
+	.parents a {
+		color: var(--muted);
+		font-weight: 700;
+		text-decoration: none;
+	}
+	.body {
+		margin: 5px 0 0;
+		line-height: 1.55;
+		font-size: 0.95rem;
+	}
+	.rule-fallback {
+		margin: 8px 0;
+	}
+	.rule-fallback a {
+		display: inline-flex;
+		gap: 8px;
+		align-items: baseline;
+		text-decoration: none;
+	}
+	.rule-fallback .more {
+		color: var(--ok);
+		font-size: 0.85rem;
+		font-weight: 600;
+	}
 </style>

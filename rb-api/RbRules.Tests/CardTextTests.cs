@@ -39,6 +39,24 @@ public class CardTextTests
     }
 
     [Fact]
+    public void AfgeleideAltTekstBlijftBuitenEmbeddingEnPrompt()
+    {
+        // Harde grens (#270): ImageAltText kan lokaal samengesteld zijn.
+        // Afgeleid is niet officieel — het hoort in een alt= en mag dus nooit
+        // in de embeddingtekst of een LLM-prompt terechtkomen.
+        var card = Sample();
+        card.ImageAltText = "Riftbound Champion Unit: Adaptatron. AFGELEIDE ALT-TEKST.";
+        card.ImageColorPrimary = "#222c44";
+        card.Illustrator = "Envar Studio";
+
+        Assert.DoesNotContain("AFGELEIDE ALT-TEKST", CardText.Compose(card));
+        Assert.DoesNotContain("AFGELEIDE ALT-TEKST", CardText.DescribeForPrompt(card));
+        // Krediet en laadkleur zijn presentatie, geen kaartfeit voor het model.
+        Assert.DoesNotContain("Envar Studio", CardText.Compose(card));
+        Assert.DoesNotContain("#222c44", CardText.Compose(card));
+    }
+
+    [Fact]
     public void NeedsEmbedding_WhenMissing() =>
         Assert.True(CardText.NeedsEmbedding(Sample()));
 

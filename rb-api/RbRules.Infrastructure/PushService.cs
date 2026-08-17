@@ -23,6 +23,12 @@ public class PushService(ILogger<PushService> logger)
         RbRulesDbContext db, DateTimeOffset since, CancellationToken ct = default)
     {
         if (!Enabled) return;
+        // Bewust GEEN roots-only-filter (#206): push vuurt direct na de scan,
+        // vóórdat de consolidatie-run gedraaid heeft — verse changes zijn op
+        // dat moment per definitie nog ongeconsolideerd, dus een filter zou
+        // hier niets doen. Dat een net-geconsolideerd paar in theorie twee
+        // pushes kan opleveren is een gedocumenteerde, bewuste beperking
+        // (ARCHITECTURE §6.2).
         var important = await db.Changes.AsNoTracking()
             .Where(c => c.DetectedAt >= since && c.Severity == "high")
             .ToListAsync(ct);
@@ -31,7 +37,7 @@ public class PushService(ILogger<PushService> logger)
             var sent = await SendToAllAsync(db,
                 "Belangrijke Riftbound-wijziging",
                 c.Summary ?? c.ChangeType,
-                "https://riftbound-v2.bo3.dev/", ct);
+                "https://poracle.nl/", ct);
             if (sent > 0)
                 logger.LogInformation("Push: {Sent} meldingen voor change {Id}", sent, c.Id);
         }

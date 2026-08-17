@@ -1,0 +1,366 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Microsoft.Extensions.Logging.Abstractions;
+using Pgvector;
+using RbRules.Domain;
+using RbRules.Infrastructure;
+
+namespace RbRules.Tests;
+
+/// <summary>Concept-niveau-dedupe van de FAQ-mining (#177, HIGH-review-fix).
+/// De eerdere exacte-tekst-toets stapelde dubbele geverifieerde rulings op
+/// zodra een her-mine (na een gedeeltelijk mislukte/gecapte run, of na een
+/// cosmetische bronwijziging met een nieuwe Document-rij) de LLM een
+/// verduidelijking nét anders liet verwoorden. Deze tests dekken precies dat
+/// gat: de LLM-stub geeft een PARAFRASE terug (andere woorden, zelfde
+/// onderwerp), en de embedding-stub is een deterministische bag-of-words zodat
+/// een parafrase dicht bij het origineel ligt en een écht ander concept ver —
+/// het gat dat de bestaande tests (identieke-string-stub) niet konden raken.</summary>
+public class ClarificationMiningDedupeTests
+{
+    private const string SourceId = "playriftbound-com-unleashed-rules-faq-and-clarifications";
+    private const string SourceUrl =
+        "https://playriftbound.com/en-us/news/rules-and-releases/unleashed-rules-faq-and-clarifications/";
+
+    // Het citaat staat in de seed-content (SeedFaqDocAsync) ⇒ grounded; en
+    // mechaniek "Legion" resolvet ⇒ anchored ⇒ verified. Zo testen deze cases
+    // de dedupe op échte (verified) rulings, de realistische situatie.
+    private const string GroundedQuote = "Legion means you finalize an item on the chain";
+
+    // Origineel en parafrase delen bijna alle woorden (alleen het laatste
+    // werkwoord verschilt) ⇒ lage cosine-afstand ⇒ dezelfde verduidelijking.
+    private static string Original(string clar) =>
+        $$"""{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "{{clar}}", "quote": "{{GroundedQuote}}"}]}""";
+
+    private const string LegionA = "Legion betekent dat je een item op de chain finalizet";
+    private const string LegionParaphrase = "Legion betekent dat je een item op de chain afrondt";
+    // Heel andere verduidelijking over hetzelfde onderwerp (Legion) ⇒ deelt
+    // vrijwel geen woorden ⇒ hoge cosine-afstand ⇒ apart concept.
+    private const string LegionDifferent =
+        "Legion units kunnen niet worden gekozen als doel door removal effecten";
+
+    [Fact]
+    public async Task ReRun_ParaphraseOfSameConcept_UpdatesExisting_NoNewRow()
+    {
+        using var db = NewDb();
+        var doc = await SeedFaqDocAsync(db);
+        var answer = Original(LegionA);
+        var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
+
+        var first = await svc.RunAsync();
+        Assert.Equal(1, first.Verified);
+
+        // Tweede run (force, want doc is al ClarifiedAt): de LLM herformuleert
+        // exact hetzelfde concept — geen nieuwe rij, de bestaande wordt bijgewerkt.
+        answer = Original(LegionParaphrase);
+        var second = await svc.RunAsync(force: true);
+
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        Assert.Equal(1, second.Updated);
+        var ruling = Assert.Single(await db.Corrections.ToListAsync());
+        Assert.Contains("afrondt", ruling.Text); // bijgewerkt naar de nieuwste formulering
+        Assert.DoesNotContain("finalizet", ruling.Text);
+        Assert.Equal("verified", ruling.Status);
+        Assert.NotNull(ruling.Embedding);
+    }
+
+    [Fact]
+    public async Task ReMine_NewDocumentSameConcept_NoDuplicate()
+    {
+        // Bevinding (b): een cosmetische bronwijziging maakt een nieuwe
+        // Document-rij (ClarifiedAt=null) ⇒ her-mine van het HELE document.
+        using var db = NewDb();
+        var doc1 = await SeedFaqDocAsync(db, retrievedAt: DateTimeOffset.UtcNow.AddDays(-1));
+        var answer = Original(LegionA);
+        var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
+
+        var first = await svc.RunAsync();
+        Assert.Equal(1, first.Verified);
+        Assert.NotNull(doc1.ClarifiedAt);
+
+        // Nieuwe Document-versie van dezelfde bron (nieuwste RetrievedAt,
+        // ClarifiedAt=null) — de service pakt de laatste, dus geen force nodig.
+        // Bewust zónder het citaat: de her-mine haalt de grounding niet, maar
+        // de dedupe herkent het concept en de bestaande verified ruling wordt
+        // NIET gedegradeerd (no-demote).
+        db.Documents.Add(new Document
+        {
+            SourceId = SourceId, Content = "Herziene tekst met dezelfde Legion-uitleg.",
+            ContentHash = "hash2", RetrievedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        answer = Original(LegionParaphrase);
+
+        var second = await svc.RunAsync();
+
+        Assert.Equal(1, second.Documents);
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        var ruling = Assert.Single(await db.Corrections.ToListAsync()); // geen duplicaat
+        Assert.Equal("verified", ruling.Status); // niet gedegradeerd door de niet-gegronde her-mine
+    }
+
+    [Fact]
+    public async Task ReRun_DifferentConcept_DifferentRef_CreatesNewRow()
+    {
+        // Geen over-dedup: een verduidelijking over een ánder onderwerp krijgt
+        // wél een eigen rij.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = Original(LegionA);
+        var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
+
+        await svc.RunAsync();
+        answer = """{"clarifications": [{"topicType": "concept", "topicRef": "Reflection tokens", "clarification": "Reflection tokens tellen niet mee voor het handlimiet."}]}""";
+        var second = await svc.RunAsync(force: true);
+
+        // Reflection tokens: geen citaat + geen primer-anker ⇒ nieuw ter review.
+        Assert.Equal(1, second.Pending);
+        Assert.Equal(2, await db.Corrections.CountAsync());
+    }
+
+    [Fact]
+    public async Task ReRun_DifferentConcept_SameRef_FarEmbedding_CreatesNewRow()
+    {
+        // Discriminatie op embedding-niveau: twee inhoudelijk verschillende
+        // verduidelijkingen over hetzelfde onderwerp (Ref "Legion") die ver uit
+        // elkaar liggen mogen NIET samengevouwen worden.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = Original(LegionA);
+        var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
+
+        await svc.RunAsync();
+        answer = Original(LegionDifferent);
+        var second = await svc.RunAsync(force: true);
+
+        Assert.Equal(1, second.Verified); // grounded + anchored, maar verre embedding ⇒ eigen rij
+        var rulings = await db.Corrections.Where(c => c.Ref == "Legion").ToListAsync();
+        Assert.Equal(2, rulings.Count); // twee losse Legion-verduidelijkingen
+    }
+
+    [Fact]
+    public async Task ReRun_SameClarification_DifferentQuote_QuoteNotInDedupeKey()
+    {
+        // Het citaat telt niet mee in de dedupe-sleutel: zelfde verduidelijking
+        // met een ander citaat werkt de bestaande rij bij, geen duplicaat.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = $$"""{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen op de chain.", "quote": "{{GroundedQuote}}"}]}""";
+        var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
+
+        await svc.RunAsync();
+        answer = """{"clarifications": [{"topicType": "mechanic", "topicRef": "Legion", "clarification": "Legion betekent finalizen op de chain.", "quote": "een compleet ander citaat uit de bron"}]}""";
+        var second = await svc.RunAsync(force: true);
+
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        Assert.Equal(1, second.Updated);
+        var ruling = Assert.Single(await db.Corrections.ToListAsync());
+        Assert.Contains("een compleet ander citaat", ruling.Text); // citaat bijgewerkt
+    }
+
+    [Fact]
+    public async Task ReRun_EmbeddingDown_NormalizedMatch_NoDuplicate_ExistingEmbeddingKept()
+    {
+        // Degradatie: valt Ollama weg bij een her-run, dan voorkomt de
+        // genormaliseerde exacte-tekst-toets alsnog een duplicaat — en de
+        // bestaande (goede) embedding blijft staan (nooit overschreven met null).
+        using var db = NewDb();
+        var doc = await SeedFaqDocAsync(db);
+        var answer = Original(LegionA);
+        var svc1 = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
+        await svc1.RunAsync();
+        var before = (await db.Corrections.SingleAsync()).Embedding;
+        Assert.NotNull(before);
+
+        // Zelfde concept (alleen whitespace/case-variant), maar nu ligt Ollama plat.
+        answer = Original("legion  betekent dat je een item op de chain finalizet");
+        var svc2 = new ClarificationMiningService(db, Ai(() => answer), DownEmbeddings());
+        var second = await svc2.RunAsync(force: true);
+
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        Assert.Equal(0, second.Failed);
+        var ruling = Assert.Single(await db.Corrections.ToListAsync());
+        Assert.NotNull(ruling.Embedding); // niet overschreven met null
+    }
+
+    [Fact]
+    public async Task ReMine_BestaandeReviewNote_StatusEnRedenBlijvenStaan_NietStilTeruggedraaid()
+    {
+        // #184: een beheerder-opmerking is een menselijk oordeel — de
+        // volgende her-mine (handmatig of nachtelijk) mag Status/StatusReason
+        // niet stilzwijgend overschrijven, ook niet als de herformulering nu
+        // wél door de gate zou komen. De brontekst (Text/Embedding) mag wel
+        // verversen, dat is onschadelijk.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        var answer = Original(LegionA); // grounded + anchored ⇒ zou normaliter verifiëren
+        var svc = new ClarificationMiningService(db, Ai(() => answer), BagOfWordsEmbeddings());
+        await svc.RunAsync();
+
+        var existing = await db.Corrections.SingleAsync();
+        existing.Status = "unverified";
+        existing.StatusReason = "handmatig teruggezet — nader onderzoek nodig";
+        existing.ReviewNote = "twijfel of dit wel Legion is, graag nakijken";
+        await db.SaveChangesAsync();
+
+        answer = Original(LegionParaphrase);
+        var second = await svc.RunAsync(force: true);
+
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(1, second.Updated);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("unverified", ruling.Status); // niet stiekem geverifieerd
+        Assert.Equal("handmatig teruggezet — nader onderzoek nodig", ruling.StatusReason); // niet overschreven
+        Assert.Equal("twijfel of dit wel Legion is, graag nakijken", ruling.ReviewNote); // blijft staan
+        Assert.Contains("afrondt", ruling.Text); // brontekst mag wel verversen
+    }
+
+    [Fact]
+    public async Task ReMine_NaAnkerCorrectie_VindtVerplaatstItemTerug_GeenSpookduplicaat()
+    {
+        // #184-review: een beheerder-anker-correctie verplaatst een item naar
+        // een ánder (Scope, Ref). Een her-mine die het oorspronkelijke (foute)
+        // anker opnieuw extraheert vindt het in zijn eigen bucket niet meer
+        // terug — zonder de cross-bucket-redding zou dat een spookduplicaat
+        // opleveren én de sticky-guard omzeilen. Met de redding wordt het
+        // verplaatste ReviewNote-item teruggevonden en bijgewerkt, geen dubbel.
+        using var db = NewDb();
+        await SeedFaqDocAsync(db);
+        // Mine met een fout anker (typo "Legon", geen vocabulaire-hit ⇒ niet
+        // anchored ⇒ pending in de (concept, Legon)-bucket).
+        var misAnchored =
+            $$"""{"clarifications": [{"topicType": "concept", "topicRef": "Legon", "clarification": "{{LegionA}}", "quote": "{{GroundedQuote}}"}]}""";
+        var svc = new ClarificationMiningService(db, Ai(() => misAnchored), BagOfWordsEmbeddings());
+        await svc.RunAsync();
+
+        // Simuleer de anker-correctie zoals CorrectionReevaluationService 'm doet:
+        // verplaats naar (mechanic, Legion), verified, met een ReviewNote.
+        var item = await db.Corrections.SingleAsync();
+        item.Scope = "mechanic";
+        item.Ref = "Legion";
+        item.Status = "verified";
+        item.VerifiedAt = DateTimeOffset.UtcNow;
+        item.StatusReason = null;
+        item.ReviewNote = "anker gecorrigeerd naar mechanic:Legion";
+        await db.SaveChangesAsync();
+
+        // Her-mine: de bron is ongewijzigd, dus de LLM extraheert wéér het
+        // foute anker (concept/Legon).
+        var second = await svc.RunAsync(force: true);
+
+        Assert.Equal(1, await db.Corrections.CountAsync()); // geen spookduplicaat
+        Assert.Equal(1, second.Updated);
+        Assert.Equal(0, second.Verified);
+        Assert.Equal(0, second.Pending);
+        var ruling = await db.Corrections.SingleAsync();
+        Assert.Equal("mechanic", ruling.Scope);   // anker blijft gecorrigeerd
+        Assert.Equal("Legion", ruling.Ref);
+        Assert.Equal("verified", ruling.Status);   // status niet teruggedraaid
+        Assert.Equal("anker gecorrigeerd naar mechanic:Legion", ruling.ReviewNote);
+    }
+
+    // --- testinfra -------------------------------------------------------
+
+    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(respond(request));
+    }
+
+    private static RbRulesDbContext NewDb() => new InMemoryDbContext(
+        new DbContextOptionsBuilder<RbRulesDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+
+    private sealed class InMemoryDbContext(DbContextOptions<RbRulesDbContext> options)
+        : RbRulesDbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder b)
+        {
+            base.OnModelCreating(b);
+            foreach (var entity in b.Model.GetEntityTypes().ToList())
+                foreach (var prop in entity.GetProperties()
+                             .Where(p => p.ClrType == typeof(Vector)).ToList())
+                    b.Entity(entity.ClrType).Property(prop.Name)
+                        .HasConversion(new ValueConverter<Vector, string>(
+                            v => v.ToString(), s => new Vector(s)));
+        }
+    }
+
+    private static RbAiClient Ai(Func<string?> answer) => new(
+        new HttpClient(new StubHandler(_ => answer() is { } a
+            ? Json(new { answer = a })
+            : new HttpResponseMessage(HttpStatusCode.InternalServerError)))
+        { BaseAddress = new Uri("http://rb-ai.test") },
+        NullLogger<RbAiClient>.Instance);
+
+    /// <summary>Deterministische bag-of-words-embedding: identieke tekst geeft
+    /// een identieke vector (afstand 0), teksten die veel woorden delen liggen
+    /// dicht bij elkaar en onverwante teksten ver — genoeg om de semantische
+    /// dedupe-poort echt te testen (parafrase dichtbij, ander concept ver).</summary>
+    private static EmbeddingService BagOfWordsEmbeddings() => new(
+        new HttpClient(new StubHandler(req =>
+        {
+            var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var doc = JsonDocument.Parse(body);
+            var vectors = doc.RootElement.GetProperty("input").EnumerateArray()
+                .Select(e => BagOfWords(e.GetString() ?? ""))
+                .ToArray();
+            return Json(new { embeddings = vectors });
+        }))
+        { BaseAddress = new Uri("http://ollama.test") });
+
+    private static EmbeddingService DownEmbeddings() => new(
+        new HttpClient(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)))
+        { BaseAddress = new Uri("http://ollama.test") });
+
+    private static float[] BagOfWords(string text)
+    {
+        var v = new float[EmbeddingConfig.Dimensions];
+        foreach (var tok in Regex.Split(text.ToLowerInvariant(), "[^a-z0-9]+"))
+        {
+            if (tok.Length == 0) continue;
+            var h = 2166136261u; // FNV-1a
+            foreach (var ch in tok) h = (h ^ ch) * 16777619u;
+            v[h % (uint)EmbeddingConfig.Dimensions] += 1f;
+        }
+        return v;
+    }
+
+    private static HttpResponseMessage Json(object payload) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
+            JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+    };
+
+    private static async Task<Document> SeedFaqDocAsync(
+        RbRulesDbContext db, DateTimeOffset? retrievedAt = null)
+    {
+        db.Sources.Add(new Source
+        {
+            Id = SourceId, Name = "Unleashed Rules FAQ and Clarifications", Url = SourceUrl,
+            Type = "official", TrustTier = 1, Rank = 90, Parser = "html", Cadence = "weekly",
+        });
+        var doc = new Document
+        {
+            SourceId = SourceId,
+            // Bevat het grounded citaat letterlijk ⇒ de Legion-concepten verifiëren.
+            Content = $"Uitleg over Legion. {GroundedQuote}. Reflection tokens komen ook aan bod.",
+            ContentHash = "hash1",
+        };
+        if (retrievedAt is { } at) doc.RetrievedAt = at;
+        db.Documents.Add(doc);
+        await db.SaveChangesAsync();
+        return doc;
+    }
+}

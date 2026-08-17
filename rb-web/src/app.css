@@ -1,24 +1,137 @@
 /* Ontwerptokens — één bron voor kleur, typografie en vormtaal.
-   Donker, rustig en zakelijk: geen emoji's, status via kleur en tekst. */
+   Richting "Domains, eigentijds" (design-proof, ongemerged): modern,
+   koel-neutraal; domeinkleuren zijn de enige echte kleur in de UI, geel is
+   uitsluitend het actie-accent (nooit een goud-op-zwart sfeerkleurtje).
+   Licht is de standaard; donker is koele graphite — geen zwart. Geen
+   emoji's, status blijft altijd kleur + tekst. */
 :root {
-	--bg: #0d1420;
-	--surface: #151f31;
-	--surface-deep: #0a111d;
-	--border: #263650;
-	--border-strong: #3a5178;
-	--text: #e8eefb;
-	--muted: #93a5c4;
-	--accent: #d98a4e;
-	--accent-soft: #d98a4e22;
-	--accent-ink: #1a1206;
-	--ok: #4fbf8b;
-	--ok-soft: #4fbf8b1c;
-	--warn: #e0a32e;
-	--warn-soft: #e0a32e1c;
+	/* Neutralen — licht (standaard). Exacte waarden uit de goedgekeurde
+	   mockup (scratchpad/rb-designs.html). */
+	--bg: #f6f7f9;
+	--surface: #ffffff;
+	--surface-deep: #eef0f3;
+	--border: rgba(20, 24, 40, 0.11);
+	--border-strong: rgba(20, 24, 40, 0.20);
+	--text: #1b1e26;
+	--muted: #606673;
+
+	/* Actie/merk-accent: geel, uitsluitend voor primaire acties (CTA-knoppen,
+	   actieve nav) — geen decoratief gebruik binnen nieuw werk. */
+	--accent: #f5c518;
+	--accent-soft: #f5c51822;
+	--accent-ink: #20190a;
+
+	/* Focusring (#214-review): geel zakt weg op de lichte standaard (~1.6:1,
+	   onder WCAG 3:1), dus een eigen focus-hue die in beide thema's contrasteert
+	   — het mind-blauw haalt ≥3:1 op zowel wit als graphite. */
+	--focus: var(--dom-mind);
+
+	/* Semantiek (los van domein/merk) */
+	--ok: #2ea36a;
+	--ok-soft: #2ea36a1c;
+	--warn: #9a6700;
+	--warn-soft: #9a67001c;
 	--err: #e5484d;
 	--err-soft: #e5484d1c;
+
 	--radius: 10px;
-	--radius-lg: 14px;
+	--radius-lg: 13px;
+
+	/* Kaartschaduw — licht: zacht; donker (hieronder): platte kaarten. */
+	--shadow-card: 0 1px 2px rgba(20, 24, 40, 0.04);
+	/* Voor grote panelen (nog niet in gebruik in deze proef). */
+	--shadow-panel-lg: 0 24px 60px -34px rgba(20, 24, 40, 0.45);
+
+	/* Domein-tokens (#domains-proof): canonieke Riftbound-domeinen, gelijk in
+	   licht en donker — dit is de ENE plek om een hue te wijzigen. Sjoerds
+	   voorlopige mapping; Order deelt hier bewust (of per ongeluk — ter
+	   beoordeling) exact dezelfde hex als --accent, zie PR-notitie. */
+	--dom-fury: #e5484d;
+	--dom-body: #ef7a35;
+	--dom-mind: #3e7bfa;
+	--dom-calm: #2ea36a;
+	--dom-chaos: #b05fd6;
+	--dom-order: #f5c518;
+	--dom-colorless: #8b91a0;
+
+	/* Papier-tokens (#342, /scorepad): scorevellen zijn altijd inkt-op-wit —
+	   ook wie in het donkere thema print krijgt wit papier, dus deze waarden
+	   wisselen bewust NIET met het thema. Spelerkleuren zijn hier functionele
+	   codering (speler 1 goud, speler 2 rood — de tafelconventie), geen
+	   decoratie; het goud is donkerder dan --accent omdat dunne gele lijnen op
+	   wit papier anders wegvallen. */
+	--paper: #ffffff;
+	--paper-ink: #1c1f27;
+	--paper-muted: #6a6f7a;
+	--paper-line: #b9bdc7;
+	--paper-line-soft: #e3e5ea;
+	--paper-p1: #a3790a;
+	/* Tekst-variant van P1-goud: --paper-p1 is als rand/balk prima maar haalt
+	   op wit geen leesbaar contrast voor microtekst; deze donkerder inkt komt
+	   op ~4.9:1. Alleen voor P1-goud als TEKSTKLEUR — randen, checkboxes en
+	   balken blijven --paper-p1. */
+	--paper-p1-ink: #8a6509;
+	--paper-p1-soft: #f5ecd2;
+	--paper-p2: #c03a40;
+	--paper-p2-soft: #f8e2e3;
+}
+
+/* Donker: koele graphite, geen zwart. Volgt OS-voorkeur... */
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #0f1114;
+		--surface: #181b21;
+		--surface-deep: #20242b;
+		--border: rgba(255, 255, 255, 0.10);
+		--border-strong: rgba(255, 255, 255, 0.20);
+		--text: #e9ebf1;
+		--muted: #9aa0ad;
+
+		--warn: #e3b341;
+		--warn-soft: #e3b34122;
+		--err: #ff6169;
+		--err-soft: #ff616922;
+
+		--shadow-card: none;
+		--shadow-panel-lg: none;
+	}
+}
+
+/* ...maar een expliciete data-theme wint altijd, in beide richtingen (bv.
+   een toekomstige thema-schakelaar of, voor deze proef, Playwright). */
+:root[data-theme='dark'] {
+	--bg: #0f1114;
+	--surface: #181b21;
+	--surface-deep: #20242b;
+	--border: rgba(255, 255, 255, 0.10);
+	--border-strong: rgba(255, 255, 255, 0.20);
+	--text: #e9ebf1;
+	--muted: #9aa0ad;
+
+	--warn: #e3b341;
+	--warn-soft: #e3b34122;
+	--err: #ff6169;
+	--err-soft: #ff616922;
+
+	--shadow-card: none;
+	--shadow-panel-lg: none;
+}
+:root[data-theme='light'] {
+	--bg: #f6f7f9;
+	--surface: #ffffff;
+	--surface-deep: #eef0f3;
+	--border: rgba(20, 24, 40, 0.11);
+	--border-strong: rgba(20, 24, 40, 0.20);
+	--text: #1b1e26;
+	--muted: #606673;
+
+	--warn: #9a6700;
+	--warn-soft: #9a67001c;
+	--err: #e5484d;
+	--err-soft: #e5484d1c;
+
+	--shadow-card: 0 1px 2px rgba(20, 24, 40, 0.04);
+	--shadow-panel-lg: 0 24px 60px -34px rgba(20, 24, 40, 0.45);
 }
 
 * { box-sizing: border-box; }
@@ -32,9 +145,34 @@ body {
 	/* Vangrail: de pagina scrollt nooit horizontaal — brede inhoud
 	   (tabellen, diagrammen) scrolt binnen zijn eigen container. */
 	overflow-x: clip;
+	/* Vangrail (#38): lange ononderbroken tokens (URL's, codes) in regel- en
+	   kaartteksten breken binnen hun blok in plaats van de pagina te verbreden. */
+	overflow-wrap: break-word;
 }
 
 img { max-width: 100%; height: auto; }
+
+/* Toegankelijke focus (#214): zichtbaar op elk interactief element, in beide
+   thema's. Alleen bij toetsenbord-/programmatische focus (:focus-visible),
+   dus geen ring op muisklik. */
+:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+	border-radius: 4px;
+}
+
+/* Respecteer prefers-reduced-motion (#214): animaties en transitions vrijwel
+   uit voor wie dat aangeeft. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+		scroll-behavior: auto !important;
+	}
+}
 
 /* iOS zoomt in op form-controls met font-size < 16px (#56) — op smalle
    schermen dus altijd minimaal 16px. */
@@ -43,6 +181,23 @@ img { max-width: 100%; height: auto; }
 	select,
 	textarea {
 		font-size: 16px;
+	}
+}
+
+/* Tap-targets (#38): op touch-schermen krijgen knoppen en chip-links een
+   raakvlak van minstens 44px hoog (iOS-richtlijn); de dichte desktop-layout
+   met muis blijft ongewijzigd. */
+@media (pointer: coarse) {
+	button {
+		min-height: 44px;
+	}
+	.site nav a,
+	a.chip,
+	.toc a,
+	.pager a {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
 	}
 }
 
@@ -64,6 +219,12 @@ a { color: inherit; }
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-card);
+}
+
+/* Cijfers die moeten uitlijnen (datums, tellers) — vormtaal-eis "Domains". */
+.tnum {
+	font-variant-numeric: tabular-nums;
 }
 
 .status-dot {
@@ -76,6 +237,15 @@ a { color: inherit; }
 .status-dot.ok { background: var(--ok); }
 .status-dot.warn { background: var(--warn); }
 .status-dot.err { background: var(--err); }
+
+/* Statusbadges (#59: stond identiek dubbel in admin- en overzichtspagina). */
+.badge {
+	font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
+	padding: 2px 8px; border-radius: 999px; font-weight: 700;
+}
+.badge.ok-b { background: var(--ok-soft); color: var(--ok); }
+.badge.warn-b { background: var(--warn-soft); color: var(--warn); }
+.badge.err { background: var(--err-soft); color: var(--err); }
 .status-dot.busy {
 	background: var(--accent);
 	animation: pulse 1.2s ease-in-out infinite;
@@ -96,45 +266,125 @@ a { color: inherit; }
 	to { transform: rotate(360deg); }
 }
 
-/* Kaarttekst-iconen (:rb_…:-tokens uit Riot-teksten) */
+/* Kaarttekst-iconen (:rb_…:-tokens uit Riot-teksten, #257): Riots eigen
+   glyphs (rb-web/static/glyphs/, zie scripts/fetch-glyphs.sh) i.p.v.
+   zelfgetekende vormen — wij tekenen hier niets meer zelf. */
 .tok {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	vertical-align: -2px;
+	position: relative;
+	/* Meeschalen met de tekstregel, dus uitlijnen in em en niet in px. */
+	vertical-align: -0.22em;
 	margin: 0 1px;
 }
-.tok-energy {
-	width: 17px;
-	height: 17px;
+/* Riot tekent deze glyphs op een 24x24-raster; onder ~14px slibt het witte
+   binnenwerk dicht (rune_rainbow met zijn gradiënten het eerst) en zijn de
+   runes alleen nog aan kleur te onderscheiden. Vandaar meeschalen met de
+   tekst op 1.15em, met een ondergrens zodat ze ook in kleine metatekst
+   leesbaar blijven. */
+.tok-glyph {
+	display: block;
+	width: 1.15em;
+	height: 1.15em;
+	min-width: 14px;
+	min-height: 14px;
+}
+/* Verborgen zolang het glyph laadt; de inline `onerror` op de <img>
+   (rbtokens.ts) zet tok-glyph-error zodra /glyphs/{token}.svg ontbreekt, en
+   deze regel toont dan de tokentekst zelf ("3", "might", …) i.p.v. een leeg
+   gat of een gebroken-afbeelding-icoon. */
+.tok-fallback { display: none; }
+.tok-glyph.tok-glyph-error { display: none; }
+.tok-glyph.tok-glyph-error ~ .tok-fallback { display: inline; }
+
+/* might.svg en exhaust.svg zijn getekend als fill="white" (voor Riots eigen
+   donkere UI) en verdwijnen op ons lichte thema — omgekeerd op donker. */
+.tok-glyph-might,
+.tok-glyph-exhaust {
+	filter: invert(1);
+}
+/* energy_*.svg is een witte schijf met een donkerblauw cijfer die de volle
+   24×24-viewBox vult; op een licht oppervlak verdwijnt de schijfrand, dus
+   een dunne omtrek erbij. Op donker heeft de witte schijf al genoeg
+   contrast, dus geen ring. */
+.tok-glyph-energy {
 	border-radius: 50%;
-	background: var(--surface-deep);
-	border: 1.5px solid var(--accent);
-	color: var(--accent);
-	font-size: 11px;
+	box-shadow: 0 0 0 1px var(--border-strong);
+}
+/* rune_*.svg zijn zelf al gekleurde schijven (rainbow: een gradient) — die
+   werken ongewijzigd in beide thema's, dus geen filter/ring hier. */
+
+/* Keyword-badges (#359): [Action]/[Assault 2] uit kaart- en antwoordtekst,
+   gerenderd door rbtokens.ts in de stijl van de gedrukte kaarten: een schuin
+   parallellogram met vette cursieve kapitalen. De vier vulkleuren zijn
+   GEMETEN op echte kaartafbeeldingen (workflow 2026-08-10, pixel-regio's) en
+   zijn kaart-identiteit — net als de glyphs bewust hardcoded en gelijk in
+   beide thema's, niet aan de UI-tokens gekoppeld (geel blijft exclusief het
+   actie-accent). Default = grijs, zodat een ongemeten nieuw keyword er
+   automatisch bij hoort. */
+.kw {
+	display: inline-block;
+	transform: skewX(-8deg);
+	font-style: italic;
+	font-weight: 800;
+	text-transform: uppercase;
+	font-size: 0.72em;
+	line-height: 1.45;
+	letter-spacing: 0.03em;
+	padding: 0 0.55em 0.08em;
+	border-radius: 2px;
+	background: #717171;
+	color: #fff;
+	white-space: nowrap;
+	vertical-align: 0.12em;
+}
+.kw-teal { background: #24705f; }
+.kw-magenta { background: #cc356e; }
+.kw-lime { background: #94b22d; color: #1c1c1c; }
+
+/* §-verwijzingen in antwoorden (#363): normalizeAnswerRefs zet [n]/§-codes om
+   naar interne links /rules/… — die renderen als mini-chip in de stijl van de
+   sec-badge van de regelwidget, zodat een verwijzing er overal hetzelfde
+   uitziet. Geldt in de antwoord-markdown én de oordeel-banner. */
+.md a[href^='/rules/'],
+.verdict a[href^='/rules/'] {
+	display: inline-block;
 	font-weight: 700;
-	font-style: normal;
-	line-height: 1;
+	font-size: 0.82em;
+	line-height: 1.5;
+	color: var(--ok);
+	background: var(--ok-soft);
+	border-radius: 999px;
+	padding: 0 0.55em;
+	text-decoration: none;
+	white-space: nowrap;
 }
-.tok-svg { width: 15px; height: 15px; }
-.tok-might path { fill: #e5766a; }
-.tok-exhaust path { fill: var(--muted); }
-.tok-rune {
-	width: 11px;
-	height: 11px;
-	border-radius: 3px;
-	transform: rotate(45deg);
-	border: 1px solid rgba(0, 0, 0, 0.45);
-	margin: 0 3px;
+
+@media (prefers-color-scheme: dark) {
+	.tok-glyph-might,
+	.tok-glyph-exhaust {
+		filter: none;
+	}
+	.tok-glyph-energy {
+		box-shadow: none;
+	}
 }
-.tok-rune-fury { background: #e5484d; }
-.tok-rune-calm { background: #4fbf8b; }
-.tok-rune-mind { background: #5b9dd9; }
-.tok-rune-body { background: #d98a4e; }
-.tok-rune-order { background: #e0c66e; }
-.tok-rune-chaos { background: #a86fd1; }
-.tok-rune-rainbow {
-	background: conic-gradient(#e5484d, #e0c66e, #4fbf8b, #5b9dd9, #a86fd1, #e5484d);
+/* Expliciete data-theme wint altijd, in beide richtingen — zelfde patroon
+   als de ontwerptokens hierboven (regels ~59-100). */
+:root[data-theme='dark'] .tok-glyph-might,
+:root[data-theme='dark'] .tok-glyph-exhaust {
+	filter: none;
+}
+:root[data-theme='dark'] .tok-glyph-energy {
+	box-shadow: none;
+}
+:root[data-theme='light'] .tok-glyph-might,
+:root[data-theme='light'] .tok-glyph-exhaust {
+	filter: invert(1);
+}
+:root[data-theme='light'] .tok-glyph-energy {
+	box-shadow: 0 0 0 1px var(--border-strong);
 }
 
 /* Markdown-weergave (rulings) */

@@ -1,0 +1,779 @@
+using Microsoft.EntityFrameworkCore;
+using RbRules.Domain;
+
+namespace RbRules.Infrastructure;
+
+/// <summary><paramref name="CapHit"/> (#190): machine-leesbaar of deze run
+/// op de per-run cap (<c>maxItems</c>) is gestrand — er ligt dan werk klaar
+/// voor een volgende run. Paden draineren hierop in plaats van op de "cap
+/// van N bereikt"-tekst in <paramref name="Message"/> te matchen.</summary>
+public record ClarificationMineResult(
+    int Documents, int Verified, int Pending, int Updated, int Failed, int Retracted,
+    string Message, bool CapHit = false);
+
+/// <summary>#177: FAQ-/clarificatie-artikelen (bv. de Unleashed Rules FAQ)
+/// worden door de scan-pipeline geknipt en geëmbed als vaste-lengte-slabs die
+/// meerdere losse verduidelijkingen mengen — één embedding over zo'n slab
+/// slaat de betekenis plat, dus een gerichte vraag ("Legion = finalize an
+/// item on the chain") haalt het chunk niet boven. Deze service mint
+/// diezelfde brontekst opnieuw, maar dan via concept-extractie (rb-ai, zelfde
+/// prompt+parse+verify-patroon als <see cref="ClaimMiningService"/>/
+/// <see cref="MechanicMiningService"/>): elke discrete verduidelijking wordt
+/// een eigen <see cref="Correction"/> met een gefocuste embedding (alleen de
+/// verduidelijking zelf, niet de hele slab) en een onderwerp-anker
+/// (Scope/Ref — mechanic:Legion, rule_section:§, card:naam, concept:…).
+///
+/// De bron is per definitie officieel (de aanroeper selecteert alleen
+/// TrustTier == 1 en een bron-type-classificatie van "faq" — <see
+/// cref="SourceContentKind.Resolve"/>, sinds #188 increment 2 een
+/// LLM-BESLISSING met de oude naam-/URL-heuristiek als transitionele
+/// fallback), maar auto-verified voor LLM-geparafraseerde tekst is te los (autoriteits-review,
+/// #177). Daarom een <b>hybride poort</b>: een concept wordt alleen
+/// <c>verified</c> als het BEIDE checks doorstaat -- (1) grounded: het citaat
+/// komt echt in de brontekst voor (<see cref="ClarificationGrounding"/>,
+/// vangt een gehallucineerd citaat) en (2) anchored: het onderwerp resolvet
+/// naar een bestaande knoop (<see cref="ClaimTopicMapper"/>: kaartnaam,
+/// mechaniek-vocabulaire, section-code of primer-concept -- vangt een
+/// verzonnen/fout anker dat anders stil aan een kaartpagina zou koppelen).
+/// Anders ⇒ <c>unverified</c> met een <see cref="Correction.StatusReason"/>
+/// ⇒ de bestaande corrections-reviewqueue in, waar de beheerder corrigeert/
+/// goedkeurt/afwijst. Een afgewezen (<c>rejected</c>) concept blijft afgewezen:
+/// de dedupe heropent een rejected tombstone nooit.
+///
+/// Idempotent op twee niveaus (#92/#93-patroon): <see
+/// cref="Document.ClarifiedAt"/> slaat een document pas over als een eerdere
+/// run volledig slaagde (een gedeeltelijke/mislukte poging komt vanzelf
+/// terug), en per <b>concept</b> dedupliceert <see cref="StoreAsync"/> op
+/// (bron, Scope, Ref) + semantische nabijheid — niet op exacte tekst. Dat is
+/// cruciaal: een her-run na een gedeeltelijk mislukt/gecapt document (of na
+/// een cosmetische bronwijziging die een nieuwe Document-rij maakt)
+/// herverwerkt het HELE document, en de LLM herformuleert een verduidelijking
+/// dan net iets anders. Een exacte-tekst-toets zou die parafrase niet
+/// herkennen en een tweede geverifieerde ruling opstapelen (zichtbaar in
+/// /ask, /rulings en op de mechaniekpagina, zonder reviewqueue). De
+/// (Scope, Ref)+embedding-poort (zelfde patroon als
+/// <see cref="ClaimMiningService"/>) herkent de parafrase en werkt de
+/// bestaande ruling bij in plaats van te dupliceren. Best-effort en gecapt
+/// per run; elke faalstap is herleidbaar in run_log (kind "clarify").
+///
+/// <b>#185-herkadering:</b> patch notes zijn UIT deze pijplijn gehaald (een
+/// bron met kind "patch-notes" matcht niet meer) — een patch-notes-artikel is
+/// een REGELWIJZIGING (delta), geen op-zichzelf-staande ruling, en hoort
+/// daarom alleen nog in de wijzigingen-feed via de gewone ingest-diff. Elke
+/// run trekt bovendien eerst de al gemínede patch-notes-Corrections van vóór
+/// deze scheiding terug (<see cref="RetractPatchNotesCorrectionsAsync"/>), en
+/// de hybride poort heeft er een derde toets bij: <see
+/// cref="ClarificationInformativeness"/> weert een geëxtraheerd item dat zelf
+/// niets meer is dan een kale aankondiging ("X is verduidelijkt/gewijzigd")
+/// zonder de regel/definitie/interactie te noemen — de vorm van de
+/// #185-bug (een lege Legion-"ruling" uit core-rules-patch-notes).
+///
+/// Backfilt bestaande bronnen vanzelf (Sjoerd-eis, #177-vervolg): de
+/// bronselectie hierboven heeft geen tijdvenster — elke enabled trust-1 bron
+/// waarvan de kind op "faq" resolvet doet mee, of hij gisteren of jaren
+/// geleden is toegevoegd. De al-geïngeste Unleashed Rules
+/// FAQ (Document met de Legion-passage staat al in de tabel, ClarifiedAt is
+/// null sinds deze kolom nieuw is) komt dus bij de eerstvolgende run gewoon
+/// mee — géén apart backfill-commando nodig, exact het patroon van
+/// ClaimsMinedAt/ClaimMiningService (die community-documenten van vóór #50
+/// evengoed mint). <paramref name="maxItems"/> is het "niet in één keer
+/// alles"-venster (#58/#119-stijl): bij veel opgehoopte bronnen stopt een run
+/// op de cap met de rest ongemarkeerd, en pakt de volgende run (job "clarify"
+/// handmatig, of de nachtelijke <c>ScanScheduler</c>-tick, #122) verder waar
+/// deze gebleven is.</summary>
+public class ClarificationMiningService(RbRulesDbContext db, RbAiClient ai, EmbeddingService embeddings)
+{
+    public const string LedgerKind = "clarify";
+
+    /// <summary>Zelfde segmentgrootte/cap als ClaimMiningService: ruim genoeg
+    /// voor een volledig FAQ-artikel (de Unleashed-FAQ is ~42 KB, dus 2
+    /// segmenten), begrenst de kosten per document.</summary>
+    private const int SegmentChars = 12000;
+    private const int MaxSegmentsPerDocument = 4;
+    private const int ResponseSnippetLength = 400;
+    /// <summary>Internal (niet private): CorrectionReevaluationService (#184)
+    /// herkent hiermee of een Correction uit deze pijplijn komt (de enige
+    /// ontstaanswijze met een brontekst om de hybride poort tegen te
+    /// gronden) en leidt er de bron-id uit af.</summary>
+    internal const string ProvenancePrefix = "clarify-mining:";
+
+    /// <summary>Embedding-afstandspoort voor de concept-dedupe: binnen dit
+    /// venster telt een bestaande ruling over hetzelfde onderwerp als "dezelfde
+    /// verduidelijking, anders verwoord" en wordt hij bijgewerkt in plaats van
+    /// gedupliceerd. Zelfde waarde als
+    /// <see cref="ClaimMiningService"/>'s JudgeGateDistance (0.35), maar hier
+    /// zonder LLM-natoets: de vergelijking gebeurt binnen een al op
+    /// (bron, Scope, Ref) gefilterde verzameling — twee verduidelijkingen over
+    /// exact hetzelfde onderwerp die zó dicht bij elkaar liggen, zíjn dezelfde.
+    /// Blijkt de poort te grof, dan is een lichte LLM-"zelfde verduidelijking?"-
+    /// toets (ClaimJudge-patroon) de volgende stap — bewust nog niet gedaan
+    /// (KISS/YAGNI).</summary>
+    private const double DedupeGateDistance = 0.35;
+
+    /// <summary>Scheidingsmarkering tussen de verduidelijking en het
+    /// (optionele) bronscitaat in <see cref="Correction.Text"/>; gedeeld door
+    /// <see cref="BuildText"/> (schrijven) en <see cref="ClarificationOf"/>
+    /// (de dedupe-vergelijking, die het citaat bewust buiten de sleutel laat).</summary>
+    private const string QuoteMarker = "\n\nCitaat uit de bron: ";
+
+    public async Task<ClarificationMineResult> RunAsync(
+        bool force = false, int maxItems = 60,
+        Action<string>? progress = null, CancellationToken ct = default)
+    {
+        maxItems = Math.Clamp(maxItems, 1, 300);
+
+        // #185-opruiming: eerst de al bestaande patch-notes-Corrections
+        // terugtrekken (oude #177-heuristiek minede die nog mee) — idempotent,
+        // vóór de eigenlijke extractie zodat elke run (handmatig of nachtelijk)
+        // dit vanzelf blijft bewaken zonder apart commando.
+        var retracted = await RetractPatchNotesCorrectionsAsync(ct);
+
+        // In-memory filter (SourceContentKind.Resolve is puur/geen EF-
+        // vertaalbare methode, docs/CONVENTIONS.md): het aantal trust-1
+        // bronnen is klein, dus materialiseren eerst is goedkoop.
+        //
+        // #188 increment 2: de kind-check gebruikt de gepersisteerde LLM-
+        // classificatie (Source.ContentKind), met de oude ClarificationSources-
+        // heuristiek als transitionele null-fallback (SourceContentKind.
+        // Resolve) — zelfde uitkomst als vóór deze increment voor een
+        // nog-niet-geclassificeerde bron, maar nu ook correct voor een bron
+        // die de LLM als "faq" herkent zonder de magische woorden in zijn
+        // slug, of die de LLM juist NIET als "faq" herkent ondanks zo'n woord
+        // in de naam/URL.
+        //
+        // Dubbelzinnig blijft veilig, maar sinds de #188-review NEUTRAAL: de
+        // LLM-prompt (SourceContentKind.SystemPrompt) instrueert dat een
+        // gemengd/onzeker artikel (bv. "Rules FAQ & Patch Notes") "other" is
+        // — niet gemined, niet geretract. Resolve geeft sowieso één enkele
+        // kind terug (nooit "faq" én "patch-notes" tegelijk), dus de
+        // #185-thrash (een bron die gemíned wordt én meteen door
+        // RetractPatchNotesCorrectionsAsync hard verwijderd, met de
+        // ClarifiedAt-gate die her-mining blokkeert ⇒ stil, permanent
+        // verlies) kan hier niet meer optreden; de heuristische
+        // null-fallback houdt voor dubbel-keyword-namen het conservatieve
+        // #185-gedrag (patch-notes wint ⇒ niet minen).
+        // IgnoredAt (#180): een genegeerde bron levert per beoordeling niets
+        // op — geen LLM-kosten meer aan besteden (zelfde bereik-afspraak als
+        // de scan-lus; bestaande rulings blijven gewoon staan).
+        var sources = (await db.Sources.AsNoTracking()
+                .Where(s => s.Enabled && s.IgnoredAt == null && s.TrustTier == 1)
+                .OrderByDescending(s => s.Rank)
+                .ToListAsync(ct))
+            .Where(s => SourceContentKind.Resolve(s.ContentKind, s.Id, s.Url, s.Name) == SourceContentKind.Faq)
+            .ToList();
+
+        // Anker-resolver voor de hybride poort (#177): dezelfde bronnen als de
+        // graph-projectie (GraphSyncService) — kaartnamen (incl. varianten →
+        // canoniek), het mechaniek-vocabulaire (seed + geaccepteerde keywords,
+        // dus "Legion" resolvet ook zonder gemínede kaart), bestaande §-codes
+        // en primer-concepten. Eén keer per run gebouwd; puur en getest
+        // (ClaimTopicMapper). Onbekend onderwerp ⇒ null ⇒ niet anchored ⇒ review.
+        // Gedeeld met CorrectionReevaluationService (#184, AnchorResolverFactory)
+        // zodat beide exact dezelfde ankers zien.
+        //
+        // #188 increment 3: naast de opaque resolver ook de leesbare
+        // mechaniek-/concept-vocabulaire (mechanicVocab/conceptVocab) — die
+        // gaat letterlijk de extractieprompt in (ClarificationMiner.
+        // GetSystemPrompt) zodat de LLM een bestaand anker kan KIEZEN in
+        // plaats van een vrije-vorm-onderwerp te verzinnen dat toch niet
+        // resolvet (issue #199: 117/133 pending items faalden hierop).
+        var (anchors, mechanicVocab, conceptVocab) = await AnchorResolverFactory.BuildWithVocabularyAsync(db, ct);
+
+        var docs = 0;
+        var verified = 0;
+        var pending = 0;
+        var updated = 0;
+        var failed = 0;
+        var processed = 0;
+        var budgetHit = false;
+
+        foreach (var src in sources)
+        {
+            if (budgetHit) break;
+            var doc = await db.Documents
+                .Where(d => d.SourceId == src.Id)
+                .OrderByDescending(d => d.RetrievedAt)
+                .FirstOrDefaultAsync(ct);
+            if (doc is null || (doc.ClarifiedAt is not null && !force)) continue;
+
+            docs++;
+            var extractionComplete = true;
+            var srcVerified = 0;
+            var srcPending = 0;
+            var itemFailures = new List<string>();
+
+            var segments = Segment(doc.Content);
+            for (var si = 0; si < segments.Count; si++)
+            {
+                if (budgetHit) { extractionComplete = false; break; }
+                progress?.Invoke(
+                    $"{src.Id}: deel {si + 1}/{segments.Count} extraheren ({verified} geverifieerd, {pending} ter review)");
+
+                var raw = await AskSafeAsync(
+                    ClarificationMiner.BuildPrompt(src.Name, segments[si]),
+                    ClarificationMiner.GetSystemPrompt(mechanicVocab, conceptVocab), ct);
+                if (raw is null)
+                {
+                    extractionComplete = false;
+                    failed++;
+                    db.RunLogs.Add(new RunLog
+                    {
+                        Kind = LedgerKind, Ref = src.Id, Status = "error",
+                        Detail = $"deel {si + 1}/{segments.Count}: rb-ai niet beschikbaar — extractie overgeslagen",
+                    });
+                    continue;
+                }
+                var extracted = ClarificationMiner.Parse(raw);
+                if (extracted is null)
+                {
+                    extractionComplete = false;
+                    failed++;
+                    db.RunLogs.Add(new RunLog
+                    {
+                        Kind = LedgerKind, Ref = src.Id, Status = "error",
+                        Detail = $"deel {si + 1}/{segments.Count}: LLM-antwoord onbruikbaar — geen parseerbare concepten. "
+                                 + $"Respons (afgekapt): {LlmJson.Snippet(raw, ResponseSnippetLength)}",
+                    });
+                    continue;
+                }
+
+                foreach (var ec in extracted)
+                {
+                    if (processed >= maxItems)
+                    {
+                        budgetHit = true;
+                        extractionComplete = false;
+                        break;
+                    }
+                    var (outcome, failure) = await StoreAsync(src, ec, doc.Content, anchors, ct);
+                    // #200: processed telt alleen uitkomsten die écht nieuw
+                    // werk deden — anders verbrandt een her-run van een groot
+                    // document (méér items dan de cap) zijn hele budget aan
+                    // het opnieuw dedupen van al-opgeslagen items en komt het
+                    // nooit voorbij de eerdere strandingsplek. Per uitkomst:
+                    switch (outcome)
+                    {
+                        // Persisteert een gloednieuwe Correction-rij — reëel
+                        // werk, en idempotent: een volgende run op ditzelfde
+                        // item vindt de rij al bestaand (dedupe op Provenance+
+                        // Scope+Ref) en levert dan Updated op, dus geen
+                        // dubbele telling.
+                        case ClarifyOutcome.NewVerified: verified++; srcVerified++; processed++; break;
+                        case ClarifyOutcome.NewPending: pending++; srcPending++; processed++; break;
+                        // Een echte, bekostigde poging (embedding-/LLM-call)
+                        // die mislukte — reëel verbruikte capaciteit, dus telt
+                        // mee (het document blijft toch al staan omdat
+                        // itemFailures.Count > 0).
+                        case ClarifyOutcome.Failed:
+                            failed++;
+                            itemFailures.Add(failure ?? "onbekende fout");
+                            processed++;
+                            break;
+                        // Updated/RejectedKept/Skipped: stuk voor stuk dedupe-
+                        // treffers BINNEN dezelfde bron (Provenance is per-bron,
+                        // dus een match hier is altijd "dit item kwam al eens
+                        // langs uit dit artikel", nooit cross-bron-bewijs zoals
+                        // ClaimMiningService.Corroborated) — geen nieuwe rij,
+                        // geen statuswijziging die niet al zo was. Updated telt
+                        // bewust NIET mee tegen het budget (#200, de kern van
+                        // de fix); RejectedKept/Skipped hadden dat al niet (de
+                        // menselijke afwijzing/al-bekend-status wordt
+                        // gerespecteerd, geen ruis).
+                        case ClarifyOutcome.Updated: updated++; break;
+                    }
+                }
+            }
+
+            // Gelijke redenen gegroepeerd tot één regel (claims-patroon,
+            // #93): Ollama-uitval raakt doorgaans alle items van een document.
+            foreach (var g in itemFailures.GroupBy(r => r))
+            {
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = LedgerKind, Ref = src.Id, Status = "error",
+                    Detail = $"{g.Count()} concept(en) niet verwerkt: {g.Key}",
+                });
+            }
+
+            // #92-patroon: pas markeren wanneer extractie én opslag voor dit
+            // document volledig geslaagd zijn (0 items vinden is ook een
+            // geldig resultaat). Een mislukte, afgebroken of op de cap
+            // gestrande run komt zo vanzelf opnieuw aan de beurt.
+            var documentDone = extractionComplete && itemFailures.Count == 0;
+            if (documentDone) doc.ClarifiedAt = DateTimeOffset.UtcNow;
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = LedgerKind, Ref = src.Id,
+                Status = documentDone ? "ok" : "info",
+                Detail = $"{srcVerified} geverifieerd, {srcPending} ter review"
+                         + (documentDone ? "" : " (deels — document blijft staan voor een volgende run)"),
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
+        var message =
+            (retracted > 0 ? $"{retracted} patch-notes-ruling(en) ingetrokken (#185) · " : "")
+            + $"{docs} document(en) verwerkt: {verified} geverifieerd, {pending} ter review, "
+            + $"{updated} bijgewerkt, {failed} mislukt"
+            + (failed > 0 ? " (redenen in run_log)" : "")
+            + (budgetHit ? $" — cap van {maxItems} bereikt, rest volgt bij de volgende run" : "");
+        return new(docs, verified, pending, updated, failed, retracted, message, budgetHit);
+    }
+
+    /// <summary>#185-opruiming: retracten van clarify-mining-<see
+    /// cref="Correction"/>s wier bron een patch-notes-bron is (Provenance
+    /// "clarify-mining:{sourceId}", bron-type "patch-notes" —
+    /// <see cref="SourceContentKind.Resolve"/>). Vóór #185 matchte patch-notes
+    /// ook mee in de FAQ-selectie, waardoor een aankondigingszin zonder
+    /// regelinhoud (bv. de lege Legion-"ruling" uit core-rules-patch-notes)
+    /// als geverifieerde ruling kon eindigen — die hoort niet in de
+    /// rulings-laag, patch notes voeden alleen nog de wijzigingen-feed
+    /// (gewone ingest-diff). Hard verwijderen (niet "rejected" markeren): het
+    /// is geen menselijke afwijzing van een specifieke bewering, het is "dit
+    /// had nooit een ruling-rij moeten zijn" — een tombstone zou de
+    /// reviewqueue-telling nodeloos vervuilen.
+    ///
+    /// Werkt zowel op <c>verified</c> als <c>unverified</c>/pending items
+    /// (Sjoerd-eis): geen statusfilter. Idempotent: draait bij elke
+    /// "clarify"-run (handmatig of nachtelijk) mee, en is na de eerste
+    /// opruiming een goedkope no-op (geen matchende Corrections meer, want
+    /// patch-notes-bronnen worden sinds #185 niet meer gemined). Sources
+    /// wordt in-memory gejoind (klein aantal trust-1-bronnen, zelfde
+    /// afweging als de bronselectie hierboven), inclusief ContentKind/
+    /// ContentKindSource (#188 increment 2) zodat de kind-check dezelfde
+    /// LLM-classificatie/heuristiek-fallback gebruikt als de bronselectie.
+    ///
+    /// <b>Consensus-poort (#188-review, fix A):</b> dit is het enige
+    /// DESTRUCTIEVE pad in de clarify-pijplijn (hard delete), en het mag
+    /// niet aan één eenmalig, onherroepelijk LLM-oordeel hangen — één fout
+    /// "patch-notes"-antwoord zou anders geverifieerde rulings permanent
+    /// wissen zonder herstelpad (de ClarifiedAt-gate blokkeert her-mining).
+    /// Er wordt daarom alleen verwijderd als de effectieve kind patch-notes
+    /// is ÉN een tweede, onafhankelijk signaal het bevestigt: de
+    /// deterministische heuristiek (<see cref="ClarificationSources.
+    /// IsPatchNotesSignal"/>) óf een expliciete beheerder-override
+    /// (ContentKindSource "admin" — precies het herstel-/bevestigingspad dat
+    /// de waarschuwing hieronder aanwijst). Zeggen LLM en heuristiek iets
+    /// verschillends, dan blijft alles staan en verschijnt een
+    /// run_log-waarschuwing. De oorspronkelijke #185-opruiming blijft zo
+    /// gewoon werken: de patch-notes-seeds (core-rules-patch-notes,
+    /// spiritforged-patch-notes) dragen het keyword — LLM en heuristiek eens
+    /// — opgeruimd.
+    ///
+    /// <b>Wees-bronnen (#188-review, fix B):</b> ontbreekt de Source-rij zelf
+    /// (bv. verwijderd uit het register), dan wordt NOOIT verwijderd — het
+    /// vroegere id-only-fallbackpad (patch-notes-woord in de sourceId) is
+    /// post-increment-2 onveilig, want een bron met zo'n woord in de id kan
+    /// door de LLM legitiem als "faq" geclassificeerd en gemined zijn
+    /// geweest. De corrections blijven staan met één run_log-regel voor
+    /// handmatige beoordeling.</summary>
+    private async Task<int> RetractPatchNotesCorrectionsAsync(CancellationToken ct)
+    {
+        var candidates = await db.Corrections
+            .Where(c => c.Provenance != null && c.Provenance.StartsWith(ProvenancePrefix))
+            .ToListAsync(ct);
+        if (candidates.Count == 0) return 0;
+
+        var sources = await db.Sources.AsNoTracking()
+            .Select(s => new { s.Id, s.Url, s.Name, s.ContentKind, s.ContentKindSource })
+            .ToDictionaryAsync(s => s.Id, ct);
+
+        var toRetract = new List<Correction>();
+        var skippedLogged = false;
+        foreach (var group in candidates.GroupBy(c => c.Provenance![ProvenancePrefix.Length..]))
+        {
+            if (!sources.TryGetValue(group.Key, out var src))
+            {
+                // Fix B: wees-provenance — nooit destructief op alleen een
+                // id-signaal; laten staan en zichtbaar maken.
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = LedgerKind, Ref = "cleanup-patch-notes", Status = "info",
+                    Detail = $"bron '{group.Key}' bestaat niet meer; {group.Count()} "
+                             + "correction(s) blijven staan — beoordeel handmatig",
+                });
+                skippedLogged = true;
+                continue;
+            }
+
+            var effective = SourceContentKind.Resolve(src.ContentKind, src.Id, src.Url, src.Name);
+            if (effective != SourceContentKind.PatchNotes) continue;
+
+            // Fix A: consensus vóór het hard delete — heuristiek of een
+            // expliciete beheerder-override moet het LLM-oordeel bevestigen.
+            var confirmed = ClarificationSources.IsPatchNotesSignal(src.Id, src.Url, src.Name)
+                            || src.ContentKindSource == SourceContentKind.AdminOrigin;
+            if (!confirmed)
+            {
+                db.RunLogs.Add(new RunLog
+                {
+                    Kind = LedgerKind, Ref = "cleanup-patch-notes", Status = "info",
+                    Detail = $"retractie overgeslagen voor bron '{src.Id}': LLM zegt patch-notes "
+                             + "maar de heuristiek niet — bevestig via de content-kind-override "
+                             + $"({group.Count()} correction(s) blijven staan)",
+                });
+                skippedLogged = true;
+                continue;
+            }
+
+            toRetract.AddRange(group);
+        }
+
+        if (toRetract.Count == 0)
+        {
+            if (skippedLogged) await db.SaveChangesAsync(ct);
+            return 0;
+        }
+
+        db.Corrections.RemoveRange(toRetract);
+        db.RunLogs.Add(new RunLog
+        {
+            Kind = LedgerKind, Ref = "cleanup-patch-notes", Status = "info",
+            Detail = $"{toRetract.Count} patch-notes-clarify-ruling(en) ingetrokken (#185 — "
+                     + "patch notes horen alleen nog in de wijzigingen-feed, niet als ruling)",
+        });
+        await db.SaveChangesAsync(ct);
+        return toRetract.Count;
+    }
+
+    private enum ClarifyOutcome { NewVerified, NewPending, Updated, RejectedKept, Skipped, Failed }
+
+    /// <summary>Eén concept opslaan met de hybride poort (#177, #185, #188) én
+    /// dedupe op conceptniveau. Poort: grounded (citaat in de bron) EN
+    /// anchored (onderwerp resolvet) EN informative (geen kale
+    /// aankondigingszin) ⇒ verified; anders unverified met
+    /// StatusReason (de reviewqueue in). Informative komt sinds #188 primair
+    /// van het LLM-oordeel dat <see cref="ClarificationMiner"/> meelevert
+    /// (<see cref="ExtractedClarification.Operative"/>); ontbreekt dat oordeel
+    /// (null — parse-gat of oude data), dan valt de poort terug op de
+    /// deterministische <see cref="ClarificationInformativeness.IsMetaOnly"/>-
+    /// heuristiek. Dedupe-sleutel: (Provenance=bron,
+    /// Scope, Ref) -- het citaat telt bewust NIET mee -- plus semantische
+    /// nabijheid: een genormaliseerd-gelijke óf embedding-nabije
+    /// verduidelijking geldt als dezelfde en wordt bijgewerkt (nooit
+    /// gedegradeerd; een rejected tombstone wordt nooit heropend) in plaats
+    /// van gedupliceerd. Zo is een her-mine (na retry OF na een cosmetische
+    /// bronwijziging met een nieuwe Document-rij) idempotent op
+    /// conceptniveau. Degradeert bij Ollama-uitval naar de genormaliseerde
+    /// exacte-tekst-toets: een re-run dupliceert dan nog steeds niet, maar
+    /// een écht nieuw concept wacht op een run met werkende embeddings (nooit
+    /// een ruling zonder embedding, #100). De exacte-tekst-toets loopt sinds
+    /// #200 vóór de embedding-call (niet erna): een dedupe-treffer heeft geen
+    /// vector nodig om te herkennen, en de aanroeper (RunAsync) telt zo'n
+    /// treffer (Updated) ook niet meer tegen het per-run-budget — samen
+    /// voorkomt dat een document met meer items dan de cap voor altijd
+    /// strandt op de eerste keer dat het budget werd geraakt.</summary>
+    private async Task<(ClarifyOutcome Outcome, string? Failure)> StoreAsync(
+        Source src, ExtractedClarification ec, string docContent,
+        ClaimTopicMapper anchors, CancellationToken ct)
+    {
+        var scope = ScopeFor(ec.TopicType);
+        var topicRef = ec.TopicRef.Trim();
+        var provenance = $"{ProvenancePrefix}{src.Id}";
+        var normClarification = ClaimMiner.NormalizeStatement(ec.Clarification);
+
+        // Hybride poort (#177, #185, #188): grounded (citaat écht in de bron)
+        // EN anchored (onderwerp resolvet naar een bestaande knoop) EN
+        // informative (geen kale "X is verduidelijkt/gewijzigd"-aankondiging
+        // zonder regelinhoud) ⇒ verified; anders pending met reden, de
+        // reviewqueue in. Een niet-informatief item gaat naar review in
+        // plaats van stil te worden overgeslagen: net als bij grounding/
+        // anchoring kan het oordeel een keer mis zitten, en de beheerder
+        // heeft dan alsnog het laatste woord (zelfde uniforme
+        // poort-semantiek, geen aparte "skip"-tak).
+        //
+        // #188: informative is nu primair het LLM-oordeel dat de extractie
+        // zelf al meelevert (ec.Operative) — het model kan "kondigt-een-
+        // wijziging-aan" van "beschrijft-de-wijziging" onderscheiden, een
+        // regex niet (adversariële review #185). Ontbreekt dat oordeel (null:
+        // oude prompt-variant, parse-gat), dan valt de poort terug op de
+        // deterministische IsMetaOnly-heuristiek — nooit een harde 500.
+        var grounded = ClarificationGrounding.IsGrounded(ec.Quote, docContent);
+        var anchored = anchors.Resolve(ec.TopicType, topicRef) is not null;
+        var informative = ec.Operative ?? !ClarificationInformativeness.IsMetaOnly(ec.Clarification);
+        var verifies = grounded && anchored && informative;
+        var reason = verifies ? null : GateReason(grounded, anchored, informative, ec.Quote, ec.TopicType, topicRef);
+
+        // Dedupe-scope: alle clarify-rulings van déze bron voor ditzelfde
+        // onderwerp (Scope, Ref). Klein per (bron, onderwerp), dus tracked
+        // materialiseren en de afstand in-memory berekenen (geen pgvector-SQL
+        // nodig — werkt zo ook in de InMemory-tests, net als de test-seam van
+        // ClaimMiningService.CheckOfficialAsync).
+        var refLower = topicRef.ToLowerInvariant();
+        var siblings = await db.Corrections
+            .Where(c => c.Provenance == provenance
+                        && ((c.Scope == scope && c.Ref.ToLower() == refLower)
+                            // Cross-bucket-redding (#184-review): een beheerder-
+                            // opmerking kan dit item via een anker-correctie naar
+                            // een ánder (Scope, Ref) hebben verplaatst. Zonder de
+                            // ReviewNote-items van deze bron erbij zou een her-mine
+                            // die het oorspronkelijke (foute) anker opnieuw
+                            // extraheert het verplaatste item niet vinden en een
+                            // spookduplicaat aanmaken (de sticky-guard vuurt dan
+                            // nooit). Ze meenemen laat de tekst-/embedding-dedupe
+                            // hieronder het verplaatste item alsnog terugvinden; de
+                            // embedding-poort (DedupeGateDistance) voorkomt dat een
+                            // écht ander concept van dezelfde bron er per ongeluk
+                            // in smelt.
+                            || c.ReviewNote != null))
+            .ToListAsync(ct);
+
+        // Cheap-vóór-duur (#200, issue-richting 2): een genormaliseerd-exacte
+        // dedupe-treffer heeft geen embedding nodig — de tekst is ongewijzigd,
+        // dus elke bestaande vector blijft even accuraat. Vóór deze fix werd
+        // de embedding sowieso eerst berekend en dan alsnog weggegooid voor
+        // precies deze Updated/RejectedKept-uitkomsten — de grootste
+        // kostenpost per herhaald item bij een her-run van een groot document
+        // (elk al bekend item betaalde opnieuw een Ollama-call). De
+        // embedding-poort zelf (NearestWithin, hieronder) verandert niet —
+        // die blijft parafrases vangen.
+        var exactMatch = siblings.FirstOrDefault(
+            c => ClaimMiner.NormalizeStatement(ClarificationOf(c.Text)) == normClarification);
+        if (exactMatch is not null)
+            return await ApplyMatchAsync(exactMatch, src, ec, verifies, reason, freshEmbedding: null, ct);
+
+        Pgvector.Vector vec;
+        try
+        {
+            // Gefocuste embedding (issue #177): alleen onderwerp + verduide-
+            // lijking (zonder citaat), niet de hele slab — zo haalt een
+            // gerichte vraag dit item wél boven, en is de embedding meteen de
+            // dedupe-maat (quote buiten de sleutel). Ook een pending item krijgt
+            // een embedding: dat lekt niet in /ask (retrieval filtert op
+            // Status=verified) maar houdt de dedupe over runs heen robuust.
+            vec = await embeddings.EmbedOneAsync($"{topicRef}\n{ec.Clarification.Trim()}", ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Geen exacte match (al gecheckt, hierboven) en geen embedding
+            // beschikbaar: dit is een écht nieuw concept, dat wacht op een run
+            // met werkende embeddings (nooit een ruling zonder embedding, #100).
+            return (ClarifyOutcome.Failed, $"embedding mislukt (Ollama): {ex.Message}");
+        }
+
+        // Binnen de embedding-poort (parafrase van dezelfde verduidelijking) —
+        // de exacte-tekst-weg is hierboven al geprobeerd.
+        var near = NearestWithin(siblings, vec, DedupeGateDistance);
+        if (near is not null)
+            return await ApplyMatchAsync(near, src, ec, verifies, reason, freshEmbedding: vec, ct);
+
+        db.Corrections.Add(new Correction
+        {
+            Scope = scope,
+            Ref = topicRef,
+            Text = BuildText(ec),
+            Question = QuestionLabelFor(ec),
+            SourceRef = src.Url,
+            Provenance = provenance,
+            Status = verifies ? "verified" : "unverified",
+            StatusReason = reason,
+            VerifiedAt = verifies ? DateTimeOffset.UtcNow : null,
+            Embedding = vec,
+        });
+        await db.SaveChangesAsync(ct);
+        return (verifies ? ClarifyOutcome.NewVerified : ClarifyOutcome.NewPending, null);
+    }
+
+    /// <summary>Een gevonden dedupe-match (exact óf embedding-nabij)
+    /// afhandelen — gedeeld door beide paden in <see cref="StoreAsync"/>.
+    /// <paramref name="freshEmbedding"/> is null voor een exacte-tekst-match
+    /// (#200: de embedding-call is overgeslagen omdat de tekst ongewijzigd
+    /// is, dus de bestaande vector blijft gewoon staan) en de nieuw berekende
+    /// vector voor een parafrase-match (NearestWithin), waar de verse
+    /// embedding wél de moeite waard is.</summary>
+    private async Task<(ClarifyOutcome Outcome, string? Failure)> ApplyMatchAsync(
+        Correction match, Source src, ExtractedClarification ec,
+        bool verifies, string? reason, Pgvector.Vector? freshEmbedding, CancellationToken ct)
+    {
+        // Afgewezen blijft afgewezen (#177): een beheerder-afwijzing
+        // (rejected tombstone) mag een volgende run niet heropenen.
+        if (match.Status == "rejected") return (ClarifyOutcome.RejectedKept, null);
+
+        // Bijwerken i.p.v. dupliceren: de nieuwste formulering + citaat +
+        // embedding winnen. Nooit degraderen: een al geverifieerde ruling
+        // blijft verified, ook als een flaky her-extractie de poort niet
+        // haalt; een pending item upgradet zodra een latere run grounded +
+        // anchored is.
+        // Beheerder-opmerking (#184) maakt dit item beheerder-eigendom: een
+        // volgende her-mine mag de status én het anker (Scope/Ref + het
+        // Question-label) die de beheerder achterliet niet stilzwijgend
+        // terugdraaien — óók niet als een anker-correctie dit item naar een
+        // ander (Scope, Ref) verplaatste (de cross-bucket-redding in
+        // StoreAsync vindt het juist dáárom terug). Alleen de bron-afgeleide
+        // tekst/citaat/embedding verversen met de nieuwste extractie.
+        if (!string.IsNullOrWhiteSpace(match.ReviewNote))
+        {
+            match.Text = BuildText(ec);
+            match.SourceRef = src.Url;
+            if (freshEmbedding is not null) match.Embedding = freshEmbedding;
+            await db.SaveChangesAsync(ct);
+            return (ClarifyOutcome.Updated, null);
+        }
+
+        match.Text = BuildText(ec);
+        match.Question = QuestionLabelFor(ec);
+        match.SourceRef = src.Url;
+        if (freshEmbedding is not null) match.Embedding = freshEmbedding;
+
+        if (match.Status == "verified" || verifies)
+        {
+            match.Status = "verified";
+            match.StatusReason = null;
+            match.VerifiedAt ??= DateTimeOffset.UtcNow;
+        }
+        else
+        {
+            match.Status = "unverified";
+            match.StatusReason = reason;
+            match.VerifiedAt = null;
+        }
+        await db.SaveChangesAsync(ct);
+        return (ClarifyOutcome.Updated, null);
+    }
+
+    /// <summary>Leesbare reden dat de hybride poort een item pending laat, voor
+    /// de reviewqueue (StatusReason). Combineert alle faalredenen als er
+    /// meerdere tegelijk gelden. Internal (niet private): CorrectionReevaluation-
+    /// Service (#184) hergebruikt dezelfde bewoording bij een her-evaluatie die
+    /// de poort nog steeds niet haalt.</summary>
+    internal static string GateReason(
+        bool grounded, bool anchored, bool informative, string? quote, string topicType, string topicRef)
+    {
+        var parts = new List<string>();
+        if (!grounded)
+            parts.Add(string.IsNullOrWhiteSpace(quote)
+                ? "geen citaat om te verifiëren"
+                : "citaat niet terug te vinden in de bron");
+        if (!anchored)
+            parts.Add($"onderwerp '{topicRef.Trim()}' ({topicType}) niet herkend");
+        if (!informative)
+            parts.Add("verduidelijking is een aankondiging zonder regelinhoud (#185)");
+        return string.Join("; ", parts);
+    }
+
+    /// <summary>Dichtstbijzijnde sibling binnen de poort (cosine-afstand), of
+    /// null. In-memory berekend over een kleine, al op (bron, Scope, Ref)
+    /// gefilterde verzameling.</summary>
+    private static Correction? NearestWithin(
+        List<Correction> siblings, Pgvector.Vector vec, double gate)
+    {
+        Correction? nearest = null;
+        var best = double.MaxValue;
+        foreach (var c in siblings)
+        {
+            if (c.Embedding is null) continue;
+            var d = CosineDistance(c.Embedding, vec);
+            if (d < best) { best = d; nearest = c; }
+        }
+        return best <= gate ? nearest : null;
+    }
+
+    /// <summary>Cosine-afstand (1 − cosine-similariteit), identiek aan wat
+    /// pgvector's CosineDistance in SQL doet — hier in-memory zodat de dedupe
+    /// ook zonder Postgres (en in de InMemory-tests) werkt. Een nulvector of
+    /// dimensie-mismatch geeft de maximale afstand (nooit een crash).</summary>
+    private static double CosineDistance(Pgvector.Vector a, Pgvector.Vector b)
+    {
+        var x = a.ToArray();
+        var y = b.ToArray();
+        if (x.Length != y.Length) return 1.0;
+        double dot = 0, nx = 0, ny = 0;
+        for (var i = 0; i < x.Length; i++)
+        {
+            dot += (double)x[i] * y[i];
+            nx += (double)x[i] * x[i];
+            ny += (double)y[i] * y[i];
+        }
+        return nx == 0 || ny == 0 ? 1.0 : 1.0 - dot / (Math.Sqrt(nx) * Math.Sqrt(ny));
+    }
+
+    /// <summary>De verduidelijking uit een opgeslagen <see cref="Correction.
+    /// Text"/> terug — het (optionele) bronscitaat na <see cref="QuoteMarker"/>
+    /// valt weg, zodat de dedupe alleen op de verduidelijking zelf vergelijkt
+    /// (quote niet in de sleutel). Internal (niet private): CorrectionReevaluation-
+    /// Service (#184) gebruikt dit om de informativiteits-poort te her-draaien.</summary>
+    internal static string ClarificationOf(string text)
+    {
+        var i = text.IndexOf(QuoteMarker, StringComparison.Ordinal);
+        return i < 0 ? text : text[..i];
+    }
+
+    /// <summary>Het (optionele) bronscitaat uit een opgeslagen <see
+    /// cref="Correction.Text"/> terug — het omgekeerde van <see
+    /// cref="ClarificationOf"/>. Null als BuildText geen citaat aanhaalde
+    /// (ExtractedClarification.Quote was leeg). Internal: CorrectionReevaluation-
+    /// Service (#184) gebruikt dit om de grondigheidspoort te her-draaien
+    /// zonder de LLM-extractie te hoeven herhalen.</summary>
+    internal static string? ExtractQuote(string text)
+    {
+        var i = text.IndexOf(QuoteMarker, StringComparison.Ordinal);
+        if (i < 0) return null;
+        return text[(i + QuoteMarker.Length)..].Trim().Trim('“', '”', '"');
+    }
+
+    /// <summary>topicType → Correction.Scope: "section" wordt het bestaande
+    /// opslagformaat "rule_section"; onbekend degradeert naar "concept"
+    /// (zelfde veilige-kant-keuze als ClaimMiner.ParseClaims). Internal (niet
+    /// private): CorrectionReevaluationService (#184) hergebruikt dit bij een
+    /// anker-correctie uit een beheerder-opmerking.</summary>
+    internal static string ScopeFor(string topicType) => topicType switch
+    {
+        "card" => "card",
+        "mechanic" => "mechanic",
+        "section" => "rule_section",
+        _ => "concept",
+    };
+
+    /// <summary>De opgeslagen tekst: de verduidelijking zelf, plus — als het
+    /// artikel er een citaat bij gaf — dat citaat zichtbaar aangehaald
+    /// (bron + citaat, issue #177), zonder een apart schemaveld nodig te
+    /// hebben.</summary>
+    private static string BuildText(ExtractedClarification ec) =>
+        string.IsNullOrWhiteSpace(ec.Quote)
+            ? ec.Clarification
+            : $"{ec.Clarification}{QuoteMarker}“{ec.Quote}”";
+
+    /// <summary>Question fungeert hier als kort label (onderwerp, evt. met
+    /// §-verwijzing) voor de snippet-weergave in /ask en /rulings — niet als
+    /// letterlijke vraag (er is geen natuurlijke vraag bij een FAQ-concept).</summary>
+    private static string? QuestionLabelFor(ExtractedClarification ec)
+    {
+        if (string.IsNullOrWhiteSpace(ec.SectionRef) || ec.TopicType == "section") return ec.TopicRef;
+        return $"{ec.TopicRef} (§{ec.SectionRef.Trim()})";
+    }
+
+    /// <summary>AskAsync met het scout-timeoutpatroon: een HttpClient-timeout
+    /// telt als uitval van één stap, niet als crash van de hele run.</summary>
+    private async Task<string?> AskSafeAsync(string prompt, string system, CancellationToken ct)
+    {
+        try
+        {
+            return await ai.AskAsync(prompt, system, ct: ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Knipt documenttekst in extractie-delen op een woordgrens
+    /// (zelfde implementatie als ClaimMiningService.Segment).</summary>
+    private static List<string> Segment(string content)
+    {
+        var segments = new List<string>();
+        var rest = content.Trim();
+        while (rest.Length > 0 && segments.Count < MaxSegmentsPerDocument)
+        {
+            if (rest.Length <= SegmentChars)
+            {
+                segments.Add(rest);
+                break;
+            }
+            var cut = rest.LastIndexOf(' ', SegmentChars);
+            if (cut < SegmentChars / 2) cut = SegmentChars;
+            segments.Add(rest[..cut]);
+            rest = rest[cut..].TrimStart();
+        }
+        return segments;
+    }
+}

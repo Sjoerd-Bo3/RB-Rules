@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AI-sidecar: Claude Agent SDK op abonnement (classify/answer). Interne service — niet publiek exposen.",
+  "description": "AI-sidecar: Claude Agent SDK op abonnement (classify/answer). Interne service \u2014 niet publiek exposen.",
   "scripts": {
     "start": "tsx src/server.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/validate.test.ts src/brain-tools.test.ts src/relations.test.ts src/extract.test.ts src/audit.test.ts src/usage.test.ts src/warmpool.test.ts src/concurrency.test.ts src/failure.test.ts src/ai.test.ts src/server.test.ts && AI_EXTRACT_TIMEOUT_MS=1000 node --import tsx --test src/extract-timeout.test.ts && AI_EXTRACT_TIMEOUT_MS=1000 AI_EXTRACT_PER_CARD_MS=1100 node --import tsx --test src/extract-batch.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.178",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

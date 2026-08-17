@@ -1,0 +1,564 @@
+import { error, fail, redirect } from '@sveltejs/kit';
+import type { Actions, PageServerLoad } from './$types';
+import { AdminApiError, adminApi, authed } from '$lib/server/admin';
+
+// Tegel-overzichten (#61): één parametrische route, per kind een eigen fetch.
+// Filterwaarden worden hier gevalideerd zodat de UI-chips en de API-parameter
+// altijd overeenkomen.
+const KIND_FILTERS: Record<string, { allowed: string[]; fallback: string } | null> = {
+	kaarten: null,
+	embeddings: { allowed: ['embedded', 'unembedded'], fallback: 'embedded' },
+	analyse: { allowed: ['mined', 'unmined'], fallback: 'mined' },
+	regelsecties: null,
+	bans: null,
+	errata: null,
+	interacties: null,
+	wijzigingen: null,
+	correcties: null,
+	primer: null,
+	// Claims (#50/#124): status-chips; leeg = default-weergave (alleen wat
+	// aandacht vraagt: te reviewen, niet gearchiveerd). Afgehandeld, archief
+	// en alles zitten achter de chips.
+	claims: {
+		allowed: ['unreviewed', 'accepted', 'rejected', 'superseded', 'archived', 'all'],
+		fallback: ''
+	},
+	// Relatievoorstellen (#116/#124): zelfde chip-patroon als claims.
+	relaties: { allowed: ['unreviewed', 'accepted', 'rejected', 'archived', 'all'], fallback: '' },
+	// Bronvoorstellen uit de scout (#63): de bestaande statussen zíjn hier het
+	// archief (#124, KISS) — default alleen te beoordelen, "all" toont alles.
+	voorstellen: { allowed: ['proposed', 'accepted', 'rejected', 'all'], fallback: 'proposed' },
+	gaten: null,
+	// Piltover Archive-decks (#15): attributie + deep-link per deck.
+	decks: null,
+	// Set-dekking (#145): per set aanwezige/ontbrekende basisnummers.
+	setdekking: null,
+	// Gebruikers + kosteninzicht (#42): de chips kiezen de meetperiode.
+	gebruikers: { allowed: ['vandaag', '7d', '30d'], fallback: '7d' },
+	// Judge-benchmark (#158): geen filter-chips, wel een los "run"-nummer
+	// voor de run-historie (zie de load-case hieronder).
+	benchmark: null,
+	// Bron-feeds (#167): geen filter, gewoon de volledige (korte) lijst.
+	feeds: null
+};
+
+export const load: PageServerLoad = async ({ params, url, cookies }) => {
+	if (!authed(cookies)) throw redirect(303, '/admin');
+	const kind = params.kind;
+	// Object.hasOwn: `in` kijkt ook in de prototype-keten ("constructor" → 500).
+	if (!Object.hasOwn(KIND_FILTERS, kind)) throw error(404, 'Onbekend overzicht');
+
+	const page = Math.min(100_000, Math.max(1, Math.trunc(Number(url.searchParams.get('page'))) || 1));
+	const q = url.searchParams.get('q')?.trim() ?? '';
+	const source = url.searchParams.get('source') ?? '';
+	const filterRule = KIND_FILTERS[kind];
+	const rawFilter = url.searchParams.get('filter') ?? '';
+	const filter = filterRule
+		? filterRule.allowed.includes(rawFilter) ? rawFilter : filterRule.fallback
+		: '';
+
+	const base = { kind, page, q, filter, source, apiDown: false };
+	try {
+		switch (kind) {
+			case 'kaarten':
+			case 'embeddings':
+			case 'analyse': {
+				const qs = new URLSearchParams({ page: String(page) });
+				if (filter) qs.set('filter', filter);
+				if (q) qs.set('q', q);
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/cards?${qs}`) };
+			}
+			case 'regelsecties': {
+				const qs = new URLSearchParams({ page: String(page) });
+				if (source) qs.set('sourceId', source);
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/rulechunks?${qs}`) };
+			}
+			case 'bans':
+				return { ...base, data: await adminApi<unknown>('/api/admin/overview/bans') };
+			case 'errata':
+				return { ...base, data: await adminApi<unknown>('/api/admin/overview/errata') };
+			case 'interacties':
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/interactions?page=${page}`) };
+			case 'wijzigingen':
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/changes?page=${page}`) };
+			case 'correcties':
+				return { ...base, data: await adminApi<unknown>('/api/admin/corrections') };
+			case 'primer':
+				return { ...base, data: await adminApi<unknown>('/api/admin/knowledge') };
+			case 'claims': {
+				const qs = new URLSearchParams({ page: String(page) });
+				if (filter) qs.set('status', filter);
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/claims?${qs}`) };
+			}
+			case 'relaties': {
+				const qs = new URLSearchParams({ page: String(page) });
+				if (filter) qs.set('status', filter);
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/relations?${qs}`) };
+			}
+			case 'voorstellen': {
+				const qs = new URLSearchParams({ page: String(page) });
+				// rb-api kent hier geen "all": geen status-parameter = alles.
+				if (filter && filter !== 'all') qs.set('status', filter);
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/proposals?${qs}`) };
+			}
+			case 'gaten':
+				// Kennis-gaten-rapport (#52): vers berekend bij elke aanvraag.
+				return { ...base, data: await adminApi<unknown>('/api/admin/overview/gaps') };
+			case 'decks':
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/decks?page=${page}`) };
+			case 'setdekking':
+				// Set-dekking (#145): exact uit de riftbound-id's afgeleid.
+				return { ...base, data: await adminApi<unknown>('/api/admin/overview/setcoverage') };
+			case 'gebruikers': {
+				const qs = new URLSearchParams({ page: String(page), period: filter });
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/users?${qs}`) };
+			}
+			case 'benchmark': {
+				// Losse "run"- en "sweep"-nummers (geen page/filter): welke
+				// single-run resp. welke model-sweep (#174) getoond wordt.
+				// Zonder parameter kiest rb-api steeds de meest recente.
+				const qs = new URLSearchParams();
+				const run = url.searchParams.get('run');
+				if (run) qs.set('run', run);
+				const sweep = url.searchParams.get('sweep');
+				if (sweep) qs.set('sweep', sweep);
+				return { ...base, data: await adminApi<unknown>(`/api/admin/overview/benchmark?${qs}`) };
+			}
+			case 'feeds':
+				return { ...base, data: await adminApi<unknown>('/api/admin/overview/feeds') };
+			default:
+				throw error(404, 'Onbekend overzicht');
+		}
+	} catch {
+		return { ...base, apiDown: true, data: null };
+	}
+};
+
+// Reviewqueue-acties voor claims en relaties (#124) delen hun vorm: id (+
+// eventuele notitie) uit het formulier, POST naar rb-api, en fouten mét
+// item-id terug zodat de melding bij het juiste item landt en de getypte
+// notitie niet verdwijnt (#42-patroon).
+type CookieJar = { get(name: string): string | undefined };
+
+async function reviewDecision(
+	cookies: CookieJar,
+	request: Request,
+	resource: 'claims' | 'relations',
+	decision: 'accept' | 'reject'
+) {
+	if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+	const form = await request.formData();
+	const id = Number(form.get('id'));
+	const note = String(form.get('note') ?? '').trim();
+	try {
+		await adminApi(`/api/admin/${resource}/${id}/${decision}`, {
+			method: 'POST',
+			body: JSON.stringify({ note: note || null })
+		});
+		return { ok: true };
+	} catch (e) {
+		return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+	}
+}
+
+async function itemAction(
+	cookies: CookieJar,
+	request: Request,
+	resource: 'claims' | 'relations',
+	action: 'archive' | 'unarchive'
+) {
+	if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+	const form = await request.formData();
+	const id = Number(form.get('id'));
+	try {
+		await adminApi(`/api/admin/${resource}/${id}/${action}`, { method: 'POST' });
+		return { ok: true };
+	} catch (e) {
+		return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+	}
+}
+
+async function archiveHandled(cookies: CookieJar, resource: 'claims' | 'relations') {
+	if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+	try {
+		const r = await adminApi<{ archived: number }>(`/api/admin/${resource}/archive-handled`, {
+			method: 'POST'
+		});
+		return { ok: true, archived: r.archived };
+	} catch (e) {
+		return fail(502, { error: e instanceof Error ? e.message : String(e) });
+	}
+}
+
+async function promoteNote(
+	cookies: CookieJar,
+	request: Request,
+	resource: 'claims' | 'relations'
+) {
+	if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+	const form = await request.formData();
+	const id = Number(form.get('id'));
+	const note = String(form.get('note') ?? '').trim();
+	try {
+		const r = await adminApi<{ embedded: boolean }>(
+			`/api/admin/${resource}/${id}/promote-note`,
+			{ method: 'POST', body: JSON.stringify({ note: note || null }) }
+		);
+		return { ok: true, promoted: true, embedded: r.embedded, id };
+	} catch (e) {
+		return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+	}
+}
+
+// Correcties (#177, bron/opmerking/her-evaluatie #184): verifiëren/verwerpen
+// nemen — net als claims/relaties — een optionele beheerder-opmerking mee;
+// "opnieuw evalueren" bewaart de opmerking en triggert de deterministische
+// her-toets van de hybride poort voor dit ene item (rb-api: /reevaluate).
+export const actions: Actions = {
+	// Ontkoppelen van een foute consolidatie (#206, review-fix finding 1):
+	// op de secundaire change; rb-api zet ConsolidatedWithId terug op null
+	// én schrijft een sticky pair-memo zodat de eerstvolgende
+	// consolidatie-run het paar niet meteen weer merget.
+	unconsolidateChange: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/changes/${form.get('id')}/unconsolidate`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	verifyCorrection: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const note = String(form.get('note') ?? '').trim();
+		try {
+			await adminApi(`/api/admin/corrections/${id}/verify`, {
+				method: 'POST',
+				body: JSON.stringify({ note: note || null })
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	rejectCorrection: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const note = String(form.get('note') ?? '').trim();
+		try {
+			await adminApi(`/api/admin/corrections/${id}/reject`, {
+				method: 'POST',
+				body: JSON.stringify({ note: note || null })
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	// Opmerking → her-evaluatie (#184): de opmerking wordt traceerbaar bewaard
+	// op de Correction en triggert meteen een her-toets van de hybride poort
+	// (grounded/anchored/informative) voor dit ene item — een anker-correctie
+	// in de opmerking (bv. "mechanic:Recall") kan een fout-aangeankerd item
+	// alsnog naar verified tillen.
+	reevaluateCorrection: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const note = String(form.get('note') ?? '').trim();
+		try {
+			const r = await adminApi<{ outcome: string; reason: string | null }>(
+				`/api/admin/corrections/${id}/reevaluate`,
+				{ method: 'POST', body: JSON.stringify({ note: note || null }) }
+			);
+			return { ok: true, reevaluated: true, outcome: r.outcome, reason: r.reason, id };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	deleteCorrection: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/corrections/${form.get('id')}`, { method: 'DELETE' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Spelbegrip-primer (#70): bewerken her-embedt server-side; de status
+	// blijft staan. Fail-paden geven het doc-id mee zodat de fout bij het
+	// juiste formulier landt en de paginastate niet verdwijnt.
+	saveKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const title = String(form.get('title') ?? '').trim();
+		const body = String(form.get('body') ?? '').trim();
+		// #266: leeg meesturen wist de Nederlandse weergave (de pagina toont
+		// dan het Engels) — dat is een geldige keuze, dus geen verplicht veld.
+		const bodyNl = String(form.get('bodyNl') ?? '').trim();
+		if (!title || !body) return fail(400, { error: 'Titel en tekst mogen niet leeg zijn', id });
+		try {
+			await adminApi(`/api/admin/knowledge/${id}`, {
+				method: 'PATCH',
+				body: JSON.stringify({ title, body, bodyNl })
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	approveKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/knowledge/${form.get('id')}/approve`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	unapproveKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/knowledge/${form.get('id')}/unapprove`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	deleteKnowledge: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/knowledge/${form.get('id')}`, { method: 'DELETE' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Claims-review (#50/#124): bevestigen maakt een claim retrieval-baar
+	// (#51); verwerpen houdt hem uit beeld. Beide nemen de optionele
+	// beheerder-notitie mee; bij verwerpen is die de zichtbare reden.
+	// Fail-paden dragen het item-id mee zodat de fout bij het juiste item
+	// landt en de paginastate (getypte notitie incluis) blijft staan (#42).
+	acceptClaim: async ({ request, cookies }) => reviewDecision(cookies, request, 'claims', 'accept'),
+	rejectClaim: async ({ request, cookies }) => reviewDecision(cookies, request, 'claims', 'reject'),
+	// Archief (#124): uit de default-weergave, terugvindbaar via de chip;
+	// status (en dus /ask-deelname of graph-projectie) verandert niet.
+	archiveClaim: async ({ request, cookies }) => itemAction(cookies, request, 'claims', 'archive'),
+	unarchiveClaim: async ({ request, cookies }) =>
+		itemAction(cookies, request, 'claims', 'unarchive'),
+	archiveHandledClaims: async ({ cookies }) => archiveHandled(cookies, 'claims'),
+	// Notitie → geverifieerde ruling (#124): de uitleg van de beheerder wordt
+	// een Correction (bestaand verify-pad) en stuurt voortaan de antwoorden.
+	promoteClaimNote: async ({ request, cookies }) => promoteNote(cookies, request, 'claims'),
+	// Relatie-review (#116/#124): accepteren maakt het voorstel definitief
+	// (mee in de graph zodra ook het kind geaccepteerd is); verwerpen haalt
+	// het uit de projectie en voorkomt her-voorstellen.
+	acceptRelation: async ({ request, cookies }) =>
+		reviewDecision(cookies, request, 'relations', 'accept'),
+	rejectRelation: async ({ request, cookies }) =>
+		reviewDecision(cookies, request, 'relations', 'reject'),
+	archiveRelation: async ({ request, cookies }) =>
+		itemAction(cookies, request, 'relations', 'archive'),
+	unarchiveRelation: async ({ request, cookies }) =>
+		itemAction(cookies, request, 'relations', 'unarchive'),
+	archiveHandledRelations: async ({ cookies }) => archiveHandled(cookies, 'relations'),
+	promoteRelationNote: async ({ request, cookies }) =>
+		promoteNote(cookies, request, 'relations'),
+	// Bulk-actie per aanbevelingsgroep (#199 v1): "accepteer/verwerp alle N met
+	// aanbeveling X" — dun endpoint dat per item hetzelfde accept-/reject-pad
+	// aanroept (RelationTriageService.DecideAsync/ApplyDecision, rb-api), geen
+	// nieuw autoriteitspad. bulkDecision draagt mee zodat de UI de melding bij
+	// de juiste knop toont (accept- en reject-groep hebben allebei een form).
+	bulkDecideRelations: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const recommendation = String(form.get('recommendation') ?? '');
+		const decision = String(form.get('decision') ?? '');
+		// TOCTOU-fence (review-fix #199): wat de UI rendeerde gaat mee — de
+		// groepstelling en de max RecommendedAt binnen de groep. rb-api
+		// weigert met 409 als de groep intussen is veranderd (bv. door een
+		// gelijktijdige triage-run); dan is er NIETS beslist.
+		const expectedCount = Number(form.get('expectedCount'));
+		const asOf = String(form.get('asOf') ?? '');
+		if (!Number.isInteger(expectedCount) || expectedCount < 0 || !asOf) {
+			return fail(400, {
+				error: 'De geladen groepstelling ontbreekt — ververs de pagina en probeer opnieuw.',
+				bulkDecision: decision
+			});
+		}
+		try {
+			const r = await adminApi<{ applied: number }>('/api/admin/relations/bulk-decide', {
+				method: 'POST',
+				body: JSON.stringify({ recommendation, decision, expectedCount, asOf })
+			});
+			return { ok: true, bulkApplied: r.applied, bulkDecision: decision };
+		} catch (e) {
+			// 409 = fence: de nette melding uit rb-api landt bij de juiste knop.
+			const status = e instanceof AdminApiError && e.status === 409 ? 409 : 502;
+			return fail(status, {
+				error: e instanceof Error ? e.message : String(e),
+				bulkDecision: decision
+			});
+		}
+	},
+	// Kind-vocabulaire (#116, patroon mechanieken): accepteren laat relaties
+	// met dit kind meedoen in de graph-projectie; verwerpen houdt het kind
+	// (en nieuwe voorstellen ermee) uit beeld.
+	acceptRelationKind: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/relationkinds/${form.get('id')}/accept`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	rejectRelationKind: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/relationkinds/${form.get('id')}/reject`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Bronvoorstellen (#63): accepteren zet de bron uitgeschakeld in het
+	// register (aanzetten gaat daarna bewust via de bronnen-tabel);
+	// verwerpen houdt de URL uit volgende scout-runs.
+	acceptProposal: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/proposals/${form.get('id')}/accept`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	rejectProposal: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/proposals/${form.get('id')}/reject`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Accountbeheer (#42): blokkeren/deblokkeren en quota bijstellen. Fouten
+	// dragen het gebruikers-id mee zodat de melding bij de juiste rij landt.
+	saveUser: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = Number(form.get('id'));
+		const patch: Record<string, unknown> = {};
+		if (form.has('blocked')) patch.blocked = form.get('blocked') === 'true';
+		if (form.has('dailyQuota')) {
+			const q = Number(form.get('dailyQuota'));
+			if (!Number.isInteger(q) || q < 0) return fail(400, { error: 'Quotum moet een getal van 0 of hoger zijn', id });
+			patch.dailyQuota = q;
+		}
+		if (form.has('dailyPhotoQuota')) {
+			const q = Number(form.get('dailyPhotoQuota'));
+			if (!Number.isInteger(q) || q < 0) return fail(400, { error: 'Foto-quotum moet een getal van 0 of hoger zijn', id });
+			patch.dailyPhotoQuota = q;
+		}
+		// #153: Grondig-dagquotum (zelf geforceerde agentic-vragen).
+		if (form.has('dailyAgenticQuota')) {
+			const q = Number(form.get('dailyAgenticQuota'));
+			if (!Number.isInteger(q) || q < 0) return fail(400, { error: 'Grondig-quotum moet een getal van 0 of hoger zijn', id });
+			patch.dailyAgenticQuota = q;
+		}
+		try {
+			await adminApi(`/api/admin/users/${id}`, {
+				method: 'PATCH',
+				body: JSON.stringify(patch)
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	// Bron-feeds (#167): zelf toevoegen/bewerken/verwijderen, patroon van de
+	// bestaande bronnen-toggle. UrlGuard-weigeringen (422) komen als
+	// { error } terug — dezelfde vorm die adminApi hier al als Error opgooit.
+	createFeed: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = String(form.get('id') ?? '').trim();
+		const url = String(form.get('url') ?? '').trim();
+		const name = String(form.get('name') ?? '').trim();
+		if (!id || !url || !name) return fail(400, { error: 'Id, naam en URL zijn verplicht' });
+		const categoryFilter = String(form.get('categoryFilter') ?? '').trim();
+		const cadence = String(form.get('cadence') ?? 'daily');
+		try {
+			await adminApi('/api/admin/feeds', {
+				method: 'POST',
+				body: JSON.stringify({
+					id, name, url,
+					categoryFilter: categoryFilter || null,
+					autoApprove: form.get('autoApprove') === 'true',
+					cadence,
+					enabled: true
+				})
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	saveFeed: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = String(form.get('id') ?? '');
+		const patch: Record<string, unknown> = {};
+		// De volledige bewerkformulier stuurt altijd "cadence" mee (een select,
+		// nooit leeg) — dat is het betrouwbare signaal dat dít de volledige
+		// edit-save is, in plaats van de losse aan/uit-toggle hieronder. Bínnen
+		// die tak autoApprove altijd expliciet zetten: een aangevinkte checkbox
+		// die is uitgevinkt wordt door de browser helemaal niet meegestuurd, dus
+		// "form.has('autoApprove')" zou een bewuste uitzet-actie stil negeren.
+		if (form.has('cadence')) {
+			patch.name = String(form.get('name') ?? '');
+			patch.url = String(form.get('url') ?? '');
+			// Leeg veld betekent hier expliciet "alle categorieën" (filter uit).
+			patch.categoryFilter = String(form.get('categoryFilter') ?? '').trim();
+			patch.cadence = String(form.get('cadence'));
+			patch.autoApprove = form.get('autoApprove') === 'true';
+		}
+		if (form.has('enabled')) patch.enabled = form.get('enabled') === 'true';
+		try {
+			await adminApi(`/api/admin/feeds/${encodeURIComponent(id)}`, {
+				method: 'PATCH',
+				body: JSON.stringify(patch)
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	},
+	deleteFeed: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const id = String(form.get('id') ?? '');
+		try {
+			await adminApi(`/api/admin/feeds/${encodeURIComponent(id)}`, { method: 'DELETE' });
+			return { ok: true };
+		} catch (e) {
+			// id meesturen (zelfde vorm als saveFeed) zodat de melding bij de
+			// juiste rij landt in plaats van stil te verdwijnen in het
+			// (ingeklapte) toevoeg-formulier.
+			return fail(502, { error: e instanceof Error ? e.message : String(e), id });
+		}
+	}
+};

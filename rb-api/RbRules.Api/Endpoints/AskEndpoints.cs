@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RbRules.Domain;
 using RbRules.Infrastructure;
@@ -6,56 +7,54 @@ namespace RbRules.Api.Endpoints;
 
 public static class AskEndpoints
 {
+    /// <summary>Zelfde casing als Results.Ok (camelCase) voor de NDJSON-frames.</summary>
+    private static readonly JsonSerializerOptions StreamJson = new(JsonSerializerDefaults.Web);
+
     public static void MapAskEndpoints(this IEndpointRouteBuilder app)
     {
         // ── Rulings-Q&A (S2): hybrid retrieval + §-citaten ─────────────
-        app.MapPost("/api/ask", async (AskRequest req, AskService ask, RbRulesDbContext db) =>
+        app.MapPost("/api/ask", async (AskRequest req, AskService ask) =>
         {
-            if (string.IsNullOrWhiteSpace(req.Question))
-                return Results.BadRequest(new { error = "question is verplicht" });
-            // Optionele board-state-foto('s): max 2, alleen gangbare beeldformaten.
-            var images = (req.Images ?? [])
-                .Where(i => !string.IsNullOrWhiteSpace(i.Data))
-                .Take(2)
-                .Select(i => new RbAiClient.AiImage(i.MediaType, i.Data))
-                .ToList();
-            if (images.Any(i => i.MediaType is not ("image/jpeg" or "image/png" or "image/webp" or "image/gif")))
-                return Results.BadRequest(new { error = "afbeeldingstype niet ondersteund" });
-            if (images.Any(i => i.Data.Length > 8_000_000))
-                return Results.BadRequest(new { error = "afbeelding te groot (max ~6 MB)" });
-
-            // Doorvraag-historie (#41): gecapt op 3 rondes, tekstlengte begrensd.
-            var history = (req.History ?? [])
-                .Where(t => !string.IsNullOrWhiteSpace(t.Question))
-                .TakeLast(3)
-                .Select(t => new AskTurn(
-                    t.Question.Length > 2000 ? t.Question[..2000] : t.Question,
-                    t.Answer.Length > 6000 ? t.Answer[..6000] : t.Answer))
-                .ToList();
-
-            var sw = System.Diagnostics.Stopwatch.StartNew();
+            if (ValidateAsk(req, out var images, out var history) is { } bad) return bad;
+            // De duurmeting voor de "gemiddeld ±Xs"-indicatie zit in AskService.
+            // Approach (#153): parse valt veilig op Auto terug; of de keuze
+            // gehonoreerd wordt beslist AskService (alleen ingelogd).
             var result = await ask.AskAsync(
                 req.Question.Trim(), images.Count > 0 ? images : null,
-                history.Count > 0 ? history : null);
-            sw.Stop();
-            try
-            {
-                // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraagpagina.
-                db.AskMetrics.Add(new AskMetric
-                {
-                    DurationMs = (int)Math.Min(sw.ElapsedMilliseconds, int.MaxValue),
-                    QuestionType = result.QuestionType,
-                    HadImage = images.Count > 0,
-                    Ok = result.Ok,
-                });
-                await db.SaveChangesAsync();
-            }
-            catch
-            {
-                // meting mag een antwoord nooit blokkeren
-            }
+                history.Count > 0 ? history : null,
+                AgenticGate.ParseApproach(req.Approach));
             return Results.Ok(result);
-        }).RequireRateLimiting("llm");
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>()
+            // #328: /ask is alleen nog voor ingelogde bezoekers — de filter
+            // draait NA UserQuotaFilter (die resolvet het sessietoken).
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>();
+
+        // ── Streamende variant (#31): NDJSON-frames ────────────────────
+        // meta (citaties/claims vóór het antwoord) → delta* → final|error.
+        // Zelfde retrieval en afronding als /api/ask (AskService is de bron);
+        // AI-uitval eindigt in een final-frame met de gedegradeerde tekst,
+        // precies zoals de niet-streamende route. Zelfde quota-poort (#42):
+        // de filter vuurt vóór de eerste frame-byte, dus 401/403/429 zijn
+        // hier nog gewone JSON-responses.
+        app.MapPost("/api/ask/stream", (AskRequest req, AskService ask, HttpContext http) =>
+        {
+            if (ValidateAsk(req, out var images, out var history) is { } bad) return bad;
+            return Results.Stream(
+                body => StreamAskAsync(
+                    ask, req.Question.Trim(), images, history,
+                    AgenticGate.ParseApproach(req.Approach), http, body),
+                "application/x-ndjson");
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>()
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>(); // #328: zie /api/ask
+
+        // ── Eigen ask-geschiedenis (#157): laatste 20 eigen vragen — de
+        // filter zet zowel User als IpHash op RequestUserContext (ook
+        // anoniem), dus geen route-parameter nodig — en dus geen enumeratie
+        // van andermans historie mogelijk.
+        app.MapGet("/api/ask/history", async (
+            AskHistoryService history, RequestUserContext userContext, CancellationToken ct) =>
+            Results.Ok(await history.RecentAsync(userContext.User?.Id, userContext.IpHash, ct)))
+            .AddEndpointFilter<UserQuotaFilter>();
 
         // Echte duurstatistiek (laatste 100 geslaagde vragen) voor de wachtindicatie.
         app.MapGet("/api/ask/stats", async (RbRulesDbContext db) =>
@@ -68,14 +67,58 @@ public static class AskEndpoints
                 .ToListAsync();
             if (recent.Count == 0) return Results.Ok(new { Count = 0 });
             var sorted = recent.OrderBy(x => x).ToList();
+            // Fase-verdeling (#152): gemiddelde rewrite/embed/retrieval/AI
+            // over de recentste geslaagde traces mét timings — de traces zijn
+            // de enige plek waar de verdeling staat (metric kent alleen het
+            // totaal). Parse is tolerant (AskPhases.Parse); geen timings =
+            // gewoon geen phases-blok, de basisstatistiek blijft werken.
+            var phaseRows = await db.AskTraces.AsNoTracking()
+                .Where(t => t.Ok && t.PhaseTimings != null)
+                .OrderByDescending(t => t.CreatedAt)
+                .Take(50)
+                .Select(t => t.PhaseTimings!)
+                .ToListAsync();
+            var parsed = phaseRows
+                .Select(AskPhases.Parse)
+                .OfType<AskPhases>()
+                .ToList();
             return Results.Ok(new
             {
                 Count = recent.Count,
                 AvgMs = (int)recent.Average(),
                 MedianMs = sorted[sorted.Count / 2],
                 P90Ms = sorted[(int)(sorted.Count * 0.9)],
+                Phases = parsed.Count == 0 ? null : new
+                {
+                    Count = parsed.Count,
+                    RewriteMs = (int)parsed.Average(p => p.RewriteMs),
+                    EmbedMs = (int)parsed.Average(p => p.EmbedMs),
+                    RetrievalMs = (int)parsed.Average(p => p.RetrievalMs),
+                    AiMs = (int)parsed.Average(p => p.AiMs),
+                },
             });
         });
+
+        // ── Voorverwarmsignaal (#154) ──────────────────────────────────
+        // De /ask-paginalaad meldt zich hier (rb-web server-load, fire-and-
+        // forget) zodat rb-ai's warme-sessie-pool alvast een SDK-subprocess
+        // boot. Altijd 202 — uitval van rb-ai is volledig stil (PrewarmAsync
+        // slikt alles en is intern op 2s gekapt). Anoniem toegankelijk, maar
+        // achter een eigen per-IP-limiet: het signaal boot een subprocess op
+        // de VM en mag niet DoS-baar zijn; bewust níet de "llm"-policy, die
+        // zou paginalaads het vraagbudget van echte vragen laten opeten.
+        app.MapPost("/api/ask/prewarm", async (RbAiClient ai) =>
+        {
+            await ai.PrewarmAsync();
+            return Results.Accepted();
+        }).RequireRateLimiting("prewarm")
+            // #328 (review): het signaal boot een SDK-subprocess op de VM en
+            // anoniem kan toch geen vraag meer stellen — dus dezelfde
+            // login-poort als de AI-paden, server-authoritatief (de rb-web-
+            // conditie is alleen de nette kant). Geen quota-effect: prewarm
+            // draagt geen AskRequest, dus UserQuotaFilter telt hem niet mee.
+            .AddEndpointFilter<UserQuotaFilter>()
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>();
 
         // ── Interacties (S3) ───────────────────────────────────────────
         app.MapPost("/api/resolve", async (ResolveRequest req, InteractionService interactions) =>
@@ -86,7 +129,8 @@ public static class AskEndpoints
             return result is null
                 ? Results.BadRequest(new { error = "kaarten niet gevonden" })
                 : Results.Ok(result);
-        }).RequireRateLimiting("llm");
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>()
+            .AddEndpointFilter<UserQuotaFilter.RequireUser>(); // #328: LLM-pad
 
         // ── Feedback op antwoorden (self-learning, #24) ────────────────
         app.MapPost("/api/corrections", async (CorrectionSubmit body, RbRulesDbContext db) =>
@@ -114,6 +158,120 @@ public static class AskEndpoints
             });
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
-        }).RequireRateLimiting("llm");
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+
+        // ── Ruling vastleggen vanuit een /ask-gesprek (#166) ───────────
+        // Autoriteit bepaalt de route (de veiligheidskern): een beheerder
+        // (X-Admin-Key) verifieert direct; een ingelogde gebruiker
+        // (X-User-Token, via UserQuotaFilter → RequestUserContext) legt een
+        // voorstel vast in de reviewqueue; anoniem wordt hier al geweerd —
+        // server-authoritatief, geen van beide credentials komt uit de body.
+        app.MapPost("/api/ask/ruling", async (
+            RulingSubmit body, ChatRulingService chatRulings,
+            RequestUserContext userContext, HttpContext http, CancellationToken ct) =>
+        {
+            var isAdmin = AdminAuthFilter.IsAdmin(http);
+            if (!isAdmin && userContext.User is null)
+                return Results.Json(
+                    new { error = "log in (of als beheerder) om een ruling vast te leggen" },
+                    statusCode: StatusCodes.Status401Unauthorized);
+
+            var result = await chatRulings.SubmitAsync(
+                body, isAdmin ? RulingAuthority.Admin : RulingAuthority.User, ct);
+            return result.Status switch
+            {
+                RulingSubmitStatus.InvalidInput => Results.BadRequest(new { error = result.Error }),
+                RulingSubmitStatus.Verified => Results.Ok(new
+                {
+                    ok = true, verified = true,
+                    result.CorrectionId, result.Embedded, result.Updated,
+                }),
+                _ => Results.Ok(new
+                {
+                    ok = true, verified = false,
+                    result.CorrectionId, result.Updated,
+                }),
+            };
+        }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
+    }
+
+    /// <summary>Gedeelde validatie/normalisatie voor /api/ask en
+    /// /api/ask/stream — beide routes accepteren exact hetzelfde request.
+    /// Geeft een BadRequest terug bij fouten, anders null.</summary>
+    private static IResult? ValidateAsk(
+        AskRequest req, out List<RbAiClient.AiImage> images, out List<AskTurn> history)
+    {
+        images = [];
+        history = [];
+        if (string.IsNullOrWhiteSpace(req.Question))
+            return Results.BadRequest(new { error = "question is verplicht" });
+        // Optionele board-state-foto('s): max 2, alleen gangbare beeldformaten.
+        images = [.. (req.Images ?? [])
+            .Where(i => !string.IsNullOrWhiteSpace(i.Data))
+            .Take(2)
+            .Select(i => new RbAiClient.AiImage(i.MediaType, i.Data))];
+        if (images.Any(i => i.MediaType is not ("image/jpeg" or "image/png" or "image/webp" or "image/gif")))
+            return Results.BadRequest(new { error = "afbeeldingstype niet ondersteund" });
+        if (images.Any(i => i.Data.Length > 8_000_000))
+            return Results.BadRequest(new { error = "afbeelding te groot (max ~6 MB)" });
+
+        // Doorvraag-historie (#41): gecapt op 3 rondes, tekstlengte begrensd.
+        history = [.. (req.History ?? [])
+            .Where(t => !string.IsNullOrWhiteSpace(t.Question))
+            .TakeLast(3)
+            .Select(t => new AskTurn(
+                t.Question.Length > 2000 ? t.Question[..2000] : t.Question,
+                t.Answer.Length > 6000 ? t.Answer[..6000] : t.Answer))];
+        return null;
+    }
+
+    /// <summary>Schrijft de NDJSON-frames voor /api/ask/stream. Elk frame wordt
+    /// direct geflusht zodat het antwoord woord-voor-woord bij de browser komt.
+    /// Een weggelopen client (RequestAborted) is geen fout — dan gewoon stoppen;
+    /// de metric-afronding in AskService gebruikt bewust geen request-token.</summary>
+    private static async Task StreamAskAsync(
+        AskService ask, string question, List<RbAiClient.AiImage> images,
+        List<AskTurn> history, AskApproach approach, HttpContext http, Stream body)
+    {
+        await using var writer = new StreamWriter(body);
+        async Task WriteFrameAsync(object frame)
+        {
+            await writer.WriteLineAsync(JsonSerializer.Serialize(frame, StreamJson));
+            await writer.FlushAsync(http.RequestAborted);
+        }
+        try
+        {
+            var result = await ask.AskStreamingAsync(
+                question, images.Count > 0 ? images : null,
+                history.Count > 0 ? history : null,
+                onMeta: m => WriteFrameAsync(new
+                {
+                    type = "meta", questionType = m.QuestionType,
+                    citations = m.Citations, claims = m.Claims,
+                    // #153: aanpak-terugmelding vóór het antwoord — een
+                    // quota-terugval hoort niet te wachten op het slotframe.
+                    approach = m.Approach, approachReason = m.ApproachReason,
+                }),
+                onDelta: text => WriteFrameAsync(new { type = "delta", text }),
+                approach, ct: http.RequestAborted);
+            await WriteFrameAsync(new { type = "final", result });
+        }
+        catch (OperationCanceledException)
+        {
+            // Client is weg — niets meer te schrijven.
+        }
+        catch (Exception ex)
+        {
+            // Onverwachte fout ná de 200: als frame melden (best-effort),
+            // zodat de UI kan terugvallen i.p.v. eeuwig wachten.
+            try
+            {
+                await WriteFrameAsync(new { type = "error", error = ex.Message });
+            }
+            catch
+            {
+                // response al kapot — dan valt er niets meer te melden
+            }
+        }
     }
 }

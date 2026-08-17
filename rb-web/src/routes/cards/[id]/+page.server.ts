@@ -1,38 +1,11 @@
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { api } from '$lib/api';
+import type { CardDetail } from '$lib/types';
 
-export interface CardDetail {
-	riftboundId: string;
-	name: string;
-	type: string | null;
-	supertype: string | null;
-	rarity: string | null;
-	domains: string[];
-	energy: number | null;
-	might: number | null;
-	power: number | null;
-	setId: string | null;
-	setLabel: string | null;
-	collectorNumber: number | null;
-	textPlain: string | null;
-	imageUrl: string | null;
-	tags: string[];
-	mechanics: string[] | null;
-	triggers: string[] | null;
-	effects: string[] | null;
-	banned: boolean;
-	errataText: string | null;
-	variantOf: string | null;
-	versions: {
-		riftboundId: string;
-		setId: string | null;
-		setLabel: string | null;
-		rarity: string | null;
-		collectorNumber: number | null;
-		imageUrl: string | null;
-	}[];
-}
+// CardDetail is sinds #252 gedeeld met de graph-node-proxy en staat daarom in
+// $lib/types.ts (docs/CONVENTIONS.md); hier alleen doorgegeven aan de pagina.
+export type { CardDetail };
 
 interface Interaction {
 	otherId: string;
@@ -56,9 +29,90 @@ interface SimilarCard {
 }
 
 interface CardRules {
-	errata: { newText: string; sourceUrl: string | null; detectedAt: string }[];
+	errata: {
+		newText: string;
+		sourceUrl: string | null;
+		detectedAt: string;
+		/** Temporele precedentie (#168): vanaf wanneer deze tekst gold, of
+		 *  null als de bron geen datum draagt. De lijst staat al op
+		 *  precedentie-volgorde (hoogste TrustTier, dan nieuwste
+		 *  EffectiveFrom) — het eerste item is de tekst die NU geldt. */
+		effectiveFrom: string | null;
+	}[];
 	relevantRules: { section: string; snippet: string; sourceName: string; url: string }[];
 }
+
+// Kaart-dossier (#127): rulings, claims, brein-relaties en ban-historie.
+export interface CardDossier {
+	rulings: {
+		id: number;
+		question: string | null;
+		text: string;
+		provenance: string | null;
+		date: string;
+		sections: { sourceId: string; code: string }[];
+		/** "Waar besloten" (#166) — URL of vrije citatie. */
+		sourceRef: string | null;
+	}[];
+	claims: {
+		id: number;
+		statement: string;
+		corroboration: number;
+		trustScore: number;
+		officialStatus: string;
+		trustLabel: string;
+		sources: { name: string; url: string | null; quote: string | null; trustTier: number }[];
+	}[];
+	relations: {
+		otherRef: string;
+		otherName: string | null;
+		kind: string;
+		explanation: string;
+		status: string;
+		trust: number;
+		richting: string;
+	}[];
+	banHistory: {
+		kind: string;
+		format: string;
+		effectiveFrom: string | null;
+		sourceUrl: string;
+		detectedAt: string;
+	}[];
+	deckPopularity: CardDeckPopularity;
+}
+
+/** Deck-gebruikssignaal (#15 golf 1 spoor B): aandeel van de recente
+ *  Piltover Archive-decks dat deze kaart speelt. recentDeckCount is de
+ *  noemer — altijd meegegeven zodat "N%" nooit los van zijn basis leest.
+ *  thinData markeert een te kleine noemer (bv. tijdens de lopende
+ *  deck-backfill, #15 spoor 2): dan tonen we absolute aantallen in plaats
+ *  van het percentage. */
+export interface CardDeckPopularity {
+	deckCount: number;
+	recentDeckCount: number;
+	percentage: number;
+	averageCopiesWhenPlayed: number | null;
+	thinData: boolean;
+	topCoPlayed: { riftboundId: string; name: string; deckCount: number }[];
+}
+
+const EMPTY_DECK_POPULARITY: CardDeckPopularity = {
+	deckCount: 0,
+	recentDeckCount: 0,
+	percentage: 0,
+	averageCopiesWhenPlayed: null,
+	thinData: true,
+	topCoPlayed: [],
+};
+
+const EMPTY_DOSSIER: CardDossier = {
+	rulings: [],
+	claims: [],
+	relations: [],
+	banHistory: [],
+	deckPopularity: EMPTY_DECK_POPULARITY,
+};
 
 export const load: PageServerLoad = async ({ params }) => {
 	let card: CardDetail;
@@ -90,5 +144,13 @@ export const load: PageServerLoad = async ({ params }) => {
 	} catch {
 		// regels-index nog niet gedraaid — sectie gewoon verbergen
 	}
-	return { card, similar, interactions, rules };
+
+	// Kaart-dossier (#127) — best-effort: lege hoofdstukken worden verborgen.
+	let dossier: CardDossier = EMPTY_DOSSIER;
+	try {
+		dossier = await api<CardDossier>(`/api/cards/${encodeURIComponent(params.id)}/dossier`);
+	} catch {
+		// dossier niet beschikbaar — de kaartfeiten blijven gewoon werken
+	}
+	return { card, similar, interactions, rules, dossier };
 };

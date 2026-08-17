@@ -1,32 +1,57 @@
 using Microsoft.EntityFrameworkCore;
 using Neo4j.Driver;
 using RbRules.Domain;
+using RbRules.Domain.Ontology;
 
 namespace RbRules.Infrastructure;
 
 public record GraphSyncResult(
     int Cards, int Domains, int Tags, int Mechanics,
-    int Sections = 0, int Concepts = 0, int Errata = 0, int Bans = 0, int Governed = 0);
+    int Sections, int Concepts, int Claims, int Sources, int Errata, int Changes,
+    int Relations, int Rulings, int MiningRuns = 0, int Assertions = 0,
+    int Interactions = 0, int Conditions = 0,
+    RelatesToWriteTally? RelationEdges = null, RelatesToWriteTally? QualifierCacheEdges = null)
+{
+    /// <summary>Waarschuwingstekst wanneer een van de twee RELATES_TO-rondes
+    /// rijen aanbood die géén edge werden (#321, ADR-20): het verschil met het
+    /// aanbod, per oorzaak. <c>null</c> = alles geland (of niets aangeboden).
+    /// Aanroepers die hun eigen samenvatting bouwen (JobCatalog,
+    /// SetReleaseService, AdminEndpoints) horen dit veld te gebruiken — een
+    /// resultaat-record met de uitval erin helpt niets als de aanroeper hem
+    /// negeert (#282-review).</summary>
+    public string? RelationsDropNote
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (RelationEdges is { Dropped: > 0 } r)
+                parts.Add($"relaties {r.Written} van {r.Offered} geschreven ({r.OorzaakTekst()})");
+            if (QualifierCacheEdges is { Dropped: > 0 } c)
+                parts.Add($"qualifier-cache {c.Written} van {c.Offered} geschreven ({c.OorzaakTekst()})");
+            return parts.Count == 0
+                ? null
+                : "RELATES_TO onvolledig geprojecteerd: " + string.Join("; ", parts);
+        }
+    }
+}
 
 /// <summary>Neo4j-sync met batched UNWIND (audit-fix: de PoP deed ~4 queries
-/// per kaart). Tag ≠ Mechanic: facties/tribes worden (:Tag), geminede
-/// spelmechanieken (:Mechanic). Parameters als dictionaries — de driver
-/// serialiseert geen anonymous types in collecties.
-///
-/// Sinds #377 is dit een échte kennisgraaf: naast kaartfacetten gaan ook
-/// regelsecties (met hun hiërarchie), primer-concepten, errata en bans mee,
-/// en leidt Neo4j GOVERNED_BY af uit HAS_MECHANIC + DEFINES. De structuur
-/// volgt GraphOntology — relaties die daar niet in staan komen er niet in.</summary>
+/// per kaart; dit zijn er een handvol totaal). Tag ≠ Mechanic: facties/tribes
+/// worden (:Tag), geminede spelmechanieken (:Mechanic). Parameters als
+/// dictionaries — de driver serialiseert geen anonymous types in collecties.
+/// Sinds #104 projecteert dezelfde transactionele rebuild ook de kennislagen
+/// (docs/BRAIN.md §2.2): RuleSection (+PART_OF), Concept (+EXPLAINS), Claim
+/// (+ABOUT/SUPPORTED_BY, alleen accepted/unreviewed), Source, Erratum
+/// (+SUPERSEDES) en Change (+AFFECTS); elke knoop draagt een ref-property
+/// volgens de BrainRef-conventie (§2.1). Sinds #116 ook de dynamische
+/// LLM-relaties als RELATES_TO {kind, trust, explanation, status} — via de
+/// reviewpoort (RelationProjection), nooit rechtstreeks. Sinds #191 ook
+/// geverifieerde rulings als Ruling (+ABOUT/SUPPORTED_BY, alleen
+/// status=verified) — hetzelfde Claim-patroon, via RulingTopicMapper.</summary>
 public class GraphSyncService(RbRulesDbContext db, IDriver driver)
 {
-    /// <summary>Per mechaniek de meest algemene secties die hem beschrijven.</summary>
-    private const int DefiningSectionsPerMechanic = 3;
-
-    public async Task<GraphSyncResult> SyncAsync(
-        Action<string>? progress = null, CancellationToken ct = default)
+    public async Task<GraphSyncResult> SyncAsync(CancellationToken ct = default)
     {
-        progress?.Invoke("kaarten en facetten verzamelen");
-
         // Alleen canonieke printings (#57): alt-arts zijn dezelfde kaart in
         // het spel en horen niet als losse knopen in de graph. Projectie
         // zonder embedding-vectoren (#43).
@@ -40,355 +65,809 @@ public class GraphSyncService(RbRulesDbContext db, IDriver driver)
                 SetId = c.SetId, SetLabel = c.SetLabel,
             })
             .ToListAsync(ct);
-        var canonicalIds = cards.Select(c => c.RiftboundId).ToHashSet();
 
-        // Variant → canonieke printing, zodat errata en bans die aan een
-        // alt-art hangen op de juiste knoop landen.
-        var canonicalOf = await db.Cards.AsNoTracking()
-            .Select(c => new { c.RiftboundId, c.VariantOf })
-            .ToDictionaryAsync(c => c.RiftboundId, c => c.VariantOf ?? c.RiftboundId, ct);
+        // Naam→canoniek-id-lookup voor de mappers: álle printings, zodat een
+        // claim of erratum dat aan een alt-art hangt op de canonieke knoop
+        // uitkomt.
+        var allCards = await db.Cards.AsNoTracking()
+            .Select(c => new { c.RiftboundId, c.Name, c.VariantOf })
+            .ToListAsync(ct);
+
+        var sources = await db.Sources.AsNoTracking()
+            .OrderByDescending(s => s.Rank)
+            .Select(s => new { s.Id, s.Name, s.TrustTier, s.Rank, s.Url })
+            .ToListAsync(ct);
+
+        // Sectie-knopen: één per (bron, §-code); de chunk-splitsing (zelfde
+        // code in meerdere chunks) is een opslagdetail en vouwt hier samen.
+        // Voorkeursvolgorde op bron-rank: bij een code die in meerdere
+        // bronnen bestaat wijzen mappers naar de hoogst gerankte bron.
+        var rankBySource = sources.ToDictionary(s => s.Id, s => s.Rank);
+        var sections = (await db.RuleChunks.AsNoTracking()
+                .Where(r => r.SectionCode != null && r.SectionCode != "")
+                .Select(r => new { r.SourceId, Code = r.SectionCode! })
+                .Distinct()
+                .ToListAsync(ct))
+            .OrderByDescending(s => rankBySource.GetValueOrDefault(s.SourceId))
+            .ThenBy(s => s.SourceId).ThenBy(s => s.Code)
+            .ToList();
+
+        // Defensief uniek op topic: de ref is de unieke sleutel in de graph.
+        var concepts = (await db.KnowledgeDocs.AsNoTracking()
+                .Where(k => k.Kind == "primer")
+                .Select(k => new { k.Topic, k.Title, k.Status, k.SectionRefs })
+                .ToListAsync(ct))
+            .GroupBy(k => k.Topic).Select(g => g.First())
+            .ToList();
+
+        // Scope-keuze (docs/BRAIN.md §2.2): alleen accepted/unreviewed claims
+        // — rejected/superseded blijven in Postgres, zodat geen tool per
+        // ongeluk weerlegde kennis als buurknoop presenteert.
+        var claims = await db.Claims.AsNoTracking()
+            .Where(c => c.Status == "accepted" || c.Status == "unreviewed")
+            .Select(c => new
+            {
+                c.Id, c.TopicType, c.TopicRef, c.Statement,
+                c.Corroboration, c.TrustScore, c.Status, c.OfficialStatus,
+            })
+            .ToListAsync(ct);
+
+        var claimSources = await db.ClaimSources.AsNoTracking()
+            .Where(s => s.Claim!.Status == "accepted" || s.Claim!.Status == "unreviewed")
+            .Select(s => new { s.ClaimId, s.SourceId })
+            .Distinct()
+            .ToListAsync(ct);
+
+        var errata = await db.Errata.AsNoTracking()
+            .Select(e => new { e.Id, e.CardName, e.CardRiftboundId })
+            .ToListAsync(ct);
+
+        // Bewust ALLE changes, ook geconsolideerde secundairen (#206): de
+        // graph is de volledige, ongefilterde brontrail — consolidatie is
+        // feed-presentatie, geen kennisrelatie (ARCHITECTURE §6.3).
+        var changes = await db.Changes.AsNoTracking()
+            .Select(c => new { c.Id, c.ChangeType, c.Severity, c.DetectedAt, c.Summary, c.Meaning, c.Diff })
+            .ToListAsync(ct);
+
+        // Rulings (#191): alleen verified — unverified/rejected zijn geen
+        // kennis en blijven Postgres-only, zelfde kennislagen-discipline als
+        // de accepted/unreviewed-scope hierboven voor Claim.
+        var rulings = await db.Corrections.AsNoTracking()
+            .Where(c => c.Status == "verified")
+            .Select(c => new
+            {
+                c.Id, c.Scope, c.Ref, c.Text, c.Question, c.Provenance,
+                c.SourceRef, c.VerifiedAt,
+            })
+            .ToListAsync(ct);
+
+        // Provenance-ruggengraat (fase 0a, #233): PROV-O-Activity + Assertion.
+        // Postgres is de bron; deze projectie is idempotent herbouwbaar. De
+        // Assertion draagt in Postgres altijd WAS_GENERATED_BY + DERIVED_FROM
+        // (schrijfpoort), dus de edges hieronder resolveren per constructie.
+        var miningRuns = await db.MiningRuns.AsNoTracking()
+            .Select(r => new { r.Id, r.Kind, r.LlmModel, r.PromptVersion, r.StartedAt, r.CompletedAt })
+            .ToListAsync(ct);
+        var assertions = await db.Assertions.AsNoTracking()
+            .Select(a => new
+            {
+                a.Id, a.Subject, a.FactKind, a.MiningRunId, a.DerivedFromRef,
+                a.Model, a.EmbeddingModel, a.EmbeddingDim, a.Verifier, a.Verdict, a.AssertedAt,
+            })
+            .ToListAsync(ct);
+
+        // Reïficatie & gekwalificeerde relaties (fase 2, #226): de gereïficeerde
+        // interacties (SoT in Postgres) + hun condities → :Interaction/:Condition
+        // + de gedenormaliseerde RELATES_TO-qualifier-cache. Rejected interacties
+        // leven alleen als tombstone, niet als knoop (InteractionProjection).
+        var interactions = await db.Interactions.AsNoTracking()
+            .Include(x => x.Conditions)
+            .Where(x => x.Status != InteractionStatus.Rejected)
+            .ToListAsync(ct);
+        var interactionRows = InteractionProjection.BuildProjectionRows(interactions);
+
+        // Dynamische relaties (#116): LLM-relaties gaan nooit rechtstreeks de
+        // graph in — hier projecteert de rebuild wat de reviewpoort doorlaat.
+        // RelationProjection (Domain, getest): rejected nooit; accepted en
+        // unreviewed (status als edge-property) alleen met een geaccepteerd
+        // kind (seed + geaccepteerde RelationKinds).
+        var acceptedKindSet = RelationProjection.AcceptedKindSet(
+            await db.RelationKinds.AsNoTracking()
+                .Where(k => k.Status == "accepted")
+                .Select(k => k.Kind)
+                .ToListAsync(ct));
+        var relations = (await db.Relations.AsNoTracking()
+                .Select(r => new { r.FromRef, r.ToRef, r.Kind, r.Explanation, r.Trust, r.Status })
+                .ToListAsync(ct))
+            .Where(r => RelationProjection.ShouldProject(r.Status, r.Kind, acceptedKindSet))
+            .ToList();
+
+        // Pure mappers (Domain): topic→ref voor claims, naam/§-match voor
+        // change-AFFECTS. Niet te matchen doelen ⇒ knoop zonder edge.
+        var topicMapper = ClaimTopicMapper.Create(
+            allCards.Select(c => (c.RiftboundId, c.Name, c.VariantOf)),
+            cards.SelectMany(c => c.Mechanics ?? []),
+            sections.Select(s => (s.SourceId, s.Code)),
+            concepts.Select(k => (k.Topic, k.Title)));
+        var affectsMapper = ChangeAffectsMapper.Create(
+            cards.Select(c => (c.RiftboundId, c.Name)),
+            sections.Select(s => (s.SourceId, s.Code)));
 
         var cardRows = cards.Select(c => (object)new Dictionary<string, object?>
         {
             ["id"] = c.RiftboundId,
+            ["ref"] = BrainRef.Card(c.RiftboundId).Format(),
             ["name"] = c.Name,
             ["type"] = c.Type,
             ["rarity"] = c.Rarity,
             ["energy"] = c.Energy,
             ["might"] = c.Might,
             ["set"] = c.SetId,
+            ["setRef"] = c.SetId is null ? null : BrainRef.Set(c.SetId).Format(),
             ["setLabel"] = c.SetLabel,
         }).ToList();
 
-        var domainPairs = Pairs(cards, c => c.Domains);
-        var tagPairs = Pairs(cards, c => c.Tags);
-        var mechanicPairs = Pairs(cards, c => c.Mechanics ?? []);
+        var domainPairs = Pairs(cards, c => c.Domains, BrainRef.Domain);
+        var tagPairs = Pairs(cards, c => c.Tags, BrainRef.Tag);
+        var mechanicPairs = MechanicPairs(cards);
+
+        var sectionRows = sections.Select(s => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Section(s.SourceId, s.Code).Format(),
+            ["code"] = s.Code,
+            ["sourceId"] = s.SourceId,
+        }).ToList();
+
+        // PART_OF: kind → dichtstbijzijnde bestáánde ouder binnen dezelfde
+        // bron ("466.2.c" hangt aan "466.2", of aan "466" als het
+        // tussenniveau geen eigen tekst heeft).
+        var partOfPairs = new List<object>();
+        foreach (var group in sections.GroupBy(s => s.SourceId))
+        {
+            var codes = group.Select(s => s.Code).ToHashSet();
+            foreach (var s in group)
+            {
+                var parent = RuleSectionParser.ParentCodes(s.Code)
+                    .Reverse().FirstOrDefault(codes.Contains);
+                if (parent is null) continue;
+                partOfPairs.Add(new Dictionary<string, object?>
+                {
+                    ["child"] = BrainRef.Section(s.SourceId, s.Code).Format(),
+                    ["parent"] = BrainRef.Section(s.SourceId, parent).Format(),
+                });
+            }
+        }
+
+        var conceptRows = concepts.Select(k => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Concept(k.Topic).Format(),
+            ["topic"] = k.Topic,
+            ["title"] = k.Title,
+            ["status"] = k.Status,
+        }).ToList();
+
+        // EXPLAINS: KnowledgeDoc.SectionRefs (komma-gescheiden §-codes) →
+        // sectie-knopen. Codes die (nog) geen chunk hebben vallen stil weg.
+        var explainsPairs = new List<object>();
+        var explainsSeen = new HashSet<(string, string)>();
+        foreach (var k in concepts)
+        {
+            var codes = (k.SectionRefs ?? "").Split(',',
+                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            foreach (var code in codes)
+            {
+                if (topicMapper.ResolveSection(code) is not { } target) continue;
+                if (!explainsSeen.Add((k.Topic, target.Key))) continue;
+                explainsPairs.Add(new Dictionary<string, object?>
+                {
+                    ["concept"] = BrainRef.Concept(k.Topic).Format(),
+                    ["section"] = target.Format(),
+                });
+            }
+        }
+
+        var sourceRows = sources.Select(s => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Source(s.Id).Format(),
+            ["id"] = s.Id,
+            ["name"] = s.Name,
+            ["trustTier"] = (int)s.TrustTier,
+        }).ToList();
+
+        var claimRows = claims.Select(c => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Claim(c.Id).Format(),
+            ["statement"] = c.Statement,
+            ["corroboration"] = c.Corroboration,
+            ["trustScore"] = c.TrustScore,
+            ["status"] = c.Status,
+            ["officialStatus"] = c.OfficialStatus,
+        }).ToList();
+
+        // ABOUT per doelsoort (kaart op id, mechaniek op name, sectie/concept
+        // op ref — allemaal constraint-gedekte sleutels). Geen match = claim
+        // zonder ABOUT-edge, per ontwerp.
+        var aboutCard = new List<object>();
+        var aboutMechanic = new List<object>();
+        var aboutSection = new List<object>();
+        var aboutConcept = new List<object>();
+        foreach (var c in claims)
+        {
+            if (topicMapper.Resolve(c.TopicType, c.TopicRef) is not { } target) continue;
+            var pair = (object)new Dictionary<string, object?>
+            {
+                ["claim"] = BrainRef.Claim(c.Id).Format(),
+                ["target"] = target.Kind is BrainRefKind.Card or BrainRefKind.Mechanic
+                    ? target.Key : target.Format(),
+            };
+            (target.Kind switch
+            {
+                BrainRefKind.Card => aboutCard,
+                BrainRefKind.Mechanic => aboutMechanic,
+                BrainRefKind.Section => aboutSection,
+                _ => aboutConcept,
+            }).Add(pair);
+        }
+
+        var supportedByPairs = claimSources.Select(s => (object)new Dictionary<string, object?>
+        {
+            ["claim"] = BrainRef.Claim(s.ClaimId).Format(),
+            ["source"] = BrainRef.Source(s.SourceId).Format(),
+        }).ToList();
+
+        var rulingRows = rulings.Select(r => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Ruling(r.Id).Format(),
+            ["text"] = r.Text,
+            ["question"] = r.Question,
+            ["kind"] = RulingKind.FromProvenance(r.Provenance),
+            ["verifiedAt"] = r.VerifiedAt?.UtcDateTime.ToString("o"),
+        }).ToList();
+
+        // ABOUT: zelfde resolutie als Claim, via RulingTopicMapper (Scope →
+        // gedeeld topic-vocabulaire → ClaimTopicMapper.Resolve). Scope
+        // "answer" (chat-ruling zonder anker) en de review-notitie-
+        // promotiescopes "claim"/"relation" resolven nooit ⇒ knoop zonder
+        // ABOUT-edge, per ontwerp (zelfde gedrag als een niet-matchende claim).
+        var rulingAboutCard = new List<object>();
+        var rulingAboutMechanic = new List<object>();
+        var rulingAboutSection = new List<object>();
+        var rulingAboutConcept = new List<object>();
+        foreach (var r in rulings)
+        {
+            if (RulingTopicMapper.Resolve(topicMapper, r.Scope, r.Ref) is not { } target) continue;
+            var pair = (object)new Dictionary<string, object?>
+            {
+                ["ruling"] = BrainRef.Ruling(r.Id).Format(),
+                ["target"] = target.Kind is BrainRefKind.Card or BrainRefKind.Mechanic
+                    ? target.Key : target.Format(),
+            };
+            (target.Kind switch
+            {
+                BrainRefKind.Card => rulingAboutCard,
+                BrainRefKind.Mechanic => rulingAboutMechanic,
+                BrainRefKind.Section => rulingAboutSection,
+                _ => rulingAboutConcept,
+            }).Add(pair);
+        }
+
+        // SUPPORTED_BY: SourceRef (#166, de "waar besloten"-URL/citatie) →
+        // Source, via dezelfde genormaliseerde URL-kandidaten als het
+        // bron-dossier (#171, SourceScout.UrlCandidates). sources staat al op
+        // Rank aflopend (zie hierboven) — TryAdd laat bij een gedeelde URL
+        // (#175) dus de hoogst gerankte bron winnen. Geen match (vrije
+        // citatie zonder URL, of onbekende bron) ⇒ knoop zonder edge.
+        var sourceIdByUrl = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var s in sources)
+            foreach (var candidate in SourceScout.UrlCandidates(s.Url))
+                sourceIdByUrl.TryAdd(candidate, s.Id);
+        var rulingSupportedByPairs = new List<object>();
+        foreach (var r in rulings)
+        {
+            if (r.SourceRef is null || !sourceIdByUrl.TryGetValue(r.SourceRef, out var sourceId))
+                continue;
+            rulingSupportedByPairs.Add(new Dictionary<string, object?>
+            {
+                ["ruling"] = BrainRef.Ruling(r.Id).Format(),
+                ["source"] = BrainRef.Source(sourceId).Format(),
+            });
+        }
+
+        var erratumRows = errata.Select(e => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Erratum(e.Id).Format(),
+            ["cardName"] = e.CardName,
+        }).ToList();
+
+        // SUPERSEDES: het opgeslagen id kan een variant-printing zijn
+        // (naam-match bij de extractie) — resolven naar canoniek; lukt dat
+        // niet, dan alsnog via de kaartnaam. Geen match = knoop zonder edge.
+        var canonicalIds = cards.Select(c => c.RiftboundId).ToHashSet();
+        var variantOfById = allCards.Where(c => c.VariantOf != null)
+            .ToDictionary(c => c.RiftboundId, c => c.VariantOf!);
+        var supersedesPairs = new List<object>();
+        foreach (var e in errata)
+        {
+            var cardId = e.CardRiftboundId is { } id
+                ? (canonicalIds.Contains(id) ? id : variantOfById.GetValueOrDefault(id))
+                : null;
+            cardId ??= topicMapper.Resolve("card", e.CardName) is { } byName ? byName.Key : null;
+            if (cardId is null) continue;
+            supersedesPairs.Add(new Dictionary<string, object?>
+            {
+                ["erratum"] = BrainRef.Erratum(e.Id).Format(),
+                ["cardId"] = cardId,
+            });
+        }
+
+        var changeRows = changes.Select(c => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Change(c.Id).Format(),
+            ["changeType"] = c.ChangeType,
+            ["severity"] = c.Severity,
+            ["detectedAt"] = c.DetectedAt.UtcDateTime.ToString("o"),
+        }).ToList();
+
+        var relationRows = relations.Select(r => (object)new Dictionary<string, object?>
+        {
+            ["from"] = r.FromRef,
+            ["to"] = r.ToRef,
+            ["kind"] = r.Kind,
+            ["trust"] = r.Trust,
+            ["explanation"] = r.Explanation,
+            ["status"] = r.Status,
+        }).ToList();
+
+        var miningRunRows = miningRuns.Select(r => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.MiningRun(r.Id).Format(),
+            ["id"] = r.Id,
+            ["kind"] = r.Kind,
+            ["llmModel"] = r.LlmModel,
+            ["promptVersion"] = r.PromptVersion,
+            ["startedAt"] = r.StartedAt.UtcDateTime.ToString("o"),
+            ["completedAt"] = r.CompletedAt?.UtcDateTime.ToString("o"),
+        }).ToList();
+
+        var assertionRows = assertions.Select(a => (object)new Dictionary<string, object?>
+        {
+            ["ref"] = BrainRef.Assertion(a.Id).Format(),
+            ["subject"] = a.Subject,
+            ["factKind"] = a.FactKind,
+            ["run"] = BrainRef.MiningRun(a.MiningRunId).Format(),
+            ["derivedFrom"] = a.DerivedFromRef,
+            ["model"] = a.Model,
+            ["embeddingModel"] = a.EmbeddingModel,
+            ["embeddingDim"] = a.EmbeddingDim,
+            ["verifier"] = a.Verifier,
+            ["verdict"] = a.Verdict,
+            ["assertedAt"] = a.AssertedAt.UtcDateTime.ToString("o"),
+        }).ToList();
+
+        var affectsSection = new List<object>();
+        var affectsCard = new List<object>();
+        foreach (var c in changes)
+        {
+            // Gedeelde "betrokken"-definitie met de kennis-hertoets (#119).
+            var text = ChangeAffectsMapper.AffectsText(c.Summary, c.Meaning, c.Diff);
+            foreach (var target in affectsMapper.Resolve(c.ChangeType, text))
+            {
+                (target.Kind == BrainRefKind.Card ? affectsCard : affectsSection)
+                    .Add((object)new Dictionary<string, object?>
+                    {
+                        ["change"] = BrainRef.Change(c.Id).Format(),
+                        ["target"] = target.Kind == BrainRefKind.Card
+                            ? target.Key : target.Format(),
+                    });
+            }
+        }
 
         await using var session = driver.AsyncSession();
 
-        // Eerder gesyncte variant-knopen opruimen (#57) — de graph is vóór
-        // de variantgroepering gevuld.
-        await session.RunAsync(
+        // Eén transactie rond de hele rebuild (conventie): opruimen en de
+        // nieuwe stand schrijven slagen of falen samen — een fout halverwege
+        // mag geen half leeggeruimde graph achterlaten. Dispose zonder commit
+        // = rollback.
+        await using var tx = await session.BeginTransactionAsync();
+
+        // Knopen die geen canonieke kaart (meer) zijn opruimen (#57): de graph
+        // is vóór de variantgroepering gevuld, en ook een latere canonical-
+        // wissel zou het oude id als wees achterlaten.
+        await tx.RunAsync(
             "MATCH (c:Card) WHERE NOT c.id IN $ids DETACH DELETE c",
             new Dictionary<string, object>
             {
-                ["ids"] = canonicalIds.Select(id => (object)id).ToList(),
+                ["ids"] = cards.Select(c => (object)c.RiftboundId).ToList(),
             });
 
-        await session.RunAsync(
+        await tx.RunAsync(
             """
             UNWIND $rows AS row
             MERGE (c:Card {id: row.id})
-              SET c.name = row.name, c.type = row.type, c.rarity = row.rarity,
-                  c.energy = row.energy, c.might = row.might
+              SET c.ref = row.ref, c.name = row.name, c.type = row.type,
+                  c.rarity = row.rarity, c.energy = row.energy, c.might = row.might
             WITH c, row WHERE row.set IS NOT NULL
             MERGE (s:Set {id: row.set}) ON CREATE SET s.label = row.setLabel
+            SET s.ref = row.setRef
             MERGE (c)-[:FROM_SET]->(s)
             """,
             new Dictionary<string, object> { ["rows"] = cardRows });
 
-        await RunPairsAsync(session,
-            "MERGE (d:Domain {name: p.value}) MERGE (c)-[:HAS_DOMAIN]->(d)", domainPairs);
-        await RunPairsAsync(session,
-            "MERGE (t:Tag {name: p.value}) MERGE (c)-[:HAS_TAG]->(t)", tagPairs);
-        await RunPairsAsync(session,
-            "MERGE (m:Mechanic {name: p.value}) MERGE (c)-[:HAS_MECHANIC]->(m)", mechanicPairs);
+        await RunPairsAsync(tx, DomainMergeClause, domainPairs);
+        await RunPairsAsync(tx,
+            "MERGE (t:Tag {name: p.value}) SET t.ref = p.ref MERGE (c)-[:HAS_TAG]->(t)", tagPairs);
+        await RunPairsAsync(tx, MechanicMergeClause, mechanicPairs);
 
-        var sections = await SyncRuleSectionsAsync(session, progress, ct);
-        var defining = await SyncDefinesAsync(session, cards, progress, ct);
-        var governed = await InferGovernedByAsync(session, progress);
-        var concepts = await SyncConceptsAsync(session, progress, ct);
-        var (errata, bans) = await SyncErrataAndBansAsync(session, canonicalOf, canonicalIds, progress, ct);
+        // Facet-knopen die na de opruiming nergens meer aan hangen (bijv. een
+        // promo-set die alleen variant-printings bevatte) verdwijnen mee.
+        // Vóór de kennislaag-stappen: facetten bestaan bij gratie van kaarten,
+        // niet van claims.
+        await tx.RunAsync(
+            """
+            MATCH (n) WHERE (n:Set OR n:Domain OR n:Tag OR n:Mechanic)
+              AND NOT (n)--() DELETE n
+            """);
 
-        return new(
+        // Kennislaag-projectie (#104): volledige herbouw binnen dezelfde
+        // transactie — klein genoeg (duizenden knopen) en per definitie
+        // idempotent, geen wees-administratie per soort nodig.
+        await tx.RunAsync(
+            """
+            MATCH (n) WHERE n:RuleSection OR n:Concept OR n:Claim
+              OR n:Source OR n:Erratum OR n:Change OR n:Ruling
+              OR n:MiningRun OR n:Assertion OR n:Interaction OR n:Condition
+            DETACH DELETE n
+            """);
+
+        // RELATES_TO (#116) volledig herbouwen: de DETACH DELETE hierboven
+        // ruimt alleen edges aan kennislaag-knopen op — tussen persistente
+        // knopen (Card/Mechanic/…) zouden verwijderde of inmiddels verworpen
+        // relaties anders blijven hangen. Deterministisch: de edges hieronder
+        // zijn exact wat de reviewpoort nú doorlaat.
+        await tx.RunAsync("MATCH ()-[r:RELATES_TO]->() DELETE r");
+
+        await RunRowsAsync(tx,
+            "CREATE (r:RuleSection {ref: row.ref, code: row.code, sourceId: row.sourceId})",
+            sectionRows);
+        await tx.RunAsync(
+            """
+            UNWIND $pairs AS p
+            MATCH (child:RuleSection {ref: p.child})
+            MATCH (parent:RuleSection {ref: p.parent})
+            MERGE (child)-[:PART_OF]->(parent)
+            """,
+            new Dictionary<string, object> { ["pairs"] = partOfPairs });
+
+        await RunRowsAsync(tx,
+            "CREATE (k:Concept {ref: row.ref, topic: row.topic, title: row.title, status: row.status})",
+            conceptRows);
+        await tx.RunAsync(
+            """
+            UNWIND $pairs AS p
+            MATCH (k:Concept {ref: p.concept})
+            MATCH (r:RuleSection {ref: p.section})
+            MERGE (k)-[:EXPLAINS]->(r)
+            """,
+            new Dictionary<string, object> { ["pairs"] = explainsPairs });
+
+        await RunRowsAsync(tx,
+            "CREATE (s:Source {ref: row.ref, id: row.id, name: row.name, trustTier: row.trustTier})",
+            sourceRows);
+
+        await RunRowsAsync(tx,
+            """
+            CREATE (cl:Claim {ref: row.ref, statement: row.statement,
+                              corroboration: row.corroboration, trustScore: row.trustScore,
+                              status: row.status, officialStatus: row.officialStatus})
+            """,
+            claimRows);
+        await RunEdgesAsync(tx, "MATCH (cl:Claim {ref: p.claim}) MATCH (t:Card {id: p.target}) MERGE (cl)-[:ABOUT]->(t)", aboutCard);
+        await RunEdgesAsync(tx, "MATCH (cl:Claim {ref: p.claim}) MATCH (t:Mechanic {name: p.target}) MERGE (cl)-[:ABOUT]->(t)", aboutMechanic);
+        await RunEdgesAsync(tx, "MATCH (cl:Claim {ref: p.claim}) MATCH (t:RuleSection {ref: p.target}) MERGE (cl)-[:ABOUT]->(t)", aboutSection);
+        await RunEdgesAsync(tx, "MATCH (cl:Claim {ref: p.claim}) MATCH (t:Concept {ref: p.target}) MERGE (cl)-[:ABOUT]->(t)", aboutConcept);
+        await RunEdgesAsync(tx, "MATCH (cl:Claim {ref: p.claim}) MATCH (s:Source {ref: p.source}) MERGE (cl)-[:SUPPORTED_BY]->(s)", supportedByPairs);
+
+        await RunRowsAsync(tx,
+            """
+            CREATE (rl:Ruling {ref: row.ref, text: row.text, question: row.question,
+                               kind: row.kind, verifiedAt: row.verifiedAt})
+            """,
+            rulingRows);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (t:Card {id: p.target}) MERGE (rl)-[:ABOUT]->(t)", rulingAboutCard);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (t:Mechanic {name: p.target}) MERGE (rl)-[:ABOUT]->(t)", rulingAboutMechanic);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (t:RuleSection {ref: p.target}) MERGE (rl)-[:ABOUT]->(t)", rulingAboutSection);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (t:Concept {ref: p.target}) MERGE (rl)-[:ABOUT]->(t)", rulingAboutConcept);
+        await RunEdgesAsync(tx, "MATCH (rl:Ruling {ref: p.ruling}) MATCH (s:Source {ref: p.source}) MERGE (rl)-[:SUPPORTED_BY]->(s)", rulingSupportedByPairs);
+
+        await RunRowsAsync(tx,
+            "CREATE (e:Erratum {ref: row.ref, cardName: row.cardName})",
+            erratumRows);
+        await RunEdgesAsync(tx, "MATCH (e:Erratum {ref: p.erratum}) MATCH (c:Card {id: p.cardId}) MERGE (e)-[:SUPERSEDES]->(c)", supersedesPairs);
+
+        await RunRowsAsync(tx,
+            """
+            CREATE (ch:Change {ref: row.ref, changeType: row.changeType,
+                               severity: row.severity, detectedAt: row.detectedAt})
+            """,
+            changeRows);
+        await RunEdgesAsync(tx, "MATCH (ch:Change {ref: p.change}) MATCH (t:RuleSection {ref: p.target}) MERGE (ch)-[:AFFECTS]->(t)", affectsSection);
+        await RunEdgesAsync(tx, "MATCH (ch:Change {ref: p.change}) MATCH (t:Card {id: p.target}) MERGE (ch)-[:AFFECTS]->(t)", affectsCard);
+
+        // Provenance-knopen (fase 0a, #233): eerst de MiningRun-activities, dan
+        // de Assertions met hun WAS_GENERATED_BY- en DERIVED_FROM-edges. De
+        // DERIVED_FROM-doelen (Source/RuleSection/Card/…) bestaan op dit punt al,
+        // dus een label-loze ref-match resolveert. Dit is sinds #317 de ENIGE
+        // label-loze ref-match die overblijft: bewust, want DERIVED_FROM is
+        // provenance (buiten de TBox) met heterogene doelen — RELATES_TO draagt
+        // zijn WHERE-label-disjunctie hieronder wél, omdat dáár een declaratie
+        // tegenover staat.
+        await RunRowsAsync(tx,
+            """
+            CREATE (r:MiningRun {ref: row.ref, id: row.id, kind: row.kind,
+                                 llmModel: row.llmModel, promptVersion: row.promptVersion,
+                                 startedAt: row.startedAt, completedAt: row.completedAt})
+            """,
+            miningRunRows);
+        await RunRowsAsync(tx,
+            """
+            CREATE (a:Assertion {ref: row.ref, subject: row.subject, factKind: row.factKind,
+                                 derivedFrom: row.derivedFrom, model: row.model,
+                                 embeddingModel: row.embeddingModel, embeddingDim: row.embeddingDim,
+                                 verifier: row.verifier, verdict: row.verdict, assertedAt: row.assertedAt})
+            """,
+            assertionRows);
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (a:Assertion {ref: row.ref})
+            MATCH (run:MiningRun {ref: row.run})
+            MERGE (a)-[:WAS_GENERATED_BY]->(run)
+            """,
+            new Dictionary<string, object> { ["rows"] = assertionRows });
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (a:Assertion {ref: row.ref})
+            MATCH (src {ref: row.derivedFrom})
+            MERGE (a)-[:DERIVED_FROM]->(src)
+            """,
+            new Dictionary<string, object> { ["rows"] = assertionRows });
+
+        // RELATES_TO als laatste: beide eindpunten kunnen elke van de vijf
+        // gemeten knoopsoorten zijn, dus pas nadat álle knopen bestaan. Match op
+        // de ref-property (per constructie globaal uniek, §2.1) — een label-loze
+        // property-match is een scan, maar de aantallen zijn klein (§2.2) en de
+        // rebuild draait toch al batched. De WHERE-label-disjunctie (#317) dwingt
+        // de gedeclareerde domain/range af: de live graaf droeg twaalf
+        // label-combinaties, allemaal binnen Card/Mechanic/Concept/RuleSection/
+        // Claim, en een ref die naar een knoop búíten die vijf wijst wordt bewust
+        // NIET geschreven — dat ís de afdwinging (één disjunctie per kant, geen
+        // 5×5 aan per-soort-statements: RELATES_TO is de gedenormaliseerde
+        // elk-naar-elk-link). MERGE op kind: twee kinds tussen hetzelfde paar
+        // zijn twee edges. Refs zonder knoop (verdwenen mechaniek, verwijderd
+        // doc) worden — anders dan bij ABOUT — niet stil weggelaten maar
+        // GETELD (#321, ADR-20): RETURN count(r) meet wat er werkelijk landde,
+        // en het verschil met het aanbod gaat per oorzaak de run-melding in.
+        var relationsWritten = await WrittenCountAsync(await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (a {ref: row.from})
+            MATCH (b {ref: row.to})
+            WHERE (a:Card OR a:Mechanic OR a:Concept OR a:RuleSection OR a:Claim)
+              AND (b:Card OR b:Mechanic OR b:Concept OR b:RuleSection OR b:Claim)
+            MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)
+              SET r.trust = row.trust, r.explanation = row.explanation,
+                  r.status = row.status
+            RETURN count(r) AS written
+            """,
+            new Dictionary<string, object> { ["rows"] = relationRows }));
+
+        // Reïficatie & gekwalificeerde relaties (fase 2, #226): eerst de
+        // :Interaction- en :Condition-knopen (verwijderd in de DETACH DELETE
+        // hierboven, dus CREATE), dan de HAS_ROLE-/REQUIRES_CONDITION-/
+        // GOVERNED_BY-edges (fillers/secties bestaan al) en tot slot de
+        // gedenormaliseerde RELATES_TO-cache. De cache is nooit de bron — ze is
+        // volledig herbouwbaar uit deze knopen (InteractionProjection).
+        await RunRowsAsync(tx,
+            """
+            CREATE (ix:Interaction:Concept {ref: row.ref, kind: row.kind,
+                                            status: row.status, statusReason: row.statusReason})
+            """,
+            [.. interactionRows.Nodes]);
+        await RunRowsAsync(tx,
+            "CREATE (c:Condition {ref: row.ref, onKind: row.onKind, subjectRole: row.subjectRole, value: row.value, operator: row.operator})",
+            [.. interactionRows.ConditionNodes]);
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (ix:Interaction {ref: row.interaction})
+            MATCH (c:Condition {ref: row.ref})
+            MERGE (ix)-[:REQUIRES_CONDITION]->(c)
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.ConditionNodes });
+        // HAS_ROLE per filler-soort (#304), zoals ABOUT dat per doelsoort doet: de
+        // gedeclareerde range (Card/Mechanic) wordt zo door het statement zélf
+        // afgedwongen i.p.v. door een label-loze ref-match "gehoopt". Beide
+        // statements krijgen dezelfde rijen; een rij bindt alleen in het statement
+        // waarvan het label bij zijn ref-soort hoort (de andere MATCH vindt niets —
+        // hetzelfde stille-wees-gedrag als een ref zonder knoop, zie ABOUT).
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (ix:Interaction {ref: row.interaction})
+            MATCH (f:Card {ref: row.filler})
+            MERGE (ix)-[r:HAS_ROLE {role: row.role}]->(f)
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.RoleEdges });
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (ix:Interaction {ref: row.interaction})
+            MATCH (f:Mechanic {ref: row.filler})
+            MERGE (ix)-[r:HAS_ROLE {role: row.role}]->(f)
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.RoleEdges });
+        await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (ix:Interaction {ref: row.interaction})
+            MATCH (s:RuleSection {ref: row.section})
+            MERGE (ix)-[:GOVERNED_BY]->(s)
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.GovernedByEdges });
+        // Zelfde WHERE-label-disjunctie als het #116-statement hierboven (#317):
+        // de cache-edge is dezelfde RELATES_TO-bewering en draagt dus dezelfde
+        // afdwinging — en sinds #321 ook dezelfde eerlijke telling.
+        // Agent/patient-refs zijn in de praktijk card:/mechanic:, maar de poort
+        // is de declaratie, niet de gewoonte.
+        var cacheWritten = await WrittenCountAsync(await tx.RunAsync(
+            """
+            UNWIND $rows AS row
+            MATCH (a {ref: row.from})
+            MATCH (b {ref: row.to})
+            WHERE (a:Card OR a:Mechanic OR a:Concept OR a:RuleSection OR a:Claim)
+              AND (b:Card OR b:Mechanic OR b:Concept OR b:RuleSection OR b:Claim)
+            MERGE (a)-[r:RELATES_TO {kind: row.kind}]->(b)
+              SET r.window = row.window, r.actorStatus = row.actorStatus,
+                  r.costDelta = row.costDelta, r.tier = row.tier,
+                  r.reifiedOnly = row.reifiedOnly, r.source = 'interaction'
+            RETURN count(r) AS written
+            """,
+            new Dictionary<string, object> { ["rows"] = interactionRows.RelatesToCache }));
+
+        await tx.CommitAsync();
+
+        // Eerlijke RELATES_TO-telling (#321, ADR-20): het buiten-de-projectie-
+        // deel is deterministisch uit de rijen zelf bekend (de WHERE weigert
+        // zo'n eindpunt per constructie); de rest van het gat zijn refs zonder
+        // knoop. Geteld op de rijen die de statements écht kregen.
+        var relationTally = RelatesToWriteTally.Create(
+            relationRows.Count, relationsWritten,
+            relations.Count(r =>
+                !RelationProjection.CanBeEndpoint(r.FromRef, EdgeEndpoint.From) ||
+                !RelationProjection.CanBeEndpoint(r.ToRef, EdgeEndpoint.To)));
+        var cacheTally = RelatesToWriteTally.Create(
+            interactionRows.RelatesToCache.Count, cacheWritten,
+            interactionRows.RelatesToCache.Count(row =>
+                !RelationProjection.CanBeEndpoint(row["from"] as string, EdgeEndpoint.From) ||
+                !RelationProjection.CanBeEndpoint(row["to"] as string, EdgeEndpoint.To)));
+
+        var result = new GraphSyncResult(
             cardRows.Count,
             CountDistinct(domainPairs),
             CountDistinct(tagPairs),
             CountDistinct(mechanicPairs),
-            Sections: sections,
-            Concepts: concepts,
-            Errata: errata,
-            Bans: bans,
-            Governed: governed);
-    }
+            sectionRows.Count,
+            conceptRows.Count,
+            claimRows.Count,
+            sourceRows.Count,
+            erratumRows.Count,
+            changeRows.Count,
+            relationTally.Written,
+            rulingRows.Count,
+            miningRunRows.Count,
+            assertionRows.Count,
+            interactionRows.Nodes.Count,
+            interactionRows.ConditionNodes.Count,
+            relationTally,
+            cacheTally);
 
-    /// <summary>Regelsecties als knopen, met hun hiërarchie (601.2.d hangt
-    /// onder 601.2 onder 601) — die zat tot nu toe alleen impliciet in de
-    /// §-code-string.</summary>
-    private async Task<int> SyncRuleSectionsAsync(
-        IAsyncSession session, Action<string>? progress, CancellationToken ct)
-    {
-        progress?.Invoke("regelsecties naar de graaf");
-
-        var chunks = await db.RuleChunks.AsNoTracking()
-            .Where(c => c.SectionCode != null && c.SectionCode != "")
-            .OrderBy(c => c.ChunkIndex)
-            .Select(c => new { Code = c.SectionCode!, c.SourceId, c.Page, c.Text })
-            .ToListAsync(ct);
-        if (chunks.Count == 0) return 0;
-
-        var sections = chunks
-            .GroupBy(c => c.Code)
-            .Select(g =>
+        // De pijplijn schrijft zijn eigen waarschuwing (#282b): de scheduler-
+        // aanroep gooit het resultaat weg, dus alleen langs dit pad is de
+        // uitval op élke route zichtbaar. Ná de commit — een teruggerolde
+        // transactie hoort geen "deels geschreven"-melding achter te laten.
+        if (result.RelationsDropNote is { } note)
+        {
+            db.RunLogs.Add(new RunLog
             {
-                var first = g.First();
-                return new
-                {
-                    Code = g.Key,
-                    first.SourceId,
-                    first.Page,
-                    Snippet = first.Text[..Math.Min(first.Text.Length, 200)],
-                };
-            })
-            .ToList();
-
-        var rows = sections.Select(s => (object)new Dictionary<string, object?>
-        {
-            ["code"] = s.Code,
-            ["source"] = s.SourceId,
-            ["page"] = s.Page,
-            ["snippet"] = s.Snippet,
-        }).ToList();
-
-        await session.RunAsync(
-            """
-            UNWIND $rows AS row
-            MERGE (r:RuleSection {code: row.code})
-              SET r.source = row.source, r.page = row.page, r.snippet = row.snippet
-            """,
-            new Dictionary<string, object> { ["rows"] = rows });
-
-        // Directe ouder-kind-relaties; alleen als de ouder ook bestaat.
-        var codes = sections.Select(s => s.Code).ToHashSet();
-        var parentRows = sections
-            .Select(s => new { s.Code, Parent = RuleSectionParser.ParentCodes(s.Code).LastOrDefault() })
-            .Where(x => x.Parent is not null && codes.Contains(x.Parent))
-            .Select(x => (object)new Dictionary<string, object?>
-            {
-                ["parent"] = x.Parent,
-                ["child"] = x.Code,
-            })
-            .ToList();
-
-        if (parentRows.Count > 0)
-        {
-            await session.RunAsync(
-                """
-                UNWIND $rows AS row
-                MATCH (p:RuleSection {code: row.parent}), (c:RuleSection {code: row.child})
-                MERGE (p)-[:PARENT_OF]->(c)
-                """,
-                new Dictionary<string, object> { ["rows"] = parentRows });
+                Kind = "graph", Ref = "relates-to", Status = "warn", Detail = note,
+            });
+            await db.SaveChangesAsync(ct);
         }
 
-        return sections.Count;
+        return result;
     }
 
-    /// <summary>DEFINES: de meest algemene secties die een mechaniek noemen.
-    /// Korte §-codes staan hoger in de boom en zijn dus definiërender dan een
-    /// diepe subregel die het keyword terloops gebruikt.</summary>
-    private async Task<int> SyncDefinesAsync(
-        IAsyncSession session, List<Card> cards, Action<string>? progress, CancellationToken ct)
+    /// <summary>Leest de <c>RETURN count(r) AS written</c>-uitkomst van een
+    /// RELATES_TO-statement. Echte Neo4j levert bij een aggregatie altijd
+    /// precies één rij; een opnemende test-driver levert er nul — dan is er
+    /// niets gemeten en geeft dit <c>null</c> terug
+    /// (<see cref="RelatesToWriteTally.Create"/> valt dan terug op wat
+    /// deterministisch bekend is).</summary>
+    private static async Task<int?> WrittenCountAsync(IResultCursor cursor)
     {
-        var mechanics = cards
-            .SelectMany(c => c.Mechanics ?? [])
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(m => m.Length >= 3)
-            .ToList();
-        if (mechanics.Count == 0) return 0;
-
-        progress?.Invoke($"mechanieken koppelen aan definiërende secties ({mechanics.Count})");
-
-        var rows = new List<object>();
-        foreach (var mechanic in mechanics)
-        {
-            var codes = await db.RuleChunks.AsNoTracking()
-                .Where(c => c.SectionCode != null && EF.Functions.ILike(c.Text, $"%{mechanic}%"))
-                .Select(c => c.SectionCode!)
-                .Distinct()
-                .ToListAsync(ct);
-
-            foreach (var code in codes
-                .OrderBy(c => c.Length)
-                .ThenBy(c => c, StringComparer.Ordinal)
-                .Take(DefiningSectionsPerMechanic))
-            {
-                rows.Add(new Dictionary<string, object?> { ["code"] = code, ["mechanic"] = mechanic });
-            }
-        }
-        if (rows.Count == 0) return 0;
-
-        await session.RunAsync(
-            """
-            UNWIND $rows AS row
-            MATCH (r:RuleSection {code: row.code}), (m:Mechanic {name: row.mechanic})
-            MERGE (r)-[:DEFINES]->(m)
-            """,
-            new Dictionary<string, object> { ["rows"] = rows });
-        return rows.Count;
-    }
-
-    /// <summary>Inferentie in de graaf zelf: draagt een kaart een mechaniek
-    /// en definieert een sectie die mechaniek, dan valt de kaart onder die
-    /// sectie. Dit is precies wat een kennisgraaf toevoegt boven losse
-    /// tabellen — het feit stond nergens, maar volgt uit twee andere.</summary>
-    private static async Task<int> InferGovernedByAsync(IAsyncSession session, Action<string>? progress)
-    {
-        progress?.Invoke("afgeleide relaties berekenen (GOVERNED_BY)");
-        var cursor = await session.RunAsync(
-            """
-            MATCH (c:Card)-[:HAS_MECHANIC]->(m:Mechanic)<-[:DEFINES]-(r:RuleSection)
-            MERGE (c)-[g:GOVERNED_BY]->(r)
-              SET g.inferred = true, g.via = m.name
-            RETURN count(g) AS n
-            """);
-        var record = await cursor.SingleAsync();
-        return record["n"].As<int>();
-    }
-
-    /// <summary>Primer-concepten en de secties die ze uitleggen.</summary>
-    private async Task<int> SyncConceptsAsync(
-        IAsyncSession session, Action<string>? progress, CancellationToken ct)
-    {
-        var docs = await db.KnowledgeDocs.AsNoTracking()
-            .Where(k => k.Kind == "primer" && k.Status == "approved")
-            .Select(k => new { k.Topic, k.Title, k.SectionRefs })
-            .ToListAsync(ct);
-        if (docs.Count == 0) return 0;
-
-        progress?.Invoke($"primer-concepten naar de graaf ({docs.Count})");
-
-        var conceptRows = docs.Select(d => (object)new Dictionary<string, object?>
-        {
-            ["id"] = d.Topic,
-            ["title"] = d.Title,
-        }).ToList();
-
-        await session.RunAsync(
-            """
-            UNWIND $rows AS row
-            MERGE (c:Concept {id: row.id}) SET c.title = row.title
-            """,
-            new Dictionary<string, object> { ["rows"] = conceptRows });
-
-        var explainRows = docs
-            .SelectMany(d => (d.SectionRefs ?? "")
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Distinct()
-                .Select(code => (object)new Dictionary<string, object?>
-                {
-                    ["concept"] = d.Topic,
-                    ["code"] = code,
-                }))
-            .ToList();
-
-        if (explainRows.Count > 0)
-        {
-            await session.RunAsync(
-                """
-                UNWIND $rows AS row
-                MATCH (c:Concept {id: row.concept}), (r:RuleSection {code: row.code})
-                MERGE (c)-[:EXPLAINS]->(r)
-                """,
-                new Dictionary<string, object> { ["rows"] = explainRows });
-        }
-
-        return docs.Count;
-    }
-
-    /// <summary>Errata en bans als knopen, gekoppeld aan de canonieke kaart —
-    /// zo is een ban op één printing zichtbaar vanaf de hele variantgroep.</summary>
-    private async Task<(int Errata, int Bans)> SyncErrataAndBansAsync(
-        IAsyncSession session,
-        Dictionary<string, string> canonicalOf,
-        HashSet<string> canonicalIds,
-        Action<string>? progress,
-        CancellationToken ct)
-    {
-        progress?.Invoke("errata en bans naar de graaf");
-
-        string? Canonical(string? cardId) =>
-            cardId is not null && canonicalOf.TryGetValue(cardId, out var canonical)
-            && canonicalIds.Contains(canonical) ? canonical : null;
-
-        var errata = (await db.Errata.AsNoTracking()
-                .Where(e => e.CardRiftboundId != null)
-                .Select(e => new { e.Id, e.CardName, e.NewText, e.CardRiftboundId })
-                .ToListAsync(ct))
-            .Select(e => new { e.Id, e.CardName, e.NewText, Card = Canonical(e.CardRiftboundId) })
-            .Where(e => e.Card is not null)
-            .ToList();
-
-        if (errata.Count > 0)
-        {
-            await session.RunAsync(
-                """
-                UNWIND $rows AS row
-                MERGE (e:Erratum {id: row.id})
-                  SET e.cardName = row.cardName, e.newText = row.newText
-                WITH e, row
-                MATCH (c:Card {id: row.card})
-                MERGE (e)-[:AMENDS]->(c)
-                """,
-                new Dictionary<string, object>
-                {
-                    ["rows"] = errata.Select(e => (object)new Dictionary<string, object?>
-                    {
-                        ["id"] = $"erratum:{e.Id}",
-                        ["cardName"] = e.CardName,
-                        ["newText"] = e.NewText[..Math.Min(e.NewText.Length, 300)],
-                        ["card"] = e.Card,
-                    }).ToList(),
-                });
-        }
-
-        var bans = (await db.BanEntries.AsNoTracking()
-                .Where(b => b.CardRiftboundId != null)
-                .Select(b => new { b.Id, b.Name, b.Kind, b.CardRiftboundId })
-                .ToListAsync(ct))
-            .Select(b => new { b.Id, b.Name, b.Kind, Card = Canonical(b.CardRiftboundId) })
-            .Where(b => b.Card is not null)
-            .ToList();
-
-        if (bans.Count > 0)
-        {
-            await session.RunAsync(
-                """
-                UNWIND $rows AS row
-                MERGE (b:BanEntry {id: row.id})
-                  SET b.name = row.name, b.kind = row.kind
-                WITH b, row
-                MATCH (c:Card {id: row.card})
-                MERGE (b)-[:BANS]->(c)
-                """,
-                new Dictionary<string, object>
-                {
-                    ["rows"] = bans.Select(b => (object)new Dictionary<string, object?>
-                    {
-                        ["id"] = $"ban:{b.Id}",
-                        ["name"] = b.Name,
-                        ["kind"] = b.Kind,
-                        ["card"] = b.Card,
-                    }).ToList(),
-                });
-        }
-
-        return (errata.Count, bans.Count);
+        if (!await cursor.FetchAsync()) return null;
+        return (int)cursor.Current["written"].As<long>();
     }
 
     private static async Task RunPairsAsync(
-        IAsyncSession session, string mergeClause, List<object> pairs)
+        IAsyncQueryRunner runner, string mergeClause, List<object> pairs)
     {
-        await session.RunAsync(
+        await runner.RunAsync(
             $"UNWIND $pairs AS p MATCH (c:Card {{id: p.id}}) {mergeClause}",
             new Dictionary<string, object> { ["pairs"] = pairs });
     }
 
-    private static List<object> Pairs(IEnumerable<Card> cards, Func<Card, string[]> selector) =>
+    private static async Task RunRowsAsync(
+        IAsyncQueryRunner runner, string createClause, List<object> rows)
+    {
+        await runner.RunAsync(
+            $"UNWIND $rows AS row {createClause}",
+            new Dictionary<string, object> { ["rows"] = rows });
+    }
+
+    private static async Task RunEdgesAsync(
+        IAsyncQueryRunner runner, string matchMergeClause, List<object> pairs)
+    {
+        await runner.RunAsync(
+            $"UNWIND $pairs AS p {matchMergeClause}",
+            new Dictionary<string, object> { ["pairs"] = pairs });
+    }
+
+    /// <summary>De MERGE-clausule voor een kaart-facet-projectie, opgebouwd uit de
+    /// ontologie (<see cref="OntologySchema"/>) — de ÉNE schema-bron (#227). Edge-naam
+    /// én knooplabel (de range van de relatie) komen dus uit het register in plaats van
+    /// uit een losse string-literal hier.
+    ///
+    /// Waarom (#274): het schema noemde deze relaties HAS_KEYWORD en IN_DOMAIN terwijl
+    /// de projectie al jaren HAS_MECHANIC en HAS_DOMAIN schreef. Twee namen voor
+    /// dezelfde relatie maakt het schema onvalideerbaar (het beschrijft niet wat er
+    /// staat) en de reasoner inert: de uit de ontologie gegenereerde property-chain-
+    /// Cypher matchte edges en knooplabels die niemand ooit schrijft. Door het hier af
+    /// te leiden kan dat niet meer stil uiteenlopen — één naam wijzigen in de ontologie
+    /// verplaatst de projectie mee, en <c>OntologyProjectionAlignmentTests</c> pint de
+    /// canonieke namen vast. Interpolatie in Cypher is veilig: beide waarden komen uit
+    /// het compile-time schema-register, nooit uit invoer.</summary>
+    private static string FacetMergeClause(RelationType type, string alias)
+    {
+        var relation = OntologySchema.Relations[type];
+        return $"MERGE ({alias}:{relation.Range[0]} {{name: p.value}}) SET {alias}.ref = p.ref " +
+               $"MERGE (c)-[:{relation.EdgeName}]->({alias})";
+    }
+
+    /// <summary>De kaart→domein-projectie (HAS_DOMAIN → <c>:Domain</c>).</summary>
+    internal static string DomainMergeClause => FacetMergeClause(RelationType.HasDomain, "d");
+
+    /// <summary>De kaart→mechaniek-projectie (HAS_MECHANIC → <c>:Mechanic</c>).</summary>
+    internal static string MechanicMergeClause => FacetMergeClause(RelationType.HasMechanic, "m");
+
+    /// <summary>De DETERMINISTISCHE kaart→mechanic-projectie (HAS_MECHANIC): één rij
+    /// per (kaart, mechanic), recht uit <see cref="Card.Mechanics"/> — geen LLM, geen
+    /// Interaction-tabel. Als eigen, intern-zichtbare methode zodat een regressietest
+    /// (#249) kan vastleggen dat déze laag blijft bestaan: de brein-mining mag
+    /// kaart↔eigen-keyword niet meer als <c>Interaction</c> herkauwen, maar de
+    /// kaart↔keyword-structuur in de graph moet daar ongewijzigd doorheen komen —
+    /// dat netwerk ís de graph-verkenner.</summary>
+    internal static List<object> MechanicPairs(IEnumerable<Card> cards) =>
+        Pairs(cards, c => c.Mechanics ?? [], BrainRef.Mechanic);
+
+    private static List<object> Pairs(
+        IEnumerable<Card> cards, Func<Card, string[]> selector, Func<string, BrainRef> refFor) =>
         [.. cards.SelectMany(c => selector(c).Select(v => (object)new Dictionary<string, object?>
         {
             ["id"] = c.RiftboundId,
             ["value"] = v,
+            ["ref"] = refFor(v).Format(),
         }))];
 
     private static int CountDistinct(List<object> pairs) =>

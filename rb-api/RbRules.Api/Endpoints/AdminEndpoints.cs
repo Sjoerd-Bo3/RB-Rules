@@ -6,6 +6,14 @@ namespace RbRules.Api.Endpoints;
 
 public static class AdminEndpoints
 {
+    /// <summary>Melding bij een geweigerde AutoApprove-feed op een
+    /// niet-officieel domein (#167) — auto-toevoegen als trust-1 official bron
+    /// mag alleen op Riot's eigen domeinen.</summary>
+    private const string AutoApproveDomainError =
+        "AutoApprove kan alleen aan op een officieel Riot-domein "
+        + "(playriftbound.com); zet de feed op zo'n domein of laat AutoApprove uit "
+        + "— nieuwe artikelen komen dan in de reviewqueue (Bronvoorstellen).";
+
     public static void MapAdminEndpoints(this IEndpointRouteBuilder app)
     {
         // ── Beheer (X-Admin-Key) ───────────────────────────────────────
@@ -23,8 +31,8 @@ public static class AdminEndpoints
                 var r = await cards.SyncAsync();
                 db.RunLogs.Add(new RunLog
                 {
-                    Kind = "cards", Ref = r.Source, Status = "ok",
-                    Detail = $"{r.Sets} sets, {r.Cards} kaarten",
+                    Kind = "cards", Ref = r.SourceLabel, Status = "ok",
+                    Detail = $"{r.Sets} sets, {r.CardsSummary}",
                 });
                 await db.SaveChangesAsync();
                 return Results.Ok(r);
@@ -44,14 +52,10 @@ public static class AdminEndpoints
         {
             try
             {
-                var r = await pipeline.RunAsync(force ?? false);
-                db.RunLogs.Add(new RunLog
-                {
-                    Kind = "embed", Ref = "cards", Status = "ok",
-                    Detail = $"{r.Embedded} geembed, {r.Skipped} al actueel",
-                });
-                await db.SaveChangesAsync();
-                return Results.Ok(r);
+                // De pijplijn schrijft zelf de embed-regel (ok én error, #282) — voor
+                // álle aanroepers, ook de scheduler-tick die hier nooit langskomt.
+                // Hier dus geen eigen regel: dat zou een dubbele opleveren.
+                return Results.Ok(await pipeline.RunAsync(force ?? false));
             }
             catch (Exception ex)
             {
@@ -68,7 +72,10 @@ public static class AdminEndpoints
             db.RunLogs.Add(new RunLog
             {
                 Kind = "mine", Ref = "mechanics", Status = r.Failed > 0 ? "info" : "ok",
-                Detail = $"{r.Mined} gemined, {r.Failed} mislukt, {r.Remaining} resterend",
+                Detail = $"{r.Mined} gemined, {r.Failed} mislukt, {r.Remaining} resterend, " +
+                         $"{r.NewCandidates} nieuwe keyword-kandidaten, " +
+                         $"{r.LlmAdded} mechanieken uit LLM-oordeel, " +
+                         $"{r.Reconciled} kaarten hergesynchroniseerd",
             });
             await db.SaveChangesAsync();
             return Results.Ok(r);
@@ -79,10 +86,14 @@ public static class AdminEndpoints
             try
             {
                 var r = await graph.SyncAsync();
+                // De pijplijn schreef bij verlies zelf al een warn-regel (#321);
+                // deze ok-regel draagt de note mee zodat de twee elkaar niet
+                // tegenspreken in het run_log-overzicht.
                 db.RunLogs.Add(new RunLog
                 {
                     Kind = "graph", Ref = null, Status = "ok",
-                    Detail = $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics",
+                    Detail = $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics"
+                        + (r.RelationsDropNote is { } note ? $" — {note}" : ""),
                 });
                 await db.SaveChangesAsync();
                 return Results.Ok(r);
@@ -99,15 +110,8 @@ public static class AdminEndpoints
         {
             try
             {
-                var results = await pipeline.RunAsync();
-                var total = results.Sum(r => r.Chunks);
-                db.RunLogs.Add(new RunLog
-                {
-                    Kind = "embed", Ref = "rules", Status = "ok",
-                    Detail = $"{results.Count} bronnen, {total} sectie-chunks",
-                });
-                await db.SaveChangesAsync();
-                return Results.Ok(results);
+                // Ook hier schrijft de pijplijn zelf zijn embed-regel (#282).
+                return Results.Ok(await pipeline.RunAsync());
             }
             catch (Exception ex)
             {
@@ -143,167 +147,101 @@ public static class AdminEndpoints
         });
 
         // ── Levendige admin: async jobs + live status ──────────────────
+        // De jobdefinities zelf staan in JobCatalog (Infrastructure, #59).
         admin.MapPost("/jobs/{name}", (string name, JobRunner jobs) =>
         {
-            Func<IServiceProvider, Action<string>, CancellationToken, Task<string>>? work = name switch
-            {
-                // Eén knop voor alles: elke stap best-effort in de juiste volgorde —
-                // een haperende stap (Ollama/LLM even weg) stopt de rest niet.
-                "all" => async (sp, report, ct) =>
-                {
-                    var results = new List<string>();
-                    async Task Step(string label, Func<Task<string>> run)
-                    {
-                        report($"{results.Count + 1}/8 · {label}");
-                        try { results.Add($"{label}: {await run()}"); }
-                        catch (Exception ex) { results.Add($"{label}: FOUT — {ex.Message}"); }
-                    }
-
-                    await Step("kaarten", async () =>
-                    {
-                        var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(
-                            p => report($"1/8 · kaarten — {p}"), ct);
-                        return $"{r.Cards} kaarten via {r.Source}";
-                    });
-                    await Step("bronnen scannen", async () =>
-                    {
-                        var r = await sp.GetRequiredService<IngestService>().ScanAsync(
-                            onlyDue: false, progress: p => report($"2/8 · scan — {p}"), ct: ct);
-                        return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
-                    });
-                    await Step("regels indexeren", async () =>
-                    {
-                        var r = await sp.GetRequiredService<RuleChunkPipeline>().RunAsync(
-                            force: false, p => report($"3/8 · regels — {p}"), ct);
-                        return $"{r.Sum(x => x.Chunks)} chunks";
-                    });
-                    await Step("bans/errata", async () =>
-                    {
-                        var r = await sp.GetRequiredService<BanErrataSyncService>().SyncAsync(ct);
-                        return $"{r.Bans} bans, {r.Errata} errata";
-                    });
-                    await Step("embeddings", async () =>
-                    {
-                        var r = await sp.GetRequiredService<CardEmbeddingPipeline>().RunAsync(
-                            progress: p => report($"5/8 · embeddings — {p}"), ct: ct);
-                        return $"{r.Embedded} geembed";
-                    });
-                    await Step("mechanieken", async () =>
-                    {
-                        var r = await sp.GetRequiredService<MechanicMiningService>().RunAsync(
-                            progress: p => report($"6/8 · mechanieken — {p}"), ct: ct);
-                        return $"{r.Mined} gemined, {r.Remaining} resterend";
-                    });
-                    await Step("graph", async () =>
-                    {
-                        var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(
-                            p => report($"7/8 · graph — {p}"), ct);
-                        return $"{r.Cards} cards, {r.Sections} secties, {r.Governed} afgeleide relaties";
-                    });
-                    await Step("interacties", async () =>
-                    {
-                        var r = await sp.GetRequiredService<InteractionService>().MineAsync(
-                            progress: p => report($"8/8 · interacties — {p}"), ct: ct);
-                        return $"{r.Verified} geverifieerd";
-                    });
-                    return string.Join(" · ", results);
-                },
-                "scan" => async (sp, report, ct) =>
-                {
-                    var scanStart = DateTimeOffset.UtcNow;
-                    var r = await sp.GetRequiredService<IngestService>()
-                        .ScanAsync(onlyDue: false, progress: report, ct: ct);
-                    // Ook handmatige scans sturen pushmeldingen bij high-severity.
-                    try
-                    {
-                        await sp.GetRequiredService<PushService>().NotifyHighSeverityAsync(
-                            sp.GetRequiredService<RbRulesDbContext>(), scanStart, ct);
-                    }
-                    catch
-                    {
-                        // push is best-effort
-                    }
-                    return string.Join(", ", r.Select(x => $"{x.SourceId}={x.Status}"));
-                },
-                "cards" => async (sp, report, ct) =>
-                {
-                    var r = await sp.GetRequiredService<CardSyncService>().SyncAsync(report, ct);
-                    return $"{r.Sets} sets, {r.Cards} kaarten via {r.Source}";
-                },
-                "embed" => async (sp, report, ct) =>
-                {
-                    var r = await sp.GetRequiredService<CardEmbeddingPipeline>()
-                        .RunAsync(progress: report, ct: ct);
-                    return $"{r.Embedded} kaarten geembed, {r.Skipped} al actueel";
-                },
-                "mine" => async (sp, report, ct) =>
-                {
-                    var r = await sp.GetRequiredService<MechanicMiningService>()
-                        .RunAsync(progress: report, ct: ct);
-                    return $"{r.Mined} kaarten gemined, {r.Remaining} resterend";
-                },
-                "rules" => async (sp, report, ct) =>
-                {
-                    // Handmatige run = volledige herbouw, zodat parser-verbeteringen
-                    // ook op bestaande documenten landen.
-                    var r = await sp.GetRequiredService<RuleChunkPipeline>()
-                        .RunAsync(force: true, report, ct);
-                    return $"{r.Sum(x => x.Chunks)} sectie-chunks over {r.Count} bronnen (herbouwd)";
-                },
-                "bans" => async (sp, report, ct) =>
-                {
-                    report("officiële documenten structureren via LLM");
-                    var r = await sp.GetRequiredService<BanErrataSyncService>().SyncAsync(ct);
-                    return $"{r.Bans} bans, {r.Errata} errata gestructureerd";
-                },
-                "graph" => async (sp, report, ct) =>
-                {
-                    var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(report, ct);
-                    return $"{r.Cards} cards, {r.Mechanics} mechanics, {r.Sections} regelsecties, " +
-                           $"{r.Concepts} concepten, {r.Errata} errata, {r.Bans} bans, " +
-                           $"{r.Governed} afgeleide regel-relaties";
-                },
-                "primer" => async (sp, report, ct) =>
-                {
-                    var r = await sp.GetRequiredService<PrimerService>()
-                        .GenerateAsync(progress: report, ct: ct);
-                    return $"{r.Written} primer-docs geschreven (drafts), {r.Skipped} goedgekeurd gelaten, {r.Failed} mislukt";
-                },
-                "interactions" => async (sp, report, ct) =>
-                {
-                    var r = await sp.GetRequiredService<InteractionService>()
-                        .MineAsync(progress: report, ct: ct);
-                    return $"{r.Candidates} kandidaten beoordeeld, {r.Verified} interacties geverifieerd";
-                },
-                _ => null,
-            };
-            if (work is null) return Results.NotFound(new { error = $"onbekende job '{name}'" });
-            return jobs.TryStart(name, work)
+            var job = JobCatalog.Find(name);
+            if (job is null) return Results.NotFound(new { error = $"onbekende job '{name}'" });
+            return jobs.TryStart(name, job.Run)
                 ? Results.Accepted("/api/admin/status", new { started = name })
                 : Results.Conflict(new { error = "er draait al een job — wacht tot die klaar is" });
         });
 
-        admin.MapGet("/status", async (JobRunner jobs, RbRulesDbContext db) =>
+        // Afbreken (#253): één route voor jobs én paden — een pad draait als
+        // gewone JobRunner-run, dus de éénjob-gate kent maar één lopende run.
+        // Literal segment wint van de {name}-parameter hierboven, dus dit
+        // botst niet met een job die toevallig "cancel" zou heten. Niets aan
+        // het draaien = 200 met cancelled:false (net gedrag, geen 500/404):
+        // de knop kan altijd geklikt worden, ook als de run net zelf klaar is.
+        admin.MapPost("/jobs/cancel", (JobRunner jobs) =>
+        {
+            var cancelling = jobs.TryCancel();
+            return cancelling is null
+                ? Results.Ok(new { cancelled = false, message = "er draait geen job" })
+                : Results.Accepted("/api/admin/status", new { cancelled = true, job = cancelling.Name });
+        });
+
+        // ── Paden (#190): geordende JobCatalog-jobs die vanzelf doorstromen.
+        // De paddefinities zelf staan in JobPaths (Infrastructure); uitvoering
+        // via PathRunner, als één gewone JobRunner-run onder de padnaam —
+        // dezelfde éénjob-gate/TryStart-conflictgedrag als /jobs/{name}, en de
+        // padnaam verschijnt daardoor vanzelf op /status (Running/JobRuns).
+        admin.MapGet("/paths", () => Results.Ok(JobPaths.AllPaths));
+
+        admin.MapPost("/paths/{name}", (string name, JobRunner jobs) =>
+        {
+            var path = JobPaths.Find(name);
+            if (path is null) return Results.NotFound(new { error = $"onbekend pad '{name}'" });
+            return jobs.TryStart(name, (sp, report, ct) => PathRunner.RunAsync(path, sp, report, ct))
+                ? Results.Accepted("/api/admin/status", new { started = name })
+                : Results.Conflict(new { error = "er draait al een job of pad — wacht tot die klaar is" });
+        });
+
+        admin.MapGet("/status", async (JobRunner jobs, JobLedger ledger, RbRulesDbContext db) =>
         {
             var (running, last) = jobs.Snapshot();
             return Results.Ok(new
             {
                 Running = running,
                 LastJob = last,
+                // Laatste afronding per job uit het run_log-grootboek (#122):
+                // overleeft een herstart en toont ook de automatische runs
+                // van de scheduler (relaties nachtelijk, scout wekelijks).
+                JobRuns = await ledger.LastRunsAsync(),
                 Counts = new
                 {
                     Sources = await db.Sources.CountAsync(s => s.Enabled),
-                    Changes = await db.Changes.CountAsync(),
+                    // Bron-feeds (#167): index-pagina's die op nieuwe artikelen worden afgespeurd.
+                    Feeds = await db.SourceFeeds.CountAsync(f => f.Enabled),
+                    // #206 (review-fix finding 10): roots-only, zodat de
+                    // tegel hetzelfde telt als de lijst waarheen hij linkt
+                    // (AdminOverviewService.ChangesAsync filtert secundaire
+                    // changes uit en nest ze onder hun primaire).
+                    Changes = await db.Changes.CountAsync(c => c.ConsolidatedWithId == null),
                     Cards = await db.Cards.CountAsync(),
                     CardsEmbedded = await db.Cards.CountAsync(c => c.Embedding != null),
-                    CardsMined = await db.Cards.CountAsync(c => c.Mechanics != null),
+                    // Vólledig gemined (#211): mechanieken komen sinds die
+                    // increment deterministisch uit de gebrackete kaarttekst en
+                    // staan er dus ook bij rb-ai-uitval al — alleen op
+                    // Mechanics tellen zou de tegel op 100% zetten terwijl de
+                    // LLM-velden nog ontbreken.
+                    CardsMined = await db.Cards.CountAsync(
+                        c => c.Mechanics != null && c.Triggers != null),
                     RuleChunks = await db.RuleChunks.CountAsync(),
                     Bans = await db.BanEntries.CountAsync(),
                     Errata = await db.Errata.CountAsync(),
                     Interactions = await db.CardInteractions.CountAsync(),
                     OpenCorrections = await db.Corrections.CountAsync(c => c.Status == "unverified"),
+                    Knowledge = await db.KnowledgeDocs.CountAsync(),
+                    Claims = await db.Claims.CountAsync(),
+                    Relations = await db.Relations.CountAsync(),
+                    MechanicCandidates = await db.MechanicKeywords.CountAsync(k => k.Status == "candidate"),
+                    OpenProposals = await db.SourceProposals.CountAsync(p => p.Status == "proposed"),
+                    Users = await db.Users.CountAsync(),
+                    Decks = await db.Decks.CountAsync(),
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
+                // Embed-gezondheid (#282-review): de NIEUWSTE embed-regel, los van het
+                // 15-rijen-venster hierboven. Dat venster is precies de val die #282
+                // opnieuw zou introduceren — een nachtelijke embed-fout om 02:00 wordt
+                // vóór de ochtend weggedrukt door de regels van stap 6-8, de
+                // job-afronding en de claims-/clarify-/relations-jobs, waarna beheer er
+                // weer kerngezond uitziet. Eén rij, geen extra roundtrip.
+                LastEmbed = await db.RunLogs.AsNoTracking()
+                    .Where(l => l.Kind == "embed")
+                    .OrderByDescending(l => l.CreatedAt)
+                    .Select(l => new { l.Status, l.Detail, l.CreatedAt })
+                    .FirstOrDefaultAsync(),
             });
         });
 
@@ -333,6 +271,15 @@ public static class AdminEndpoints
             if (patch.Rank is not null) src.Rank = patch.Rank.Value;
             if (patch.Cadence is not null) src.Cadence = patch.Cadence;
             if (patch.Enabled is not null) src.Enabled = patch.Enabled.Value;
+            // Bron-type-override (#188-review, fix C): geldige kind ⇒
+            // herkomst "admin" (definitief), leeg ⇒ wissen (herclassificatie
+            // bij de volgende scan), ongeldig ⇒ 400 en niets aangeraakt.
+            if (patch.ContentKind is not null
+                && !SourceContentKind.TryApplyOverride(src, patch.ContentKind))
+                return Results.BadRequest(new
+                {
+                    error = "contentKind moet 'faq', 'patch-notes', 'other' of leeg (= wissen) zijn",
+                });
             await db.SaveChangesAsync();
             return Results.Ok(src);
         });
@@ -341,6 +288,34 @@ public static class AdminEndpoints
         {
             var src = await db.Sources.FindAsync(id);
             if (src is null) return Results.NotFound();
+
+            // Tombstone (#167): een via een bron-feed auto-ontdekte bron
+            // (FeedId != null) moet na een bewuste verwijdering verwijderd
+            // blijven — anders maakt FeedCrawlService hem bij de volgende
+            // reparse (na een feed-paginawijziging) stil opnieuw aan, want de
+            // dedup rust op "bestaat als Source/Proposal". Reuse de
+            // reviewqueue: een "rejected" SourceProposal houdt de URL in de
+            // known-set van de crawl (die alle proposal-statussen meeneemt),
+            // dus hij komt nooit ongevraagd terug. Handmatig toegevoegde
+            // bronnen (FeedId == null) hebben dit niet nodig.
+            if (src.FeedId is not null)
+            {
+                var existing = await db.SourceProposals.FirstOrDefaultAsync(p => p.Url == src.Url);
+                if (existing is null)
+                    db.SourceProposals.Add(new SourceProposal
+                    {
+                        Url = src.Url, Name = src.Name, Type = src.Type,
+                        Status = "rejected", ReviewedAt = DateTimeOffset.UtcNow,
+                        Motivation = "Handmatig verwijderde feed-bron — niet opnieuw "
+                            + "automatisch toevoegen (#167).",
+                    });
+                else
+                {
+                    existing.Status = "rejected";
+                    existing.ReviewedAt = DateTimeOffset.UtcNow;
+                }
+            }
+
             // FK's zijn cascade/set-null geconfigureerd (audit-fix) — geen wees-rijen.
             await db.Documents.Where(d => d.SourceId == id).ExecuteDeleteAsync();
             await db.Changes.Where(c => c.SourceId == id).ExecuteDeleteAsync();
@@ -349,15 +324,135 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
-        // Feed-curatie: ruis (bijv. oude flip-flop-spam) handmatig kunnen opruimen.
-        admin.MapDelete("/changes/{id:long}", async (long id, RbRulesDbContext db) =>
+        // Bron-dossier (#171, spiegelbeeld van #167): wat heeft déze bron
+        // aan het systeem toegevoegd, en is dat compleet verwerkt? Alleen
+        // projectie op bestaande data (#127-patroon).
+        admin.MapGet("/sources/{id}/dossier", async (
+                string id, SourceDossierService dossier, CancellationToken ct) =>
+            await dossier.GetAsync(id, ct) is { } d ? Results.Ok(d) : Results.NotFound());
+
+        // Bronnenlijst voor het beheer (#180): incl. genegeerde bronnen (de
+        // UI filtert client-side, zelfde patroon als de andere lijsten op de
+        // admin-pagina) plus de negeer-kandidaat-vlag.
+        admin.MapGet("/sources", async (SourceListService list, CancellationToken ct) =>
+            Results.Ok(await list.ListAsync(ct)));
+
+        // Negeren met reden (#180): apart van Enabled (dat blijft "tijdelijk
+        // uit") — negeren is een bewuste, blijvende beoordeling ("dit levert
+        // niets op"). Genegeerd ⇒ de scan-lus slaat de bron over
+        // (IngestService) en de bron verdwijnt uit de standaard
+        // bronnenlijst/-views tot de beheerder 'm terugzet; bestaande
+        // Document/Change-rijen blijven onaangeroerd (negeren is geen
+        // delete). Herkomst-bescherming tegen de feed-crawl (#175-patroon)
+        // hoeft hier niet apart geregeld: de Source-rij zelf blijft bestaan,
+        // dus FeedCrawlService's known-URL-dedup ziet 'm gewoon nog staan en
+        // adopteert/hercreëert nooit een duplicaat.
+        admin.MapPost("/sources/{id}/ignore", async (
+            string id, SourceIgnoreRequest? body, RbRulesDbContext db) =>
         {
-            var c = await db.Changes.FindAsync(id);
-            if (c is null) return Results.NotFound();
-            db.Changes.Remove(c);
+            var src = await db.Sources.FindAsync(id);
+            if (src is null) return Results.NotFound();
+            src.IgnoredAt = DateTimeOffset.UtcNow;
+            src.IgnoreReason = string.IsNullOrWhiteSpace(body?.Reason) ? null : body.Reason.Trim();
+            await db.SaveChangesAsync();
+            return Results.Ok(src);
+        });
+
+        admin.MapPost("/sources/{id}/unignore", async (string id, RbRulesDbContext db) =>
+        {
+            var src = await db.Sources.FindAsync(id);
+            if (src is null) return Results.NotFound();
+            src.IgnoredAt = null;
+            src.IgnoreReason = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(src);
+        });
+
+        // Bron-feeds (#167): zelf toevoegen/beheren, patroon van de
+        // sources-endpoints hierboven. UrlGuard op elke (nieuwe) URL — een
+        // feed-URL is net zo goed externe/beheerder-invoer als een bron-URL.
+        admin.MapGet("/feeds", async (RbRulesDbContext db) =>
+            await db.SourceFeeds.OrderBy(f => f.Id).ToListAsync());
+
+        admin.MapPost("/feeds", async (SourceFeed feed, RbRulesDbContext db) =>
+        {
+            if (string.IsNullOrWhiteSpace(feed.Id) || string.IsNullOrWhiteSpace(feed.Url))
+                return Results.BadRequest(new { error = "id en url zijn verplicht" });
+            if (UrlGuard.Check(feed.Url) is { Allowed: false } g)
+                return Results.UnprocessableEntity(new { error = $"URL geweigerd (SSRF-guard): {g.Reason}" });
+            // AutoApprove-gate (#167): auto-toevoegen als enabled trust-1
+            // official bron mag alleen op een officieel Riot-domein — weiger
+            // fail-fast zodat de opgeslagen staat nooit misleidend
+            // "AutoApprove aan" toont terwijl de crawl hem als reviewqueue
+            // behandelt. De crawl handhaaft dit sowieso (defense-in-depth).
+            if (feed.AutoApprove && !OfficialDomains.IsOfficialUrl(feed.Url))
+                return Results.UnprocessableEntity(new { error = AutoApproveDomainError });
+            db.SourceFeeds.Add(feed);
+            await db.SaveChangesAsync();
+            return Results.Created($"/api/admin/feeds/{feed.Id}", feed);
+        });
+
+        admin.MapPatch("/feeds/{id}", async (string id, FeedPatch patch, RbRulesDbContext db) =>
+        {
+            var feed = await db.SourceFeeds.FindAsync(id);
+            if (feed is null) return Results.NotFound();
+            if (patch.Url is not null && UrlGuard.Check(patch.Url) is { Allowed: false } g)
+                return Results.UnprocessableEntity(new { error = $"URL geweigerd (SSRF-guard): {g.Reason}" });
+            // AutoApprove-gate op de resulterende staat (#167): een PATCH die
+            // alleen de URL naar een niet-officieel domein wijzigt terwijl
+            // AutoApprove al aan stond, mag de misleidende combinatie niet
+            // laten ontstaan. Beoordeel dus (effectieve url, effectieve flag).
+            var effectiveUrl = patch.Url ?? feed.Url;
+            var effectiveAutoApprove = patch.AutoApprove ?? feed.AutoApprove;
+            if (effectiveAutoApprove && !OfficialDomains.IsOfficialUrl(effectiveUrl))
+                return Results.UnprocessableEntity(new { error = AutoApproveDomainError });
+
+            if (patch.Url is not null) feed.Url = patch.Url;
+            if (patch.Name is not null) feed.Name = patch.Name;
+            // Leeg (niet null) betekent expliciet "alle categorieën" — het filter uit.
+            if (patch.CategoryFilter is not null)
+                feed.CategoryFilter = string.IsNullOrWhiteSpace(patch.CategoryFilter) ? null : patch.CategoryFilter;
+            if (patch.AutoApprove is not null) feed.AutoApprove = patch.AutoApprove.Value;
+            if (patch.Cadence is not null) feed.Cadence = patch.Cadence;
+            if (patch.Enabled is not null) feed.Enabled = patch.Enabled.Value;
+            await db.SaveChangesAsync();
+            return Results.Ok(feed);
+        });
+
+        admin.MapDelete("/feeds/{id}", async (string id, RbRulesDbContext db) =>
+        {
+            var feed = await db.SourceFeeds.FindAsync(id);
+            if (feed is null) return Results.NotFound();
+            db.SourceFeeds.Remove(feed);
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
         });
+
+        // Feed-curatie: ruis (bijv. oude flip-flop-spam) handmatig kunnen
+        // opruimen. Een primaire verwijderen neemt haar secundairen mee
+        // (#206 review-fix, finding 9) — de kale FK-SetNull zou de kaart
+        // anders meteen laten herrijzen vanuit de andere bron.
+        admin.MapDelete("/changes/{id:long}", async (long id, ChangeFeedService feed) =>
+        {
+            var r = await feed.DeleteAsync(id);
+            return r.Found
+                ? Results.Ok(new { ok = true, removedConfirmations = r.RemovedConfirmations })
+                : Results.NotFound();
+        });
+
+        // Ontkoppelen van een foute consolidatie (#206 review-fix, finding 1):
+        // op de SECUNDAIRE change; zet ConsolidatedWithId terug op null én
+        // schrijft een sticky pair-memo zodat de eerstvolgende run het paar
+        // niet meteen weer merget.
+        admin.MapPost("/changes/{id:long}/unconsolidate", async (
+            long id, ChangeConsolidationService consolidation) =>
+            await consolidation.UnconsolidateAsync(id) switch
+            {
+                UnconsolidateOutcome.Applied => Results.Ok(new { ok = true }),
+                UnconsolidateOutcome.NotConsolidated => Results.BadRequest(
+                    new { error = "deze change is geen secundaire van een geconsolideerd paar" }),
+                _ => Results.NotFound(),
+            });
 
         // Primer-kennisdocs (kennislaag 1, #49): reviewen en goedkeuren.
         admin.MapGet("/knowledge", async (RbRulesDbContext db) =>
@@ -365,7 +460,7 @@ public static class AdminEndpoints
                 .OrderBy(k => k.Topic)
                 .Select(k => new
                 {
-                    k.Id, k.Kind, k.Topic, k.Title, k.Body,
+                    k.Id, k.Kind, k.Topic, k.Title, k.Body, k.BodyNl,
                     k.SectionRefs, k.Status, k.UpdatedAt,
                 })
                 .ToListAsync());
@@ -375,9 +470,103 @@ public static class AdminEndpoints
             var doc = await db.KnowledgeDocs.FindAsync(id);
             if (doc is null) return Results.NotFound();
             doc.Status = "approved";
+            // #119: de hertoets-kanttekening leeft alleen zolang het doc op
+            // review wacht — goedkeuren betekent "opnieuw gecontroleerd", dus
+            // de reden gaat weg en de tekst is weer exact die van de embedding.
+            doc.Body = KnowledgeRecheck.StripMarkers(doc.Body);
             doc.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync();
             return Results.Ok(new { ok = true });
+        });
+
+        // Intrekken (#70): terug naar draft — het doc doet dan niet meer mee
+        // in de /ask-context (AskService filtert op Status == "approved")
+        // tot her-goedkeuring.
+        admin.MapPost("/knowledge/{id:long}/unapprove", async (long id, RbRulesDbContext db) =>
+        {
+            var doc = await db.KnowledgeDocs.FindAsync(id);
+            if (doc is null) return Results.NotFound();
+            doc.Status = "draft";
+            doc.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Beheerder-bewerking (#70): titel/tekst corrigeren zonder
+        // her-generatie. Status blijft wat hij was: een bewerkte approved
+        // blijft approved, een bewerkte draft blijft draft.
+        admin.MapPatch("/knowledge/{id:long}", async (
+            long id, KnowledgePatch patch, RbRulesDbContext db, EmbeddingService embeddings) =>
+        {
+            var doc = await db.KnowledgeDocs.FindAsync(id);
+            if (doc is null) return Results.NotFound();
+            var title = patch.Title?.Trim();
+            // #119: hertoets-kanttekeningen zijn beheer-metadata, geen
+            // doc-tekst — bewerken verwijdert ze (de beheerder hééft de reden
+            // dan gezien), zodat een nieuwe embedding nooit een kanttekening
+            // bevat.
+            var body = patch.Body is null
+                ? null : KnowledgeRecheck.StripMarkers(patch.Body).Trim();
+            if (string.IsNullOrEmpty(title) && string.IsNullOrEmpty(body))
+                return Results.BadRequest(new { error = "titel of tekst is verplicht" });
+
+            var changed = (!string.IsNullOrEmpty(title) && title != doc.Title)
+                       || (!string.IsNullOrEmpty(body) && body != doc.Body);
+            if (!string.IsNullOrEmpty(title)) doc.Title = title;
+            if (!string.IsNullOrEmpty(body)) doc.Body = body;
+            // #266: de Nederlandse weergave is de tekst die de bezoeker ziet,
+            // dus de reviewer kan haar hier corrigeren. Niet meegestuurd =
+            // ongemoeid; leeg meegestuurd = wissen, waarna /primer het Engels
+            // toont. Geen her-embed: de embedding hoort bij de Engelse body.
+            if (patch.BodyNl is not null)
+                doc.BodyNl = string.IsNullOrWhiteSpace(patch.BodyNl) ? null : patch.BodyNl.Trim();
+            if (changed)
+            {
+                // Zelfde embed-input als PrimerService, zodat /ask de bewerkte
+                // versie direct semantisch vindt.
+                //
+                // DIT IS DE AANROEPPLEK UIT #301. Een reviewer plakt hier een
+                // body van willekeurige lengte, en tot #301 ging die zonder
+                // lengtegrens naar Ollama: bij 8000+ tekens geen mislukte embed
+                // maar een OOM-kill van llama-server — een VM-breed
+                // geheugenincident (Ollama deelt de 8 GB met Postgres, Neo4j en
+                // rb-ai), dat de catch hieronder als een hikje liet ogen. De
+                // begrenzing zit nu in EmbeddingService en kan dus niet meer
+                // omzeild worden. TryEmbedAsync i.p.v. EmbedOneAsync omdat een
+                // kap alleen langs dit kanaal terugkomt; hij belandt op de rij
+                // (#299) zodat een halve vector achteraf herkenbaar blijft.
+                var input = $"{doc.Title}\n{doc.Body}";
+                var embed = await embeddings.TryEmbedAsync([input]);
+                if (embed.Ok)
+                {
+                    doc.Embedding = embed.Vectors![0];
+                    doc.EmbeddingModel = EmbeddingConfig.Model;
+                    doc.EmbeddingTruncatedAt = embed.Capped > 0 ? embed.CappedAt : null;
+                }
+                else
+                {
+                    // Ollama tijdelijk weg — opslaan telt (zelfde patroon als
+                    // corrections/verify). De oude embedding hoort bij de oude
+                    // tekst: liever géén embedding (het doc doet even niet mee
+                    // in /ask) dan een stille mismatch; embedding volgt bij de
+                    // volgende bewerking.
+                    doc.Embedding = null;
+                    doc.EmbeddingModel = null;
+                    doc.EmbeddingTruncatedAt = null;
+                }
+            }
+            doc.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new
+            {
+                doc.Id, doc.Kind, doc.Topic, doc.Title, doc.Body, doc.BodyNl,
+                doc.SectionRefs, doc.Status, doc.UpdatedAt,
+                Embedded = doc.Embedding != null,
+                // Null = de vector dekt de volledige tekst. Een getal betekent dat
+                // alleen de eerste N tekens geëmbed zijn (#299/#301) — de bewaarde
+                // body blijft onaangeraakt, maar /ask vindt dit doc dan op een deel.
+                doc.EmbeddingTruncatedAt,
+            });
         });
 
         admin.MapDelete("/knowledge/{id:long}", async (long id, RbRulesDbContext db) =>
@@ -389,32 +578,350 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
 
-        // Denkstappen-traces van de vraag-pipeline (#40).
-        admin.MapGet("/asktraces", async (RbRulesDbContext db) =>
-            await db.AskTraces.AsNoTracking()
-                .OrderByDescending(t => t.CreatedAt)
-                .Take(30)
-                .ToListAsync());
+        // ── Tegel-overzichten (#61): elke dashboard-tegel klikt door ──────
+        admin.MapGet("/overview/cards", async (
+                string? filter, string? q, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.CardsAsync(filter, q, page ?? 1)));
 
-        // Projectie zonder Embedding — 1024 floats per rij horen niet in JSON.
-        admin.MapGet("/corrections", async (RbRulesDbContext db) =>
-            await db.Corrections.AsNoTracking()
-                .OrderByDescending(c => c.CreatedAt)
-                .Take(200)
-                .Select(c => new
+        admin.MapGet("/overview/rulechunks", async (
+                string? sourceId, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.RuleChunksAsync(sourceId, page ?? 1)));
+
+        admin.MapGet("/overview/bans", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.BansAsync()));
+
+        admin.MapGet("/overview/errata", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.ErrataAsync()));
+
+        admin.MapGet("/overview/interactions", async (
+                int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.InteractionsAsync(page ?? 1)));
+
+        admin.MapGet("/overview/changes", async (
+                int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.ChangesAsync(page ?? 1)));
+
+        admin.MapGet("/overview/claims", async (
+                string? status, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.ClaimsAsync(status, page ?? 1)));
+
+        admin.MapGet("/overview/proposals", async (
+                string? status, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.ProposalsAsync(status, page ?? 1)));
+
+        // Bron-feeds (#167): per feed laatste vangst + aantal ontdekte bronnen.
+        admin.MapGet("/overview/feeds", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.FeedsAsync()));
+
+        // Relatievoorstellen (#116): status-chips + kind-vocabulaire + queue.
+        admin.MapGet("/overview/relations", async (
+                string? status, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.RelationsAsync(status, page ?? 1)));
+
+        // Piltover Archive-decks (#15): attributie + deep-link per deck.
+        admin.MapGet("/overview/decks", async (
+                int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.DecksAsync(page ?? 1)));
+
+        // Gebruikers + kosteninzicht (#42): LLM-gebruik per account per
+        // periode, met de cheap/hard-verdeling als kosten-indicatie.
+        admin.MapGet("/overview/users", async (
+                string? period, int? page, AdminOverviewService overview) =>
+            Results.Ok(await overview.UsersAsync(period, page ?? 1)));
+
+        // Set-dekking (#145): per set de aanwezige én exact ontbrekende
+        // basisnummers, afgeleid uit de riftbound-id's zelf ("ogn-074-298" =
+        // 74 van 298). Vers berekend bij elke aanvraag.
+        admin.MapGet("/overview/setcoverage", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.SetCoverageAsync()));
+
+        // Judge-benchmark (#158) + model-sweep (#174): run-historie + het
+        // detail van de gekozen (of meest recente) run, plus sweep-historie
+        // en -detail — de jobs zelf draaien via /jobs/benchmark resp.
+        // /jobs/benchmarksweep.
+        admin.MapGet("/overview/benchmark", async (
+                long? run, long? sweep, AdminOverviewService overview) =>
+            Results.Ok(await overview.BenchmarkAsync(run, sweep)));
+
+        // Accountbeheer (#42): blokkeren en quota bijstellen.
+        admin.MapPatch("/users/{id:long}", async (long id, UserPatch patch, RbRulesDbContext db) =>
+        {
+            var user = await db.Users.FindAsync(id);
+            if (user is null) return Results.NotFound();
+            if (patch.DailyQuota is < 0 or > 10_000 || patch.DailyPhotoQuota is < 0 or > 10_000
+                || patch.DailyAgenticQuota is < 0 or > 10_000)
+                return Results.BadRequest(new { error = "quotum moet tussen 0 en 10000 liggen" });
+            if (patch.Blocked is not null) user.Blocked = patch.Blocked.Value;
+            if (patch.DailyQuota is not null) user.DailyQuota = patch.DailyQuota.Value;
+            if (patch.DailyPhotoQuota is not null) user.DailyPhotoQuota = patch.DailyPhotoQuota.Value;
+            if (patch.DailyAgenticQuota is not null) user.DailyAgenticQuota = patch.DailyAgenticQuota.Value;
+            await db.SaveChangesAsync();
+            return Results.Ok(new
+            {
+                user.Id, user.Email, user.Blocked, user.DailyQuota, user.DailyPhotoQuota,
+                user.DailyAgenticQuota,
+            });
+        });
+
+        // Bronvoorstellen-review (#63): accepteren zet de bron uitgeschakeld
+        // in het register (veilige defaults — de beheerder zet hem daarna
+        // bewust aan); verwerpen houdt de URL uit volgende scout-runs.
+        // Een door de SSRF-guard geweigerde URL (#45) geeft een 422 met
+        // { error } — de vorm die de adminApi-helper in rb-web als
+        // foutmelding aan de beheerder toont.
+        admin.MapPost("/proposals/{id:long}/accept", async (
+                long id, SourceScoutService scout) =>
+            await scout.AcceptAsync(id) switch
+            {
+                null => Results.NotFound(),
+                { Status: "refused" } r => Results.UnprocessableEntity(new { error = r.Message }),
+                var r => Results.Ok(r),
+            });
+
+        admin.MapPost("/proposals/{id:long}/reject", async (
+                long id, SourceScoutService scout) =>
+            await scout.RejectAsync(id) is { } r ? Results.Ok(r) : Results.NotFound());
+
+        // Claims-review (#50): accepteren maakt een claim retrieval-baar
+        // (het /ask-kanaal zelf is #51); verwerpen houdt hem uit beeld.
+        // Beide nemen optioneel een beheerder-notitie mee (#124); bij
+        // verwerpen is die notitie meteen de zichtbare reden bij het item.
+        admin.MapPost("/claims/{id:long}/accept", async (
+            long id, ReviewDecision? body, RbRulesDbContext db) =>
+        {
+            var claim = await db.Claims.FindAsync(id);
+            if (claim is null) return Results.NotFound();
+            claim.Status = "accepted";
+            claim.StatusReason = null;
+            if (!string.IsNullOrWhiteSpace(body?.Note)) claim.ReviewNote = body.Note.Trim();
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/claims/{id:long}/reject", async (
+            long id, ReviewDecision? body, RbRulesDbContext db) =>
+        {
+            var claim = await db.Claims.FindAsync(id);
+            if (claim is null) return Results.NotFound();
+            claim.Status = "rejected";
+            if (!string.IsNullOrWhiteSpace(body?.Note)) claim.ReviewNote = body.Note.Trim();
+            // Verwerpen was zwijgend (#124): met notitie is de reden de notitie.
+            claim.StatusReason = claim.ReviewNote ?? "door de beheerder afgewezen";
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Archief (#124): gearchiveerd = uit de default-reviewweergave — puur
+        // beheer-zicht; status (en dus /ask-deelname en graph-projectie)
+        // verandert niet. Herstel kan altijd via de archief-chip.
+        admin.MapPost("/claims/{id:long}/archive", async (long id, RbRulesDbContext db) =>
+        {
+            var claim = await db.Claims.FindAsync(id);
+            if (claim is null) return Results.NotFound();
+            claim.ArchivedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/claims/{id:long}/unarchive", async (long id, RbRulesDbContext db) =>
+        {
+            var claim = await db.Claims.FindAsync(id);
+            if (claim is null) return Results.NotFound();
+            claim.ArchivedAt = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // "Archiveer alle afgehandelde" (#124): alles waar de beheerder al
+        // over besliste (of wat de pipeline zelf afwees) in één keer het
+        // archief in; te-reviewen items blijven staan.
+        admin.MapPost("/claims/archive-handled", async (RbRulesDbContext db) =>
+        {
+            var archived = await db.Claims
+                .Where(c => c.ArchivedAt == null && c.Status != "unreviewed")
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.ArchivedAt, DateTimeOffset.UtcNow));
+            return Results.Ok(new { archived });
+        });
+
+        // Notitie → geverifieerde ruling (#124): de beheerder-notitie wordt
+        // een Correction (scope claim, ref = BrainRef) via het verify-pad,
+        // zodat de uitleg voortaan antwoorden stuurt.
+        admin.MapPost("/claims/{id:long}/promote-note", async (
+                long id, ReviewDecision? body, ReviewNoteService notes) =>
+            await notes.PromoteClaimNoteAsync(id, body?.Note) switch
+            {
+                { Status: PromoteNoteStatus.NotFound } => Results.NotFound(),
+                { Status: PromoteNoteStatus.NoNote } => Results.BadRequest(
+                    new { error = "geen notitie om door te zetten — schrijf er eerst één" }),
+                var r => Results.Ok(new { ok = true, r.CorrectionId, r.Embedded, r.Updated }),
+            });
+
+        // Relatie-review (#116): accepteren maakt het voorstel definitief
+        // (blijft/komt in de graph bij de volgende graph-sync, mits het kind
+        // geaccepteerd is); verwerpen haalt hem uit de projectie én voorkomt
+        // dat de miner hetzelfde voorstel opnieuw opvoert. Loopt via
+        // RelationTriageService.DecideAsync (#199) — dezelfde plek die de
+        // bulk-actie hieronder aanroept, zodat er geen twee plekken zijn die
+        // kunnen uiteenlopen ("geen nieuw autoriteitspad").
+        admin.MapPost("/relations/{id:long}/accept", async (
+                long id, ReviewDecision? body, RelationTriageService triage) =>
+            await triage.DecideAsync(id, "accept", body?.Note) is RelationDecisionOutcome.Applied
+                ? Results.Ok(new { ok = true })
+                : Results.NotFound());
+
+        admin.MapPost("/relations/{id:long}/reject", async (
+                long id, ReviewDecision? body, RelationTriageService triage) =>
+            await triage.DecideAsync(id, "reject", body?.Note) is RelationDecisionOutcome.Applied
+                ? Results.Ok(new { ok = true })
+                : Results.NotFound());
+
+        // Bulk-actie per aanbevelingsgroep (#199 v1): "accepteer alle N met
+        // aanbeveling accept" / "verwerp alle N met aanbeveling reject" — één
+        // klik, de mens klikt. Loopt per item hetzelfde accept-/reject-pad na
+        // (RelationTriageService.DecideAsync/ApplyDecision), in één
+        // transactie (multi-row). Geen nieuw autoriteitspad: dit is puur een
+        // dun vermenigvuldigde van de bestaande, losse acties hierboven.
+        // Review-fixes: expliciete input-validatie → 400 (finding 6) en de
+        // TOCTOU-fence (expectedCount + asOf) → 409 zodra de groep is
+        // veranderd sinds het renderen van de knop (finding 1).
+        admin.MapPost("/relations/bulk-decide", async (
+            RelationBulkDecideRequest? body, RelationTriageService triage) =>
+        {
+            if (body is null)
+                return Results.BadRequest(new { error = "body ontbreekt of is geen geldige JSON" });
+            if (body.ValidationError() is { } invalid)
+                return Results.BadRequest(new { error = invalid });
+
+            var r = await triage.BulkDecideAsync(
+                body.Recommendation!, body.Decision!.Trim().ToLowerInvariant(),
+                body.ExpectedCount!.Value, body.AsOf!.Value);
+            return r.Status switch
+            {
+                RelationBulkStatus.Applied => Results.Ok(new { applied = r.Applied }),
+                RelationBulkStatus.FenceViolation => Results.Conflict(new
                 {
-                    c.Id, c.Scope, c.Ref, c.Text, c.Question,
-                    c.Provenance, c.Status, c.CreatedAt, c.VerifiedAt,
-                })
-                .ToListAsync());
+                    error = "de aanbevelingsgroep is veranderd sinds het laden — "
+                            + "ververs de pagina en beoordeel opnieuw",
+                }),
+                _ => Results.BadRequest(new { error = "decision moet 'accept' of 'reject' zijn" }),
+            };
+        });
+
+        // Archief + notitie-promotie voor relaties (#124, claims-patroon).
+        admin.MapPost("/relations/{id:long}/archive", async (long id, RbRulesDbContext db) =>
+        {
+            var relation = await db.Relations.FindAsync(id);
+            if (relation is null) return Results.NotFound();
+            relation.ArchivedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/relations/{id:long}/unarchive", async (long id, RbRulesDbContext db) =>
+        {
+            var relation = await db.Relations.FindAsync(id);
+            if (relation is null) return Results.NotFound();
+            relation.ArchivedAt = null;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/relations/archive-handled", async (RbRulesDbContext db) =>
+        {
+            var archived = await db.Relations
+                .Where(r => r.ArchivedAt == null && r.Status != "unreviewed")
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.ArchivedAt, DateTimeOffset.UtcNow));
+            return Results.Ok(new { archived });
+        });
+
+        admin.MapPost("/relations/{id:long}/promote-note", async (
+                long id, ReviewDecision? body, ReviewNoteService notes) =>
+            await notes.PromoteRelationNoteAsync(id, body?.Note) switch
+            {
+                { Status: PromoteNoteStatus.NotFound } => Results.NotFound(),
+                { Status: PromoteNoteStatus.NoNote } => Results.BadRequest(
+                    new { error = "geen notitie om door te zetten — schrijf er eerst één" }),
+                var r => Results.Ok(new { ok = true, r.CorrectionId, r.Embedded, r.Updated }),
+            });
+
+        // Kind-vocabulaire-review (#116, patroon mechanics): accepteren laat
+        // relaties met dit kind meedoen in de graph-projectie (volgende
+        // graph-sync); verwerpen houdt het kind — en nieuwe voorstellen
+        // ermee — uit beeld.
+        admin.MapPost("/relationkinds/{id:long}/accept", async (long id, RbRulesDbContext db) =>
+        {
+            var kind = await db.RelationKinds.FindAsync(id);
+            if (kind is null) return Results.NotFound();
+            kind.Status = "accepted";
+            kind.ReviewedAt = DateTimeOffset.UtcNow;
+            db.RunLogs.Add(new RunLog
+            {
+                Kind = "relations", Ref = $"kind:{kind.Kind}", Status = "ok",
+                Detail = "kind geaccepteerd — relaties met dit kind gaan mee bij de volgende graph-sync",
+            });
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        admin.MapPost("/relationkinds/{id:long}/reject", async (long id, RbRulesDbContext db) =>
+        {
+            var kind = await db.RelationKinds.FindAsync(id);
+            if (kind is null) return Results.NotFound();
+            kind.Status = "rejected"; // blijft bewaard: wordt niet opnieuw voorgesteld
+            kind.ReviewedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+        // Kennis-gaten-rapport (#52): waar is de kennisbank dun — dekking,
+        // vraag-signalen (lege retrieval/AI-uitval/negatieve feedback) en
+        // bron-versheid. Vers berekend bij elke aanvraag.
+        admin.MapGet("/overview/gaps", async (KnowledgeGapsService gaps, CancellationToken ct) =>
+            Results.Ok(await gaps.BuildAsync(ct)));
+        // Groeiend mechaniek-vocabulaire (#52): kandidaten uit de miner
+        // reviewen. Accepteren = vocabulaire + re-mine van de betrokken
+        // kaarten; verwerpen = term komt niet opnieuw de queue in.
+        admin.MapGet("/mechanics", async (MechanicVocabularyService vocab) =>
+            Results.Ok(await vocab.ListAsync()));
+        admin.MapPost("/mechanics/{id:long}/accept", async (
+                long id, MechanicVocabularyService vocab) =>
+            await vocab.AcceptAsync(id) is { } r ? Results.Ok(r) : Results.NotFound());
+        admin.MapPost("/mechanics/{id:long}/reject", async (
+                long id, MechanicVocabularyService vocab) =>
+            await vocab.RejectAsync(id) ? Results.Ok(new { ok = true }) : Results.NotFound());
+        // Bewijs bij een kandidaat (#123): welke kaarten dragen de term, met
+        // snippet — lazy opgevraagd bij het uitklappen in de admin.
+        admin.MapGet("/mechanics/{id:long}/cards", async (
+                long id, MechanicVocabularyService vocab, CancellationToken ct) =>
+            await vocab.CardsForKeywordAsync(id, ct: ct) is { } cards
+                ? Results.Ok(cards) : Results.NotFound());
+
+        // Denkstappen-traces van de vraag-pipeline (#40). De lijst is slank;
+        // het volledige gesprek (antwoord + eerdere beurten, #143) komt per
+        // trace uit het detail — lazy bij het uitklappen in het beheer.
+        admin.MapGet("/asktraces", async (AdminOverviewService overview) =>
+            Results.Ok(await overview.AskTracesAsync()));
+        admin.MapGet("/asktraces/{id:long}", async (
+                long id, AdminOverviewService overview) =>
+            await overview.AskTraceAsync(id) is { } t
+                ? Results.Ok(t) : Results.NotFound());
+
+        // Projectie zonder Embedding (1024 floats per rij horen niet in JSON) mét
+        // bron-naam + gesaniteerde link en beheerder-opmerking (#184) — logica in
+        // AdminOverviewService.CorrectionsAsync (endpoints dun, docs/CONVENTIONS.md).
+        admin.MapGet("/corrections", async (AdminOverviewService overview) =>
+            await overview.CorrectionsAsync());
 
         admin.MapPost("/corrections/{id:long}/verify", async (
-            long id, RbRulesDbContext db, EmbeddingService embeddings) =>
+            long id, ReviewDecision? body, RbRulesDbContext db, EmbeddingService embeddings) =>
         {
             var c = await db.Corrections.FindAsync(id);
             if (c is null) return Results.NotFound();
             c.Status = "verified";
+            // #177: een goedgekeurd clarify-item heeft geen openstaande reden meer.
+            c.StatusReason = null;
             c.VerifiedAt = DateTimeOffset.UtcNow;
+            // #184: een opmerking bij het verifiëren blijft traceerbaar bewaard.
+            if (!string.IsNullOrWhiteSpace(body?.Note)) c.ReviewNote = body.Note.Trim();
             try
             {
                 // Embedding op vraag+correctie zodat /ask de ruling semantisch vindt.
@@ -427,6 +934,36 @@ public static class AdminEndpoints
             await db.SaveChangesAsync();
             return Results.Ok(c);
         });
+
+        // Zacht afwijzen (#177): een pending clarify-item als rejected markeren
+        // in plaats van verwijderen. De tombstone laat de mining de afwijzing
+        // respecteren — een volgende run heropent hetzelfde concept niet. Voor
+        // definitief opruimen bestaat DELETE nog. Een opmerking (#184) is dan de
+        // zichtbare reden bij het item — zelfde patroon als claims/relaties.
+        admin.MapPost("/corrections/{id:long}/reject", async (
+            long id, ReviewDecision? body, RbRulesDbContext db) =>
+        {
+            var c = await db.Corrections.FindAsync(id);
+            if (c is null) return Results.NotFound();
+            c.Status = "rejected";
+            c.VerifiedAt = null;
+            if (!string.IsNullOrWhiteSpace(body?.Note)) c.ReviewNote = body.Note.Trim();
+            await db.SaveChangesAsync();
+            return Results.Ok(new { ok = true });
+        });
+
+        // Her-evaluatie op een opmerking (#184): draait de hybride poort
+        // (grounded/anchored/informative, #177/#185) opnieuw voor dit ene item —
+        // de opmerking kan een anker-correctie bevatten (bv. "mechanic:Recall")
+        // die een fout-aangeankerd onderwerp corrigeert. Logica in
+        // CorrectionReevaluationService (endpoints dun).
+        admin.MapPost("/corrections/{id:long}/reevaluate", async (
+                long id, ReviewDecision? body, CorrectionReevaluationService reeval) =>
+            await reeval.ReevaluateAsync(id, body?.Note) switch
+            {
+                { Outcome: ReevaluateOutcome.NotFound } => Results.NotFound(),
+                var r => Results.Ok(new { ok = true, outcome = r.Outcome.ToString(), r.Reason }),
+            });
 
         admin.MapDelete("/corrections/{id:long}", async (long id, RbRulesDbContext db) =>
         {

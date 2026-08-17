@@ -42,7 +42,9 @@ RbRules.Api  →  RbRules.Infrastructure  →  RbRules.Domain
 
 - **Domain**: entiteiten, pure logica (parsers, routers, tekst-utils). Geen
   EF-, HTTP- of framework-afhankelijkheden. Alles hier is unit-testbaar
-  zonder infrastructuur.
+  zonder infrastructuur. Bewuste, enige uitzondering (#44): het kale
+  `Pgvector`-pakket voor het `Vector`-datatype op entiteiten — dat is een
+  datatype, geen I/O; EF Core en Npgsql zelf blijven buiten Domain.
 - **Infrastructure**: services met I/O — EF Core (`RbRulesDbContext`), HTTP
   (RbAiClient, sync-services), Neo4j, Ollama. Publieke API van een service is
   een of twee methoden met een duidelijk resultaat-record.
@@ -79,6 +81,34 @@ Endpoint-regels:
 
 ## AI-gebruik (rb-ai / prompts)
 
+- **Afgeleide/gesynthetiseerde kennis wordt in de brontaal (Engels) opgeslagen**
+  (#187) — alles wat het LLM extraheert/synthetiseert en dat als kennis wordt
+  bewaard of in `/ask` meegaat, staat in het Engels, dicht bij de officiële
+  bewoording: claims (`ClaimMiner`), de primer (`PrimerService`),
+  relatie-`explanation`s (`RelationMiner`, `rb-ai`'s `AGENT_ADDENDUM`), de
+  relatie-kind-labels (`RelationMiner.SeedKinds` — Engels, met de oude
+  NL-labels als uitstervende legacy), en de claim-toets-redenering
+  (`OfficialCheck`/`ClaimJudge`: de `reason` die als `Claim.StatusReason`
+  weerlegging/misvatting voedt in `/ask`, #125). Geen vertaalstap, dus geen
+  vertaalverlies, en consistente semantiek met de Engelse kaart-/regelbronnen
+  zelf. **UI en /ask-antwoorden blijven Nederlands** — dat scheidt
+  `AskService.BasePrompt` af, dat blijft ongewijzigd.
+  (`ClarificationMiner`/`ClarificationMiningService` volgen hetzelfde patroon,
+  #185.) **Weergave is iets anders dan opslag** (#266): waar afgeleide kennis
+  rechtstreeks als leespagina bij de bezoeker komt — vooralsnog alleen
+  `/primer` — komt er bij de generatie een Nederlandse weergave naast de
+  canonieke Engelse tekst (`knowledge_doc.body_nl`), die door dezelfde
+  draft/approve-poort gaat. Nooit vertalen bij het renderen (dat omzeilt de
+  review-poort), nooit over officiële regel- of kaartteksten (#189), en altijd
+  met een glossarium-waarborg die speltermen en §-verwijzingen onvertaald
+  houdt (`PrimerTranslation`, ADR-17); faalt die, dan toont de pagina het
+  Engels. Een bestaande Nederlandse afgeleide laag wordt niet in-place vertaald
+  maar weggegooid en schoon herbouwd — zie `KnowledgeRegenerationService`
+  (expliciete, destructieve admin-actie, nooit automatisch; raakt nooit de
+  bron-/mensenwerk-tabellen). Uitzondering (bewust, buiten deze ronde): de
+  kennis-levenscyclus-redenen in `KnowledgeRecheck` (#119, prefix "hertoetst
+  na regelwijziging …") blijven voorlopig Nederlands — dat is een apart spoor
+  met een EF-query-const en admin-rapportweergave.
 - Alle LLM-verkeer via de rb-ai-sidecar (abonnement); rb-api kent geen
   API-keys. De sidecar is alleen intern bereikbaar.
 - LLM-uitval is een verwacht pad: `RbAiClient` geeft `null` terug en de
@@ -138,3 +168,9 @@ Endpoint-regels:
 - Feature-werk op de werkbranch, PR naar main; merge naar main = deploy
   (CI publiceert images, deploy-workflow rolt uit).
 - Secrets alleen via GitHub Secrets / VM-`.env`; nooit in code, logs of chat.
+- **Levende documentatie (#134)** — elke PR die endpoints, datamodel,
+  services, UI-routes of de deploy raakt, werkt `docs/ARCHITECTURE.md`
+  (arc42) bij; elke PR die features of gedrag wijzigt, werkt `docs/PRD.md`
+  bij. De Onderhoud-hoofdstukken in beide documenten zeggen per soort
+  wijziging welke sectie. Geen doc-delta nodig? Motiveer dat kort in de
+  PR-body. De PR-template bevat de checklist.

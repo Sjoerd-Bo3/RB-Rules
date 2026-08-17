@@ -1,63 +1,280 @@
-# RB-Rules v2 op de Server-setup VM — achter de centrale Caddy, images uit GHCR
-# (Watchtower auto-update). Draait NAAST de PoP tot pariteit; wissel dan de
-# Caddy-route om.
+# RB-Rules v2 op de Server-setup VM — achter de centrale Caddy, images uit GHCR.
+# Updates komen uitsluitend via push-to-deploy (v2-deploy.yml); Watchtower staat
+# op deze services expliciet UIT (enable=false) zodat er één updatemechanisme is
+# en pull/up nooit racet met een Watchtower-update (issue #45, punt 3).
 #
 #   docker compose --project-name rb-rules-v2 up -d
+#
+# Ops-hardening (issue #45):
+#  - memory-limits per service: op de 8GB B2ms kiest de host-OOM-killer anders
+#    willekeurig; caps localiseren een piek in de veroorzakende container.
+#    Budget: api 1.5g + web 512m + ai 2500m + postgres 1g + neo4j 1.5g (heap 512m
+#    + pagecache 384m uit .env + JVM-overhead) + ollama 2.5g (bge-m3 geladen).
+#    De som ligt bewust bóven de 7,7 GiB van de VM: dit zijn PLAFONDS, geen
+#    reserveringen — geen enkele service zit normaal aan zijn cap, en de caps
+#    bestaan juist om een uitschieter te localiseren in plaats van de host mee te
+#    slepen. rb-ai ging in #279 van 1g naar 2500m omdat de brein-mining sindsdien
+#    parallel draait: elke gelijktijdige SDK-sessie is een Claude-subprocess van
+#    orde-grootte 300-400 MiB RSS, dus AI_MAX_CONCURRENCY=5 vraagt ~2 GiB náást
+#    node zelf (~300 MiB). Bij 1g paste dat niet en OOM-killte de container
+#    zichzelf precies wanneer het druk is. Gemeten vóór de wijziging: 4,2 GiB vrij
+#    op de VM, rb-ai op 290 MiB — de ~1,7 GiB extra past daar met marge voor
+#    Ollama/Neo4j/Postgres. Verhoog AI_MAX_CONCURRENCY nooit zonder deze limiet
+#    mee te nemen (en omgekeerd).
+#  - healthchecks op alle services + log-rotatie (json-file groeit anders
+#    onbegrensd).
+#
+# IMAGE_TAG (issue #45, :latest-race): de deploy-workflow pint per run de
+# commit-SHA van de publish die hem triggerde (export op het SSH-commando —
+# de .env op de VM blijft onaangeroerd). Zonder IMAGE_TAG valt alles terug
+# op :latest, dus handmatig `docker compose up -d` op de VM blijft gewoon
+# werken; de eerstvolgende automatische deploy pint dan weer een SHA.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   rb-api:
-    image: ghcr.io/sjoerd-bo3/rb-rules-rb-api:latest
+    image: ghcr.io/sjoerd-bo3/rb-rules-rb-api:${IMAGE_TAG:-latest}
     container_name: rb-v2-api
     restart: unless-stopped
+    logging: *default-logging
     labels:
-      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
-      DATABASE_URL: Host=rb-v2-postgres;Database=rbrules;Username=rbrules;Password=${POSTGRES_PASSWORD}
+      DATABASE_URL: Host=rb-v2-postgres;Database=rbrules;Username=rbrules;Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD ontbreekt in .env}
       NEO4J_URI: bolt://rb-v2-neo4j:7687
       NEO4J_USER: neo4j
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-rbrules-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD ontbreekt in .env}
       RB_AI_URL: http://rb-v2-ai:8090
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       OLLAMA_URL: http://rb-v2-ollama:11434
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:beheer@bo3.dev}
+      # Magic-link-login (#42): zonder SMTP-config geeft inloggen een nette
+      # 503 en blijft de rest van de site gewoon werken.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://poracle.nl}
+      # Agentic ask (#107): off/auto/force. Default auto sinds 2026-07-13
+      # (keuze Sjoerd); via .env terug te zetten zonder repo-wijziging.
+      ASK_AGENTIC: ${ASK_AGENTIC:-auto}
+      # Ask-geschiedenis (#157): HMAC-secret voor de ip_hash-koppeling. Zonder
+      # secret degradeert de anonieme geschiedenis stil naar leeg — geen crash.
+      ASK_IP_HASH_SECRET: ${ASK_IP_HASH_SECRET:-}
+      # Nachtrun (#245) + noodrem (#249). MOETEN hier staan: Compose geeft alleen
+      # door wat expliciet onder environment: staat, dus een waarde in de VM-.env
+      # alléén bereikte de container nooit — de "noodrem" uit ea567ad deed in
+      # productie niets (printenv gaf niets). De defaults spiegelen
+      # NightlyRunSettings, zodat een ontbrekende .env-waarde het huidige gedrag
+      # houdt: nachtrun AAN, venster 00:00–11:00 Europe/Amsterdam.
+      #
+      # Sinds #254 zijn dit BOOTSTRAP-DEFAULTS: de noodrem en het venster zijn
+      # schakelaars in beheer → Brein (setting-tabel, gelezen op het
+      # gebruiksmoment). Zolang daar niets is omgezet gelden deze waarden
+      # onveranderd. Uitzetten hoeft dus geen .env + compose up -d meer;
+      # handmatig starten via beheer werkt hoe dan ook.
+      NIGHTLY_ENABLED: ${NIGHTLY_ENABLED:-true}
+      NIGHTLY_START_HOUR: ${NIGHTLY_START_HOUR:-0}
+      NIGHTLY_END_HOUR: ${NIGHTLY_END_HOUR:-11}
+      NIGHTLY_TZ: ${NIGHTLY_TZ:-Europe/Amsterdam}
+      # Brein-mining-parallellisme (#279): hoeveel kaarten/subjecten er gelijktijdig
+      # door de rb-ai-extractie gaan. Moet GELIJK zijn aan rb-ai's achtergrond-
+      # deelcap (AI_MAX_CONCURRENCY − AI_INTERACTIVE_RESERVE = 5 − 2 = 3): precies
+      # zoveel workers als er achtergrond-permits zijn betekent geen wachtrij en
+      # geen zelf-veroorzaakte 429's. Hoger levert daarom géén doorvoer op maar
+      # uitval (zichtbaar als "429 AI-slots vol" in het run-detail); lager laat
+      # slots onbenut. Bijstellen doe je aan beide kanten tegelijk.
+      BREIN_MINING_CONCURRENCY: ${BREIN_MINING_CONCURRENCY:-3}
+      # Steekproefdichtheid van de interactie-audit (#255): 1 op de N gepromoveerde
+      # interacties langs het sterkere model. Dit is alleen de BOOTSTRAP-default —
+      # de knop zelf is beheerd (setting-tabel, brein.audit.sample_n) en wint
+      # altijd van deze env (#254). Staat hier tóch expliciet vanwege de
+      # NIGHTLY_ENABLED-les hierboven: een variabele die alleen in de VM-.env
+      # staat bereikt de container nooit.
+      BREIN_AUDIT_SAMPLE_N: ${BREIN_AUDIT_SAMPLE_N:-10}
+      # Embed-batchgrootte (#282). MOETEN hier staan — zelfde les als NIGHTLY_ENABLED
+      # hierboven. Verifieer na deploy met:
+      #   docker exec rb-v2-api printenv | grep EMBED_
+      #
+      # Deze twee horen bij de memory:-cap van de OLLAMA-service onderaan deze file,
+      # net zoals AI_MAX_CONCURRENCY bij die van rb-ai hoort. Aanleiding: de
+      # cgroup-OOM-killer schoot llama-server af op ~2,5 GB (anon-rss 2578728kB) —
+      # precies Ollama's plafond. Idle houdt Ollama ~69 MiB vast, dus de piek zit
+      # volledig in het VERZOEK: llama.cpp houdt de activaties van alle sequenties in
+      # een batch tegelijk vast, en die kosten schalen met aantal én lengte.
+      #
+      # Vandaar twee grenzen. EMBED_BATCH_SIZE (16 → 8) knijpt het aantal; de
+      # regel-secties zijn met tot 2400 tekens per stuk de zware kant, dus
+      # EMBED_BATCH_CHARS is wat de worst case echt afknijpt — vóór #282 kon
+      # één verzoek 16×2400 ≈ 38k tekens bevatten.
+      #
+      # 8000 → 6000 (#293). #282 koos 8000 op gevoel, en dat bleek EXACT de klip:
+      # meetreeks tegen deze Ollama (POST /api/embed, bge-m3) gaf
+      #   500 / 2400 / 3908 / 4500 / 5000 / 6000 / 7000 tekens → HTTP 200
+      #   8000 tekens                                         → HTTP 400, 3 van 3
+      #   20000 tekens                                        → HTTP 400
+      # met foutbody `do embedding request: … EOF` = het llama-server-kindproces
+      # sterft. Bevestigd met de OOM-teller: `dmesg | grep -c llama-server` ging
+      # tijdens die reeks van 10 naar 30. De 400 en de OOM-kill zijn hetzelfde
+      # gebeuren. 7000 is de klifrand zelf, dus 6000 = ~15% marge eronder.
+      #
+      # Verhogen = de OOM terughalen; verhoog dan eerst de cap hieronder, en alleen
+      # als er op de VM ruimte is (Postgres 1g + Neo4j 1,5g + Ollama 2,5g +
+      # rb-ai 2,44g + api 1,5g op 8 GB). Let op: rb-api weigert een EMBED_BATCH_CHARS
+      # boven EmbeddingSettings.MaxConfigurableBatchChars (6300 — sinds #303 tien
+      # procent ONDER de meetwaarde 7000, want die is de klifrand zelf en dus geen
+      # plek om een beheerder legaal neer te zetten) en valt dan mét een waarschuwing
+      # terug op de default. Écht hoger willen is dus een codewijziging naast deze
+      # compose-wijziging, precies omdat de twee bij elkaar horen. Omlaag bijstellen
+      # kan hier gewoon.
+      #
+      # Sinds #301 is die grens bovendien een GARANTIE en niet langer een afspraak:
+      # EmbeddingService kapt en splitst elk verzoek zelf, dus ook de tien
+      # aanroepplekken buiten de twee embed-pijplijnen (primer-drafts, /ask,
+      # correcties) kunnen llama-server niet meer omver duwen.
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-8}
+      EMBED_BATCH_CHARS: ${EMBED_BATCH_CHARS:-6000}
+      # Brein-extractie (#323). BREIN_EXTRACT_MODEL/BATCH_K zijn BOOTSTRAP-
+      # DEFAULTS voor de beheerde instellingen (beheer → Brein wint, tabel
+      # `setting`); de twee AI_EXTRACT_*-spiegels delen bewust dezelfde
+      # .env-variabelen als rb-ai hieronder, zodat rb-api's batch-callbudget
+      # (BreinExtractSettings.BatchCallTimeout = basis + (K−1)×per-kaart +
+      # marge) per constructie RUIMER blijft dan rb-ai's eigen keten — een
+      # rb-api-timeout korter dan de keten eronder verkleedt elke fout als
+      # "traag" (#281). Verzet je één van de twee in de .env, dan bereiken ze
+      # BEIDE containers.
+      BREIN_EXTRACT_MODEL: ${BREIN_EXTRACT_MODEL:-fable}
+      BREIN_EXTRACT_BATCH_K: ${BREIN_EXTRACT_BATCH_K:-50}
+      AI_EXTRACT_TIMEOUT_MS: ${AI_EXTRACT_TIMEOUT_MS:-90000}
+      AI_EXTRACT_PER_CARD_MS: ${AI_EXTRACT_PER_CARD_MS:-180000}
     depends_on:
       postgres:
         condition: service_healthy
+      neo4j:
+        condition: service_started
+      ollama:
+        condition: service_started
+    healthcheck:
+      # De aspnet-image heeft geen curl/wget, wel bash — HTTP-check via /dev/tcp.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s # EF-migraties bij opstart kunnen even duren
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
     networks: [internal]
 
   rb-web:
-    image: ghcr.io/sjoerd-bo3/rb-rules-rb-web:latest
+    image: ghcr.io/sjoerd-bo3/rb-rules-rb-web:${IMAGE_TAG:-latest}
     container_name: rb-v2-web
     restart: unless-stopped
+    logging: *default-logging
     labels:
-      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       RB_API_URL: http://rb-v2-api:8080
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Board-state-foto's bij rulings-vragen (adapter-node default is 512K)
       BODY_SIZE_LIMIT: 10M
     depends_on: [rb-api]
+    healthcheck:
+      # node:22-alpine heeft geen curl, wel node met fetch. Statisch asset,
+      # zodat de check niet meelift op de gezondheid van rb-api.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/manifest.webmanifest').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
     networks: [internal, caddy]
 
   rb-ai:
-    image: ghcr.io/sjoerd-bo3/rb-rules-rb-ai:latest
+    image: ghcr.io/sjoerd-bo3/rb-rules-rb-ai:${IMAGE_TAG:-latest}
     container_name: rb-v2-ai
     restart: unless-stopped
+    logging: *default-logging
     labels:
-      com.centurylinklabs.watchtower.enable: "true"
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Brein-tools (#106/#107): de agentic-taak praat via de brein-API terug
+      # met rb-api (compose-intern, containernaam zoals RB_AI_URL hierboven).
+      RB_API_URL: http://rb-v2-api:8080
+      # Gelijktijdigheid (#279). MOETEN hier staan: Compose geeft alleen door wat
+      # expliciet onder environment: staat — een waarde in de VM-.env alléén is een
+      # substitutie-bron voor deze file, geen container-env (de NIGHTLY_ENABLED-les
+      # hieronder bij rb-api). Verifieer na deploy met:
+      #   docker exec rb-v2-ai printenv | grep AI_
+      #
+      # AI_MAX_CONCURRENCY is de harde cap op gelijktijdige SDK-sessies en hangt
+      # vast aan het memory-plafond hierboven (2500m ≈ 5 subprocessen + node).
+      # AI_INTERACTIVE_RESERVE is het aantal permits dat NOOIT naar batch-werk
+      # (de brein-mining via /extract/*) gaat: die reserve is wat /ask overeind
+      # houdt tijdens een nachtrun. 2 (niet 1) omdat een agentic /ask 2 permits
+      # kost — met één vrij slot zou juist het zwaarste vraagpad alsnog in de rij
+      # belanden. 5 − 2 = 3 achtergrond-permits, en dat getal moet gelijk blijven
+      # aan BREIN_MINING_CONCURRENCY bij rb-api.
+      AI_MAX_CONCURRENCY: ${AI_MAX_CONCURRENCY:-5}
+      AI_INTERACTIVE_RESERVE: ${AI_INTERACTIVE_RESERVE:-2}
+      # Tijdslimiet per brein-extractie (#281). Default 90000 = het bestaande
+      # gedrag; hij staat hier zodat de knop er in een incident daadwerkelijk
+      # ís — een waarde die alleen in de VM-.env staat bereikt de container
+      # nooit (zie de regel hierboven, en de NIGHTLY_ENABLED-les bij rb-api).
+      #
+      # NOODREM, GEEN FIX. Ophogen verschuift alleen de schaalklip: de duur van
+      # een extractie schaalt mee met het aantal aangeboden refs (gemeten:
+      # 3 refs → 200 na 49,0 s, 39 refs → 92,1 s afgekapt), en dat aantal groeit
+      # met elke set die de kennisbank leert. Bij ~60 refs ligt de klip er weer.
+      # De structurele oplossing (minder refs per aanroep, of de vraag op
+      # mechanic-niveau stellen) staat in #288. Verhogen kost bovendien
+      # wandkloktijd per mislukte kaart in de nachtrun — een run met 22
+      # uitvallen betaalt 22× deze waarde.
+      AI_EXTRACT_TIMEOUT_MS: ${AI_EXTRACT_TIMEOUT_MS:-90000}
+      # Batch-extractie (#323): extra tijdsbudget per EXTRA kaart in een sessie
+      # (effectieve timeout = AI_EXTRACT_TIMEOUT_MS + (K−1) × deze waarde).
+      # Default 180 s: ruim boven de gemeten sonnet-generatie per kaart
+      # (147-163 s). Zelfde .env-variabele wordt aan rb-api gespiegeld
+      # (hierboven) voor het batch-callbudget — verzet ze dus nooit los van
+      # elkaar, en nooit zonder deze regel: een waarde die alleen in de VM-.env
+      # staat bereikt de container niet (#268-les).
+      AI_EXTRACT_PER_CARD_MS: ${AI_EXTRACT_PER_CARD_MS:-180000}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          # 1g → 2500m in #279; hoort bij AI_MAX_CONCURRENCY hierboven (zie de
+          # budget-toelichting bovenaan deze file).
+          memory: 2500m
     networks: [internal]
 
   postgres:
     image: pgvector/pgvector:pg17
     container_name: rb-v2-postgres
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: rbrules
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD ontbreekt in .env}
       POSTGRES_DB: rbrules
     volumes:
       - /mnt/data/postgres/rb-rules-v2:/var/lib/postgresql/data
@@ -66,6 +283,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
     networks: [internal]
 
   # Audit-fix: graph is kernonderdeel — altijd aan (geen optioneel profiel).
@@ -73,12 +294,24 @@ services:
     image: neo4j:5-community
     container_name: rb-v2-neo4j
     restart: unless-stopped
+    logging: *default-logging
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-rbrules-neo4j}
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD ontbreekt in .env}
       NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-512m}
       NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-384m}
     volumes:
       - /mnt/data/neo4j/rb-rules-v2:/data
+    healthcheck:
+      # wget zit in de officiële neo4j-image; 7474 antwoordt zodra de server op is.
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:7474 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
     networks: [internal]
 
   # Meertalig embeddingmodel: docker compose -p rb-rules-v2 exec ollama ollama pull bge-m3
@@ -86,8 +319,35 @@ services:
     image: ollama/ollama:latest
     container_name: rb-v2-ollama
     restart: unless-stopped
+    logging: *default-logging
     volumes:
+      # Modellen op de datadisk — bij de #82-hardening per ongeluk gesneuveld,
+      # waardoor een recreate het gepullde bge-m3 wiste (embedding-uitval).
       - /mnt/data/ollama/rb-rules-v2:/root/.ollama
+    healthcheck:
+      # 'ollama ls' praat met de eigen API op 11434 — geen curl nodig.
+      test: ["CMD", "ollama", "ls"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          # BEWUST ONGEWIJZIGD in #282, ook al werd deze cap geraakt. De VM heeft
+          # geen ruimte om te schuiven: rb-ai nam in #279 de laatste ~1,7 GiB, en de
+          # som van de caps ligt al boven de 7,7 GiB van de host. De ingreep zit dus
+          # aan de vraagkant (EMBED_BATCH_SIZE/EMBED_BATCH_CHARS bij rb-api), niet aan
+          # het plafond: idle is Ollama ~69 MiB, dus wie de piek verkleint heeft deze
+          # 2,5 GiB ruim niet nodig. Een verhoging hier zonder eerst te meten schuift
+          # de OOM alleen door naar Postgres of Neo4j — en dan kiest de HOST-killer,
+          # die niet weet wie de veroorzaker is.
+          #
+          # #293 heeft die vraagkant nu wél gemeten: bij deze cap ligt de klip tussen
+          # 7000 en 8000 tekens per verzoek. Verzet je deze waarde, dan verschuift die
+          # klip mee en is de meetreeks bij EMBED_BATCH_CHARS hierboven verlopen —
+          # opnieuw meten vóór je daar iets op baseert.
+          memory: 2560m
     networks: [internal]
 
 networks:
