@@ -196,8 +196,9 @@ public static class AdminEndpoints
                     });
                     await Step("graph", async () =>
                     {
-                        var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
-                        return $"{r.Cards} cards";
+                        var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(
+                            p => report($"7/8 · graph — {p}"), ct);
+                        return $"{r.Cards} cards, {r.Sections} secties, {r.Governed} afgeleide relaties";
                     });
                     await Step("interacties", async () =>
                     {
@@ -257,9 +258,10 @@ public static class AdminEndpoints
                 },
                 "graph" => async (sp, report, ct) =>
                 {
-                    report("kaarten, domeinen, tags en mechanieken naar Neo4j schrijven");
-                    var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(ct);
-                    return $"{r.Cards} cards, {r.Domains} domains, {r.Tags} tags, {r.Mechanics} mechanics";
+                    var r = await sp.GetRequiredService<GraphSyncService>().SyncAsync(report, ct);
+                    return $"{r.Cards} cards, {r.Mechanics} mechanics, {r.Sections} regelsecties, " +
+                           $"{r.Concepts} concepten, {r.Errata} errata, {r.Bans} bans, " +
+                           $"{r.Governed} afgeleide regel-relaties";
                 },
                 "primer" => async (sp, report, ct) =>
                 {

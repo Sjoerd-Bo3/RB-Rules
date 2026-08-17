@@ -38,6 +38,7 @@ builder.Services.AddHttpClient<EmbeddingService>(c =>
 builder.Services.AddScoped<CardEmbeddingPipeline>();
 builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
+builder.Services.AddScoped<GraphQueryService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
 builder.Services.AddScoped<AskService>();
 builder.Services.AddScoped<PrimerService>();
@@ -100,6 +101,7 @@ app.MapOpenApi();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "rb-api" }));
 
 app.MapCardEndpoints();
+app.MapGraphEndpoints();
 app.MapRuleEndpoints();
 app.MapAskEndpoints();
 app.MapFeedEndpoints();

@@ -26,7 +26,8 @@ public record AskResult(
 /// <summary>Rulings-Q&A met hybride retrieval (audit-fix: niet meer alleen
 /// vector): vector-zoek + Postgres full-text, gefuseerd met RRF; daarna
 /// kaartfeiten + geverifieerde rulings + antwoord via rb-ai met [n]-citaten.</summary>
-public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai)
+public class AskService(
+    RbRulesDbContext db, EmbeddingService embeddings, RbAiClient ai, GraphQueryService graph)
 {
     private const int TopK = 8;
     private const int RrfK = 60;
@@ -156,6 +157,37 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
         var chunksById = chunks.ToDictionary(c => c.Id);
         var ordered = topIds.Where(chunksById.ContainsKey).Select(id => chunksById[id]).ToList();
 
+        // Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
+        // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
+        // regels het keyword niet expliciet definiëren.
+        var cardContext = await CardContextAsync(question, qLower, qv, ct);
+
+        // GraphRAG (#377): vector levert het startpunt, de graaf breidt uit.
+        // Bovenliggende regels van de gevonden secties en de afgeleide
+        // kaart↔regel-verbanden (GOVERNED_BY) komen erbij — die staan nergens
+        // als tekst, maar volgen uit de structuur.
+        var (extraCodes, graphNotes) = await graph.ExpandForAskAsync(
+            [.. ordered.Where(c => c.SectionCode != null).Select(c => c.SectionCode!)],
+            cardContext.CardIds, ct);
+        if (extraCodes.Count > 0)
+        {
+            var extra = await db.RuleChunks.AsNoTracking()
+                .Where(c => c.SectionCode != null && extraCodes.Contains(c.SectionCode)
+                            && !topIds.Contains(c.Id))
+                .OrderBy(c => c.ChunkIndex)
+                .Join(db.Sources, c => c.SourceId, s => s.Id, (c, s) => new
+                {
+                    c.Id, c.Text, c.SectionCode, c.Page, c.DocumentId, c.SourceId,
+                    s.Name, s.Url, s.TrustTier,
+                })
+                .ToListAsync(ct);
+            ordered.AddRange(extra.DistinctBy(c => c.SectionCode));
+        }
+        var graphBlock = graphNotes.Count == 0
+            ? ""
+            : "\n\nGRAAFVERBANDEN (afgeleid uit de kennisgraaf):\n" +
+              string.Join("\n", graphNotes.Select(n => $"- {n}"));
+
         // PDF-bestands-URL's voor deeplinks (…rules.pdf#page=N).
         var docIds = ordered.Select(c => c.DocumentId).Distinct().ToList();
         var fileUrls = await db.Documents
@@ -195,10 +227,6 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
               "de regels zelf blijven normatief):\n" +
               string.Join("\n\n", primerDocs.Select(p => $"[{p.Title}]\n{p.Body}"));
 
-        // 4. Kaartcontext — altijd semantisch (naam + mechaniek-keyword + buren),
-        // zodat "wat is Deflect?" bewijs uit kaartteksten krijgt, ook als de
-        // regels het keyword niet expliciet definiëren.
-        var cardContext = await CardContextAsync(question, qLower, qv, ct);
         var cardBlock = cardContext.Block;
 
         // 4b. Legaliteitsvragen krijgen de actuele banlijst als gezaghebbend blok.
@@ -245,7 +273,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
 
         // Met foto: het sterkere model — board-state-analyse vraagt echt zicht.
         var aiAnswer = await ai.AskAsync(
-            $"Context-fragmenten:\n{context}{primerBlock}{cardBlock}{banBlock}{rulingBlock}{historyBlock}\n\n{questionLabel}: {question}",
+            $"Context-fragmenten:\n{context}{primerBlock}{cardBlock}{graphBlock}{banBlock}{rulingBlock}{historyBlock}\n\n{questionLabel}: {question}",
             $"{BasePrompt}\n\n{QuestionRouter.StructureFor(type)}",
             task: images is { Count: > 0 } ? "hard" : "cheap",
             images: images, ct: ct);
@@ -311,7 +339,8 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
     }
 
     private sealed record CardContextResult(
-        string Block, IReadOnlyList<string> Mechanics, IReadOnlyList<string> CardNames);
+        string Block, IReadOnlyList<string> Mechanics,
+        IReadOnlyList<string> CardNames, IReadOnlyList<string> CardIds);
 
     /// <summary>Kaartcontext via drie kanalen: exacte naam-matches, herkende
     /// mechaniek-keywords ("wat is Deflect?" → kaarten mét Deflect) en
@@ -367,7 +396,7 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .ToListAsync(ct);
 
         var ids = nameHits.Concat(mechanicCardIds).Concat(semanticIds).Distinct().Take(8).ToList();
-        if (ids.Count == 0) return new("", matchedMechanics, []);
+        if (ids.Count == 0) return new("", matchedMechanics, [], []);
 
         var cards = await db.Cards.AsNoTracking()
             .Where(c => ids.Contains(c.RiftboundId))
@@ -390,6 +419,6 @@ public class AskService(RbRulesDbContext db, EmbeddingService embeddings, RbAiCl
             .Where(cardsById.ContainsKey)
             .Select(id => cardsById[id].Name)
             .ToList();
-        return new(block, matchedMechanics, includedNames);
+        return new(block, matchedMechanics, includedNames, [.. cardsById.Keys]);
     }
 }

@@ -105,7 +105,7 @@ public class ScanScheduler(IServiceScopeFactory scopeFactory, ILogger<ScanSchedu
                         logger.LogInformation("Mechanieken: {Mined} kaarten gemined ({Remaining} resterend)",
                             m.Mined, m.Remaining);
                         var graph = scope.ServiceProvider.GetRequiredService<GraphSyncService>();
-                        await graph.SyncAsync(ct);
+                        await graph.SyncAsync(ct: ct);
                     }
                 }
                 catch (Exception ex)

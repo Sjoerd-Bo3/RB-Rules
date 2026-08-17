@@ -238,54 +238,6 @@ public static class CardEndpoints
             return Results.Ok(new { explanation = raw.Trim(), cached = false });
         }).RequireRateLimiting("llm");
 
-        // Graph-verkenner (#29): buren van een kaart via gedeelde mechanieken,
-        // domeinen en geverifieerde interacties.
-        app.MapGet("/api/graph/neighbors", async (string card, RbRulesDbContext db) =>
-        {
-            var center = await db.Cards.FindAsync(card);
-            if (center is null) return Results.NotFound();
-
-            var mechanics = center.Mechanics ?? [];
-            var mechanicGroups = new List<object>();
-            foreach (var m in mechanics.Take(6))
-            {
-                var sharing = await db.Cards
-                    .Where(c => c.RiftboundId != card && c.VariantOf == null &&
-                                c.Mechanics != null && c.Mechanics.Contains(m))
-                    .OrderBy(c => c.Name)
-                    .Take(6)
-                    .Select(c => new { c.RiftboundId, c.Name, c.ImageUrl })
-                    .ToListAsync();
-                mechanicGroups.Add(new { Mechanic = m, Cards = sharing });
-            }
-
-            var interactions = await db.CardInteractions
-                .Where(x => x.CardAId == card || x.CardBId == card)
-                .Take(12)
-                .ToListAsync();
-            var otherIds = interactions
-                .Select(x => x.CardAId == card ? x.CardBId : x.CardAId)
-                .ToList();
-            var names = await db.Cards
-                .Where(c => otherIds.Contains(c.RiftboundId))
-                .ToDictionaryAsync(c => c.RiftboundId, c => c.Name);
-
-            return Results.Ok(new
-            {
-                Center = new { center.RiftboundId, center.Name, center.ImageUrl, center.Domains },
-                Mechanics = mechanicGroups,
-                Interactions = interactions.Select(x =>
-                {
-                    var otherId = x.CardAId == card ? x.CardBId : x.CardAId;
-                    return new
-                    {
-                        OtherId = otherId,
-                        OtherName = names.GetValueOrDefault(otherId, otherId),
-                        x.Kind,
-                    };
-                }),
-            });
-        });
 
         // Regels & errata die bij deze kaart horen (voor de kaartpagina).
         app.MapGet("/api/cards/{id}/rules", async (string id, RbRulesDbContext db) =>

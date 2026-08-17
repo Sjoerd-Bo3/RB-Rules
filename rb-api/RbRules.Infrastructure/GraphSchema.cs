@@ -15,6 +15,9 @@ public static class GraphSchema
         "CREATE CONSTRAINT tag_name IF NOT EXISTS FOR (t:Tag) REQUIRE t.name IS UNIQUE",
         "CREATE CONSTRAINT mechanic_name IF NOT EXISTS FOR (m:Mechanic) REQUIRE m.name IS UNIQUE",
         "CREATE CONSTRAINT rule_section_code IF NOT EXISTS FOR (r:RuleSection) REQUIRE r.code IS UNIQUE",
+        "CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (c:Concept) REQUIRE c.id IS UNIQUE",
+        "CREATE CONSTRAINT erratum_id IF NOT EXISTS FOR (e:Erratum) REQUIRE e.id IS UNIQUE",
+        "CREATE CONSTRAINT ban_entry_id IF NOT EXISTS FOR (b:BanEntry) REQUIRE b.id IS UNIQUE",
     ];
 
     public static async Task EnsureAsync(IDriver driver, CancellationToken ct = default)

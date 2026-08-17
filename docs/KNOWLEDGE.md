@@ -172,12 +172,22 @@ deck-advies, "wat verandert er voor mijn deck door deze errata", enz.
 
 ## Ontologie, vectoren en graph — hoe ze zich verhouden
 
-**Stand vandaag (feitelijk vastgesteld):** de vector-kant draagt alles, de
-graph is *write-only*. GraphSyncService en InteractionService schrijven naar
-Neo4j, maar geen enkele leesroute gebruikt het: AskService raakt de driver
-niet aan en `/api/graph/neighbors` (de verkenner-UI) draait volledig op
-Postgres. De `RuleSection`-constraint bestaat wel, maar zo'n node wordt
-nooit aangemaakt.
+**Was:** de vector-kant droeg alles en de graaf was *write-only* — Neo4j werd
+geschreven maar nergens gelezen, `/api/graph/neighbors` draaide op Postgres,
+en `RuleSection`-knopen bestonden alleen als constraint.
+
+**Nu (gebouwd):** de graaf wordt gelezen én levert eigen kennis.
+`GraphQueryService` bedient de verkenner, de bewijsketen tussen twee kaarten
+en de uitbreiding in `/ask`; regelsecties (met `PARENT_OF`), primer-concepten,
+errata en bans staan als knopen in de graaf; en Neo4j leidt `GOVERNED_BY`
+zelf af uit `HAS_MECHANIC` + `DEFINES`. Valt Neo4j weg, dan beantwoordt
+Postgres dezelfde vraag met minder diepte en zegt het antwoord welke engine
+het leverde. De ontologie staat expliciet in `GraphOntology` en is publiek
+opvraagbaar via `/api/graph/ontology` — de uitlegpagina `/hoe-het-werkt`
+leest hem live, zodat die uitleg niet kan verouderen.
+
+Nog open (zie #377): federatie met externe graven, `SAME_AS`-resolutie en de
+brein-API (#53).
 
 ### Wat elk medium goed kan
 
@@ -212,15 +222,18 @@ Entiteiten: Card · Set · Domain · Tag · Mechanic · Keyword · RuleSection �
 Relaties:   Card-[:HAS_MECHANIC|HAS_DOMAIN|HAS_TAG]->…      (bestaat)
             Card-[:FROM_SET]->Set                            (bestaat)
             Card-[:INTERACTS_WITH {kind, verified}]->Card    (bestaat)
-            Card-[:VARIANT_OF]->Card                         ← ontbreekt
-            RuleSection-[:PARENT_OF]->RuleSection            ← ontbreekt
-            RuleSection-[:DEFINES]->Keyword|Mechanic         ← ontbreekt
-            Card-[:GOVERNED_BY]->RuleSection                 ← ontbreekt
-            Concept-[:EXPLAINS]->RuleSection                 ← ontbreekt
-            Erratum-[:AMENDS]->Card · BanEntry-[:BANS]->Card ← ontbreekt
-            Change-[:AFFECTS]->RuleSection|Card              ← ontbreekt
-            Claim-[:ABOUT]->… · Claim-[:SUPPORTED_BY]->Source
-            Card-[:STAPLE_IN]->Archetype
+            RuleSection-[:PARENT_OF]->RuleSection            (gebouwd)
+            RuleSection-[:DEFINES]->Mechanic                 (gebouwd)
+            Card-[:GOVERNED_BY]->RuleSection                 (gebouwd, afgeleid)
+            Concept-[:EXPLAINS]->RuleSection                 (gebouwd)
+            Erratum-[:AMENDS]->Card · BanEntry-[:BANS]->Card (gebouwd)
+            Change-[:AFFECTS]->RuleSection|Card              ← open
+            Claim-[:ABOUT]->… · Claim-[:SUPPORTED_BY]->Source ← open (#50)
+            Card-[:STAPLE_IN]->Archetype                     ← open (na #15)
+
+Varianten krijgen bewust géén eigen knoop: alt-arts en herdrukken zijn in
+het spel dezelfde kaart, dus de graaf werkt op de canonieke printing. Dat is
+meteen de entity-resolution-regel voor koppeling met externe graven.
 
 Inferentie: keyword op kaart + sectie die keyword definieert ⇒ GOVERNED_BY
             ban op printing ⇒ ban op de hele variantgroep

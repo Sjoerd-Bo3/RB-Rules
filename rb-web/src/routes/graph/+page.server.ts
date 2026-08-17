@@ -1,10 +1,21 @@
 import type { PageServerLoad } from './$types';
 import { api } from '$lib/api';
 
+export interface GraphNode {
+	id: string;
+	label: string;
+}
+
 export interface GraphData {
-	center: { riftboundId: string; name: string; imageUrl: string | null; domains: string[] };
-	mechanics: { mechanic: string; cards: { riftboundId: string; name: string; imageUrl: string | null }[] }[];
+	center: GraphNode;
+	domains: string[];
+	mechanics: { mechanic: string; cards: GraphNode[] }[];
+	/** Afgeleide kaart↔regel-relaties (GOVERNED_BY) — alleen uit Neo4j. */
+	rules: { code: string; snippet: string | null; via: string | null }[];
 	interactions: { otherId: string; otherName: string; kind: string }[];
+	facts: { kind: string; label: string }[];
+	/** Welke engine antwoordde: 'neo4j' (volledige graaf) of 'postgres'. */
+	source: string;
 }
 
 export const load: PageServerLoad = async ({ url }) => {

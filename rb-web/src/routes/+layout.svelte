@@ -11,6 +11,7 @@
 		{ href: '/ask', label: 'Vraag' },
 		{ href: '/cards', label: 'Kaarten' },
 		{ href: '/graph', label: 'Graph' },
+		{ href: '/hoe-het-werkt', label: 'Hoe het werkt' },
 		{ href: '/admin', label: 'Beheer' }
 	];
 
