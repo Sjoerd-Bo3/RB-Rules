@@ -170,6 +170,89 @@ een geconfigureerde MCP-server, maxTurns omhoog). Dezelfde brein-API is
 daarna de bouwsteen voor alles wat we nog verzinnen: interactie-ontdekking,
 deck-advies, "wat verandert er voor mijn deck door deze errata", enz.
 
+## Ontologie, vectoren en graph — hoe ze zich verhouden
+
+**Stand vandaag (feitelijk vastgesteld):** de vector-kant draagt alles, de
+graph is *write-only*. GraphSyncService en InteractionService schrijven naar
+Neo4j, maar geen enkele leesroute gebruikt het: AskService raakt de driver
+niet aan en `/api/graph/neighbors` (de verkenner-UI) draait volledig op
+Postgres. De `RuleSection`-constraint bestaat wel, maar zo'n node wordt
+nooit aangemaakt.
+
+### Wat elk medium goed kan
+
+| | pgvector (semantisch) | Neo4j (structureel) |
+|---|---|---|
+| Beantwoordt | "wat lijkt hierop / gaat hier ongeveer over" | "wat hangt hier aantoonbaar aan vast, via welke stappen" |
+| Sterk in | onbekende formulering, synoniemen, NL↔EN, fuzzy intentie | exacte samenhang, meerstaps-paden, tellen over relaties |
+| Zwak in | bewijs leveren, meerstaps-redenering, volledigheid | vrije tekst en onbekende formuleringen |
+
+Ze zijn complementair. Het patroon dat we willen (GraphRAG): **vector vindt
+het startpunt, de graph breidt uit en bewijst.** Voor een ruling: de
+embedding van de vraag levert kandidaat-secties en -kaarten; de graph haalt
+daar ouderregels, errata, bans, gedeelde mechanieken en geverifieerde
+interacties bij; die verbonden set gaat als context naar het LLM, met het
+pad als bewijs. Vandaag doen we alleen de eerste helft.
+
+### Ontologie: van impliciet naar expliciet
+
+Onze ontologie bestaat, maar impliciet — verspreid over C#-types,
+Cypher-strings en promptteksten. Expliciet maken betekent één plek die
+vastlegt welke entiteitstypen bestaan, welke relaties tussen welke typen
+geldig zijn, welke eigenschappen verplicht zijn en welke afleidregels
+gelden. Dat levert drie dingen op die we missen: validatie bij het schrijven,
+uitbreidbaarheid (nieuw type = registratie, geen code-archeologie) en
+inferentie.
+
+```
+Entiteiten: Card · Set · Domain · Tag · Mechanic · Keyword · RuleSection ·
+            Concept (primer) · Erratum · BanEntry · Change · Source ·
+            Claim · Archetype · Deck
+
+Relaties:   Card-[:HAS_MECHANIC|HAS_DOMAIN|HAS_TAG]->…      (bestaat)
+            Card-[:FROM_SET]->Set                            (bestaat)
+            Card-[:INTERACTS_WITH {kind, verified}]->Card    (bestaat)
+            Card-[:VARIANT_OF]->Card                         ← ontbreekt
+            RuleSection-[:PARENT_OF]->RuleSection            ← ontbreekt
+            RuleSection-[:DEFINES]->Keyword|Mechanic         ← ontbreekt
+            Card-[:GOVERNED_BY]->RuleSection                 ← ontbreekt
+            Concept-[:EXPLAINS]->RuleSection                 ← ontbreekt
+            Erratum-[:AMENDS]->Card · BanEntry-[:BANS]->Card ← ontbreekt
+            Change-[:AFFECTS]->RuleSection|Card              ← ontbreekt
+            Claim-[:ABOUT]->… · Claim-[:SUPPORTED_BY]->Source
+            Card-[:STAPLE_IN]->Archetype
+
+Inferentie: keyword op kaart + sectie die keyword definieert ⇒ GOVERNED_BY
+            ban op printing ⇒ ban op de hele variantgroep
+            change raakt sectie ⇒ afhankelijke Concepts/Claims te herzien
+```
+
+Elke edge draagt provenance (bron, wanneer, door welke job of gebruiker).
+Dat is het verschil tussen een grafiek en een *kennis*graaf.
+
+### Meerdere graphs koppelen
+
+Zodra er meer dan één graaf is (kaart-/regelgraaf, deck- en metagraaf,
+community-claims, extern materiaal zoals het LoL-universum of een
+toernooidatabase), verbind je die via drie mechanismen:
+
+1. **Stabiele identiteiten.** Eén canonieke sleutel per entiteit
+   (`card:ogn-056-298`, `rule:core/601.2.d`). Zonder stabiele sleutel is
+   koppelen giswerk. Onze variantgroepering is hier al een vorm van.
+2. **Entity resolution + `SAME_AS`.** Externe graven noemen dezelfde
+   entiteit anders ("Teemo" in het LoL-universum versus onze kaart-Teemo).
+   Match op naam + type + context (eventueel embedding-ondersteund) en leg
+   de uitkomst vast als expliciete `SAME_AS`-edge mét betrouwbaarheid —
+   nooit id's stilzwijgend gelijkstellen.
+3. **Federatie versus materialisatie.** Federatie bevraagt de andere graaf
+   live (actueel, afhankelijk van beschikbaarheid); materialisatie kopieert
+   de relevante subgraaf periodiek binnen (snel, maar veroudert). Voor ons:
+   eigen kennis materialiseren, externe bronnen federeren of gecached
+   materialiseren met `last_seen`.
+
+De brein-API (#53) abstraheert hierover: één antwoord, met pad en herkomst,
+ongeacht in welke graaf het feit staat.
+
 ## Uitvoeringsvolgorde
 
 1. **Primer** (#49) — grootste begripwinst per uur werk.
