@@ -907,6 +907,20 @@ de globale duur-vangrail).
   Status; alleen de beheerder (X-Admin-Key) kan de actie triggeren. Een
   al `verified` of `rejected` item degradeert/heropent nooit via dit pad.
 
+- **Uitlegpagina** (#379) — `/hoe-het-werkt`: een publieke, deelbare uitleg van
+  de hele keten (bron → secties → hybride zoek → ontologie → graaf → GraphRAG →
+  trust-poort → antwoord), plus een hoofdstuk over het koppelen van meerdere
+  kennisgrafen en een expliciete "waar het niet voor is". Twee dingen komen live
+  uit rb-api zodat de uitleg niet naast de werkelijkheid kan komen te staan: de
+  telstanden (`/api/stats`) en de **ontologie zelf** — klassen, relaties met
+  domein/bereik en kardinaliteit, de disjunctheids-assen en de gegenereerde
+  afleidingsregels, via het nieuwe `/api/brain/ontologie`. Beide best-effort:
+  hapert rb-api, dan blijft de prozauitleg staan. Bevat ook de motivering
+  waarom de graaf een property graph is en geen triplestore (de gekwalificeerde
+  relaties uit ADR-12 zouden daar reïficatie afdwingen in plaats van een keuze
+  te zijn). *Route* `/hoe-het-werkt` · *endpoints* `/api/stats`,
+  `/api/brain/ontologie` · bereikbaar via de zijbalk-voet en de site-footer.
+
 ### 4.5 Beheer (`/admin`)
 
 - **Beheer-console** (#214) — `/admin` heeft een **eigen console-shell**, los

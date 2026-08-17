@@ -1,4 +1,5 @@
 using RbRules.Domain;
+using RbRules.Domain.Ontology;
 using RbRules.Infrastructure;
 
 namespace RbRules.Api.Endpoints;
@@ -143,6 +144,12 @@ public static class BrainEndpoints
                 ? Problem(404, "niet gevonden", $"onbekende claim: {parsed.Format()}")
                 : Results.Ok(evidence);
         });
+
+        // ── ontologie: het schema zelf, publiek leesbaar ───────────────
+        // Voedt de uitlegpagina (/hoe-het-werkt) rechtstreeks uit
+        // OntologySchema, zodat die uitleg niet kan verouderen als er een
+        // klasse of relatie bijkomt. Compile-time constant: geen DB, geen IO.
+        brain.MapGet("/ontologie", () => Results.Ok(OntologyPublicProjection.Current));
 
         // ── contradictions: weerlegde kennis, expliciet gelabeld ───────
         brain.MapGet("/contradictions", async (

@@ -19,8 +19,41 @@ namespace RbRules.Tests;
 /// is EF InMemory (RelationTriageServiceTests-patroon).</summary>
 public class ChangeConsolidationServiceTests
 {
-    private static readonly DateTimeOffset RulesHubDetectedAt =
-        new(2026, 7, 16, 6, 46, 0, TimeSpan.Zero);
+    /// <summary>Hoe ver de fixture terug ligt. BEWUST relatief aan nu: de
+    /// kandidaat-query kijkt <see cref="ChangeConsolidationService.LookbackWindow"/>
+    /// terug vanáf <c>UtcNow</c>, dus een ABSOLUTE datum in de fixture is een
+    /// tijdbom — hij schuift het venster uit terwijl er niets aan de code
+    /// verandert. Dat gebeurde ook: het #206-scenario stond hardgecodeerd op
+    /// 16 juli 2026, en op 15 augustus 2026 werden acht tests in deze klasse
+    /// vanzelf rood (nul kandidaten, dus nul beoordeelde paren) zonder één
+    /// wijziging in <see cref="ChangeConsolidationService"/>. Wat het scenario
+    /// écht beschrijft is het VERSCHIL tussen twee detecties (5 minuten), niet
+    /// de kalenderdatum.</summary>
+    private static readonly TimeSpan FixtureAge = TimeSpan.FromDays(2);
+
+    /// <summary>Detectiemoment van de officiële Rules Hub-change; de
+    /// community-bronnen in het scenario volgen er minuten later op. Eén keer
+    /// vastgelegd bij het laden van de klasse (net als voorheen), zodat alle
+    /// tijdstippen binnen een run onderling vast liggen.</summary>
+    private static readonly DateTimeOffset RulesHubDetectedAt = DateTimeOffset.UtcNow - FixtureAge;
+
+    /// <summary>Regressiewachter bij de tijdbom hierboven: valt de fixture
+    /// buiten het terugkijkvenster, dan levert de kandidaat-query nul rijen en
+    /// slagen alle andere tests in deze klasse om de VERKEERDE reden (ze
+    /// asserteren dan op een lege run). Deze test faalt met een leesbare reden
+    /// in plaats van acht mysterieuze "verwacht 1, kreeg 0". De 2 dagen staan
+    /// hier als literal — schuift <see cref="ChangeConsolidationService.LookbackWindow"/>
+    /// onder de fixture-leeftijd, dan hoort dat rood te worden, niet stil mee
+    /// te bewegen.</summary>
+    [Fact]
+    public void Fixture_LigtBinnenHetTerugkijkvenster()
+    {
+        Assert.True(
+            FixtureAge < ChangeConsolidationService.LookbackWindow,
+            $"De fixture ligt {FixtureAge.TotalDays} dagen terug, maar de kandidaat-query "
+            + $"kijkt maar {ChangeConsolidationService.LookbackWindow.TotalDays} dagen terug — "
+            + "elke run-test in deze klasse ziet dan nul kandidaten.");
+    }
 
     private const string SameAnswer = """{"sameEvent": true}""";
     private const string DifferentAnswer = """{"sameEvent": false}""";
