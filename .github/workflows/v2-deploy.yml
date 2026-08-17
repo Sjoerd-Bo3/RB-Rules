@@ -4,7 +4,18 @@ name: v2 deploy to VM
 #  - update (default): compose syncen + pull + up — draait na elke publish.
 #  - bootstrap (workflow_dispatch met bootstrap=true): EERSTE deploy —
 #    schrijft .env uit secrets, ontdekt het Caddy-netwerk, start de stack,
-#    pullt bge-m3, voegt de Caddy-route toe en trapt de kaart-sync af.
+#    wiret de Caddy-import, pullt bge-m3 en trapt de kaart-sync af.
+#
+# Caddy-siteconfig (#379): de route van poracle.nl staat in de repo
+# (deploy/server-setup-v2/caddy/poracle.caddy) en wordt bij elke deploy naar
+# ~/compose/caddy/conf.d/ gesynct, gevalideerd en herladen — inclusief de
+# TLS-keten-pin op ISRG Root X1. De workflow bewerkt de GEDEELDE Caddyfile
+# nooit (die draagt ook andere sites; een globaal blok moet er bovendien als
+# eerste in staan), behalve bij een bootstrap, waar hij eenmalig de
+# import-regel toevoegt. De stap "Verifieer TLS-keten" leest daarna de
+# werkelijk geserveerde keten uit: een geldige curl bewijst niets, want de
+# cross-sign naar X1 verifieert prima terwijl bezoekers alsnog
+# ERR_CERT_AUTHORITY_INVALID krijgen.
 #
 # Image-pinning (issue #45, :latest-race): twee parallelle publishes kunnen
 # :latest in de verkeerde volgorde zetten (PR #83 miste daardoor tijdelijk op
@@ -44,6 +55,10 @@ on:
         description: "Image-tag om te deployen (latest of een commit-SHA die v2-ci gepubliceerd heeft)"
         type: string
         default: "latest"
+      renew_tls:
+        description: "Gooi de certificaten van poracle.nl weg en laat ze opnieuw uitgeven (nodig na een wijziging in preferred_chains, #379)"
+        type: boolean
+        default: false
 
 # Serialiseer deploys: vijf snelle merges gaven vijf racende runs met
 # containernaam-conflicten op de VM (issue #45). Nieuwe runs wachten netjes
@@ -232,20 +247,132 @@ jobs:
           $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 ps && docker compose --project-name rb-rules-v2 logs --tail 50 rb-api rb-web"
           exit 1
 
-      - name: "Bootstrap: embeddings-model, Caddy-route, kickoff"
+      - name: Sync Caddy-siteconfig
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          # De siteconfig van poracle.nl leeft sinds #379 in de repo
+          # (deploy/server-setup-v2/caddy/poracle.caddy) in plaats van als
+          # handmatig blok in de centrale Caddyfile. Reden: die file bevat de
+          # TLS-keten-pin op ISRG Root X1, en zulke dingen horen versiebeheerd
+          # en reviewbaar te zijn — niet als eenmalige `>>`-append in een
+          # bootstrap-stap die daarna nooit meer draait.
+          #
+          # HARDE GRENS: deze stap raakt de centrale Caddyfile NOOIT zelf aan.
+          # Die file is gedeeld met andere sites op de VM, en een globaal blok
+          # moet bovendien het eerste blok zijn — tekstchirurgie daarop vanuit
+          # een workflow zet in het slechtste geval élke site op de VM plat.
+          # Ontbreekt de import-regel, dan slaan we over met een notice en de
+          # exacte handmatige stap.
+          #
+          # Alleen bij een bootstrap wiren we die import-regel één keer; bij
+          # elke normale deploy blijft de gedeelde Caddyfile onaangeroerd.
+          if [ "${{ inputs.bootstrap }}" = "true" ]; then
+            $SSHCMD "mkdir -p ~/compose/caddy/conf.d"
+            $SSHCMD "grep -qE '^[[:space:]]*import[[:space:]]+conf\.d/\*\.caddy' ~/compose/caddy/Caddyfile || printf '\nimport conf.d/*.caddy\n' >> ~/compose/caddy/Caddyfile"
+            if $SSHCMD "grep -qE '^[[:space:]]*$DOMAIN' ~/compose/caddy/Caddyfile"; then
+              echo "::warning::er staat nog een handmatig $DOMAIN-blok in ~/compose/caddy/Caddyfile. Haal dat weg — anders botst het met conf.d/poracle.caddy en weigert Caddy te laden."
+            fi
+          fi
+
+          if ! $SSHCMD "grep -qE '^[[:space:]]*import[[:space:]]+conf\.d/\*\.caddy' ~/compose/caddy/Caddyfile" 2>/dev/null; then
+            echo "::notice::~/compose/caddy/Caddyfile heeft geen 'import conf.d/*.caddy' — siteconfig-sync overgeslagen. Eenmalig op de VM: mkdir -p ~/compose/caddy/conf.d && echo 'import conf.d/*.caddy' >> ~/compose/caddy/Caddyfile && (het oude poracle.nl-blok eruit halen), daarna deze workflow opnieuw draaien."
+            exit 0
+          fi
+
+          $SSHCMD "mkdir -p ~/compose/caddy/conf.d"
+          # Back-up vóór elke wijziging: een kapotte siteconfig die Caddy niet
+          # laadt is te herstellen, een weggeraakte niet.
+          $SSHCMD "[ -f ~/compose/caddy/conf.d/poracle.caddy ] && cp ~/compose/caddy/conf.d/poracle.caddy ~/compose/caddy/conf.d/poracle.caddy.bak || true"
+          scp -i ~/.ssh/id_deploy \
+            deploy/server-setup-v2/caddy/poracle.caddy \
+            "$VM_USER@$VM_HOST:/home/$VM_USER/compose/caddy/conf.d/poracle.caddy"
+
+          # Ziet de CONTAINER de file ook? De import is relatief aan de
+          # Caddyfile in de container, dus als alleen de Caddyfile zelf
+          # gemount is (en niet de map eromheen) staat het bestand er wel op
+          # de host maar bestaat het niet voor Caddy. Dat faalt anders pas bij
+          # validate met een obscure melding, of — erger — laadt stil de oude
+          # config door.
+          if ! $SSHCMD "docker exec caddy test -f /etc/caddy/conf.d/poracle.caddy"; then
+            echo "::error::/etc/caddy/conf.d/poracle.caddy bestaat niet in de caddy-container. De centrale Caddy mount waarschijnlijk alleen de Caddyfile en niet de map eromheen. Mount ~/compose/caddy op /etc/caddy (of voeg conf.d als tweede volume toe) en draai deze workflow opnieuw."
+            $SSHCMD "[ -f ~/compose/caddy/conf.d/poracle.caddy.bak ] && mv ~/compose/caddy/conf.d/poracle.caddy.bak ~/compose/caddy/conf.d/poracle.caddy || true"
+            exit 1
+          fi
+
+          # Valideren vóór reloaden. Faalt de validatie, dan de back-up
+          # terugzetten en de deploy laten falen — nooit een reload op een
+          # config waarvan we weten dat hij stuk is.
+          if ! $SSHCMD "docker exec caddy caddy validate --config /etc/caddy/Caddyfile"; then
+            echo "::error::Caddy-config ongeldig na de sync — back-up teruggezet, niets herladen"
+            $SSHCMD "[ -f ~/compose/caddy/conf.d/poracle.caddy.bak ] && mv ~/compose/caddy/conf.d/poracle.caddy.bak ~/compose/caddy/conf.d/poracle.caddy || rm -f ~/compose/caddy/conf.d/poracle.caddy"
+            exit 1
+          fi
+          $SSHCMD "docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
+          $SSHCMD "rm -f ~/compose/caddy/conf.d/poracle.caddy.bak"
+          echo "Caddy-siteconfig gesynct, gevalideerd en herladen."
+
+      - name: "Optioneel: certificaten opnieuw laten uitgeven"
+        if: steps.check.outputs.enabled == 'true' && inputs.renew_tls == true
+        run: |
+          # BEWUST OPT-IN, nooit automatisch (#379). `preferred_chains` geldt
+          # pas bij de VOLGENDE uitgifte: Caddy vervangt een nog geldig
+          # certificaat niet, dus na het aanzetten van de pin blijft de oude
+          # keten staan tot deze stap draait.
+          #
+          # En dit hoort géén onderdeel van elke deploy te zijn: Let's Encrypt
+          # staat een beperkt aantal duplicaat-certificaten per week toe voor
+          # dezelfde set namen. Bij elke merge weggooien betekent binnen een
+          # dag helemaal geen certificaat meer — dat is een veel ergere storing
+          # dan de storing die we repareren.
+          ACME_DIR=/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory
+          for host in "$DOMAIN" "www.$DOMAIN"; do
+            echo "verwijder cert voor $host"
+            $SSHCMD "docker exec caddy rm -rf '$ACME_DIR/$host'" || true
+          done
+          $SSHCMD "docker restart caddy"
+          echo "Caddy herstart; uitgifte loopt. De verificatiestap hieronder controleert de nieuwe keten."
+          sleep 30
+
+      - name: Verifieer TLS-keten
+        if: steps.check.outputs.enabled == 'true' && inputs.bootstrap != true
+        run: |
+          # Permanente bewaking (#379). De aanleiding: Caddy kreeg een keten uit
+          # Let's Encrypts nieuwe "Generation Y"-hiërarchie (Root YE / Root YR),
+          # die nog in geen enkele grote trust store zit. Bezoekers kregen
+          # ERR_CERT_AUTHORITY_INVALID terwijl een gewone `curl` "verify ok"
+          # meldde — er is een cross-sign naar het vertrouwde ISRG Root X1, maar
+          # lang niet elke client bouwt dat langere pad.
+          #
+          # De les die deze stap vastlegt: toets de KETEN, niet de exitcode.
+          # Een geslaagde verbinding bewijst alleen dat de trust store van de
+          # runner het pad vindt.
+          fail=0
+          for host in "$DOMAIN" "www.$DOMAIN"; do
+            chain=$($SSHCMD "openssl s_client -connect '$host:443' -servername '$host' -showcerts </dev/null 2>/dev/null | grep -E '^ *i:'" || true)
+            if [ -z "$chain" ]; then
+              echo "::warning::kon de certificaatketen van $host niet uitlezen (openssl op de VM beschikbaar?) — keten niet geverifieerd"
+              continue
+            fi
+            echo "--- keten $host:"
+            printf '%s\n' "$chain"
+            if printf '%s' "$chain" | grep -qE 'CN *= *Root Y[ER]'; then
+              echo "::warning::$host serveert een keten via ISRG Root YE/YR — die roots zitten nog in geen enkele grote trust store en bezoekers krijgen ERR_CERT_AUTHORITY_INVALID. De pin staat in deploy/server-setup-v2/caddy/poracle.caddy, maar geldt pas bij de volgende uitgifte: draai deze workflow via workflow_dispatch met renew_tls=true."
+              fail=1
+            fi
+          done
+          if [ "$fail" = "1" ]; then
+            echo "::notice::Deploy zelf is geslaagd; alleen de certificaatketen vraagt actie (zie waarschuwing hierboven)."
+          else
+            echo "OK: geen ketens via een niet-vertrouwde root."
+          fi
+
+      - name: "Bootstrap: embeddings-model en kickoff"
         if: steps.check.outputs.enabled == 'true' && inputs.bootstrap == true
         run: |
           # 1. Meertalig embeddingmodel (idempotent)
           $SSHCMD "cd $VM_PATH && docker compose --project-name rb-rules-v2 exec -T ollama ollama pull bge-m3"
 
-          # 2. Caddy-route toevoegen als die er nog niet staat + reload.
-          #    Security-headers (issue #45); CSP bewust niet — die vergt eerst
-          #    testen tegen de SvelteKit-app (inline scripts/PWA) en hoort
-          #    niet blind in een bootstrap.
-          $SSHCMD "grep -q '$DOMAIN' ~/compose/caddy/Caddyfile || printf '\n%s {\n\tencode gzip\n\theader {\n\t\tStrict-Transport-Security \"max-age=31536000\"\n\t\tX-Content-Type-Options nosniff\n\t\tX-Frame-Options DENY\n\t\tReferrer-Policy strict-origin-when-cross-origin\n\t}\n\treverse_proxy rb-v2-web:3000\n}\n' '$DOMAIN' >> ~/compose/caddy/Caddyfile"
-          $SSHCMD "docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
-
-          # 3. Kickoff: kaart-sync (secret komt uit de .env op de VM, niet uit
+          # 2. Kickoff: kaart-sync (secret komt uit de .env op de VM, niet uit
           #    de commandline van de runner). Daarna doet de scheduler de rest.
           #    De stack is hierboven al geverifieerd gezond.
           $SSHCMD "cd $VM_PATH && . ./.env && docker run --rm --network rb-rules-v2_internal curlimages/curl:latest -fsS -m 300 -X POST -H \"X-Admin-Key: \$ADMIN_PASSWORD\" http://rb-v2-api:8080/api/admin/cards/sync" || echo "::warning::kaart-sync-kickoff faalde — kan later via /admin"

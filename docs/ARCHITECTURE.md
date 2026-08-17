@@ -1050,7 +1050,7 @@ robots-afspraak, browser-UA verplicht), achter een eigen
 `deckfetch`-rate-limit per client-ip; 400 ongeldige id / 404 weg op PA / 502
 PA-storing als Problem met detail), `/api/rules*`,
 `/api/knowledge`, `/api/brain/*` (search, node, neighbors, path, evidence,
-contradictions, en sinds #379 `ontologie` — een publieke, IO-loze projectie van
+contradictions, en sinds PR #378 `ontologie` — een publieke, IO-loze projectie van
 `OntologySchema` + de gegenereerde `InferenceRuleRegistry` via
 `OntologyPublicProjection`, zodat de uitlegpagina de klassen, relaties,
 disjunctheid en afleidingsregels LIVE toont in plaats van een overgetypte kopie
@@ -1254,7 +1254,7 @@ deck-codes/decklijsten krijgen negatieve refs die bewust nooit serialiseren
 en zijn — net als de registration-personalia — alléén lokale component-state:
 een code is geen stabiele referentie, en persoonsgegevens horen niet in
 query-strings),
-`/hoe-het-werkt` (publieke uitlegpagina, #379 — de keten van bron tot antwoord
+`/hoe-het-werkt` (publieke uitlegpagina, PR #378 — de keten van bron tot antwoord
 in negen hoofdstukken, bedoeld om aan derden te laten zien; server-load haalt
 `/api/stats` en `/api/brain/ontologie` best-effort op, dus de ontologie-tabel en
 de telstanden zijn live en de prozauitleg blijft leesbaar als rb-api hapert.
@@ -3244,7 +3244,19 @@ Keten (`.github/workflows/v2-ci.yml`, `v2-deploy.yml`,
 
 Topologie op de VM (`docker-compose.yml`): centrale **Caddy** (extern netwerk)
 reverse-proxyt `poracle.nl` (en `www.`) naar rb-web, met een 301 vanaf het
-oude `riftbound-v2.bo3.dev` (#349 — let op: passkeys en web-push zijn aan de
+oude `riftbound-v2.bo3.dev` (#349. **De siteconfig van poracle.nl staat sinds
+#379 in de repo** — `deploy/server-setup-v2/caddy/poracle.caddy` — en wordt door
+`v2-deploy.yml` bij elke deploy naar `~/compose/caddy/conf.d/` gesynct,
+`caddy validate`-gecontroleerd en herladen, met back-up-en-terugrollen bij een
+ongeldige config. De GEDEELDE Caddyfile blijft daarbij onaangeroerd (hij draagt
+ook andere sites, en een globaal blok moet er als eerste in staan); alleen een
+bootstrap wiret er eenmalig `import conf.d/*.caddy` in. Die file draagt ook de
+TLS-keten-pin `preferred_chains { root_common_name "ISRG Root X1" }`, en de
+stap **Verifieer TLS-keten** leest na elke deploy de werkelijk geserveerde
+keten uit — zie de valkuil in CLAUDE.md: een geslaagde `curl` bewijst hier
+niets. Een gewijzigde `preferred_chains` geldt pas bij de volgende uitgifte,
+dus daarvoor is er de opt-in dispatch-input `renew_tls`, bewust niet
+automatisch vanwege Let's Encrypts duplicaat-limiet — let op: passkeys en web-push zijn aan de
 origin gebonden en moeten op het nieuwe domein opnieuw); alle services hebben
 memory-limits, healthchecks en log-rotatie (10m×3). **Watchtower staat
 expliciet uit** op de v2-services (`com.centurylinklabs.watchtower.enable:
