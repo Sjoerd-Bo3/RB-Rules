@@ -208,7 +208,17 @@ de globale duur-vangrail).
   `/api/bans`, `/api/sets/upcoming`.
 - **Regels-browser** — hoofdstuk-hiërarchie van de Core/Tournament Rules met
   §-permalinks en PDF-deeplinks (`#page=N`), plus hybride (semantisch +
-  full-text) zoeken door de secties.
+  full-text) zoeken door de secties. Sinds #385 gaat een regelsectie
+  **contextueel** de embedding in: `§ code (bron) — eerste zin van de hoogste
+  en de dichtstbijzijnde ouder — tekst`, zodat "hoe werkt Deflect" ook een
+  subregel vindt die het woord zelf niet noemt (Anthropic's
+  contextual-retrieval-meting: −35% gemiste retrievals). De opgeslagen en
+  getoonde tekst blijft de kale sectietekst; de invoervorm staat als
+  `embedding_variant` op de rij, en de her-embed-job (#382) pakt rijen met
+  een oudere vorm op — na deploy dus één keer "Embeddingen" draaien. Kaarten
+  gingen al als samengestelde tekst (naam, type, domeinen, stats, tekst,
+  tags) de embedding in. Alle embed-paden schrijven nu ook de
+  content-hash van de exacte invoer (Ring-A-provenance).
   *Routes* `/rules`, `/rules/[code]` · *endpoints* `/api/rules/toc`,
   `/api/rules/search`, `/api/rules/section/{code}`.
 - **Sectie-dossier** — per § de kennis die erop leunt: kaarten die naar de

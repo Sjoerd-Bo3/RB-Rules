@@ -3415,6 +3415,21 @@ kan rb-api eerder starten dan Postgres klaar is.
   al vanzelf heeft. De vaste-lengte-chunks van het artikel blijven daarnaast
   gewoon bestaan (volledigheid, page-context) maar dragen de retrieval niet
   meer alleen.
+- **Contextuele chunk-embeddings** (#385, `RuleChunkEmbedText` in Domain). Een
+  §-chunk ging als kale tekst de embedding in en wist dus niet onder welke kop
+  hij valt. Sinds #385 is de embed-INVOER `§ code (bron) — eerste zin van de
+  hoogste ouder — eerste zin van de dichtstbijzijnde ouder — tekst` (elke
+  ouder-zin ≤ 160 tekens); `RuleChunk.Text` blijft de kale tekst (invoer ≠
+  opslag, zelfde scheiding als de kap van #293). `RuleChunkPipeline` bouwt de
+  ouders uit dezelfde parse, `EmbeddingRefreshService` uit de bestaande index
+  (`RuleParentLookup`). De invoervorm staat als `RuleChunk.EmbeddingVariant`
+  op de rij (null = kale tekst van vóór #385); de her-embed-job selecteert op
+  model óf variant, zodat twee invoervormen nooit stil in één vectorruimte
+  staan. Bump `RuleChunkEmbedText.Variant` bij elke wijziging van de vorm
+  (regressiewachter in `RuleChunkEmbedTextTests`). Bijvangst: alle embed-
+  paden schrijven nu `EmbeddingContentHash` van de exacte invoer — de
+  Ring-A-provenance (#233) werd tot dan op geen enkele laag geschreven.
+  Kaarten waren al contextueel (`CardText.Compose`).
 - **Het brein & BrainRef** (`docs/BRAIN.md`). Eén tekstuele identiteit
   (`card:…`, `section:sourceId/code`, `claim:…`) over pgvector, Neo4j én
   API-contracten (`BrainRef.cs`). De brein-API (`/api/brain/*`) biedt zes

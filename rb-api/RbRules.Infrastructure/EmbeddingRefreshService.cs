@@ -62,13 +62,22 @@ public class EmbeddingRefreshService(
         var model = EmbeddingConfig.Model;
         var layers = new List<EmbeddingRefreshLayer>();
 
-        // Regelchunks: de tekst zelf. Zelfde invoer als RuleChunkPipeline.
+        // Regelchunks: de contextuele invoervorm van RuleChunkPipeline (#385:
+        // "§ code (bron) — ouder-zin — tekst"). Stale = ander model óf een
+        // oudere invoervorm (null = kale tekst van vóór #385).
+        var variant = RuleChunkEmbedText.Variant;
         var chunks = await db.RuleChunks
-            .Where(c => c.Embedding != null && c.EmbeddingModel != model)
+            .Where(c => c.Embedding != null && (c.EmbeddingModel != model || c.EmbeddingVariant != variant))
             .OrderBy(c => c.Id).ToListAsync(ct);
+        var chunkText = await RuleChunkTextsAsync(chunks, ct);
         layers.Add(await RefreshLayerAsync("regels", chunks,
-            c => c.Text,
-            (c, v, cut) => { c.Embedding = v; c.EmbeddingModel = model; c.EmbeddingTruncatedAt = cut; },
+            c => chunkText[c],
+            (c, v, cut, input) =>
+            {
+                c.Embedding = v; c.EmbeddingModel = model; c.EmbeddingTruncatedAt = cut;
+                c.EmbeddingVariant = variant;
+                c.EmbeddingContentHash = EmbeddingProvenance.ContentHash(input);
+            },
             progress, ct));
 
         // Primer: titel + body, zoals PrimerService bij (her)generatie.
@@ -77,7 +86,11 @@ public class EmbeddingRefreshService(
             .OrderBy(d => d.Id).ToListAsync(ct);
         layers.Add(await RefreshLayerAsync("primer", docs,
             d => $"{d.Title}\n{d.Body}",
-            (d, v, cut) => { d.Embedding = v; d.EmbeddingModel = model; d.EmbeddingTruncatedAt = cut; },
+            (d, v, cut, input) =>
+            {
+                d.Embedding = v; d.EmbeddingModel = model; d.EmbeddingTruncatedAt = cut;
+                d.EmbeddingContentHash = EmbeddingProvenance.ContentHash(input);
+            },
             progress, ct));
 
         // Rulings: vraag + tekst, de dominante vorm op de schrijfpaden (verify in
@@ -87,7 +100,11 @@ public class EmbeddingRefreshService(
             .OrderBy(c => c.Id).ToListAsync(ct);
         layers.Add(await RefreshLayerAsync("rulings", rulings,
             c => $"{c.Question}\n{c.Text}",
-            (c, v, _) => { c.Embedding = v; c.EmbeddingModel = model; },
+            (c, v, _, input) =>
+            {
+                c.Embedding = v; c.EmbeddingModel = model;
+                c.EmbeddingContentHash = EmbeddingProvenance.ContentHash(input);
+            },
             progress, ct));
 
         // Claims: onderwerp-ref + bewering, zoals ClaimMiningService.
@@ -96,15 +113,46 @@ public class EmbeddingRefreshService(
             .OrderBy(c => c.Id).ToListAsync(ct);
         layers.Add(await RefreshLayerAsync("claims", claims,
             c => $"{c.TopicRef}\n{c.Statement}",
-            (c, v, _) => { c.Embedding = v; c.EmbeddingModel = model; },
+            (c, v, _, input) =>
+            {
+                c.Embedding = v; c.EmbeddingModel = model;
+                c.EmbeddingContentHash = EmbeddingProvenance.ContentHash(input);
+            },
             progress, ct));
 
         return new EmbeddingRefreshResult(layers);
     }
 
+    /// <summary>Contextuele invoer per chunk (#385): bronnaam en de ouder-
+    /// teksten uit de bestaande index (één query per bron via
+    /// <see cref="RuleParentLookup"/>), zodat de her-embed dezelfde vorm maakt
+    /// als de indexering zelf.</summary>
+    private async Task<Dictionary<RuleChunk, string>> RuleChunkTextsAsync(
+        List<RuleChunk> chunks, CancellationToken ct)
+    {
+        var result = new Dictionary<RuleChunk, string>(ReferenceEqualityComparer.Instance);
+        if (chunks.Count == 0) return result;
+        var sourceIds = chunks.Select(c => c.SourceId).Distinct().ToList();
+        var names = await db.Sources.AsNoTracking()
+            .Where(s => sourceIds.Contains(s.Id))
+            .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
+        var parents = await RuleParentLookup.FetchAsync(db,
+            [.. chunks.Where(c => c.SectionCode != null).Select(c => (c.SourceId, c.SectionCode!))], ct);
+        foreach (var c in chunks)
+        {
+            var chain = c.SectionCode is null
+                ? []
+                : parents.GetValueOrDefault((c.SourceId, c.SectionCode), [])
+                    .Select(p => (p.Code, p.Text)).ToList();
+            result[c] = RuleChunkEmbedText.Build(
+                c.SectionCode, names.GetValueOrDefault(c.SourceId, c.SourceId), chain, c.Text);
+        }
+        return result;
+    }
+
     private async Task<EmbeddingRefreshLayer> RefreshLayerAsync<T>(
-        string layer, List<T> todo, Func<T, string> text, Action<T, Vector, int?> apply,
-        Action<string>? progress, CancellationToken ct)
+        string layer, List<T> todo, Func<T, string> text, Action<T, Vector, int?, string> apply,
+        Action<string>? progress, CancellationToken ct) where T : class
     {
         if (todo.Count == 0)
             return new(layer, new EmbedRunResult(0, 0));
@@ -138,7 +186,7 @@ public class EmbeddingRefreshService(
                 var cut = texts[offset + k].Length < originals[offset + k].Length
                     ? texts[offset + k].Length
                     : (int?)null;
-                apply(todo[offset + k], result.Vectors![k], cut);
+                apply(todo[offset + k], result.Vectors![k], cut, texts[offset + k]);
             }
             await db.SaveChangesAsync(ct);
             embedded += count;
