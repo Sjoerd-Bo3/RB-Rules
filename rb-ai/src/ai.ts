@@ -36,7 +36,7 @@ import {
 
 // Auth: CLAUDE_CODE_OAUTH_TOKEN (abonnement) of ANTHROPIC_API_KEY.
 // Laat ANTHROPIC_API_KEY leeg bij abonnementsgebruik — die wint stilletjes.
-export type Task = "cheap" | "hard" | "research" | "agentic";
+export type Task = "light" | "cheap" | "hard" | "research" | "agentic";
 
 export interface AskImage {
   mediaType: string; // image/jpeg | image/png | image/webp | image/gif
@@ -44,6 +44,13 @@ export interface AskImage {
 }
 
 const MODEL: Record<Task, string> = {
+  // "light" (#381): één-beurt-taken met een gesloten uitvoerformaat waarvan
+  // de uitkomst deterministisch wordt nagerekend — de query-rewrite van /ask
+  // (QueryRewriter.Parse kapt op MaxQueries/MaxNormalizedLength en valt bij
+  // onzin terug op de ruwe vraag). Daar telt latency op het kritieke pad
+  // zwaarder dan redeneerkracht. Bewust NIET voor het antwoord zelf: een
+  // modelwissel daar vraagt eerst een eval-run (#387).
+  light: "claude-haiku-4-5-20251001",
   cheap: "claude-sonnet-4-6",
   hard: "claude-opus-4-8",
   research: "claude-sonnet-4-6", // web-werk is zoek+samenvat: Sonnet volstaat (kosten, #42)
@@ -890,8 +897,8 @@ export function buildQueryOptions(input: {
   };
 }
 
-/** De warme-boot-opties zijn per constructie het koude cheap-pad met
- * dezelfde signatuur — apart benoemd zodat de contract-test elke toekomstige
+/** De warme-boot-opties zijn per constructie het koude pad van dezelfde taak
+ * (cheap of light, #381) met dezelfde signatuur — apart benoemd zodat de contract-test elke toekomstige
  * special-casing van het warme pad ziet.
  *
  * `stderr` komt van buiten omdat elke sessie een EIGEN staart hoort te hebben
@@ -907,7 +914,9 @@ export function warmBootOptions(
   stderr: (data: string) => void,
 ): Options {
   return buildQueryOptions({
-    task: "cheap",
+    // De taak zit in de signatuur (#381): het model is een spawn-optie, dus
+    // een warme sessie is per constructie aan één model gebonden.
+    task: sig.task,
     systemPrompt: sig.systemPrompt,
     includePartialMessages: sig.includePartialMessages,
     controller,
@@ -915,7 +924,7 @@ export function warmBootOptions(
   });
 }
 
-function bootWarmCheapSession(sig: WarmSignature): WarmBootHandle {
+function bootWarmSession(sig: WarmSignature): WarmBootHandle {
   const controller = new AbortController();
   const input = pushableInput<ReturnType<typeof buildUserMessage>>();
   // Eigen staart per warme sessie (#300), aangelegd vóór de spawn zodat ook
@@ -943,7 +952,7 @@ function bootWarmCheapSession(sig: WarmSignature): WarmBootHandle {
  * /prewarm-signaal boot er toch niets, en de degradatie naar koud is
  * transparant — de schakelaar is er voor ops-noodgevallen). */
 export const warmPool = new WarmPool({
-  boot: bootWarmCheapSession,
+  boot: bootWarmSession,
   enabled: !["0", "false", "off"].includes(
     (process.env.AI_WARM_POOL ?? "1").toLowerCase(),
   ),
@@ -1069,13 +1078,15 @@ function finishAskRun(
  * semaphore (agentic weegt 2); boven de cap wacht hij kort in de rij en
  * daarna bubbelt een ConcurrencyLimitError naar server.ts (429).
  *
- * Warme pool (#154): een cheap-call waarvan de sessie-opties byte-gelijk
- * zijn aan een voorverwarmde sessie krijgt die sessie (subprocess-boot al
- * betaald); in alle andere gevallen — en bij een dood gebleken warme sessie
- * — start hij transparant koud. Eén sessie = één call, nooit hergebruik.
- * Een `model`-override (#174) slaat de warme pool altijd over — de
- * voorverwarmde sessie is altijd op MODEL.cheap gebootstrapt, dus een claim
- * zou de override stilzwijgend negeren; zie de guard hieronder. */
+ * Warme pool (#154): een cheap- of light-call (#381) waarvan de sessie-opties
+ * byte-gelijk zijn aan een voorverwarmde sessie krijgt die sessie
+ * (subprocess-boot al betaald); in alle andere gevallen — en bij een dood
+ * gebleken warme sessie — start hij transparant koud. Eén sessie = één call,
+ * nooit hergebruik. De taak zit in de signatuur, dus een op het light-model
+ * gebootte sessie bedient nooit een cheap-call (en andersom). Een
+ * `model`-override (#174) slaat de warme pool altijd over — de voorverwarmde
+ * sessie is op MODEL[task] gebootstrapt, dus een claim zou de override
+ * stilzwijgend negeren; zie de guard hieronder. */
 export async function askClaude(opts: {
   prompt: string;
   system?: string;
@@ -1175,8 +1186,8 @@ export async function askClaude(opts: {
       priority: "interactive",
     });
 
-    if (task === "cheap" && !model && pool.isEnabled()) {
-      const sig: WarmSignature = { systemPrompt, includePartialMessages };
+    if ((task === "cheap" || task === "light") && !model && pool.isEnabled()) {
+      const sig: WarmSignature = { task, systemPrompt, includePartialMessages };
       pool.observe(sig);
       const claimed = controller.signal.aborted ? null : pool.claim(sig);
       if (claimed) {

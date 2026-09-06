@@ -105,6 +105,7 @@ public class AiUsageMeteringTests
         // de drift-wacht op de spiegel van rb-ai/src/ai.ts (MODEL). Wijzigt
         // rb-ai zijn map, dan hoort deze test bewust rood te gaan bij het
         // meebewegen van AskPathModels — en betrapt hij elke stille wijziging.
+        Assert.Equal("claude-haiku-4-5-20251001", AskPathModels.Resolve("light"));
         Assert.Equal("claude-sonnet-4-6", AskPathModels.Resolve("cheap"));
         Assert.Equal("claude-opus-4-8", AskPathModels.Resolve("hard"));
         Assert.Equal("claude-sonnet-4-6", AskPathModels.Resolve("agentic"));
@@ -184,20 +185,31 @@ public class AiUsageMeteringTests
     // ── Ask-pad: user-attributie + model + stempel ──────────────────────
 
     [Fact]
-    public async Task AskAsync_BoektUsageEventMetUserIdModelEnTariefversie()
+    public async Task AskAsync_BoektRewriteEnAntwoordAlsTweeUsageEvents()
     {
+        // #381: de rewrite draait op de light-trede (Haiku) en wordt als eigen
+        // rij geboekt; het antwoord houdt alleen zijn eigen tokens over. De
+        // oude "som tegen het antwoordmodel"-boeking (#328) zou de
+        // Haiku-tokens tegen het Sonnet-tarief rekenen en precies de
+        // besparing verbergen die de light-trede moet opleveren.
         using var db = NewDb();
         await SeedRulesAsync(db);
-        var tariff = new AiTariff
+        var sonnet = new AiTariff
         {
             Model = "claude-sonnet-4-6", InputUsdPerMTok = 3m, OutputUsdPerMTok = 15m,
             EffectiveFrom = DateTimeOffset.UtcNow.AddDays(-1),
         };
-        db.AiTariffs.Add(tariff);
+        var haiku = new AiTariff
+        {
+            Model = "claude-haiku-4-5-20251001", InputUsdPerMTok = 1m, OutputUsdPerMTok = 5m,
+            EffectiveFrom = DateTimeOffset.UtcNow.AddDays(-1),
+        };
+        db.AiTariffs.AddRange(sonnet, haiku);
         var user = new AppUser { Email = "speler@example.com" };
         db.Users.Add(user);
         await db.SaveChangesAsync();
 
+        // Eerste call = rewrite (100/10), tweede = antwoord (2000/300).
         var svc = Svc(db, SequenceAi(
             new { answer = Answer, usage = new { inputTokens = 100, outputTokens = 10 } },
             new { answer = Answer, usage = new { inputTokens = 2_000, outputTokens = 300 } }),
@@ -206,19 +218,36 @@ public class AiUsageMeteringTests
         var result = await svc.AskAsync(Question);
 
         Assert.True(result.Ok);
-        var evt = await db.AiUsageEvents.SingleAsync();
+        var events = await db.AiUsageEvents.OrderBy(e => e.Id).ToListAsync();
+        Assert.Equal(2, events.Count);
+
+        var rewrite = Assert.Single(events, e => e.Kind == "ask-rewrite");
+        Assert.Equal(user.Id, rewrite.UserId);
+        Assert.Equal(AiUsageEvent.OriginUser, rewrite.Origin);
+        // Light-pad → het Haiku-model-ID uit de spiegel-map, met zíjn tarief.
+        Assert.Equal("claude-haiku-4-5-20251001", rewrite.Model);
+        Assert.Equal(100, rewrite.InputTokens);
+        Assert.Equal(10, rewrite.OutputTokens);
+        Assert.Equal(haiku.Id, rewrite.TariffVersion);
+        Assert.True(rewrite.Ok);
+
+        var answer = Assert.Single(events, e => e.Kind == "ask");
         // Mutatie-bewijs "user-id niet doorgeven" ⇒ rood:
-        Assert.Equal(user.Id, evt.UserId);
-        Assert.Equal(AiUsageEvent.OriginUser, evt.Origin);
-        Assert.Equal("ask", evt.Kind);
+        Assert.Equal(user.Id, answer.UserId);
+        Assert.Equal(AiUsageEvent.OriginUser, answer.Origin);
         // Cheap-pad → het model-ID uit de spiegel-map, niet de padnaam.
-        Assert.Equal("claude-sonnet-4-6", evt.Model);
-        // Zelfde som als de metric (rewrite + antwoord).
-        Assert.Equal(2_100, evt.InputTokens);
-        Assert.Equal(310, evt.OutputTokens);
+        Assert.Equal("claude-sonnet-4-6", answer.Model);
+        // Alléén de antwoord-tokens: de som (2100/310) minus de rewrite.
+        Assert.Equal(2_000, answer.InputTokens);
+        Assert.Equal(300, answer.OutputTokens);
         // Mutatie-bewijs "tariefversie niet schrijven" ⇒ rood:
-        Assert.Equal(tariff.Id, evt.TariffVersion);
-        Assert.True(evt.Ok);
+        Assert.Equal(sonnet.Id, answer.TariffVersion);
+        Assert.True(answer.Ok);
+
+        // De metric houdt de SOM (quotum-teller, #121) — die splitst niet.
+        var metric = await db.AskMetrics.SingleAsync();
+        Assert.Equal(2_100, metric.InputTokens);
+        Assert.Equal(310, metric.OutputTokens);
     }
 
     [Fact]

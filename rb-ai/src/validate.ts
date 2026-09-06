@@ -39,7 +39,7 @@ export function parseAskRequest(body: unknown): ParseResult {
   // vallen — net als voorheen — terug op "cheap", zodat een tikfout nooit
   // stilzwijgend tools (kosten/latency) aanzet.
   const task: Task =
-    b.task === "hard" || b.task === "research" || b.task === "agentic"
+    b.task === "light" || b.task === "hard" || b.task === "research" || b.task === "agentic"
       ? b.task
       : "cheap";
 

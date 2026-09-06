@@ -1224,6 +1224,13 @@ de globale duur-vangrail).
   het antwoord gerenderd zoals op `/ask` — naast de bestaande metadata.
   *Endpoints* `/api/admin/asktraces` (slanke lijst, zonder antwoord/gesprek),
   `/api/admin/asktraces/{id}` (het gesprek, lazy bij het uitklappen).
+- **Query-rewrite op de light-trede** (#381) — de herformulering van de vraag
+  (genormaliseerde zoekzin, ≤3 zoekqueries, lexicale termen) draait op Haiku
+  4.5 in plaats van op het antwoordmodel: een één-alinea-taak met gesloten
+  formaat dat deterministisch wordt nagerekend en bij uitval op de ruwe vraag
+  terugvalt. Het antwoord zelf blijft op cheap/hard; die wissel vraagt eerst
+  een grotere eval-set (#387). De warme pool verwarmt de rewrite-sessie nu op
+  het light-model voor.
 - **Token-metering & kostenoverzicht** — echte input/output-tokens per vraag
   (rb-ai geeft usage door, geboekt op `ask_metric`), getotaliseerd per pad
   (cheap/hard/agentic, waarbij agentic splitst op gate- vs

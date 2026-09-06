@@ -91,6 +91,9 @@ public static class AskPathModels
 {
     public static string Resolve(string? path) => path switch
     {
+        // #381: de query-rewrite draait op de light-trede (Haiku) en wordt
+        // sindsdien als eigen ai_usage_event geboekt, los van het antwoordpad.
+        "light" => "claude-haiku-4-5-20251001",
         "hard" => "claude-opus-4-8",
         "agentic" => "claude-sonnet-4-6",
         _ => "claude-sonnet-4-6", // cheap en onbekend: het default-model
@@ -98,8 +101,11 @@ public static class AskPathModels
 }
 
 /// <summary>Startwaarden voor de tarieventabel — de publieke API-prijzen per
-/// miljoen tokens (juli 2026). Alleen geseed wanneer de tabel leeg is; daarna
-/// is /api/admin/tariffs (append-only) de bron van waarheid.</summary>
+/// miljoen tokens (juli 2026). Geseed per MODEL dat nog géén enkele tariefrij
+/// heeft (#381: een nieuw model — Haiku voor de rewrite — moet ook op een al
+/// gevulde productietabel een tarief krijgen, anders boekt de meter hem zonder
+/// TariffVersion en is zijn kost onzichtbaar). Bestaande modellen worden nooit
+/// aangeraakt: daar is /api/admin/tariffs (append-only) de bron van waarheid.</summary>
 public static class AiTariffSeed
 {
     public static readonly DateTimeOffset SeedEffectiveFrom =
@@ -107,6 +113,7 @@ public static class AiTariffSeed
 
     public static IReadOnlyList<AiTariff> Defaults =>
     [
+        new() { Model = "claude-haiku-4-5-20251001", InputUsdPerMTok = 1m, OutputUsdPerMTok = 5m, EffectiveFrom = SeedEffectiveFrom },
         new() { Model = "claude-sonnet-4-6", InputUsdPerMTok = 3m, OutputUsdPerMTok = 15m, EffectiveFrom = SeedEffectiveFrom },
         new() { Model = "claude-sonnet-4-6[1m]", InputUsdPerMTok = 3m, OutputUsdPerMTok = 15m, EffectiveFrom = SeedEffectiveFrom },
         new() { Model = "claude-opus-4-8", InputUsdPerMTok = 5m, OutputUsdPerMTok = 25m, EffectiveFrom = SeedEffectiveFrom },

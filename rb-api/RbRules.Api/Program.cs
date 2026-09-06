@@ -348,10 +348,15 @@ if (!app.Environment.IsEnvironment("Testing"))
         db.BenchmarkQuestions.Add(q);
     await db.SaveChangesAsync();
 
-    // Schaduwtarieven (#328): alleen bij een lege tabel — daarna is
-    // /api/admin/tariffs (append-only) de bron van waarheid.
-    if (!await db.AiTariffs.AnyAsync())
-        db.AiTariffs.AddRange(AiTariffSeed.Defaults);
+    // Schaduwtarieven (#328): seed-alleen-ontbrekende-MODELLEN (#381), zelfde
+    // semantiek als de benchmark- en feed-seeds hierboven. Een model dat al
+    // een tariefrij heeft blijft ongemoeid — daar is /api/admin/tariffs
+    // (append-only) de bron van waarheid; een model dat er nog helemaal niet
+    // in staat (Haiku, sinds de light-rewrite) krijgt zijn startwaarde, ook op
+    // een al gevulde productietabel.
+    var tariffedModels = await db.AiTariffs.Select(t => t.Model).Distinct().ToHashSetAsync();
+    foreach (var t in AiTariffSeed.Defaults.Where(t => !tariffedModels.Contains(t.Model)))
+        db.AiTariffs.Add(t);
     await db.SaveChangesAsync();
 
     // Bron-feeds (#167): zelfde seed-alleen-ontbrekende-semantiek.

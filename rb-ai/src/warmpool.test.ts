@@ -11,8 +11,8 @@ import {
   type WarmSignature,
 } from "./warmpool.js";
 
-const SIG: WarmSignature = { systemPrompt: "rewrite-prompt", includePartialMessages: false };
-const OTHER: WarmSignature = { systemPrompt: "antwoord-prompt", includePartialMessages: true };
+const SIG: WarmSignature = { task: "light", systemPrompt: "rewrite-prompt", includePartialMessages: false };
+const OTHER: WarmSignature = { task: "cheap", systemPrompt: "antwoord-prompt", includePartialMessages: true };
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -82,12 +82,22 @@ function pool(overrides: { enabled?: boolean; ttlMs?: number } = {}) {
 
 test("signatureKey: undefined en lege string zijn verschillende signaturen", () => {
   assert.notEqual(
-    signatureKey({ includePartialMessages: false }),
-    signatureKey({ systemPrompt: "", includePartialMessages: false }),
+    signatureKey({ task: "cheap", includePartialMessages: false }),
+    signatureKey({ task: "cheap", systemPrompt: "", includePartialMessages: false }),
   );
   assert.notEqual(
-    signatureKey({ systemPrompt: "x", includePartialMessages: false }),
-    signatureKey({ systemPrompt: "x", includePartialMessages: true }),
+    signatureKey({ task: "cheap", systemPrompt: "x", includePartialMessages: false }),
+    signatureKey({ task: "cheap", systemPrompt: "x", includePartialMessages: true }),
+  );
+});
+
+test("signatureKey: dezelfde prompt op een andere taak is een andere sessie (#381)", () => {
+  // Het model ligt bij de boot vast. Zou de taak niet in de sleutel zitten,
+  // dan claimde een cheap-call stil een op Haiku gebootte rewrite-sessie —
+  // een antwoord op het verkeerde model, zonder dat iets rood werd.
+  assert.notEqual(
+    signatureKey({ task: "light", systemPrompt: "x", includePartialMessages: false }),
+    signatureKey({ task: "cheap", systemPrompt: "x", includePartialMessages: false }),
   );
 });
 

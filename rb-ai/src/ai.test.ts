@@ -32,18 +32,20 @@ const sink = () => (_data: string) => {};
 // buildQueryOptions. Drift tussen die twee zou betekenen dat een warme claim
 // een ándere call doet dan het koude pad zou doen — deze tests zijn de rem.
 
-test("warm en koud bouwen byte-gelijke opties voor dezelfde cheap-signatuur", () => {
+test("warm en koud bouwen byte-gelijke opties voor dezelfde signatuur (cheap én light)", () => {
   const controller = new AbortController();
   for (const sig of [
-    { systemPrompt: "rewrite-systeemprompt", includePartialMessages: false },
-    { systemPrompt: "antwoord-systeemprompt", includePartialMessages: true },
-    { systemPrompt: undefined, includePartialMessages: false },
+    { task: "light" as const, systemPrompt: "rewrite-systeemprompt", includePartialMessages: false },
+    { task: "cheap" as const, systemPrompt: "antwoord-systeemprompt", includePartialMessages: true },
+    { task: "cheap" as const, systemPrompt: undefined, includePartialMessages: false },
   ]) {
     // In productie zijn dit twee VERSCHILLENDE staarten (elke sessie de zijne,
     // #300) — dus de test geeft ze hier ook expres niet dezelfde functie mee.
     const warm = warmBootOptions(sig, controller, sink());
     const cold = buildQueryOptions({
-      task: "cheap",
+      // De taak komt uit de signatuur (#381): warm en koud moeten op hetzelfde
+      // model landen, anders bedient een light-sessie stil een cheap-call.
+      task: sig.task,
       systemPrompt: sig.systemPrompt,
       includePartialMessages: sig.includePartialMessages,
       controller,
@@ -110,6 +112,25 @@ test("cheap-opties: exact het vertrouwde koude pad (golden)", () => {
   );
 });
 
+test("light-opties: Haiku, verder exact het cheap-pad (golden, #381)", () => {
+  // UITGESCHREVEN model-literal, geen MODEL-import in de assert: dit is de
+  // drift-wacht op de spiegel in rb-api (AskPathModels + AiTariffSeed). Wijzigt
+  // de map, dan hoort deze test bewust rood te gaan bij het meebewegen.
+  const controller = new AbortController();
+  const stderr = sink();
+  assert.deepEqual(
+    buildQueryOptions({ task: "light", systemPrompt: "S", includePartialMessages: false, controller, stderr }),
+    {
+      model: "claude-haiku-4-5-20251001",
+      maxTurns: 1,
+      tools: [],
+      abortController: controller,
+      systemPrompt: "S",
+      stderr,
+    },
+  );
+});
+
 test("research-opties: web-tools, dontAsk en 16 beurten (golden)", () => {
   const controller = new AbortController();
   const stderr = sink();
@@ -151,7 +172,7 @@ test("elke taak bouwt opties MÉT stderr-sink — geen taak spawnt blind (#300)"
   // voor niemand. Deze test loopt daarom alle taken langs in plaats van de
   // cheap-golden te vertrouwen.
   const controller = new AbortController();
-  for (const task of ["cheap", "hard", "research", "agentic"] as const) {
+  for (const task of ["light", "cheap", "hard", "research", "agentic"] as const) {
     const o = buildQueryOptions({
       task,
       includePartialMessages: false,
@@ -181,7 +202,7 @@ test("lege systemPrompt (undefined) zet het veld niet — signatuur-semantiek", 
 
 test("model-override vervangt MODEL[task] op elk taaktype (#174)", () => {
   const controller = new AbortController();
-  for (const task of ["cheap", "hard", "research", "agentic"] as const) {
+  for (const task of ["light", "cheap", "hard", "research", "agentic"] as const) {
     const o = buildQueryOptions({
       task,
       includePartialMessages: false,
@@ -373,7 +394,7 @@ test("prewarm-boot raakt de concurrency-cap niet aan: acquire zit alleen in de e
   const askClaudeStart = src.indexOf("export async function askClaude");
   const acquireIndex = src.indexOf("aiSemaphore.acquire(", askClaudeStart);
   assert.ok(askClaudeStart >= 0 && acquireIndex > askClaudeStart, "de acquire-call moet in askClaude staan");
-  const bootFnStart = src.indexOf("function bootWarmCheapSession");
+  const bootFnStart = src.indexOf("function bootWarmSession");
   const bootFnEnd = src.indexOf("\nexport const warmPool", bootFnStart);
   assert.ok(bootFnStart >= 0 && bootFnEnd > bootFnStart, "bootWarmCheapSession moet bestaan");
   const bootFnBody = src.slice(bootFnStart, bootFnEnd);
@@ -448,7 +469,7 @@ test("model-override slaat de warme-pool-claim over (#174)", async () => {
   assert.equal(res.answer, "koud", "de override hoort koud te draaien");
   assert.equal(coldModel, "claude-sonnet-5", "de override moet de koude call bereiken");
   // De klaargezette sessie is niet aangeraakt en blijft dus beschikbaar.
-  assert.ok(pool.claim({ systemPrompt: "S", includePartialMessages: false }));
+  assert.ok(pool.claim({ task: "cheap", systemPrompt: "S", includePartialMessages: false }));
   claimed.end();
 });
 
@@ -589,10 +610,10 @@ function fakeWarmPool() {
 /** Zet een warme sessie klaar voor exact deze signatuur en geef de sessie terug
  * die askClaude straks claimt. (De pool leert signaturen uit echt verkeer, dus
  * eerst het venster openen, dan de signatuur voeren, dan booten.) */
-function armWarmPool(systemPrompt: string) {
+function armWarmPool(systemPrompt: string, task: "cheap" | "light" = "cheap") {
   const { pool, boots } = fakeWarmPool();
   pool.prewarm();
-  pool.observe({ systemPrompt, includePartialMessages: false });
+  pool.observe({ task, systemPrompt, includePartialMessages: false });
   pool.prewarm();
   assert.equal(boots.length, 1, "er hoort precies één warme sessie klaar te staan");
   return { pool, boots, claimed: boots[0] };
