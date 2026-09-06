@@ -11,6 +11,12 @@ public class QuestionRouterTests
     [InlineData("What does Accelerate mean?", false, QuestionType.Definitie)]
     [InlineData("Is Teemo - Swift Scout banned?", true, QuestionType.Legaliteit)]
     [InlineData("Mag ik 4x dezelfde kaart in mijn deck?", false, QuestionType.Legaliteit)]
+    // #391: de natuurlijkste NL-legaliteitsvraag, en de ë-woordgrens van .NET.
+    [InlineData("Mag ik Viktor spelen?", true, QuestionType.Legaliteit)]
+    [InlineData("mag ik Viktor in mijn deck spelen", true, QuestionType.Legaliteit)]
+    [InlineData("Mag ik Viktor spelen als reactie op een spell?", true, QuestionType.Ruling)]
+    [InlineData("Hoeveel kopieën van Viktor mag ik in mijn deck?", true, QuestionType.Legaliteit)]
+    [InlineData("Hoeveel exemplaren van een Legend mag ik spelen?", false, QuestionType.Legaliteit)]
     [InlineData("Hoeveel tijd is er per ronde in een toernooi?", false, QuestionType.Toernooi)]
     [InlineData("Wanneer mag een judge ingrijpen?", false, QuestionType.Toernooi)]
     [InlineData("Wat doet Teemo - Swift Scout?", true, QuestionType.Kaart)]

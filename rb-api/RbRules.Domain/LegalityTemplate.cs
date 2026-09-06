@@ -24,7 +24,7 @@ public static partial class LegalityTemplate
     /// <summary>Deckbouwvragen horen niet in het sjabloon: het antwoord staat
     /// in de Core Rules (kopie-limieten per kaartsoort), niet in de banlijst.</summary>
     [GeneratedRegex(
-        @"\b(hoeveel (kopie|exemplar)|deck ?(bouw|construction|limiet)|4x|playset|kopie(ën|s)?|copies|exemplaren|rotatie|rotation)\b",
+        @"\b(hoeveel (kopie\S*|exemplar\S*)|deck ?(bouw|construction|limiet)|4x|playset|kopie(ën|en|s)?|copies|exemplaren|rotatie|rotation)\b",
         RegexOptions.IgnoreCase)]
     private static partial Regex DeckConstruction();
 

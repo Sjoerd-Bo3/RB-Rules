@@ -64,10 +64,9 @@ public class AskServiceLegalityTemplateTests
         var ai = CountingAi(() => calls++, new { answer = """{"normalized":"Viktor deck legal","queries":[],"terms":[]}""" });
         var svc = new TestableAskService(db, FailingEmbeddings(), ai, new RequestUserContext());
 
-        // Let op: "mag ik Viktor spelen?" routeert de QuestionRouter NIET als
-        // Legaliteit (geen van zijn sleutelwoorden) — dat is een router-kwestie,
-        // los van dit sjabloon. "toegestaan" routeert wel.
-        var r = await svc.AskAsync("is Viktor toegestaan?");
+        // Sinds #391 routeert ook "mag ik Viktor spelen?" als Legaliteit — de
+        // natuurlijkste Nederlandse vorm landt dus op het sjabloon.
+        var r = await svc.AskAsync("mag ik Viktor spelen?");
 
         Assert.StartsWith("**Oordeel:** Viktor is toegestaan.", r.Answer);
         Assert.Contains("staat niet op de actuele banlijst [1]", r.Answer);

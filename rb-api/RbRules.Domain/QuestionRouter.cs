@@ -28,8 +28,18 @@ public static partial class QuestionRouter
     [GeneratedRegex(@"\b(toernooi|tournament|ronde|rondes|judge|penalt|mulligan|match|best of|swiss|top ?cut|deck ?check|tijdslimiet|time limit)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Tournament();
 
-    [GeneratedRegex(@"\b(ban|banned|banlijst|banlist|verboden|legaal|legal|legaliteit|rotatie|rotation|toegestaan|hoeveel (kopie|exemplar)|deck ?(bouw|construction|limiet)|4x|playset)\b", RegexOptions.IgnoreCase)]
+    // #391: "hoeveel (kopie|exemplar)\b" matchte "kopieën" niet — .NET's \b ziet
+    // tussen e en ë (beide letters) geen woordgrens. \S* slokt het vervolg op.
+    [GeneratedRegex(@"\b(ban|banned|banlijst|banlist|verboden|legaal|legal|legaliteit|rotatie|rotation|toegestaan|hoeveel (kopie\S*|exemplar\S*)|deck ?(bouw|construction|limiet)|4x|playset)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Legality();
+
+    /// <summary>#391: "mag ik X spelen?" — de natuurlijkste Nederlandse
+    /// legaliteitsvraag, zonder één van de sleutelwoorden hierboven. Alleen
+    /// wanneer de vraag óp "spelen" eindigt: "mag ik X spelen als reactie?" is
+    /// een echte ruling-vraag (timing), en die hoort het volle format te
+    /// houden.</summary>
+    [GeneratedRegex(@"^\s*mag ik\b[^?]{1,80}?\bspelen\s*\??\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex PlayLegality();
 
     [GeneratedRegex(@"^\s*(wat (is|zijn|betekent|betekenen|doet het keyword)|what (is|are|does .* mean)|leg .*uit|explain)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Definition();
@@ -51,7 +61,7 @@ public static partial class QuestionRouter
     public static QuestionType Classify(string question, bool mentionsCard = false)
     {
         if (Tournament().IsMatch(question)) return QuestionType.Toernooi;
-        if (Legality().IsMatch(question)) return QuestionType.Legaliteit;
+        if (Legality().IsMatch(question) || PlayLegality().IsMatch(question)) return QuestionType.Legaliteit;
         if (ListQuestion().IsMatch(question)) return QuestionType.Lijst;
         if (CardQuestion().IsMatch(question) && mentionsCard) return QuestionType.Kaart;
         if (Definition().IsMatch(question) && !mentionsCard) return QuestionType.Definitie;
