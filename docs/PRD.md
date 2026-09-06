@@ -654,7 +654,12 @@ de globale duur-vangrail).
   over het herkende bord.
 - **Streaming + voorlezen** — het antwoord komt woord voor woord binnen
   (NDJSON-proxy) met vangnet naar de niet-streamende route; een
-  voorlees-knop leest het antwoord voor (speechSynthesis).
+  voorlees-knop leest het antwoord voor (speechSynthesis). Sinds #386
+  toont de pagina de gevonden regelsecties al zodra het meta-frame binnen
+  is ("Bronnen gevonden — antwoord volgt"), dus vóór het eerste
+  tekstfragment: de bezoeker leest de relevante regels terwijl het model
+  nog opstart, en de fase-indicator springt op echte voortgang naar
+  "antwoord formuleren" in plaats van op de klok.
   *Routes* `/ask`, `/ask/stream` · *endpoints* `/api/ask`, `/api/ask/stream`.
 - **Navigatiebestendige vraagsessie** (#248) — vraag, antwoord en de lopende
   stream leven in een sessie-store buiten de pagina-component
