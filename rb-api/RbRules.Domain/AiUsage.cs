@@ -94,6 +94,11 @@ public static class AskPathModels
         // #381: de query-rewrite draait op de light-trede (Haiku) en wordt
         // sindsdien als eigen ai_usage_event geboekt, los van het antwoordpad.
         "light" => "claude-haiku-4-5-20251001",
+        // #383: het legaliteitssjabloon doet geen LLM-call; RecordMetricAsync
+        // boekt er geen antwoord-rij voor. Hier voor de volledigheid — mocht
+        // een ander pad ooit "template" resolven, dan is "geen" eerlijker dan
+        // het Sonnet-default.
+        "template" => "geen",
         "hard" => "claude-opus-4-8",
         "agentic" => "claude-sonnet-4-6",
         _ => "claude-sonnet-4-6", // cheap en onbekend: het default-model

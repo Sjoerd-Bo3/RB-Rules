@@ -1232,6 +1232,22 @@ de globale duur-vangrail).
   het antwoord gerenderd zoals op `/ask` — naast de bestaande metadata.
   *Endpoints* `/api/admin/asktraces` (slanke lijst, zonder antwoord/gesprek),
   `/api/admin/asktraces/{id}` (het gesprek, lazy bij het uitklappen).
+- **Legaliteitsvragen zonder taalmodel** (#383) — een zuivere "is X banned?" /
+  "is X toegestaan/legaal?"-vraag met een herkende kaart krijgt een
+  deterministisch antwoord uit de banlijst en de set-legaliteit, in het
+  gewone scheidsrechtersformat (Oordeel / Zekerheid: Bevestigd / Uitleg / Let
+  op) met één citatie naar de officiële banlijstbron. Geen LLM-call, dus
+  seconden in plaats van tientallen seconden, nul modelkosten en geen
+  verzinselrisico op precies de vragen waar een fout het meest kost. De
+  beslissing valt vóór de retrieval, zodat een banvraag ook landt als geen
+  enkele regelsectie op de vraag matcht. Grenzen: niet bij foto's, niet bij
+  een model-sweep, niet bij deckbouwvragen (kopieën, playset, 4x — die
+  vragen de Core Rules), en alleen met een citeerbare officiële bron; anders
+  het bestaande pad, ongewijzigd. In de duurstatistiek en de vraag-traces
+  staat het pad als `template`; in het kostengrootboek komt er géén
+  antwoord-rij (alleen de rewrite). Bekende grens: "mag ik X spelen?" wordt
+  door de vraag-router niet als legaliteit herkend — een router-kwestie, los
+  van het sjabloon.
 - **Query-rewrite op de light-trede** (#381) — de herformulering van de vraag
   (genormaliseerde zoekzin, ≤3 zoekqueries, lexicale termen) draait op Haiku
   4.5 in plaats van op het antwoordmodel: een één-alinea-taak met gesloten

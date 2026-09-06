@@ -501,6 +501,13 @@
 			strakke opdracht: schrijf uitsluitend op wat in de aangeleverde context staat, in de
 			vorm die een scheidsrechter zou gebruiken.
 		</p>
+		<p>
+			Niet elke vraag komt daar overigens aan. Een zuivere legaliteitsvraag — "is deze kaart
+			verboden?" — heeft een antwoord dat al in een tabel staat: de banlijst en de
+			releasedatum van de set. Dat antwoord schrijft Poracle rechtstreeks uit die tabellen
+			op, in hetzelfde format en met dezelfde bronvermelding, zonder taalmodel. Sneller, en
+			er kan niets bij verzonnen worden.
+		</p>
 		<ul class="format">
 			<li><strong>Oordeel</strong> — het antwoord in één zin</li>
 			<li>
