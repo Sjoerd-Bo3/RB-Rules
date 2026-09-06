@@ -137,6 +137,11 @@ public class AskService(
     /// call zelf nooit uit elkaar kunnen lopen.</summary>
     internal const string RewriteTask = "light";
 
+    /// <summary>Model-pad van een sjabloonantwoord (#383) in AskMetric/AskTrace:
+    /// geen LLM-call. Bewust een eigen waarde en geen "cheap", zodat de
+    /// duurstatistiek en het beheer het pad kunnen onderscheiden.</summary>
+    internal const string TemplateModel = "template";
+
     // Brein-GraphRAG-retrieval (#228) ACHTER de default-uit feature-flag. Null (de
     // meeste constructors/tests) óf flag-uit ⇒ /ask draait EXACT zoals nu: geen
     // brein-call, geen extra latency, geen gedragswijziging. Alleen wanneer de
@@ -328,6 +333,29 @@ public class AskService(
         var mentionsResult = await mentionsTask;
         var mentionsCard = mentionsResult.Value;
         var type = QuestionRouter.Classify(question, mentionsCard);
+
+        // Legaliteitssjabloon (#383): een zuivere "is X banned / mag ik X
+        // spelen?"-vraag met een herkende kaart wordt deterministisch beantwoord
+        // uit de banlijst en de set-legaliteit — gezaghebbende tabellen die tot
+        // nu toe naar Sonnet gingen om er een alinea van te maken (tientallen
+        // seconden, plus het risico dat het model iets bij de tabel verzint).
+        // De beslissing valt HIER, vóór de retrieval, want het antwoord hangt
+        // niet van regeltekst af: een banvraag over een gebande kaart hoort ook
+        // te landen als geen enkele § op de vraag matcht (de lege-retrieval-
+        // uitgang hieronder slaat het sjabloon daarom over).
+        // Grenzen: niet bij foto's (board-state vraagt zicht), niet bij een
+        // model-sweep (options.Model — de benchmark wil het LLM-pad meten), niet
+        // bij deckbouwvragen (LegalityTemplate.Applies), en alleen met een
+        // citeerbare officiële bron. Anders: het bestaande pad, ongewijzigd.
+        LegalityTemplate.Result? template = null;
+        if (type == QuestionType.Legaliteit && images is not { Count: > 0 } && options.Model is null
+            && LegalityTemplate.IsPureLegalityQuestion(question))
+        {
+            var facts = await LegalityFactsAsync(qLower, ct);
+            if (facts is { } f && LegalityTemplate.Applies(question, f.Facts.Count))
+                template = LegalityTemplate.Build(
+                    f.Facts, DateOnly.FromDateTime(DateTime.UtcNow), f.SourceName, f.SourceUrl);
+        }
 
         // Brein-GraphRAG-verrijking (#228) — ALLEEN achter de default-uit flag. Start
         // hem hier, naast de AI-onafhankelijke lees-kanalen, zodat hij (indien aan)
@@ -544,7 +572,7 @@ public class AskService(
             take: TopK,
             bonus: hit => sourceBias != null &&
                 hit.SourceId.Contains(sourceBias, StringComparison.OrdinalIgnoreCase) ? 0.008 : 0);
-        if (topIds.Count == 0)
+        if (topIds.Count == 0 && template is null)
         {
             sw.Stop();
             // BENCHMARK-VLAG (#158): geen ask_metric-rij voor een benchmarkrun.
@@ -789,6 +817,18 @@ public class AskService(
             : null;
         var approachUsed = AgenticGate.EffectiveApproach(decision, requestedApproach);
 
+        // Sjabloonpad (#383, beslist vóór de retrieval): één citatie — de
+        // officiële banlijstbron. De retrieval-citaties vervallen, want het
+        // sjabloon citeert ze niet, en een citatielijst die het antwoord niet
+        // gebruikt is ruis. En geen escalatie: er valt niets te redeneren.
+        if (template is not null)
+        {
+            citations = [new Citation(1, template.SourceName, template.SourceUrl, null, 1,
+                Text: "Officiële banlijst en set-informatie")];
+            agentic = false;
+            escalatedBy = null;
+        }
+
         // Streaming (#31): citaties/claims/vraagtype staan nu vast — vroeg
         // naar de UI zodat die alvast kan renderen terwijl het antwoord komt.
         // De aanpak-terugmelding (#153) gaat mee: een quota-terugval hoort
@@ -829,6 +869,14 @@ public class AskService(
         // Afrondende AI-fase (#152): bij agentic de hele agent-run (plus een
         // eventueel vangnet), bij streaming tot en met het slotframe.
         var aiSw = System.Diagnostics.Stopwatch.StartNew();
+        if (template is not null)
+        {
+            // Sjabloonpad (#383): het antwoord staat al vast; op de streamingroute
+            // gaat het als één delta naar de UI, net als een agentic antwoord.
+            aiAnswer = template.Answer;
+            brainSteps = "[sjabloon: legaliteit deterministisch beantwoord uit banlijst en set-legaliteit — geen LLM-call]";
+            if (onDelta is not null) await onDelta(aiAnswer);
+        }
         if (agentic)
         {
             try
@@ -892,6 +940,7 @@ public class AskService(
         // antwoord écht leverde — "agentic" (Sonnet-agent) alleen wanneer de
         // agent antwoordde; bij vangnet of niet-escaleren het gewone model.
         var usedModel = agentAnswered ? "agentic"
+            : template is not null ? TemplateModel
             : images is { Count: > 0 } ? "hard" : "cheap";
 
         // Vanaf hier bewust ZONDER request-token (review #31): de (LLM-)kosten
@@ -1557,10 +1606,15 @@ public class AskService(
                     db, AiUsageEvent.OriginUser, "ask-rewrite", AskPathModels.Resolve(RewriteTask),
                     userContext.User?.Id, rw.Input, rw.Output,
                     0, ok: true));
-            db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
-                db, AiUsageEvent.OriginUser, "ask", AskPathModels.Resolve(path),
-                userContext.User?.Id, split.Answer?.Input, split.Answer?.Output,
-                (int)Math.Min(elapsedMs, int.MaxValue), ok));
+            // Sjabloonpad (#383): geen antwoord-call, dus geen antwoord-rij — een
+            // rij met nul tokens tegen het Sonnet-tarief zou het kostenbeeld
+            // vertekenen. De metric hierboven houdt Model = "template", zodat de
+            // duurstatistiek het pad wél apart toont.
+            if (path != TemplateModel)
+                db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
+                    db, AiUsageEvent.OriginUser, "ask", AskPathModels.Resolve(path),
+                    userContext.User?.Id, split.Answer?.Input, split.Answer?.Output,
+                    (int)Math.Min(elapsedMs, int.MaxValue), ok));
             await db.SaveChangesAsync();
         }
         catch
@@ -1606,6 +1660,48 @@ public class AskService(
                 c.ImageWidth, c.ImageHeight, c.ImageAltText);
         })];
     }
+
+    /// <summary>Feiten voor het legaliteitssjabloon (#383): per in de vraag
+    /// herkende kaart de ban-status (variantgroep, #44) met format/datum uit de
+    /// banlijst-rij, en de set-legaliteit. Plus de officiële bron om te citeren:
+    /// de ban-rij zelf als de kaart gebannen is, anders de Rules Hub. Zonder
+    /// citeerbare bron ⇒ null ⇒ geen sjabloon (een antwoord zonder bron hoort
+    /// hier niet).</summary>
+    private async Task<LegalityFacts?> LegalityFactsAsync(string qLower, CancellationToken ct)
+    {
+        var cards = await CardsNamedIn(db, qLower).Take(6).WithoutEmbedding().ToListAsync(ct);
+        if (cards.Count == 0) return null;
+
+        var banned = await BanLookup.BannedCanonicalIdsAsync(db, ct);
+        var banRows = await db.BanEntries.AsNoTracking().ToListAsync(ct);
+        var setDates = await SetDatesAsync(db, ct);
+        var hub = await db.Sources.AsNoTracking()
+            .Where(s => s.Id == SourceSeed.RulesHubId)
+            .Select(s => new { s.Name, s.Url })
+            .FirstOrDefaultAsync(ct);
+
+        string? sourceName = hub?.Name, sourceUrl = hub?.Url;
+        var facts = new List<LegalityTemplate.CardFact>();
+        foreach (var c in cards)
+        {
+            var isBanned = BanLookup.IsBanned(banned, c);
+            var canonical = CardText.CanonicalId(c);
+            var row = isBanned
+                ? banRows.FirstOrDefault(b => b.CardRiftboundId == canonical
+                    || b.CardRiftboundId == c.RiftboundId
+                    || b.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (row is not null && sourceUrl is null) { sourceName = "Banlijst (Rules Hub)"; sourceUrl = row.SourceUrl; }
+            facts.Add(new LegalityTemplate.CardFact(
+                c.Name, isBanned, row?.Format, row?.EffectiveFrom,
+                c.SetLabel ?? c.SetId,
+                c.SetId is null ? null : setDates.GetValueOrDefault(c.SetId)));
+        }
+        return sourceUrl is null || sourceName is null ? null : new LegalityFacts(facts, sourceName, sourceUrl);
+    }
+
+    private sealed record LegalityFacts(
+        List<LegalityTemplate.CardFact> Facts, string SourceName, string SourceUrl);
 
     /// <summary>Releasedatum per set (handvol rijen) — voor de legaliteits-
     /// status in kaartfeiten en kaart-widgets (#22/#68).</summary>
