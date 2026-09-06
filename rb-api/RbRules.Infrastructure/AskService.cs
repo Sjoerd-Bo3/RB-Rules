@@ -132,6 +132,11 @@ public class AskService(
 {
     private const int TopK = 8;
 
+    /// <summary>rb-ai-taak van de query-rewrite (#381): "light" = Haiku. Eén
+    /// plek, zodat de usage-boekhouding (<see cref="RecordMetricAsync"/>) en de
+    /// call zelf nooit uit elkaar kunnen lopen.</summary>
+    internal const string RewriteTask = "light";
+
     // Brein-GraphRAG-retrieval (#228) ACHTER de default-uit feature-flag. Null (de
     // meeste constructors/tests) óf flag-uit ⇒ /ask draait EXACT zoals nu: geen
     // brein-call, geen extra latency, geen gedragswijziging. Alleen wanneer de
@@ -375,7 +380,11 @@ public class AskService(
 
         var rewriteOutcome = await rewriteTask;
         rewriteMs = rewriteOutcome.Ms;
-        usage = AddUsage(usage, rewriteOutcome.Usage);
+        // De rewrite-tokens tellen mee in de metric-som (quotum), maar worden in
+        // het kostengrootboek apart geboekt tegen het light-model (#381) — zie
+        // RecordMetricAsync. Daarom hier los vastgehouden.
+        var rewriteUsage = rewriteOutcome.Usage;
+        usage = AddUsage(usage, rewriteUsage);
         var rewrite = rewriteOutcome.Rewrite;
         var searchText = rewrite?.NormalizedQuestion ?? retrievalText;
 
@@ -541,7 +550,8 @@ public class AskService(
             // BENCHMARK-VLAG (#158): geen ask_metric-rij voor een benchmarkrun.
             if (!options.Benchmark)
                 // De rewrite-call is al gemaakt — die tokens tellen mee (#121).
-                await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false, usage: usage);
+                await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: false, usage: usage,
+                    rewriteUsage: rewriteUsage);
             // Gedegradeerd (#100) én geen tekst-match: eerlijk melden wat er
             // aan de hand is — niet doen alsof de index leeg is.
             return new(qv is null
@@ -913,6 +923,7 @@ public class AskService(
             await RecordMetricAsync(
                 sw.ElapsedMilliseconds, type, images, ok: aiAnswer is not null,
                 agentic: agentAnswered, model: usedModel, usage: usage,
+                rewriteUsage: rewriteUsage,
                 // #153: attributie op de póging (ook bij vangnet/abort) — de
                 // kosten zijn dan al gemaakt, dus het quotum telt de rij mee.
                 escalatedBy: escalatedBy);
@@ -1195,8 +1206,13 @@ public class AskService(
         }
 
         var rewriteSw = System.Diagnostics.Stopwatch.StartNew();
+        // Light-trede (#381): de rewrite is een één-alinea-taak met een gesloten
+        // formaat dat QueryRewriter.Parse deterministisch narekent en waarvan
+        // uitval (null) gewoon op de ruwe vraag terugvalt — precies het profiel
+        // waar een klein, snel model volstaat. Het antwoord zelf blijft op cheap.
         var res = await ai.AskWithUsageAsync(
-            QueryRewriter.BuildPrompt(retrievalText), QueryRewriter.SystemPrompt, ct: ct);
+            QueryRewriter.BuildPrompt(retrievalText), QueryRewriter.SystemPrompt,
+            task: RewriteTask, ct: ct);
         var rewrite = res is null ? null : QueryRewriter.Parse(res.Answer);
         if (rewrite is not null && cacheKey is not null) rewriteCache!.Set(cacheKey, rewrite);
         return (rewrite, res?.Usage, rewriteSw.ElapsedMilliseconds);
@@ -1496,7 +1512,7 @@ public class AskService(
     private async Task RecordMetricAsync(
         long elapsedMs, QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images,
         bool ok, bool agentic = false, string? model = null, AiUsage? usage = null,
-        string? escalatedBy = null)
+        string? escalatedBy = null, AiUsage? rewriteUsage = null)
     {
         try
         {
@@ -1525,15 +1541,25 @@ public class AskService(
             // ai_usage_event — mét user-attributie, model-ID en de
             // tariefversie van dit moment (reproduceerbare schaduwkost).
             // Bewust in dezelfde save als de metric: één best-effort-blok.
-            // LET OP (review #328): de rij boekt de SOM van alle calls van de
-            // vraag tegen het model van het ANTWOORDpad — bij een foto-/hard-
-            // vraag rekent dat de (kleine) cheap-rewrite dus tegen het
-            // hard-tarief. Bewuste bovengrens: per-call-splitsen kost een
-            // tweede rij per vraag zonder dat het beeld verandert.
+            //
+            // Sinds #381 in TWEE rijen: de rewrite draait op een ander (en veel
+            // goedkoper) model dan het antwoord, dus de som tegen het
+            // antwoordmodel boeken — de "bewuste bovengrens" van #328 — zou de
+            // Haiku-tokens tegen het Sonnet- of Opus-tarief rekenen en precies
+            // de besparing verbergen die de light-trede moet opleveren. De
+            // arithmetiek staat in AiUsageSplit (Domain, getest).
             var path = model ?? (images is { Count: > 0 } ? "hard" : "cheap");
+            var split = AiUsageSplit.Apply(
+                usage is null ? null : (usage.InputTokens, usage.OutputTokens),
+                rewriteUsage is null ? null : (rewriteUsage.InputTokens, rewriteUsage.OutputTokens));
+            if (split.Rewrite is { } rw)
+                db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
+                    db, AiUsageEvent.OriginUser, "ask-rewrite", AskPathModels.Resolve(RewriteTask),
+                    userContext.User?.Id, rw.Input, rw.Output,
+                    0, ok: true));
             db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
                 db, AiUsageEvent.OriginUser, "ask", AskPathModels.Resolve(path),
-                userContext.User?.Id, usage?.InputTokens, usage?.OutputTokens,
+                userContext.User?.Id, split.Answer?.Input, split.Answer?.Output,
                 (int)Math.Min(elapsedMs, int.MaxValue), ok));
             await db.SaveChangesAsync();
         }

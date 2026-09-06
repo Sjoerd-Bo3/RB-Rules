@@ -197,7 +197,7 @@ flowchart TB
     end
     caddy --> web
     web -->|server-load / +server.ts-proxy| api
-    api -->|task cheap/hard/research/agentic| ai
+    api -->|task light/cheap/hard/research/agentic| ai
     api --> pg
     api --> neo
     api --> ollama
@@ -1175,7 +1175,9 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   `InteractionExtraction`/`MechanicPredicateExtraction`, die de tweede muur
   blijft). Plus de request-validatie. Zie §6.6 voor waaróm de vorm vast is.
 - `src/warmpool.ts` — signaal-gedreven warme-sessie-pool (#154): houdt na een
-  `/prewarm`-signaal maximaal één voorverwarmde cheap-SDK-sessie klaar
+  `/prewarm`-signaal maximaal één voorverwarmde SDK-sessie per signatuur klaar
+  (sinds #381 zit de TAAK in die signatuur — het model is een spawn-optie, dus
+  een op het light-model gebootte rewrite-sessie bedient nooit een cheap-call)
   (subprocess boot alvast, API-call pas bij de vraag; één sessie = één call,
   nooit hergebruik over vragen heen), met TTL, dode-sessie-degradatie naar
   koud en kill-switch `AI_WARM_POOL=0`.
@@ -1210,7 +1212,7 @@ Elke geslaagde wijziging landt als auditregel in `run_log`
   (`RB_API_URL`), met tool-call-cap.
 - `src/relations.ts` — afsplitsen van relatievoorstellen uit het agent-antwoord
   (`RELATIONS_MARKER`).
-- `src/validate.ts` — request-validatie (onbekende taak valt terug op `cheap`).
+- `src/validate.ts` — request-validatie (`light`/`hard`/`research`/`agentic` expliciet; een onbekende taak valt terug op `cheap`).
 
 ### rb-web — belangrijkste modules
 
@@ -1479,9 +1481,13 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
   via `POST /api/admin/tariffs`). Bedragen worden nooit opgeslagen maar op
   leesmoment gereproduceerd als rij × gestempeld tarief (`ShadowCost`),
   overal gelabeld als schaduwkosten — we betalen abonnement, geen tokens.
-  Boekende paden: ask (som van alle calls van de vraag tegen het model van
-  het antwoordpad — een foto-/hard-vraag rekent de kleine cheap-rewrite dus
-  bewust tegen het hard-tarief, een bovengrens), resolve en de
+  Boekende paden: ask — sinds #381 in TWEE rijen per vraag: `ask-rewrite`
+  (de query-rewrite, light-trede = Haiku, eigen tarief) en `ask` (het
+  antwoordpad met alléén zijn eigen tokens; `AiUsageSplit` in Domain doet de
+  aftrek). De oude som-tegen-het-antwoordmodel-boeking (#328) zou de
+  Haiku-tokens tegen het Sonnet-/Opus-tarief rekenen en precies de besparing
+  verbergen die de light-trede oplevert. De `ask_metric`-rij houdt wél de som
+  (quotum-teller) —, resolve en de
   similarity-uitleg-vulling (beide user-veroorzaakt, met attributie), plus
   mining/audit/primer; het paneel meldt zelf dat de overige platform-callers
   nog niet boeken en elk totaal dus een ondergrens is (`MeteredNote`).
@@ -1511,7 +1517,7 @@ sequenceDiagram
     W->>A: POST /api/ask
     A->>A: history + rewrite-cache-lookup (LRU, #152)
     par rewrite overlapt met de rewrite-onafhankelijke kanalen
-        A->>AI: query-rewrite (cheap, overgeslagen bij cache-hit)
+        A->>AI: query-rewrite (light = Haiku 4.5 sinds #381, overgeslagen bij cache-hit)
     and
         A->>O: embed de rúwe vraag
         A->>DB: naam-match + FTS (ruwe tekst) + banlijst — elk op eigen DbContext (IDbContextFactory)

@@ -28,8 +28,16 @@
 
 import { describeThrown, logEvent, type StderrTail } from "./failure.js";
 
+/** De taken die een warme sessie mogen claimen (#381). Het MODEL ligt bij de
+ * boot vast (het is een spawn-optie, net als de systeemprompt), dus de taak
+ * hoort bij de signatuur: een sessie die op het rewrite-model is geboot mag
+ * nooit een antwoord-call bedienen, en andersom. Bewust een eigen string-type
+ * en geen import van `Task` uit ai.ts — die importeert dit bestand al. */
+export type WarmTask = "cheap" | "light";
+
 /** Sessie-opties die bij de SDK-boot vastliggen en dus de claim-sleutel zijn. */
 export interface WarmSignature {
+  task: WarmTask;
   systemPrompt?: string;
   includePartialMessages: boolean;
 }
@@ -37,7 +45,7 @@ export interface WarmSignature {
 /** Byte-gelijke opties ⇒ zelfde sleutel; `undefined` en `""` zijn bewust
  * verschillend (het koude pad zet systemPrompt alleen als die truthy is). */
 export function signatureKey(sig: WarmSignature): string {
-  return JSON.stringify([sig.systemPrompt ?? null, sig.includePartialMessages]);
+  return JSON.stringify([sig.task, sig.systemPrompt ?? null, sig.includePartialMessages]);
 }
 
 /** Wat de boot-factory (ai.ts) aan de pool teruggeeft: de SDK-berichtenstroom
