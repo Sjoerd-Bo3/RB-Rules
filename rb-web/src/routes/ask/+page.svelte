@@ -191,7 +191,11 @@
 	const phase = $derived.by(() => {
 		if (!busy || !askSession.startedAt) return 0;
 		const step = Math.max(2000, Math.round((stats.medianMs ?? 24_000) / PHASES.length));
-		return Math.min(PHASES.length - 1, Math.floor((tick - askSession.startedAt) / step));
+		const byTimer = Math.min(PHASES.length - 1, Math.floor((tick - askSession.startedAt) / step));
+		// Echte voortgang wint van de timer (#386): zodra het meta-frame met de
+		// citaties binnen is, ís de retrieval klaar — dan mag de fase-tekst niet
+		// nog "regelsecties zoeken" zeggen omdat de klok toevallig achterloopt.
+		return live?.citations.length ? Math.max(2, byTimer) : byTimer;
 	});
 
 	interface HistItem { q: string; at: number; }
@@ -390,6 +394,32 @@
 				<button type="button" class="fb stop" onclick={() => askSession.stop()}>Stoppen</button>
 			</div>
 		</div>
+		{#if live?.citations.length}
+			<!-- Bronnen vóór het antwoord (#386): de retrieval is klaar en het
+			     meta-frame heeft de citaties al gebracht, maar het eerste
+			     tekstfragment laat nog op zich wachten (de koude SDK-boot zit
+			     precies in dit gat). De bezoeker kan de relevante regels dus
+			     alvast lezen. Zelfde opmaak als de definitieve citatielijst, hier
+			     standaard open — nu is het het enige wat er te lezen valt. -->
+			<section class="panel found" aria-label="Gevonden bronnen">
+				<p class="found-head">
+					<strong>Bronnen gevonden</strong>
+					<span class="meta">antwoord volgt · {live.citations.length} regelsectie{live.citations.length === 1 ? '' : 's'}</span>
+				</p>
+				{#each live.citations as c (c.n)}
+					{@const essence = citationEssence(c.text)}
+					<details class="cite">
+						<summary>
+							<span class="cite-n">[{c.n}]</span>
+							{#if c.section}<strong>§ {c.section}</strong>{/if}
+							<span class="meta">{c.sourceName} · trust {c.trust}</span>
+							{#if essence}<span class="cite-essence">{essence}</span>{/if}
+						</summary>
+						{#if c.text}<p class="cite-text">{c.text}</p>{/if}
+					</details>
+				{/each}
+			</section>
+		{/if}
 	{/if}
 
 	{#if errorText && !live}<p class="warn">{errorText}</p>{/if}
@@ -811,6 +841,16 @@
 	.phase { margin: 0 0 2px; font-weight: 600; }
 	.waiting .meta { margin: 0; font-size: 0.85rem; }
 	.answer-panel { padding: 18px 20px; }
+	/* Bronnen-vóór-antwoord (#386): zelfde kaartopmaak als het antwoordpaneel,
+	   iets compacter; de kopregel draagt de status als tekst (geen icoon). */
+	.found { padding: 14px 16px; margin-bottom: 16px; }
+	.found-head {
+		display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+		margin: 0 0 10px;
+	}
+	.found-head strong { color: var(--accent); }
+	.found-head .meta { margin: 0; font-size: 0.85rem; }
+	.found .cite:last-child { margin-bottom: 0; }
 	/* Alleen voor screenreaders: visueel volledig verborgen statusregel. */
 	.visually-hidden {
 		position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
