@@ -187,9 +187,12 @@ public static class AdminEndpoints
                 : Results.Conflict(new { error = "er draait al een job of pad — wacht tot die klaar is" });
         });
 
-        admin.MapGet("/status", async (JobRunner jobs, JobLedger ledger, RbRulesDbContext db) =>
+        admin.MapGet("/status", async (
+            JobRunner jobs, JobLedger ledger, RbRulesDbContext db, AnswerMemoryService memory) =>
         {
             var (running, last) = jobs.Snapshot();
+            // Antwoordgeheugen (#384): kandidaten / dienbaar / ingetrokken.
+            var memoryCounts = await memory.CountsAsync(CancellationToken.None);
             return Results.Ok(new
             {
                 Running = running,
@@ -229,6 +232,9 @@ public static class AdminEndpoints
                     OpenProposals = await db.SourceProposals.CountAsync(p => p.Status == "proposed"),
                     Users = await db.Users.CountAsync(),
                     Decks = await db.Decks.CountAsync(),
+                    MemoryCandidates = memoryCounts.Candidates,
+                    MemoryServable = memoryCounts.Servable,
+                    MemoryRetracted = memoryCounts.Retracted,
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
                 // Embed-gezondheid (#282-review): de NIEUWSTE embed-regel, los van het
@@ -910,6 +916,25 @@ public static class AdminEndpoints
         // AdminOverviewService.CorrectionsAsync (endpoints dun, docs/CONVENTIONS.md).
         admin.MapGet("/corrections", async (AdminOverviewService overview) =>
             await overview.CorrectionsAsync());
+
+        // ── Antwoordgeheugen (#384) ─────────────────────────────────────
+        // Overzicht van de recentste rijen en de twee beheerbeslissingen:
+        // verifiëren (hoogste trust, dient vanaf nu) of intrekken (met reden;
+        // de rij blijft als geschiedenis staan).
+        admin.MapGet("/memory", async (AnswerMemoryService memory, CancellationToken ct) =>
+            Results.Ok(await memory.ListAsync(50, ct)));
+
+        admin.MapPost("/memory/{id:long}/verify", async (
+            long id, AnswerMemoryService memory, CancellationToken ct) =>
+            await memory.ReviewAsync(id, verify: true, null, ct)
+                ? Results.Ok(new { ok = true })
+                : Results.NotFound());
+
+        admin.MapPost("/memory/{id:long}/retract", async (
+            long id, ReviewDecision? body, AnswerMemoryService memory, CancellationToken ct) =>
+            await memory.ReviewAsync(id, verify: false, body?.Note, ct)
+                ? Results.Ok(new { ok = true })
+                : Results.NotFound());
 
         admin.MapPost("/corrections/{id:long}/verify", async (
             long id, ReviewDecision? body, RbRulesDbContext db, EmbeddingService embeddings) =>

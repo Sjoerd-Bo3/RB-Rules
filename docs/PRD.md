@@ -1248,6 +1248,31 @@ de globale duur-vangrail).
   antwoord-rij (alleen de rewrite). Bekende grens: "mag ik X spelen?" wordt
   door de vraag-router niet als legaliteit herkend — een router-kwestie, los
   van het sjabloon.
+- **Antwoordgeheugen** (#384, deel 1) — elke beantwoorde eerste-beurt-vraag
+  (zonder foto, buiten benchmark/model-sweep) wordt bewaard in `answer_memory`
+  met vraag-embedding, antwoord, citaties, de gekozen regelsecties en een
+  momentopname van de bron-hashes waarop het antwoord leunde. Trust-lus:
+  `candidate` → `confirmed` (duim omhoog, óf drie keer dezelfde vraag zonder
+  tegenspraak) → `verified` (beheer); duim omlaag, een gewijzigde bron of
+  beheer maakt `retracted` (de rij blijft als geschiedenis). Komt dezelfde
+  vraag terug (cosinus ≥ 0,92 op de ruwe-vraag-embedding, zelfde vraagtype)
+  en is de rij bevestigd én zijn alle geciteerde bronnen ongewijzigd, dan
+  wordt het bewaarde antwoord 1-op-1 gediend — vóór de rewrite, dus zonder
+  één LLM-call — met het label "Eerder beantwoord op \<datum\>". Een
+  vergelijkbare eerdere vraag (0,80–0,92) verschijnt als hint naast het
+  verse antwoord. **Invalidatie via de wijzigingen-feed:** een inhoudelijke
+  wijziging van een bron (het `changed`-pad van de scan) trekt in dezelfde
+  transactie elk bewaard antwoord in dat die bron citeert, met reden; bij
+  hergebruik wordt de bron-hash bovendien nog eens tegen de live tabel
+  gehouden. Beheer: schakelaar `ask.memory.enabled` (beheerde instelling,
+  env-bootstrap `ASK_MEMORY_ENABLED`), tellers (kandidaten / dienbaar /
+  ingetrokken) en een overzicht met verifiëren/intrekken op het dashboard.
+  In de duurstatistiek en de vraag-traces staat het pad als `memory`; geen
+  kostenrij. Bewust nog niet: de bewaarde `retrieval_set` als zesde
+  RRF-kanaal en de bevestigde rijen als eval-bron (deel 2 en 3 van #384).
+  *Endpoints* `/api/admin/memory`, `/api/admin/memory/{id}/verify`,
+  `/api/admin/memory/{id}/retract`; feedback via `/api/corrections`
+  (`memoryId`).
 - **Query-rewrite op de light-trede** (#381) — de herformulering van de vraag
   (genormaliseerde zoekzin, ≤3 zoekqueries, lexicale termen) draait op Haiku
   4.5 in plaats van op het antwoordmodel: een één-alinea-taak met gesloten

@@ -60,8 +60,9 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
   API-keys (`docs/AI_AUTH.md`, `docs/CONVENTIONS.md`, `rb-ai/src/ai.ts` regel
   16-18, compose `rb-ai`-service).
 - **Lokale Ollama bge-m3, provenance heilig.** Embeddings zijn `vector(1024)`
-  met HNSW-index op álle vijf de vectorlagen (sinds #382 ook `knowledge_doc`
-  en `correction`, die tot dan een exacte scan waren); elke embedding bewaart
+  met HNSW-index op álle vectorlagen (sinds #382 ook `knowledge_doc`
+  en `correction`, die tot dan een exacte scan waren; sinds #384 ook de
+  vraag-embedding van `answer_memory`); elke embedding bewaart
   de modelnaam. Een model-wissel is een expliciete her-embed, nooit
   stilzwijgend mixen van dimensies — en sinds #382 dekt de `embed`-job die
   her-embed voor álle lagen: `EmbeddingRefreshService` pakt per laag de rijen
@@ -1126,7 +1127,8 @@ validatie, dan wordt er niets geschreven en komt er een 400 mét uitleg terug (n
 een stilzwijgend genegeerde schakelaar). Ontsloten sleutels:
 `brein.retrieval.enabled` (was `BREIN_RETRIEVAL_ENABLED`), `brein.audit.sample_n`
 (#255, steekproefdichtheid van de interactie-audit; env-default
-`BREIN_AUDIT_SAMPLE_N`, 10), `nightly.enabled` (was
+`BREIN_AUDIT_SAMPLE_N`, 10), `ask.memory.enabled` (#384, antwoordgeheugen;
+env-default `ASK_MEMORY_ENABLED`, aan), `nightly.enabled` (was
 `NIGHTLY_ENABLED`), `nightly.start_hour`, `nightly.end_hour`, `nightly.timezone`.
 Elke geslaagde wijziging landt als auditregel in `run_log`
 (Kind="setting", Ref=sleutel, Detail = "label: oud → nieuw · door wie").
@@ -1541,7 +1543,9 @@ sequenceDiagram
     A->>A: alle kanaalslots innen; RRF-fusie (bron-bias per vraagtype)
     A->>DB: §-verwijzings-bijlading (#364: genoemde, ontbrekende secties — max 6)
     A->>A: prompt-piramide (officieel > primer > community > deck-meta)
-    alt legaliteitssjabloon (#383: Legaliteit + herkende kaart, geen deckbouw/foto/model-sweep, citeerbare bron)
+    alt antwoordgeheugen-hit (#384: eerste beurt, zelfde vraag ≥ 0,92 en vraagtype, trust confirmed/verified, bronnen ongewijzigd — beslist vóór de rewrite, geen LLM-call)
+        A->>DB: answer_memory hit_count++ (3e hit bevestigt een kandidaat)
+    else legaliteitssjabloon (#383: Legaliteit + herkende kaart, geen deckbouw/foto/model-sweep, citeerbare bron)
         A->>A: LegalityTemplate.Build (banlijst + set-legaliteit, geen LLM-call)
     else agentic-escalatie (gate: Ruling met 2+ kaarten / lege retrieval — of gebruiker: Grondig binnen dagtegoed)
         A->>AI: task=agentic (brein-tools)
@@ -1551,11 +1555,29 @@ sequenceDiagram
         AI-->>A: antwoord (evt. streamend)
     end
     A->>DB: AskMetric + AskTrace (incl. PhaseTimings + kanaal-uitval-markers, best-effort)
+    A->>DB: answer_memory: vers antwoord als kandidaat (#384, best-effort; bron-hash-momentopname)
     A-->>W: antwoord + citaties + kaarten + claims
 ```
 
 Kernpunten (`AskService.cs`):
 
+0. **Antwoordgeheugen** (#384, `AnswerMemoryService`, tabel `answer_memory`):
+   vóór de rewrite en de kanalen. Een eerste-beurt-vraag zonder foto (buiten
+   benchmark/model-sweep) embedt eerst de ruwe vraag en zoekt de dichtstbijzijnde
+   bewaarde vraag (HNSW, cosinus). Dezelfde vraag (≥ 0,92, zelfde vraagtype)
+   met trust `confirmed`/`verified` én ongewijzigde bron-hashes ⇒ het bewaarde
+   antwoord (citaties uit `citations_json`) wordt 1-op-1 gediend via dezelfde
+   meta/delta/final-vorm; metric/trace boeken `Model = "memory"`, geen
+   kostenrij. Alles daarbuiten loopt het gewone pad; een vers antwoord wordt
+   achteraf kandidaat (of telt als hit op een bestaande kandidaat — de derde
+   hit bevestigt). Promotielus in `AnswerMemoryPolicy` (Domain): duim omhoog
+   bevestigt, duim omlaag / gewijzigde bron / beheer trekt in. Invalidatie:
+   `IngestService` roept `RetractForSourceAsync` in dezelfde SaveChanges als
+   de `Change`. De router (naam-match + regex) staat sindsdien vóór de
+   rewrite: het geheugen vergelijkt op vraagtype. Kosten op het miss-pad:
+   de rewrite start pas ná de ruwe embedding (≈ 0,1–0,2 s serieel) — alleen
+   met de schakelaar `ask.memory.enabled` aan. Testbaar op EF InMemory via de
+   overridable `NearestAsync` (InMemory kent geen `CosineDistance`).
 1. **Query-rewrite met overlap en cache** (#66, #152): de rewrite-call start
    als taak tegelijk met het embedden van de ruwe vraag en de
    rewrite-onafhankelijke kanalen (naam-match, FTS op de ruwe tekst,

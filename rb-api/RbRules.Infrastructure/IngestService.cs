@@ -321,6 +321,14 @@ public class IngestService(
                     Meaning = cls?.Meaning,
                     Diff = diff,
                 });
+                // Antwoordgeheugen (#384): een inhoudelijke wijziging van deze
+                // bron trekt elk bewaard antwoord in dat haar citeert — in
+                // dezelfde SaveChanges als de Change, zodat de feed en het
+                // geheugen nooit uit de pas lopen. De zwakke plek van elke
+                // antwoordcache (verouderde regels dienen) is hier precies
+                // waar de wijzigingsdetectie zich terugbetaalt.
+                await AnswerMemoryService.RetractForSourceAsync(
+                    db, src.Id, $"bron gewijzigd: {src.Name}", ct);
                 // Temporele precedentie (#168): dit is het beste signaal dat
                 // we hebben voor "wanneer is de bron zelf gewijzigd" — de
                 // officiële pagina publiceert zelf geen aparte update-datum,

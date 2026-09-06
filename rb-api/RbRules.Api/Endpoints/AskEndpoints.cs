@@ -133,7 +133,8 @@ public static class AskEndpoints
             .AddEndpointFilter<UserQuotaFilter.RequireUser>(); // #328: LLM-pad
 
         // ── Feedback op antwoorden (self-learning, #24) ────────────────
-        app.MapPost("/api/corrections", async (CorrectionSubmit body, RbRulesDbContext db) =>
+        app.MapPost("/api/corrections", async (
+            CorrectionSubmit body, RbRulesDbContext db, AnswerMemoryService memory, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(body.Question) || body.Question.Length > 2000)
                 return Results.BadRequest(new { error = "question ontbreekt of is te lang" });
@@ -156,7 +157,11 @@ public static class AskEndpoints
                 Question = body.Question.Trim(),
                 Provenance = "web-feedback",
             });
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(ct);
+            // Antwoordgeheugen (#384): hetzelfde oordeel voedt de promotielus —
+            // best-effort, een onbekende rij-id is geen fout voor de vrager.
+            if (body.MemoryId is { } memoryId)
+                await memory.FeedbackAsync(memoryId, thumbsUp: body.Verdict == "up", ct);
             return Results.Ok(new { ok = true });
         }).RequireRateLimiting("llm").AddEndpointFilter<UserQuotaFilter>();
 

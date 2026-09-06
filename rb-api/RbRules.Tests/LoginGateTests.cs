@@ -87,6 +87,7 @@ public class LoginGateTests
         services.AddScoped<GraphQueryService>();
         services.AddScoped<BrainService>();
         services.AddScoped<AgenticRelationService>();
+        services.AddScoped<AnswerMemoryService>(); // #384: parameter van /api/corrections en /admin/status
         services.AddScoped<AskService>();
         services.AddScoped<AskHistoryService>();
         services.AddScoped<ChatRulingService>();

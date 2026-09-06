@@ -33,6 +33,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     /// <summary>Schaduwtarieven (#328), append-only met ingangsdatum.</summary>
     public DbSet<AiTariff> AiTariffs => Set<AiTariff>();
     public DbSet<AskTrace> AskTraces => Set<AskTrace>();
+    public DbSet<AnswerMemory> AnswerMemories => Set<AnswerMemory>();
     public DbSet<KnowledgeDoc> KnowledgeDocs => Set<KnowledgeDoc>();
     public DbSet<Claim> Claims => Set<Claim>();
     public DbSet<ClaimSource> ClaimSources => Set<ClaimSource>();
@@ -261,6 +262,26 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // Eigen ask-geschiedenis (#157): laatste N op user_id resp. ip_hash.
             e.HasIndex(x => new { x.UserId, x.CreatedAt });
             e.HasIndex(x => new { x.IpHash, x.CreatedAt });
+        });
+
+        // Antwoordgeheugen (#384): nearest-neighbour op de vraag-embedding (HNSW,
+        // zelfde cosinus-operator als de andere lagen), plus een index op trust
+        // voor de cache-poort en op created_at voor het beheeroverzicht. De
+        // bron-momentopname wordt met LIKE doorzocht (invalidatie per bron) —
+        // klein genoeg om zonder index te blijven.
+        b.Entity<AnswerMemory>(e =>
+        {
+            e.ToTable("answer_memory");
+            e.Property(x => x.Question).HasMaxLength(500);
+            e.Property(x => x.Trust).HasMaxLength(16);
+            e.Property(x => x.Model).HasMaxLength(32);
+            e.Property(x => x.PromptVersion).HasMaxLength(16);
+            e.Property(x => x.Embedding).HasColumnType(vectorType);
+            e.HasIndex(x => x.Embedding)
+                .HasMethod("hnsw")
+                .HasOperators("vector_cosine_ops");
+            e.HasIndex(x => x.Trust);
+            e.HasIndex(x => x.CreatedAt);
         });
 
         b.Entity<KnowledgeDoc>(e =>

@@ -7,10 +7,11 @@ export const load: PageServerLoad = async ({ cookies }) => {
 	if (!authed(cookies))
 		return {
 			authed: false, sources: [], status: null, corrections: [],
-			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], drift: null
+			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], drift: null,
+			memory: [], settings: []
 		};
 	try {
-		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds, paths, drift] =
+		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds, paths, drift, memory, settings] =
 			await Promise.all([
 				// Bronnenlijst (#180): admin-endpoint i.p.v. het publieke
 				// /api/sources — dat laatste verbergt genegeerde bronnen nu
@@ -37,16 +38,20 @@ export const load: PageServerLoad = async ({ cookies }) => {
 				// extra wachttijd; AI/graph weg = null en de tabel degradeert netjes.
 				adminApi<{ drift: unknown }>('/api/admin/overview/gaps')
 					.then((g) => g.drift)
-					.catch(() => null)
+					.catch(() => null),
+				// Antwoordgeheugen (#384): recentste rijen + de schakelaar.
+				adminApi<unknown[]>('/api/admin/memory').catch(() => []),
+				adminApi<unknown[]>('/api/admin/settings').catch(() => [])
 			]);
 		return {
 			authed: true, sources, status, corrections, askTraces,
-			knowledge, mechanics, upcoming, feeds, paths, drift, apiDown: false
+			knowledge, mechanics, upcoming, feeds, paths, drift, memory, settings, apiDown: false
 		};
 	} catch {
 		return {
 			authed: true, sources: [], status: null, corrections: [],
-			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], drift: null, apiDown: true
+			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], drift: null,
+			memory: [], settings: [], apiDown: true
 		};
 	}
 };
@@ -107,6 +112,47 @@ export const actions: Actions = {
 			return { started: name };
 		} catch (e) {
 			return fail(409, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Antwoordgeheugen (#384): verifiëren (dient vanaf nu) / intrekken (met
+	// reden, blijft als geschiedenis) / de beheerde schakelaar omzetten.
+	verifyMemory: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/memory/${form.get('id')}/verify`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	retractMemory: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/memory/${form.get('id')}/retract`, {
+				method: 'POST',
+				body: JSON.stringify({ note: String(form.get('note') ?? '').trim() || null })
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	setting: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		const key = String(form.get('key') ?? '');
+		const value = String(form.get('value') ?? '');
+		if (!key) return fail(400, { error: 'Geen instelling opgegeven' });
+		try {
+			await adminApi('/api/admin/settings', {
+				method: 'POST',
+				body: JSON.stringify({ changes: [{ key, value }], actor: 'beheer' })
+			});
+			return { settingSaved: key };
+		} catch (e) {
+			return fail(400, { error: e instanceof Error ? e.message : String(e) });
 		}
 	},
 	verifyCorrection: async ({ request, cookies }) => {

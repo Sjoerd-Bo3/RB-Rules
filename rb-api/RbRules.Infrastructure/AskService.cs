@@ -70,7 +70,26 @@ public record AskResult(
     // (AgenticGate.Reason*). De UI toont daarop de nette melding
     // ("quota op — automatisch beantwoord").
     string? Approach = null, string? ApproachReason = null,
-    AskUsageInfo? Usage = null);
+    AskUsageInfo? Usage = null,
+    // Antwoordgeheugen (#384): kwam dit antwoord uit het geheugen, op welke
+    // rij slaat feedback, en was er een vergelijkbare eerdere vraag.
+    AskMemoryInfo? Memory = null);
+
+/// <summary>Antwoordgeheugen-terugmelding (#384) bij een AskResult.</summary>
+/// <param name="Id">De geheugenrij waar duim-omhoog/omlaag op slaat: de
+/// gediende rij, of de zojuist als kandidaat bewaarde (dan wel de bestaande
+/// kandidaat waarop deze vraag als hit telde). Null = niets bewaard.</param>
+/// <param name="Served">True ⇒ het antwoord is 1-op-1 uit het geheugen
+/// gediend, zonder LLM-call.</param>
+/// <param name="AnsweredAt">Bij Served: wanneer het oorspronkelijk beantwoord is.</param>
+/// <param name="Similarity">Bij Served: cosinus-gelijkenis met de bewaarde vraag.</param>
+/// <param name="Similar">Een vergelijkbare eerdere vraag (0,80–0,92) naast een
+/// vers antwoord — alleen ter weergave.</param>
+public record AskMemoryInfo(
+    long? Id, bool Served, DateTimeOffset? AnsweredAt, double? Similarity,
+    AskMemorySimilar? Similar);
+
+public record AskMemorySimilar(long Id, string Question, DateTimeOffset AnsweredAt, double Similarity);
 
 /// <summary>De benchmark-vlag (#158) — het ENE punt waarmee een benchmarkrun
 /// door de ask-aanroep reist zonder de flow te herschrijven. Benchmark = true
@@ -128,7 +147,8 @@ public class AskService(
     IDbContextFactory<RbRulesDbContext>? dbFactory = null,
     RewriteCache? rewriteCache = null,
     AgenticInFlightTracker? agenticInFlight = null,
-    BreinRetrievalService? brein = null)
+    BreinRetrievalService? brein = null,
+    AnswerMemoryService? memory = null)
 {
     private const int TopK = 8;
 
@@ -141,6 +161,15 @@ public class AskService(
     /// geen LLM-call. Bewust een eigen waarde en geen "cheap", zodat de
     /// duurstatistiek en het beheer het pad kunnen onderscheiden.</summary>
     internal const string TemplateModel = "template";
+
+    /// <summary>Model-pad van een antwoord uit het antwoordgeheugen (#384):
+    /// geen LLM-call, zelfde boekhoudregel als het sjabloon.</summary>
+    internal const string MemoryModel = "memory";
+
+    /// <summary>Korte hash van de systeemprompt (#384): elke geheugenrij draagt
+    /// de promptversie waaronder ze ontstond, zodat na een promptwijziging
+    /// zichtbaar is welke rijen nog van de oude prompt zijn.</summary>
+    internal static readonly string PromptVersion = TextUtils.Sha256(BasePrompt)[..12];
 
     // Brein-GraphRAG-retrieval (#228) ACHTER de default-uit feature-flag. Null (de
     // meeste constructors/tests) óf flag-uit ⇒ /ask draait EXACT zoals nu: geen
@@ -283,7 +312,6 @@ public class AskService(
         // de rewrite loopt. Uitval of onzin-output van de rewrite = verwacht
         // pad: rewrite blijft null en we zoeken met de rauwe vraag(+historie),
         // het gedrag van vóór #66.
-        var rewriteTask = RunRewriteAsync(retrievalText, ct);
         var rawEmbedTask = EmbedRawAsync(retrievalText, ct);
 
         // 0b. Naam-match in SQL (review-fix #43: geen full-table naar de
@@ -298,6 +326,54 @@ public class AskService(
 
         var mentionsTask = await StartDbChannelAsync("naam-match", false,
             ctx => CardsNamedIn(ctx, qLower).AnyAsync(ct), ct);
+        // De router heeft alleen de naam-match nodig (één geïndexeerde query) en
+        // staat sinds #384 vóór de rewrite: het antwoordgeheugen vergelijkt op
+        // vraagtype, en een geheugen-hit moet de rewrite-call kunnen uitsparen.
+        var mentionsResult = await mentionsTask;
+        var mentionsCard = mentionsResult.Value;
+        var type = QuestionRouter.Classify(question, mentionsCard);
+
+        // Antwoordgeheugen (#384), lezen: alleen een eerste beurt zonder foto,
+        // buiten benchmark/model-sweep, en alleen als de beheerde schakelaar aan
+        // staat. De ruwe-vraag-embedding is de eerste vector die er is — vóór de
+        // rewrite — dus een hit kost geen enkele LLM-call: dezelfde vraag
+        // (cosinus ≥ 0,92, zelfde vraagtype), bevestigd of geverifieerd, en alle
+        // geciteerde bronnen ongewijzigd ⇒ het bewaarde antwoord wordt 1-op-1
+        // gediend. Het geheugen is best-effort: elke storing = "geen geheugen",
+        // en de vraag loopt gewoon het bestaande pad. De prijs op het miss-pad is
+        // dat de rewrite pas ná de embedding start (≈ 0,1–0,2 s serieel i.p.v.
+        // overlappend) — alleen wanneer het geheugen aanstaat.
+        var memoryEligible = memory is not null && AnswerMemoryPolicy.Eligible(
+            firstTurn: turns.Count == 0, hasImage: images is { Count: > 0 },
+            benchmark: options.Benchmark, modelOverride: options.Model is not null);
+        var memoryLookup = MemoryLookup.None;
+        if (memoryEligible)
+        {
+            try
+            {
+                memoryEligible = await memory!.EnabledAsync(ct);
+                if (memoryEligible && (await rawEmbedTask).Vec is { } earlyVec)
+                    memoryLookup = await memory.LookupAsync(earlyVec, type.ToString(), ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                memory!.LogFailure(ex, "lookup");
+                memoryLookup = MemoryLookup.None;
+            }
+            if (memoryLookup.Serve is { } hit
+                && AnswerMemoryService.Citations(hit.Row) is { Count: > 0 } storedCitations)
+            {
+                return await ServeFromMemoryAsync(
+                    hit, storedCitations, question, qLower, type, images, onMeta, onDelta,
+                    sw, (await rawEmbedTask).Ms, ct);
+            }
+        }
+
+        var rewriteTask = RunRewriteAsync(retrievalText, ct);
 
         // Agentic-gate-invoer (#107, review): trigger (a) is een
         // interactievráág, dus alleen kaartnamen in de HUIDIGE vraag tellen —
@@ -328,11 +404,8 @@ public class AskService(
         var rawFtsTask = await StartChannelAsync<List<(long Id, string SourceId)>>(
             "fts", [], () => FullTextChunksAsync(retrievalText, ct), ct);
 
-        // De router heeft de naam-match nodig; daarna kan de banlijst
-        // (alleen Legaliteit) alsnog onder de rewrite starten.
-        var mentionsResult = await mentionsTask;
-        var mentionsCard = mentionsResult.Value;
-        var type = QuestionRouter.Classify(question, mentionsCard);
+        // Vraagtype staat al vast (zie boven); de banlijst (alleen Legaliteit)
+        // kan alsnog onder de rewrite starten.
 
         // Legaliteitssjabloon (#383): een zuivere "is X banned / mag ik X
         // spelen?"-vraag met een herkende kaart wordt deterministisch beantwoord
@@ -964,6 +1037,7 @@ public class AskService(
         // geen phase-timings, #152, en geen ip_hash-stempel, #157).
         // BenchmarkService (Infrastructure) boekt zelf de benchmark_result-rij
         // met antwoord/duur/tokens.
+        long? memoryRowId = null;
         if (!options.Benchmark)
         {
             // Duurmeting voedt de echte "gemiddeld ±Xs"-indicatie op de vraag-
@@ -997,6 +1071,40 @@ public class AskService(
                     logger.LogWarning(ex,
                         "relatievoorstellen uit de agentic ask niet opgeslagen");
                     brainSteps += "\n[relatievoorstellen: opslaan mislukt — zie logs]";
+                }
+            }
+
+            // Antwoordgeheugen (#384), schrijven — best-effort, buiten de
+            // duurmeting. Een vers, geslaagd antwoord op een in-aanmerking-
+            // komende vraag wordt kandidaat; viel de vraag op een bestaande
+            // kandidaat (zelfde vraag, nog niet bevestigd), dan telt ze daar als
+            // hit — de derde hit zonder tegenspraak bevestigt die rij. Het
+            // sjabloonpad slaat over (al deterministisch), net als een
+            // antwoord zonder citaties (niets om een bron-momentopname van te
+            // maken) en een client-abort (het antwoord is dan onvolledig).
+            if (memoryEligible && aiAnswer is not null && !clientGone
+                && template is null && citations.Count > 0 && rawEmbed.Vec is { } storedVec)
+            {
+                try
+                {
+                    if (memoryLookup.Same is { } same)
+                    {
+                        await memory!.RegisterHitAsync(same.Row, finishCt);
+                        memoryRowId = same.Row.Id;
+                    }
+                    else
+                    {
+                        var row = await memory!.RememberAsync(
+                            question, rewrite?.NormalizedQuestion ?? question, type.ToString(),
+                            storedVec, answer, citations,
+                            ordered.Select(c => c.SourceId), topIds, usedModel, PromptVersion,
+                            userContext.User?.Id, finishCt);
+                        memoryRowId = row.Id;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    memory!.LogFailure(ex, "remember");
                 }
             }
 
@@ -1063,15 +1171,7 @@ public class AskService(
                     // quota-filter (Api-laag), null zonder secret/IP.
                     IpHash = userContext.IpHash,
                 });
-                // Bewaar alleen de recente historie.
-                var cutoff = await db.AskTraces
-                    .OrderByDescending(t => t.CreatedAt)
-                    .Skip(200)
-                    .Select(t => t.CreatedAt)
-                    .FirstOrDefaultAsync(finishCt);
-                if (cutoff != default)
-                    await db.AskTraces.Where(t => t.CreatedAt <= cutoff).ExecuteDeleteAsync(finishCt);
-                await db.SaveChangesAsync(finishCt);
+                await PruneAndSaveTracesAsync(finishCt);
             }
             catch
             {
@@ -1109,7 +1209,88 @@ public class AskService(
             Ok: aiAnswer is not null, Claims: askClaims,
             Misconceptions: askMisconceptions,
             Approach: approachUsed, ApproachReason: decision.FallbackReason,
-            Usage: usage is null ? null : new AskUsageInfo(usage.InputTokens, usage.OutputTokens));
+            Usage: usage is null ? null : new AskUsageInfo(usage.InputTokens, usage.OutputTokens),
+            // #384: de rij voor feedback plus een eventuele vergelijkbare
+            // eerdere vraag; null als het geheugen niets deed.
+            Memory: memoryRowId is null && memoryLookup.Similar is null ? null
+                : new AskMemoryInfo(memoryRowId, Served: false, null, null,
+                    memoryLookup.Similar is { } sim
+                        ? new AskMemorySimilar(sim.Row.Id, sim.Row.Question, sim.Row.CreatedAt, sim.Similarity)
+                        : null));
+    }
+
+    /// <summary>Antwoordgeheugen-hit (#384): het bewaarde antwoord 1-op-1
+    /// dienen — zelfde meta/delta/final-vorm als een gewoon antwoord, zodat de
+    /// UI niets hoeft te weten; metric en trace boeken het pad als
+    /// <see cref="MemoryModel"/> (geen LLM-call, dus geen kostenrij).</summary>
+    private async Task<AskResult> ServeFromMemoryAsync(
+        MemoryMatch hit, IReadOnlyList<Citation> citations, string question, string qLower,
+        QuestionType type, IReadOnlyList<RbAiClient.AiImage>? images,
+        Func<AskStreamMeta, Task>? onMeta, Func<string, Task>? onDelta,
+        System.Diagnostics.Stopwatch sw, long embedMs, CancellationToken ct)
+    {
+        var row = hit.Row;
+        try
+        {
+            await memory!.RegisterHitAsync(row, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            memory!.LogFailure(ex, "hit");
+        }
+        if (onMeta is not null)
+            await onMeta(new AskStreamMeta(type.ToString(), citations, null, "auto", null));
+        if (onDelta is not null) await onDelta(row.Answer);
+
+        var finishCt = CancellationToken.None;
+        var cards = await MatchCardsAsync($"{qLower}\n{row.Answer.ToLowerInvariant()}", finishCt);
+        sw.Stop();
+        await RecordMetricAsync(sw.ElapsedMilliseconds, type, images, ok: true, model: MemoryModel);
+        try
+        {
+            db.AskTraces.Add(new AskTrace
+            {
+                Question = question.Length > 500 ? question[..500] : question,
+                QuestionType = type.ToString(),
+                Sections = string.Join(", ", citations
+                    .Where(c => c.Section != null).Select(c => $"§{c.Section}")),
+                Model = MemoryModel,
+                HadImage = false,
+                DurationMs = (int)sw.ElapsedMilliseconds,
+                BrainSteps = $"[geheugen: antwoord hergebruikt van {row.CreatedAt:yyyy-MM-dd} " +
+                             $"(rij {row.Id}, gelijkenis {hit.Similarity:0.00}, trust {row.Trust}) — geen LLM-call]",
+                Answer = row.Answer,
+                PhaseTimings = new AskPhases(0, embedMs, 0, 0, sw.ElapsedMilliseconds).ToJson(),
+                Ok = true,
+                UserId = userContext.User?.Id,
+                IpHash = userContext.IpHash,
+            });
+            await PruneAndSaveTracesAsync(finishCt);
+        }
+        catch
+        {
+            // trace mag een antwoord nooit blokkeren
+        }
+        return new(row.Answer, citations, cards, type.ToString(),
+            Approach: "auto",
+            Memory: new AskMemoryInfo(row.Id, Served: true, row.CreatedAt, hit.Similarity, null));
+    }
+
+    /// <summary>Bewaar alleen de recente trace-historie (200 rijen) en sla op.</summary>
+    private async Task PruneAndSaveTracesAsync(CancellationToken ct)
+    {
+        var cutoff = await db.AskTraces
+            .OrderByDescending(t => t.CreatedAt)
+            .Skip(200)
+            .Select(t => t.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+        if (cutoff != default)
+            await db.AskTraces.Where(t => t.CreatedAt <= cutoff).ExecuteDeleteAsync(ct);
+        await db.SaveChangesAsync(ct);
     }
 
     /// <summary>Consumeert de rb-ai-stream: deltas door naar de UI, het
@@ -1610,7 +1791,7 @@ public class AskService(
             // rij met nul tokens tegen het Sonnet-tarief zou het kostenbeeld
             // vertekenen. De metric hierboven houdt Model = "template", zodat de
             // duurstatistiek het pad wél apart toont.
-            if (path != TemplateModel)
+            if (path != TemplateModel && path != MemoryModel)
                 db.AiUsageEvents.Add(await AiUsageMeter.CreateEventAsync(
                     db, AiUsageEvent.OriginUser, "ask", AskPathModels.Resolve(path),
                     userContext.User?.Id, split.Answer?.Input, split.Answer?.Output,

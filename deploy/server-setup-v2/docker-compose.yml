@@ -66,6 +66,9 @@ services:
       # Agentic ask (#107): off/auto/force. Default auto sinds 2026-07-13
       # (keuze Sjoerd); via .env terug te zetten zonder repo-wijziging.
       ASK_AGENTIC: ${ASK_AGENTIC:-auto}
+      # Antwoordgeheugen (#384): env is de bootstrap-default; de beheerde
+      # instelling ask.memory.enabled (beheer) wint en werkt direct.
+      ASK_MEMORY_ENABLED: ${ASK_MEMORY_ENABLED:-true}
       # Ask-geschiedenis (#157): HMAC-secret voor de ip_hash-koppeling. Zonder
       # secret degradeert de anonieme geschiedenis stil naar leeg — geen crash.
       ASK_IP_HASH_SECRET: ${ASK_IP_HASH_SECRET:-}
