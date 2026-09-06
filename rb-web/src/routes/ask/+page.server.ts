@@ -166,6 +166,10 @@ export const actions: Actions = {
 		const verdict = String(form.get('verdict') ?? '');
 		const text = String(form.get('text') ?? '').trim() || undefined;
 		const answer = String(form.get('answer') ?? '');
+		// Antwoordgeheugen (#384): hetzelfde oordeel voedt de promotielus van
+		// de geheugenrij bij dit antwoord; leeg/onzin ⇒ geen koppeling.
+		const memoryRaw = Number(form.get('memoryId'));
+		const memoryId = Number.isInteger(memoryRaw) && memoryRaw > 0 ? memoryRaw : undefined;
 		let citations: AskCitation[] = [];
 		let cards: AskCard[] = [];
 		let claims: AskClaim[] = [];
@@ -195,7 +199,7 @@ export const actions: Actions = {
 			await api('/api/corrections', {
 				method: 'POST',
 				headers: { 'x-client-ip': getClientAddress(), ...userHeaders(cookies) },
-				body: JSON.stringify({ question, verdict, text })
+				body: JSON.stringify({ question, verdict, text, memoryId })
 			});
 			return { question, answer, citations, cards, claims, misconceptions, feedbackSent: verdict };
 		} catch (e) {

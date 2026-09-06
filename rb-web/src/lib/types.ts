@@ -190,6 +190,27 @@ export interface AskResult {
 	 *  eventueel afwijkt van de keuze (machine-sleutel, zie $lib/approach). */
 	approach: string | null;
 	approachReason: string | null;
+	/** Antwoordgeheugen (#384): kwam het antwoord uit het geheugen, op welke
+	 *  rij slaat feedback, en was er een vergelijkbare eerdere vraag. */
+	memory?: AskMemoryInfo | null;
+}
+
+/** Antwoordgeheugen-terugmelding (#384) bij een antwoord. */
+export interface AskMemoryInfo {
+	/** De geheugenrij waar duim omhoog/omlaag op slaat; null = niets bewaard. */
+	id: number | null;
+	/** True ⇒ 1-op-1 uit het geheugen gediend, zonder taalmodel. */
+	served: boolean;
+	answeredAt: string | null;
+	similarity: number | null;
+	similar: AskMemorySimilar | null;
+}
+
+export interface AskMemorySimilar {
+	id: number;
+	question: string;
+	answeredAt: string;
+	similarity: number;
 }
 
 /** Doorvragen (#41): één eerdere ronde in het gesprek. */

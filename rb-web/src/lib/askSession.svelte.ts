@@ -394,6 +394,7 @@ export class AskSession {
 			misconceptions: data.misconceptions ?? null,
 			questionType: data.questionType ?? null,
 			approachReason: data.approachReason ?? null,
+			memory: data.memory ?? null,
 			interrupted: null
 		};
 		// Afgeronde beurt de weergave-thread in (#365); de laatste is tegelijk

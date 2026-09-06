@@ -4,7 +4,14 @@
 // de store doet de localStorage-I/O, hier zit alleen de vorm-, versie- en
 // houdbaarheidsbewaking — en die is unit-testbaar.
 
-import type { AskCard, AskCitation, AskClaim, AskMisconception, AskTurn } from '$lib/types';
+import type {
+	AskCard,
+	AskCitation,
+	AskClaim,
+	AskMemoryInfo,
+	AskMisconception,
+	AskTurn
+} from '$lib/types';
 
 /** Naast (niet in plaats van) `rb-ask-history`, de lijst eerdere vragen. */
 export const ASK_CURRENT_KEY = 'rb-ask-current';
@@ -44,6 +51,9 @@ export interface StoredAnswer {
 	misconceptions: AskMisconception[] | null;
 	questionType: string | null;
 	approachReason: string | null;
+	/** Antwoordgeheugen (#384): gediend-uit-geheugen-label en de rij voor
+	 *  feedback. Optioneel: opslag van vóór deze versie mist het veld. */
+	memory?: AskMemoryInfo | null;
 	/** Niet-null ⇒ onvolledig antwoord (verbinding weg, zelf gestopt, of door
 	 *  een reload afgebroken); de tekst is de melding die erbij hoort. */
 	interrupted: string | null;
@@ -94,7 +104,31 @@ export function decodeSession(raw: string | null | undefined, now = Date.now()):
 		questionType: typeof answer.questionType === 'string' ? answer.questionType : null,
 		approachReason: typeof answer.approachReason === 'string' ? answer.approachReason : null,
 		interrupted: typeof answer.interrupted === 'string' ? answer.interrupted : null,
+		memory: decodeMemory(answer.memory),
 		thread: decodeThread(answer.thread)
+	};
+}
+
+/** Geheugen-terugmelding defensief teruglezen (#384): alleen de velden die de
+ *  pagina gebruikt, elk op type gecheckt; alles wat niet klopt ⇒ null. */
+function decodeMemory(raw: unknown): AskMemoryInfo | null {
+	if (!raw || typeof raw !== 'object') return null;
+	const m = raw as Partial<AskMemoryInfo>;
+	const similar =
+		m.similar && typeof m.similar === 'object' && typeof m.similar.question === 'string'
+			? {
+					id: Number(m.similar.id),
+					question: m.similar.question,
+					answeredAt: String(m.similar.answeredAt ?? ''),
+					similarity: Number(m.similar.similarity)
+				}
+			: null;
+	return {
+		id: typeof m.id === 'number' ? m.id : null,
+		served: m.served === true,
+		answeredAt: typeof m.answeredAt === 'string' ? m.answeredAt : null,
+		similarity: typeof m.similarity === 'number' ? m.similarity : null,
+		similar
 	};
 }
 

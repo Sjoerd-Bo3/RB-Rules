@@ -99,6 +99,8 @@ public static class AskPathModels
         // een ander pad ooit "template" resolven, dan is "geen" eerlijker dan
         // het Sonnet-default.
         "template" => "geen",
+        // #384: een antwoord uit het antwoordgeheugen — evenmin een LLM-call.
+        "memory" => "geen",
         "hard" => "claude-opus-4-8",
         "agentic" => "claude-sonnet-4-6",
         _ => "claude-sonnet-4-6", // cheap en onbekend: het default-model

@@ -72,6 +72,7 @@ public sealed class ManagedSettingsService
     private readonly NightlyRunSettings _nightlyBase;
     private readonly BreinAuditSettings _auditBase;
     private readonly BreinExtractSettings _extractBase;
+    private readonly AskMemorySettings _memoryBase;
     private readonly SemaphoreSlim _reload = new(1, 1);
     private readonly TimeProvider _clock;
 
@@ -90,7 +91,8 @@ public sealed class ManagedSettingsService
         IReadOnlyDictionary<string, string>? seed = null,
         TimeProvider? clock = null,
         BreinAuditSettings? auditBase = null,
-        BreinExtractSettings? extractBase = null)
+        BreinExtractSettings? extractBase = null,
+        AskMemorySettings? memoryBase = null)
     {
         _dbFactory = dbFactory;
         _logger = logger;
@@ -98,6 +100,7 @@ public sealed class ManagedSettingsService
         _nightlyBase = nightlyBase ?? NightlyRunSettings.FromEnvironment();
         _auditBase = auditBase ?? BreinAuditSettings.FromEnvironment();
         _extractBase = extractBase ?? BreinExtractSettings.FromEnvironment();
+        _memoryBase = memoryBase ?? AskMemorySettings.FromEnvironment();
         _clock = clock ?? TimeProvider.System;
         // Zonder dbFactory is de seed de enige waarheid (de leespoort keert dan
         // meteen terug); mét dbFactory is hij hooguit de startwaarde tot de eerste
@@ -127,6 +130,11 @@ public sealed class ManagedSettingsService
     /// over de hele job.</summary>
     public async Task<BreinExtractSettings> BreinExtractAsync(CancellationToken ct = default) =>
         _extractBase.WithOverrides(await OverridesAsync(ct).ConfigureAwait(false));
+
+    /// <summary>Antwoordgeheugen (#384) aan/uit op DIT moment (env + overrides) —
+    /// AskService leest dit per vraag, zodat de schakelaar direct werkt.</summary>
+    public async Task<AskMemorySettings> AskMemoryAsync(CancellationToken ct = default) =>
+        _memoryBase.WithOverrides(await OverridesAsync(ct).ConfigureAwait(false));
 
     /// <summary>De beheerde overrides zoals ze nu gelden. Leeg = alles op de
     /// env-/codewaarde.</summary>
@@ -179,6 +187,7 @@ public sealed class ManagedSettingsService
         var nightly = _nightlyBase.WithOverrides(overrides);
         var audit = _auditBase.WithOverrides(overrides);
         var extract = _extractBase.WithOverrides(overrides);
+        var memory = _memoryBase.WithOverrides(overrides);
 
         return ManagedSettingsCatalog.All.Select(d => new ManagedSettingView(
             Key: d.Key,
@@ -186,8 +195,8 @@ public sealed class ManagedSettingsService
             Group: d.Group,
             Label: d.Label,
             Description: d.Description,
-            Effective: Render(d.Key, brein, nightly, audit, extract),
-            Default: Render(d.Key, _breinBase, _nightlyBase, _auditBase, _extractBase),
+            Effective: Render(d.Key, brein, nightly, audit, extract, memory),
+            Default: Render(d.Key, _breinBase, _nightlyBase, _auditBase, _extractBase, _memoryBase),
             Overridden: overrides.ContainsKey(d.Key),
             UpdatedAt: meta.GetValueOrDefault(d.Key)?.UpdatedAt,
             UpdatedBy: meta.GetValueOrDefault(d.Key)?.UpdatedBy)).ToList();
@@ -244,6 +253,7 @@ public sealed class ManagedSettingsService
         var beforeNightly = _nightlyBase.WithOverrides(before);
         var beforeAudit = _auditBase.WithOverrides(before);
         var beforeExtract = _extractBase.WithOverrides(before);
+        var beforeMemory = _memoryBase.WithOverrides(before);
 
         var candidate = new Dictionary<string, string>(before, StringComparer.Ordinal);
         foreach (var (def, value) in parsed)
@@ -267,14 +277,15 @@ public sealed class ManagedSettingsService
         var afterNightly = _nightlyBase.WithOverrides(candidate);
         var afterAudit = _auditBase.WithOverrides(candidate);
         var afterExtract = _extractBase.WithOverrides(candidate);
+        var afterMemory = _memoryBase.WithOverrides(candidate);
 
         // 3. Alleen echte wijzigingen schrijven (geen audit-ruis bij een dubbelklik).
         var changes = new List<SettingChange>();
         var writes = new List<(SettingDefinition Def, string? Value, string Previous, string Current)>();
         foreach (var (def, value) in parsed)
         {
-            var previous = Render(def.Key, beforeBrein, beforeNightly, beforeAudit, beforeExtract);
-            var current = Render(def.Key, afterBrein, afterNightly, afterAudit, afterExtract);
+            var previous = Render(def.Key, beforeBrein, beforeNightly, beforeAudit, beforeExtract, beforeMemory);
+            var current = Render(def.Key, afterBrein, afterNightly, afterAudit, afterExtract, afterMemory);
             changes.Add(new SettingChange(def.Key, previous, current, null));
             if (current != previous || before.ContainsKey(def.Key) != candidate.ContainsKey(def.Key))
                 writes.Add((def, value, previous, current));
@@ -369,9 +380,10 @@ public sealed class ManagedSettingsService
     /// vergelijkbaar zijn.</summary>
     private static string Render(
         string key, BreinRetrievalSettings brein, NightlyRunSettings nightly,
-        BreinAuditSettings audit, BreinExtractSettings extract) => key switch
+        BreinAuditSettings audit, BreinExtractSettings extract, AskMemorySettings memory) => key switch
     {
         SettingKeys.BreinRetrievalEnabled => brein.Enabled ? "true" : "false",
+        SettingKeys.AskMemoryEnabled => memory.Enabled ? "true" : "false",
         SettingKeys.BreinAuditSampleN => audit.SampleDivisor.ToString(),
         SettingKeys.BreinExtractModel => extract.ModelAlias,
         SettingKeys.BreinExtractBatchK => extract.BatchK.ToString(),

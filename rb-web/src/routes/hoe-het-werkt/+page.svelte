@@ -508,6 +508,16 @@
 			op, in hetzelfde format en met dezelfde bronvermelding, zonder taalmodel. Sneller, en
 			er kan niets bij verzonnen worden.
 		</p>
+		<p>
+			Ook een vraag die al eens gesteld is hoeft het taalmodel niet opnieuw te belasten.
+			Poracle bewaart elk antwoord met de vraag, de geciteerde regelsecties en een
+			vingerafdruk van de bronnen van dat moment. Komt dezelfde vraag terug, dan wordt het
+			bewaarde antwoord alleen hergebruikt als het bevestigd is &mdash; door een duim
+			omhoog, doordat de vraag drie keer zonder tegenspraak terugkwam, of door een
+			beheerder &mdash; én als geen van de geciteerde bronnen sindsdien is gewijzigd. Wijzigt
+			een bron, dan trekt de wijzigingsdetectie uit stap 1 zulke antwoorden meteen in. Een
+			hergebruikt antwoord zegt dat eerlijk, met de datum erbij.
+		</p>
 		<ul class="format">
 			<li><strong>Oordeel</strong> — het antwoord in één zin</li>
 			<li>

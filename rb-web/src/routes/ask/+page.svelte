@@ -105,6 +105,14 @@
 	// Terugmelding van de server (#153): de keuze werd niet gehonoreerd —
 	// bij quota-op de eerlijke "automatisch beantwoord"-melding.
 	const answerNotice = $derived(approachNotice(current?.approachReason));
+	// #384: datum van het oorspronkelijke antwoord, defensief (opslag kan een
+	// leeg veld dragen).
+	function formatDate(iso: string | null | undefined): string {
+		const d = iso ? new Date(iso) : null;
+		return d && !Number.isNaN(d.getTime())
+			? d.toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' })
+			: 'eerder';
+	}
 
 	// Historie voor de volgende doorvraag: eerdere rondes + de huidige.
 	const nextTurns = $derived.by<AskTurn[]>(() => {
@@ -474,6 +482,21 @@
 				</p>
 			{/if}
 			{#if answerNotice}<p class="approach-notice">{answerNotice}</p>{/if}
+			<!-- Antwoordgeheugen (#384): een hergebruikt antwoord zegt dat eerlijk,
+			     mét datum — en een vergelijkbare eerdere vraag naast een vers
+			     antwoord is een hint, geen oordeel. Status = kleur + tekst. -->
+			{#if current.memory?.served}
+				<p class="memory-note">
+					<span class="memory-tag">Eerder beantwoord</span>
+					Dit antwoord is hergebruikt van {formatDate(current.memory.answeredAt)}: dezelfde
+					vraag is al eens beantwoord en de geciteerde bronnen zijn sindsdien niet gewijzigd.
+				</p>
+			{:else if current.memory?.similar}
+				<p class="memory-note meta">
+					Vergelijkbare eerdere vraag ({formatDate(current.memory.similar.answeredAt)}):
+					<q>{current.memory.similar.question}</q>
+				</p>
+			{/if}
 			{#if current.interrupted}
 				<!-- Onvolledig antwoord (#248): verbinding weg, zelf gestopt, of door
 				     een reload afgebroken — eerlijk gelabeld, niet stil als compleet. -->
@@ -643,6 +666,7 @@
 							<input type="hidden" name="claims" value={JSON.stringify(current.claims ?? [])} />
 							<input type="hidden" name="misconceptions" value={JSON.stringify(current.misconceptions ?? [])} />
 							<input type="hidden" name="verdict" value="up" />
+							<input type="hidden" name="memoryId" value={current.memory?.id ?? ''} />
 							<button class="fb">Ja</button>
 						</form>
 						<button class="fb" type="button" onclick={() => (correcting = !correcting)}>Nee, corrigeer</button>
@@ -657,6 +681,7 @@
 						<input type="hidden" name="claims" value={JSON.stringify(current.claims ?? [])} />
 							<input type="hidden" name="misconceptions" value={JSON.stringify(current.misconceptions ?? [])} />
 						<input type="hidden" name="verdict" value="down" />
+						<input type="hidden" name="memoryId" value={current.memory?.id ?? ''} />
 						<textarea name="text" rows="3" placeholder="Wat is het juiste antwoord? Verwijs waar mogelijk naar een §-sectie."></textarea>
 						<button type="submit">Verstuur correctie</button>
 					</form>
@@ -826,6 +851,14 @@
 	.approach-opt:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
 	.approach-hint { margin: 6px 0 0; }
 	/* Terugmelding (#153): keuze niet gehonoreerd — status als kleur + tekst. */
+	.memory-note { margin: 0 0 8px; font-size: 0.9rem; }
+	.memory-tag {
+		display: inline-block; font-size: 0.7rem; font-weight: 700;
+		text-transform: uppercase; letter-spacing: 0.06em;
+		background: var(--surface-deep); color: var(--accent);
+		border: 1px solid var(--border); border-radius: 999px;
+		padding: 2px 9px; margin-right: 8px;
+	}
 	.approach-notice {
 		background: var(--warn-soft); color: var(--warn);
 		border-radius: 8px; padding: 8px 12px; margin: 8px 0;

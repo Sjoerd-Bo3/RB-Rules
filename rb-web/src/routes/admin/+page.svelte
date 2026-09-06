@@ -131,6 +131,14 @@
 		statusReason: string | null;
 	}
 
+	// Antwoordgeheugen (#384): de recentste rijen zoals /api/admin/memory ze levert.
+	interface MemoryRow {
+		id: number; question: string; questionType: string | null; trust: string;
+		hitCount: number; lastHitAt: string | null; createdAt: string;
+		model: string | null; retractedReason: string | null; answer: string;
+	}
+	interface ManagedSetting { key: string; effective: string; default: string; overridden: boolean; }
+
 	interface AskTrace {
 		id: number; question: string; questionType: string | null;
 		sourceBias: string | null; mentionsCard: boolean;
@@ -250,6 +258,19 @@
 	const corrections = $derived((data.corrections ?? []) as Correction[]);
 	const openCorrections = $derived(corrections.filter((c) => c.status === 'unverified'));
 	const askTraces = $derived((data.askTraces ?? []) as AskTrace[]);
+	const memoryRows = $derived((data.memory ?? []) as MemoryRow[]);
+	const memorySetting = $derived(
+		((data.settings ?? []) as ManagedSetting[]).find((s) => s.key === 'ask.memory.enabled') ?? null
+	);
+	const memoryCounts = $derived.by(() => {
+		const c = (data.status as { counts?: Record<string, number> } | null)?.counts;
+		return c
+			? { candidates: c.memoryCandidates ?? 0, servable: c.memoryServable ?? 0, retracted: c.memoryRetracted ?? 0 }
+			: null;
+	});
+	const TRUST_LABELS: Record<string, string> = {
+		candidate: 'kandidaat', confirmed: 'bevestigd', verified: 'geverifieerd', retracted: 'ingetrokken'
+	};
 	const mechanics = $derived((data.mechanics ?? []) as MechanicKeyword[]);
 	const mechanicCandidates = $derived(mechanics.filter((m) => m.status === 'candidate'));
 	const acceptedMechanics = $derived(mechanics.filter((m) => m.status === 'accepted'));
@@ -756,6 +777,68 @@
 				{/each}
 			</section>
 		{/if}
+
+		<!-- Antwoordgeheugen (#384): bevestigde antwoorden dienen zonder LLM-call;
+		     beheer verifieert of trekt in, en zet de schakelaar om. -->
+		<section class="section" id="geheugen">
+			<h2>
+				Antwoordgeheugen
+				<span class="meta">
+					{#if memoryCounts}({memoryCounts.candidates} kandidaten · {memoryCounts.servable} dienbaar · {memoryCounts.retracted} ingetrokken){/if}
+					— een bevestigd antwoord dient bij dezelfde vraag zonder taalmodel; een gewijzigde bron trekt het in
+				</span>
+			</h2>
+			{#if memorySetting}
+				<div class="panel memory-toggle">
+					<div>
+						<strong>Geheugen {memorySetting.effective === 'true' ? 'aan' : 'uit'}</strong>
+						<p class="meta">
+							Uit = elke vraag gaat vers naar het taalmodel en er wordt niets bewaard.
+							{memorySetting.overridden ? 'Beheerde waarde (env-default: ' + (memorySetting.default === 'true' ? 'aan' : 'uit') + ').' : 'Env-default.'}
+						</p>
+					</div>
+					<form method="POST" action="?/setting" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+						<input type="hidden" name="key" value="ask.memory.enabled" />
+						<input type="hidden" name="value" value={memorySetting.effective === 'true' ? 'false' : 'true'} />
+						<button class="ghost small">{memorySetting.effective === 'true' ? 'Uitzetten' : 'Aanzetten'}</button>
+					</form>
+				</div>
+			{/if}
+			{#if memoryRows.length === 0}
+				<p class="meta">Nog geen bewaarde antwoorden.</p>
+			{/if}
+			{#each memoryRows as m (m.id)}
+				<div class="review-row panel">
+					<div class="review-body">
+						<p class="q">{m.question}</p>
+						<p class="meta">
+							<span class="badge {m.trust === 'retracted' ? 'warn-b' : m.trust === 'candidate' ? '' : 'ok-b'}">{TRUST_LABELS[m.trust] ?? m.trust}</span>
+							{m.questionType ?? '—'} · {m.model ?? '—'} · {m.hitCount}× hergebruikt
+							· bewaard {new Date(m.createdAt).toLocaleString('nl-NL')}
+							{#if m.retractedReason}· {m.retractedReason}{/if}
+						</p>
+						<details>
+							<summary class="meta">Bewaard antwoord</summary>
+							<AnswerView answer={m.answer} />
+						</details>
+					</div>
+					<div class="review-actions">
+						{#if m.trust !== 'verified'}
+							<form method="POST" action="?/verifyMemory" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+								<input type="hidden" name="id" value={m.id} />
+								<button class="cta small" title="Dient vanaf nu bij dezelfde vraag, zolang de bronnen niet wijzigen">Verifieer</button>
+							</form>
+						{/if}
+						{#if m.trust !== 'retracted'}
+							<form method="POST" action="?/retractMemory" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+								<input type="hidden" name="id" value={m.id} />
+								<button class="ghost small" title="Dient niet meer; de rij blijft als geschiedenis staan">Trek in</button>
+							</form>
+						{/if}
+					</div>
+				</div>
+			{/each}
+		</section>
 
 		<!-- Mechaniek-kandidaten (#52): het vocabulaire groeit met elke set -->
 		{#if mechanicCandidates.length}
@@ -1711,6 +1794,11 @@
 	}
 
 	/* ── Reviewrijen (correcties, mechanieken, primer) ─────────────── */
+	.memory-toggle {
+		display: flex; gap: 14px; align-items: center; justify-content: space-between;
+		padding: 12px 16px; margin-bottom: 10px;
+	}
+	.memory-toggle p { margin: 2px 0 0; }
 	.review-row {
 		display: flex;
 		gap: 14px;

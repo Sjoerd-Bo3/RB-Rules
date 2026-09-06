@@ -45,7 +45,10 @@ public record AskImageDto(string MediaType, string Data);
 
 public record ResolveRequest(string[] CardIds);
 
-public record CorrectionSubmit(string Question, string Verdict, string? Text);
+/// <summary>Feedback op een antwoord. <paramref name="MemoryId"/> (#384) is de
+/// antwoordgeheugen-rij waar het oordeel óók op slaat (duim omhoog bevestigt,
+/// duim omlaag trekt in); null = geen geheugenrij bij dit antwoord.</summary>
+public record CorrectionSubmit(string Question, string Verdict, string? Text, long? MemoryId = null);
 
 public record PushSubscribe(string Endpoint, string P256dh, string Auth);
 

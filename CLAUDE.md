@@ -45,7 +45,9 @@ hoofdlijnen. Wijzigingen-feed met diff en flip-flop-suppressie ·
 regels-browser met §-permalinks, semantisch zoeken en sectie-dossiers ·
 kaartbrowser + kaartdetail met dossier (rulings, claims, relaties,
 ban-historie) en variantgroepering · doorzoekbare /rulings-databank · /ask
-met vraag-router, scheidsrechter-format, streaming + voorlezen, doorvragen,
+met vraag-router, scheidsrechter-format, antwoordgeheugen (#384: bevestigde
+antwoorden hergebruiken, invalidatie via de wijzigingen-feed), streaming +
+voorlezen, doorvragen,
 board-state-foto's, query-rewrite, citaties/widget-markers en
 misvattingen-kanaal · kennisbank/brein: kennispiramide, primer,
 claims-pipeline, brein-API, agentic ask (flag) met relatie-terugkoppeling,

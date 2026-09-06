@@ -33,6 +33,11 @@ public static class SettingKeys
     /// van Sjoerd). De timeout en maxTurns schalen mee; partial salvage begrenst
     /// de blast radius van een omgevallen sessie.</summary>
     public const string BreinExtractBatchK = "brein.extract.batch_k";
+
+    /// <summary>Antwoordgeheugen in /ask (#384): bevestigde eerdere antwoorden
+    /// hergebruiken en elke nieuwe vraag als kandidaat bewaren. Env-bootstrap
+    /// <c>ASK_MEMORY_ENABLED</c>; uit = /ask exact als vóór #384.</summary>
+    public const string AskMemoryEnabled = "ask.memory.enabled";
 }
 
 /// <summary>Het waardetype van een beheerde instelling — bepaalt zowel de validatie
@@ -121,6 +126,13 @@ public static class ManagedSettingsCatalog
             + "venster-einde start loopt in het slechtste geval haar hele budget door "
             + "(± 2,6 uur bij K=50, ± 12,5 uur bij K=250).",
             Min: 1, Max: 250),
+        new(SettingKeys.AskMemoryEnabled, SettingKind.Bool, "ask",
+            "Antwoordgeheugen in /ask",
+            "Bewaart elke beantwoorde vraag als kandidaat en hergebruikt een bevestigd "
+            + "antwoord (duim omhoog, drie keer opnieuw gevraagd, of door beheer "
+            + "geverifieerd) zodra dezelfde vraag terugkomt en de geciteerde bronnen "
+            + "ongewijzigd zijn. Uit = elke vraag gaat vers naar het taalmodel en er "
+            + "wordt niets bewaard."),
         new(SettingKeys.NightlyEnabled, SettingKind.Bool, "nachtrun",
             "Automatische nachtrun",
             "Mag de scheduler de nachtrun zelf starten binnen het venster? Uit = de "
