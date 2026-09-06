@@ -85,6 +85,7 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
     // baseline-diff-gate diff't, en de rollup-samenvatting per harness-gate-run.
     public DbSet<EvalBaselineRecord> EvalBaselines => Set<EvalBaselineRecord>();
     public DbSet<EvalRunRecord> EvalRuns => Set<EvalRunRecord>();
+    public DbSet<EvalCaseRecord> EvalCases => Set<EvalCaseRecord>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -708,6 +709,18 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             // Eén actieve baseline per (ring × question_class × metric) — de gate
             // diff't tegen precies één cel; de index borgt dat hard.
             e.HasIndex(x => new { x.Ring, x.QueryType, x.Metric }).IsUnique();
+        });
+
+        // Eval-set uit echt verkeer (#387): klein corpus, gelezen als geheel.
+        b.Entity<EvalCaseRecord>(e =>
+        {
+            e.ToTable("eval_case");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasMaxLength(96);
+            e.Property(x => x.QueryType).HasMaxLength(32);
+            e.Property(x => x.Status).HasMaxLength(16);
+            e.Property(x => x.Origin).HasMaxLength(16);
+            e.HasIndex(x => x.Status);
         });
 
         b.Entity<EvalRunRecord>(e =>

@@ -79,6 +79,9 @@ public record UserPatch(
 /// beheerder-notitie bij bevestigen, verwerpen of notitie-promotie.</summary>
 public record ReviewDecision(string? Note);
 
+/// <summary>Statuswijziging van een eval-geval (#387): shadow | active | retired.</summary>
+public record EvalStatusChange(string? Status);
+
 /// <summary>Bulk-actie per aanbevelingsgroep op de relatie-reviewqueue (#199
 /// v1): Recommendation selecteert de groep ("accept"|"reject"|"unsure"),
 /// Decision is wat er met die groep gebeurt ("accept"|"reject").

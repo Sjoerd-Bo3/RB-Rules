@@ -197,6 +197,12 @@ public static class JobCatalog
             // jobs-paneel in plaats van een verborgen modus-vlag op
             // "benchmark" — zelfde precedent als "scan" vs. de losse "feeds".
             new("benchmarksweep", BenchmarkSweepAsync),
+            // Eval-set uit echt verkeer (#387): de gepromoveerde gevallen door de
+            // ask-pipeline (benchmark-isolatie aan), gescoord door de pure harness
+            // en gediff't tegen de Ring-A-baseline. Eén LLM-call per geval, dus
+            // net als "benchmark" een expliciete beheerdersknop — geen stap in
+            // "all" of de nachtrun.
+            new("eval", EvalAsync),
             // Wipe-mechanisme voor de LLM-afgeleide kennislaag (#187): gooit
             // claims, primer-docs, correcties en relaties weg (+ reset de
             // mining-markers) zodat een her-run met de Engelse prompts
@@ -580,6 +586,13 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<BenchmarkService>()
             .RunAsync(label: null, progress: report, ct: ct);
+        return new(r.Message);
+    }
+
+    private static async Task<JobOutcome> EvalAsync(
+        IServiceProvider sp, Action<string> report, CancellationToken ct)
+    {
+        var r = await sp.GetRequiredService<EvalRunService>().RunAsync(report, ct);
         return new(r.Message);
     }
 

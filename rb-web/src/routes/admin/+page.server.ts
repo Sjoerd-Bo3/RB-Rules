@@ -8,10 +8,10 @@ export const load: PageServerLoad = async ({ cookies }) => {
 		return {
 			authed: false, sources: [], status: null, corrections: [],
 			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], drift: null,
-			memory: [], settings: []
+			memory: [], settings: [], evalCases: [], evalRuns: []
 		};
 	try {
-		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds, paths, drift, memory, settings] =
+		const [sources, status, corrections, askTraces, knowledge, mechanics, upcoming, feeds, paths, drift, memory, settings, evalCases, evalRuns] =
 			await Promise.all([
 				// Bronnenlijst (#180): admin-endpoint i.p.v. het publieke
 				// /api/sources — dat laatste verbergt genegeerde bronnen nu
@@ -41,17 +41,20 @@ export const load: PageServerLoad = async ({ cookies }) => {
 					.catch(() => null),
 				// Antwoordgeheugen (#384): recentste rijen + de schakelaar.
 				adminApi<unknown[]>('/api/admin/memory').catch(() => []),
-				adminApi<unknown[]>('/api/admin/settings').catch(() => [])
+				adminApi<unknown[]>('/api/admin/settings').catch(() => []),
+				// Eval-set uit echt verkeer (#387): gevallen + de laatste runs.
+				adminApi<unknown[]>('/api/admin/eval/cases').catch(() => []),
+				adminApi<unknown[]>('/api/admin/eval/runs').catch(() => [])
 			]);
 		return {
 			authed: true, sources, status, corrections, askTraces,
-			knowledge, mechanics, upcoming, feeds, paths, drift, memory, settings, apiDown: false
+			knowledge, mechanics, upcoming, feeds, paths, drift, memory, settings, evalCases, evalRuns, apiDown: false
 		};
 	} catch {
 		return {
 			authed: true, sources: [], status: null, corrections: [],
 			askTraces: [], knowledge: [], mechanics: [], upcoming: [], feeds: [], paths: [], drift: null,
-			memory: [], settings: [], apiDown: true
+			memory: [], settings: [], evalCases: [], evalRuns: [], apiDown: true
 		};
 	}
 };
@@ -112,6 +115,62 @@ export const actions: Actions = {
 			return { started: name };
 		} catch (e) {
 			return fail(409, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	// Eval-set (#387): promoveren vanuit een trace of geheugenrij, status,
+	// verwijderen en een run als baseline vastleggen. Een 409 van rb-api
+	// (dubbel, geen citaties, verkeerde trust) komt als nette melding terug.
+	promoteTrace: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/asktraces/${form.get('id')}/promote-eval`, { method: 'POST' });
+			return { ok: true, evalPromoted: String(form.get('id')) };
+		} catch (e) {
+			return fail(409, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	promoteMemory: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/memory/${form.get('id')}/promote-eval`, { method: 'POST' });
+			return { ok: true, evalPromoted: `m${form.get('id')}` };
+		} catch (e) {
+			return fail(409, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	evalStatus: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/eval/cases/${encodeURIComponent(String(form.get('id')))}/status`, {
+				method: 'POST',
+				body: JSON.stringify({ status: String(form.get('status') ?? '') })
+			});
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	deleteEvalCase: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/eval/cases/${encodeURIComponent(String(form.get('id')))}`, { method: 'DELETE' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
+		}
+	},
+	evalBaseline: async ({ request, cookies }) => {
+		if (!authed(cookies)) return fail(401, { error: 'Niet ingelogd' });
+		const form = await request.formData();
+		try {
+			await adminApi(`/api/admin/eval/runs/${encodeURIComponent(String(form.get('id')))}/baseline`, { method: 'POST' });
+			return { ok: true };
+		} catch (e) {
+			return fail(502, { error: e instanceof Error ? e.message : String(e) });
 		}
 	},
 	// Antwoordgeheugen (#384): verifiëren (dient vanaf nu) / intrekken (met

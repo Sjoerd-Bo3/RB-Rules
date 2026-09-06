@@ -82,5 +82,46 @@ public class EvalRunRecord
     /// <summary>Menselijk-leesbare memo (bv. welke klasse/metriek regresseerde).</summary>
     public string? Memo { get; set; }
 
+    /// <summary>Per-case-uitkomst van deze run (#387): JSON-lijst van
+    /// {caseId, status, counted, metrics, violations} — het beheerpaneel toont
+    /// hem, en een latere run vergelijkt ertegen. Additief; null bij runs van
+    /// vóór #387.</summary>
+    public string? ResultsJson { get; set; }
+
+    /// <summary>De <c>ClassifiedSample</c>-stroom van deze run als JSON (#387),
+    /// zodat "leg deze run vast als baseline" later nog kan zonder de run te
+    /// herhalen.</summary>
+    public string? SamplesJson { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>De persistente vorm van één <see cref="EvalCase"/> (Postgres
+/// <c>eval_case</c>, #387). Tot #387 leefde de gouden set alleen als
+/// test-fixture van vijf illustratieve gevallen; sinds #387 groeit hij uit
+/// echt verkeer (promotie van een <c>AskTrace</c> of een
+/// <c>answer_memory</c>-rij, <see cref="EvalCasePromotion"/>). De lijst-velden
+/// staan als JSON: de harness leest ze als geheel, nooit per element.</summary>
+public class EvalCaseRecord
+{
+    /// <summary><see cref="EvalCasePromotion.CaseId"/>: "eval-{slug}-{hash}".</summary>
+    public required string Id { get; set; }
+    public required string Question { get; set; }
+    /// <summary><see cref="EvalQueryType"/> als string.</summary>
+    public required string QueryType { get; set; }
+    /// <summary><see cref="EvalStatus"/> als string (shadow | active | retired).</summary>
+    public string Status { get; set; } = "shadow";
+    public DateOnly ValidFrom { get; set; }
+    public DateOnly? ValidUntil { get; set; }
+    public string? SupersededByErratum { get; set; }
+    /// <summary>JSON-lijst van ids (section:… / card:…).</summary>
+    public string GoldSupportJson { get; set; } = "[]";
+    public string ExpectedCitationsJson { get; set; } = "[]";
+    /// <summary>JSON-lijst van {id, text, supersededByErratum}.</summary>
+    public string ForbiddenClaimsJson { get; set; } = "[]";
+    /// <summary>Herkomst: trace | memory (<see cref="EvalCasePromotion"/>).</summary>
+    public string? Origin { get; set; }
+    /// <summary>Id van de trace/geheugenrij waaruit het geval kwam.</summary>
+    public long? OriginRef { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

@@ -188,11 +188,14 @@ public static class AdminEndpoints
         });
 
         admin.MapGet("/status", async (
-            JobRunner jobs, JobLedger ledger, RbRulesDbContext db, AnswerMemoryService memory) =>
+            JobRunner jobs, JobLedger ledger, RbRulesDbContext db, AnswerMemoryService memory,
+            EvalCaseService evalCases) =>
         {
             var (running, last) = jobs.Snapshot();
             // Antwoordgeheugen (#384): kandidaten / dienbaar / ingetrokken.
             var memoryCounts = await memory.CountsAsync(CancellationToken.None);
+            // Eval-set (#387): actief / shadow / retired.
+            var evalCounts = await evalCases.CountsAsync(CancellationToken.None);
             return Results.Ok(new
             {
                 Running = running,
@@ -235,6 +238,9 @@ public static class AdminEndpoints
                     MemoryCandidates = memoryCounts.Candidates,
                     MemoryServable = memoryCounts.Servable,
                     MemoryRetracted = memoryCounts.Retracted,
+                    EvalActive = evalCounts.Active,
+                    EvalShadow = evalCounts.Shadow,
+                    EvalRetired = evalCounts.Retired,
                 },
                 Logs = await db.RunLogs.OrderByDescending(l => l.CreatedAt).Take(15).ToListAsync(),
                 // Embed-gezondheid (#282-review): de NIEUWSTE embed-regel, los van het
@@ -917,6 +923,38 @@ public static class AdminEndpoints
         admin.MapGet("/corrections", async (AdminOverviewService overview) =>
             await overview.CorrectionsAsync());
 
+        // ── Eval-set uit echt verkeer (#387) ────────────────────────────
+        admin.MapGet("/eval/cases", async (EvalCaseService cases, CancellationToken ct) =>
+            Results.Ok(await cases.ListAsync(ct)));
+
+        admin.MapPost("/asktraces/{id:long}/promote-eval", async (
+            long id, EvalCaseService cases, CancellationToken ct) =>
+            Promotion(await cases.PromoteFromTraceAsync(id, ct)));
+
+        admin.MapPost("/memory/{id:long}/promote-eval", async (
+            long id, EvalCaseService cases, CancellationToken ct) =>
+            Promotion(await cases.PromoteFromMemoryAsync(id, ct)));
+
+        admin.MapPost("/eval/cases/{id}/status", async (
+            string id, EvalStatusChange body, EvalCaseService cases, CancellationToken ct) =>
+            await cases.SetStatusAsync(id, body.Status ?? "", ct)
+                ? Results.Ok(new { ok = true })
+                : Results.BadRequest(new { error = "onbekend geval of onbekende status (shadow|active|retired)" }));
+
+        admin.MapDelete("/eval/cases/{id}", async (
+            string id, EvalCaseService cases, CancellationToken ct) =>
+            await cases.DeleteAsync(id, ct) ? Results.Ok(new { ok = true }) : Results.NotFound());
+
+        admin.MapGet("/eval/runs", async (EvalRunService runs, CancellationToken ct) =>
+            Results.Ok(await runs.RecentRunsAsync(10, ct)));
+
+        // Een geaccordeerde run als nieuwe Ring-A-baseline vastleggen.
+        admin.MapPost("/eval/runs/{id}/baseline", async (
+            string id, EvalRunService runs, CancellationToken ct) =>
+            await runs.RecordBaselineFromRunAsync(id, ct)
+                ? Results.Ok(new { ok = true })
+                : Results.NotFound(new { error = "run niet gevonden of zonder samples" }));
+
         // ── Antwoordgeheugen (#384) ─────────────────────────────────────
         // Overzicht van de recentste rijen en de twee beheerbeslissingen:
         // verifiëren (hoogste trust, dient vanaf nu) of intrekken (met reden;
@@ -999,4 +1037,9 @@ public static class AdminEndpoints
             return Results.Ok(new { ok = true });
         });
     }
+
+    /// <summary>Promotie-uitkomst (#387) naar een HTTP-antwoord: 200 met het
+    /// geval, of 409 met de reden (dubbel, geen citaties, verkeerde trust).</summary>
+    private static IResult Promotion(EvalPromotion p) =>
+        p.Ok ? Results.Ok(p.Case) : Results.Conflict(new { error = p.Error });
 }
