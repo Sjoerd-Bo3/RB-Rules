@@ -290,9 +290,17 @@ public static class JobCatalog
     {
         var r = await sp.GetRequiredService<CardEmbeddingPipeline>()
             .RunAsync(progress: report, ct: ct);
+        // Sinds #382 dekt "embed" álle vectorlagen: na de kaarten worden regels,
+        // primer, rulings en claims met een afwijkende modelstempel opnieuw
+        // geembed. Vóór #382 las alleen de kaartpijplijn EmbeddingModel terug —
+        // een modelwissel liet de andere vier lagen stil op oude vectoren staan.
+        var refresh = await sp.GetRequiredService<EmbeddingRefreshService>()
+            .RunAsync(progress: report, ct: ct);
         // r.Summary draagt de uitval mee (#282): een run waarin Ollama omviel meldde
         // anders alleen het aantal geslaagde kaarten en gold als geslaagde stap.
-        return new(r.Summary);
+        // De refresh-samenvatting zwijgt over lagen zonder werk, dus dit blijft
+        // één leesbare regel.
+        return new($"kaarten: {r.Summary} · {refresh.Summary}");
     }
 
     /// <summary>Ongecapte mechaniek-mining (#258): de per-run batch-cap eraf, de

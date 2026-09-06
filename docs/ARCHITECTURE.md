@@ -60,9 +60,16 @@ vector- én graf-gelinkt, bevraagbaar door AI-tools.
   API-keys (`docs/AI_AUTH.md`, `docs/CONVENTIONS.md`, `rb-ai/src/ai.ts` regel
   16-18, compose `rb-ai`-service).
 - **Lokale Ollama bge-m3, provenance heilig.** Embeddings zijn `vector(1024)`
-  met HNSW-index; elke embedding bewaart de modelnaam. Een model-wissel is een
-  expliciete her-embed, nooit stilzwijgend mixen van dimensies
-  (`docs/CONVENTIONS.md`, `EmbeddingService`, `CardEmbeddingPipeline`).
+  met HNSW-index op álle vijf de vectorlagen (sinds #382 ook `knowledge_doc`
+  en `correction`, die tot dan een exacte scan waren); elke embedding bewaart
+  de modelnaam. Een model-wissel is een expliciete her-embed, nooit
+  stilzwijgend mixen van dimensies — en sinds #382 dekt de `embed`-job die
+  her-embed voor álle lagen: `EmbeddingRefreshService` pakt per laag de rijen
+  met een vector maar een afwijkende (of ontbrekende) modelstempel opnieuw op,
+  met de tekstvorm van het schrijfpad van die laag. Vóór #382 las alleen de
+  kaartpijplijn `EmbeddingModel` terug; de andere vier lagen bleven na een
+  wissel stil op oude vectoren staan (`docs/CONVENTIONS.md`,
+  `EmbeddingService`, `CardEmbeddingPipeline`, `EmbeddingRefreshService`).
 - **Eén Azure-VM (8GB B2ms).** De hele stack draait in één compose-project met
   memory-limits per service, omdat de host-OOM-killer anders willekeurig kiest
   (`deploy/server-setup-v2/docker-compose.yml`, issue #45/#82).
@@ -1451,7 +1458,8 @@ bans, recente wijzigingen — geen migratie). `ChangeFeedService`
 ### Datastores
 
 - **Postgres + pgvector** — source of truth. Getypeerde `vector(1024)` met
-  HNSW; snake_case; EF-migraties bij opstart (`RbRulesDbContext`, `Migrations/`,
+  HNSW op elke vectorkolom (card, rule_chunk, claim, en sinds #382 ook
+  knowledge_doc en correction); snake_case; EF-migraties bij opstart (`RbRulesDbContext`, `Migrations/`,
   `Program.cs`). Sinds fase 1 (#225) ook de `pg_trgm`-extensie — voorlopig als
   gedocumenteerd schaal-pad voor het lexicale entity-resolution-signaal (de
   fase-1-scorer draait in-memory en gate-consistent). Sinds fase 4 (#228) het

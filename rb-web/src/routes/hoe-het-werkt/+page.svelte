@@ -184,11 +184,8 @@
 		<p>
 			Die "kaart" heeft in werkelijkheid 1024 dimensies in plaats van twee, en de opslag zit in
 			Postgres met de pgvector-uitbreiding. Om niet elke keer alle punten te hoeven vergelijken
-			ligt er over de grootste verzamelingen — regels, kaarten en community-inzichten — een
-			HNSW-index: een gelaagd netwerk van kortere en langere sprongen, waarmee de buren gevonden
-			worden zonder de hele verzameling af te lopen. De twee kleinere verzamelingen, spelbegrip
-			en rulings, hebben zo'n index niet: die zijn kort genoeg om nog gewoon punt voor punt te
-			vergelijken.
+			ligt er over elke verzameling een HNSW-index: een gelaagd netwerk van kortere en langere
+			sprongen, waarmee de buren gevonden worden zonder de hele verzameling af te lopen.
 		</p>
 		<div class="note">
 			<p>
@@ -197,8 +194,8 @@
 				Poracle legt daarom bij de vectoren vast welk model ze maakte, en de kolom heeft een
 				vaste maat: een model met een andere dimensie wordt hard geweigerd in plaats van er
 				stilletjes naast te gaan liggen. Wisselt het model, dan is opnieuw berekenen een
-				expliciete stap: kaarten pakt de embed-job vanzelf op, de andere lagen volgen bij hun
-				eerstvolgende herindexering of hergeneratie.
+				expliciete stap — één beheerjob die alle verzamelingen langsloopt en elke vector met
+				een verouderde stempel opnieuw berekent.
 			</p>
 		</div>
 

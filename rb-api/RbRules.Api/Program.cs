@@ -81,6 +81,7 @@ builder.Services.AddSingleton(sp => EmbeddingSettings.FromEnvironment(
     msg => sp.GetRequiredService<ILoggerFactory>()
         .CreateLogger("EmbeddingSettings").LogWarning("{Message}", msg)));
 builder.Services.AddScoped<CardEmbeddingPipeline>();
+builder.Services.AddScoped<EmbeddingRefreshService>();   // #382: her-embed over alle lagen
 builder.Services.AddScoped<MechanicMiningService>();
 builder.Services.AddScoped<GraphSyncService>();
 // Brein-projectie (#227, §3.5): de brein-lagen die GraphSyncService niet dekt

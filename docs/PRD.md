@@ -964,6 +964,14 @@ de globale duur-vangrail).
   plaats van een omgevallen stap als geslaagd te tonen — de embed-job, beide
   regel-index-jobs (`rules` en de incrementele `rules-index` uit #258) en de
   set-release-keten.
+  **Sinds #382 dekt de `embed`-job alle vijf de vectorlagen:** na de kaarten
+  worden regels, primer, rulings en claims met een afwijkende of ontbrekende
+  modelstempel opnieuw geembed (`EmbeddingRefreshService`, eigen
+  run_log-regel per laag). Daarmee is een modelwissel voor het eerst één
+  handeling in plaats van "kaarten vanzelf, de rest bij toeval". Ook hebben
+  `knowledge_doc` en `correction` nu een HNSW-index, net als de andere drie
+  lagen — het primer- en rulings-kanaal van `/ask` scanden tot dan de hele
+  verzameling.
   **Niet-geëmbedde items blijven staan** voor de volgende run (de pijplijn
   selecteert op ontbrekende embedding), en bij de regel-index wordt de hele
   bron overgeslagen in plaats van een complete index door een gatenkaas te
