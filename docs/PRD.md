@@ -954,7 +954,7 @@ de globale duur-vangrail).
 - **Jobs met live voortgang** — de "Alles bijwerken"-keten en losse jobs
   (scan, feeds, cards, embed, mine, rules, rules-index, bans, graph, primer,
   interactions, scout, classify, consolidatechanges, claims, clarify, relations,
-  relationtriage, setrelease, decks, benchmark, benchmarksweep,
+  relationtriage, setrelease, decks, benchmark, benchmarksweep, eval,
   regenerateknowledge) draaien via
   `JobRunner` met live-voortgang en run_log. *Route* `/admin` · *endpoints*
   `/api/admin/jobs/{name}`, `/api/admin/status`, `/api/admin/logs`.
@@ -1604,6 +1604,27 @@ de globale duur-vangrail).
   draaien gewoon mee (bewijs voor de agent-kwaliteit) maar tellen niet mee in
   het percentage. *Route* `/admin/overview/benchmark` · *endpoints*
   `/api/admin/jobs/benchmark`, `/api/admin/overview/benchmark`.
+- **Eval-set uit echt verkeer** (#387) — de pure eval-harness (#231: recall,
+  relevancy, F1, citatieprecisie, verboden claims, 2σ-baseline-diff per
+  vraagklasse) is bedraad aan een Postgres-corpus `eval_case` dat groeit uit
+  vragen die spelers echt stellen: beheer promoveert een vraag-trace of een
+  bevestigde antwoordgeheugen-rij ("Naar eval-set") tot een geval waarvan de
+  verwachte citaties de §-secties van dat antwoord zijn (`section:{code}`;
+  betrokken kaarten tellen bewust niet als citatie — ze zijn herkend, niet
+  geciteerd). Nieuwe gevallen zijn `shadow` (scoren, gate'n
+  niet) tot beheer ze activeert; `retired` zet ze uit. Job "eval" stuurt elk
+  geval van kracht met benchmark-isolatie door de ask-pipeline (geen metric,
+  trace of geheugen), scoort met de harness en diff't tegen de vastgelegde
+  Ring-A-baseline; de eerste run wórdt de baseline, en een geaccordeerde run
+  is met één knop de nieuwe baseline. Elke run is een `eval_run`-rij met
+  per-geval-uitkomsten (in beheer als tabel) en een `run_log`-regel. Bewuste
+  grenzen: één LLM-call per geval, dus een expliciete beheerdersknop, geen
+  nachtrun-stap; en de gate draait op de VM, niet in GitHub-CI (daar is geen
+  Ollama/rb-ai) — het `eval_run.passed`-signaal is de gate, de CI-workflow
+  bewaakt alleen de pure scoring. *Endpoints* `/api/admin/eval/cases`,
+  `/api/admin/asktraces/{id}/promote-eval`, `/api/admin/memory/{id}/promote-eval`,
+  `/api/admin/eval/cases/{id}/status`, `/api/admin/eval/runs`,
+  `/api/admin/eval/runs/{id}/baseline`, job `eval`.
 - **Model-sweep** (#174, uitbreiding op de judge-benchmark) — eigen job
   "benchmarksweep" draait dezelfde vragenset door élk model uit een
   geconfigureerde lijst (env `AI_BENCHMARK_MODELS`, comma-gescheiden;

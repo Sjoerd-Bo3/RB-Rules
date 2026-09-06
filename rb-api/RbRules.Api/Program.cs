@@ -101,6 +101,8 @@ builder.Services.AddScoped<BreinPredicateMiningService>();
 // model (rb-ai task "hard"). Meting + provenance, nooit een tier-wijziging.
 builder.Services.AddScoped<BreinInteractionAuditService>();
 builder.Services.AddScoped<RuleChunkPipeline>();
+builder.Services.AddScoped<EvalCaseService>();     // #387: eval-set uit echt verkeer
+builder.Services.AddScoped<EvalRunService>();
 builder.Services.AddScoped<AnswerMemoryService>(); // #384: antwoordgeheugen (AskService neemt hem optioneel mee)
 builder.Services.AddScoped<AskService>();
 // Beheerde instellingen (#254): de feature-vlaggen die vroeger alleen via de

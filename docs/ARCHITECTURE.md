@@ -3821,8 +3821,24 @@ kan rb-api eerder starten dan Postgres klaar is.
   (case-niveau `SupersededByErratum`/`ValidUntil` → overslaan; claim-niveau
   `ForbiddenClaim.SupersededByErratum` → een door een erratum waar-geworden
   claim telt niet meer als contradictie, C). De voorbeeld-gouden-set staat als
-  seed in `rb-api/RbRules.Tests/Fixtures/poracle-eval-seed.json` (via `EvalSeed.Parse`); het echte
-  corpus komt in Postgres `eval_case` met rb-ai-kandidaten uit set/errata-diffs.
+  seed in `rb-api/RbRules.Tests/Fixtures/poracle-eval-seed.json` (via `EvalSeed.Parse`). **Sinds
+  #387 staat het echte corpus in Postgres `eval_case`** (`EvalCaseRecord`,
+  lijstvelden als JSON) en groeit het uit echt verkeer: `EvalCaseService`
+  promoveert een `AskTrace` (§-codes uit `Sections`, markers weggefilterd) of een
+  bevestigde `answer_memory`-rij tot een shadow-geval (`EvalCasePromotion`,
+  Domain: id-vocabulaire `section:{code}`/`card:{id}`, vraagklasse uit
+  router-type + vraagtekst, stabiel id `eval-{slug}-{hash}`). `EvalRunService`
+  (job `eval`) stuurt elk geval van kracht met `AskOptions.Benchmark = true` door
+  `AskService`, abstraheert het antwoord met `EvalRunMapping` (§-citaties = retrieved
+  support = citations — betrokken kaarten zijn herkend, niet geciteerd, en tellen
+  dus niet; verboden claims lexicaal), scoort via
+  `EvalGateEvaluator` + `EvalHarness.Samples`, diff't tegen de Ring-A-baseline
+  (`eval_baseline`; de eerste run wordt de baseline, `POST
+  /eval/runs/{id}/baseline` legt een latere run vast) en schrijft een
+  `eval_run`-rij met `ResultsJson`/`SamplesJson` plus een `run_log`-regel. De
+  gate draait daarmee op de VM (één LLM-call per geval), niet in GitHub-CI —
+  daar blijft alleen de pure scoring getest. rb-ai-kandidaten uit set/errata-
+  diffs blijven een follow-up.
   **Fase 7 legt daar bovenop** (alles PURE Domain, `RbRules.Domain/Eval*.cs`;
   KRITIEK — live-graaf/rb-ai/pgvector niet in CI):
   - **Ring B/C-scoring** (`RetrievalQualityScoring`, `EvalRing`/`EvalMetricNames`,

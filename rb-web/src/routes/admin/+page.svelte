@@ -71,6 +71,7 @@
 		{ name: 'scout', label: 'Bronnen zoeken (web)', hint: 'rb-ai doorzoekt het web naar nieuwe regelbronnen; vondsten komen als voorstel in de reviewqueue, nooit automatisch in het register; draait ook wekelijks automatisch' },
 		{ name: 'decks', label: 'Decks binnenhalen', hint: 'publieke decks van Piltover Archive via de sitemap (robots-compliant, met bronvermelding); throttled en gecapt per run — een volgende run gaat verder waar het grootboek gebleven is; draait ook elke 3 uur automatisch' },
 		{ name: 'benchmark', label: 'Judge-benchmark draaien', hint: 'de vaste scheidsrechter-vragenset één keer door de /ask-pipeline (standaardmodel); geïsoleerd van de kennisbank — geen trace, metric of relatie-terugkoppeling' },
+		{ name: 'eval', label: 'Eval-set draaien', hint: 'de uit echt verkeer gepromoveerde eval-gevallen door de /ask-pipeline (geïsoleerd), gescoord op recall en citatieprecisie per vraagklasse en gediff\'t tegen de vastgelegde baseline; één LLM-call per geval' },
 		{ name: 'benchmarksweep', label: 'Model-sweep draaien', hint: 'dezelfde vragenset door élk beschikbaar model (AI_BENCHMARK_MODELS), elk 2× — voor een eerlijke score/tijd-vergelijking en een consistentie-check; kostbaar (N modellen × 2 × vragen ask-aanroepen), geschatte omvang verschijnt in het log zodra de job start' },
 		{ name: 'feeds', label: 'Bron-feeds afspeuren', hint: 'nieuwe artikelen op de Riot-nieuwspagina\'s ontdekken; vertrouwde feeds zetten direct een bron, andere een voorstel — draait ook als eerste stap van "Bronnen scannen"' },
 		// Wipe-mechanisme voor de LLM-afgeleide kennislaag (#187): in JOBS voor
@@ -138,6 +139,20 @@
 		model: string | null; retractedReason: string | null; answer: string;
 	}
 	interface ManagedSetting { key: string; effective: string; default: string; overridden: boolean; }
+	// Eval-set (#387).
+	interface EvalCaseRow {
+		id: string; question: string; queryType: string; status: string;
+		expectedCitations: string[]; origin: string | null; originRef: number | null; createdAt: string;
+	}
+	interface EvalRunRow {
+		id: string; ring: string; passed: boolean; caseCount: number; gatingFailureCount: number;
+		shadowCount: number; memo: string | null; llmModel: string | null; promptVersion: string | null;
+		createdAt: string; resultsJson: string | null;
+	}
+	interface EvalCaseResultRow {
+		caseId: string; status: string; counted: boolean; recall: number; relevancy: number;
+		f1: number; citationPrecision: number; contradictionRecall: number; violations: string[];
+	}
 
 	interface AskTrace {
 		id: number; question: string; questionType: string | null;
@@ -268,6 +283,17 @@
 			? { candidates: c.memoryCandidates ?? 0, servable: c.memoryServable ?? 0, retracted: c.memoryRetracted ?? 0 }
 			: null;
 	});
+	const evalCases = $derived((data.evalCases ?? []) as EvalCaseRow[]);
+	const evalRuns = $derived((data.evalRuns ?? []) as EvalRunRow[]);
+	const lastEvalRun = $derived(evalRuns[0] ?? null);
+	const lastEvalResults = $derived.by((): EvalCaseResultRow[] => {
+		try {
+			return lastEvalRun?.resultsJson ? (JSON.parse(lastEvalRun.resultsJson) as EvalCaseResultRow[]) : [];
+		} catch {
+			return [];
+		}
+	});
+	const EVAL_STATUS_LABELS: Record<string, string> = { shadow: 'shadow', active: 'actief', retired: 'uitgezet' };
 	const TRUST_LABELS: Record<string, string> = {
 		candidate: 'kandidaat', confirmed: 'bevestigd', verified: 'geverifieerd', retracted: 'ingetrokken'
 	};
@@ -829,12 +855,110 @@
 								<button class="cta small" title="Dient vanaf nu bij dezelfde vraag, zolang de bronnen niet wijzigen">Verifieer</button>
 							</form>
 						{/if}
+						{#if m.trust === 'confirmed' || m.trust === 'verified'}
+							<form method="POST" action="?/promoteMemory" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+								<input type="hidden" name="id" value={m.id} />
+								<button class="ghost small" title="Vraag + citaties van dit antwoord worden een shadow-geval in de eval-set">Naar eval-set</button>
+							</form>
+						{/if}
 						{#if m.trust !== 'retracted'}
 							<form method="POST" action="?/retractMemory" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
 								<input type="hidden" name="id" value={m.id} />
 								<button class="ghost small" title="Dient niet meer; de rij blijft als geschiedenis staan">Trek in</button>
 							</form>
 						{/if}
+					</div>
+				</div>
+			{/each}
+		</section>
+
+		<!-- Eval-set uit echt verkeer (#387): gepromoveerde vragen, de laatste run
+		     en de baseline-actie. -->
+		<section class="section" id="eval">
+			<h2>
+				Eval-set
+				<span class="meta">
+					({evalCases.filter((c) => c.status === 'active').length} actief · {evalCases.filter((c) => c.status === 'shadow').length} shadow · {evalCases.filter((c) => c.status === 'retired').length} uitgezet)
+					— shadow scoort maar gate't niet; activeer een geval pas na controle van de verwachte citaties
+				</span>
+			</h2>
+			{#if lastEvalRun}
+				<div class="panel eval-run">
+					<p class="t">
+						<span class="badge {lastEvalRun.passed ? 'ok-b' : 'warn-b'}">{lastEvalRun.passed ? 'gate gehaald' : 'gate niet gehaald'}</span>
+						laatste run {new Date(lastEvalRun.createdAt).toLocaleString('nl-NL')} · {lastEvalRun.caseCount} gevallen ({lastEvalRun.shadowCount} shadow) · {lastEvalRun.gatingFailureCount} overtredingen
+						{#if lastEvalRun.llmModel}· {lastEvalRun.llmModel}{/if}
+					</p>
+					{#if lastEvalRun.memo}<p class="meta">{lastEvalRun.memo}</p>{/if}
+					{#if lastEvalResults.length}
+						<details>
+							<summary class="meta">Per geval</summary>
+							<div class="table-wrap">
+								<table class="eval-table">
+									<thead><tr><th>Geval</th><th>Status</th><th>Recall</th><th>Citaties</th><th>F1</th><th>Overtredingen</th></tr></thead>
+									<tbody>
+										{#each lastEvalResults as r (r.caseId)}
+											<tr>
+												<td>{r.caseId}</td>
+												<td>{EVAL_STATUS_LABELS[r.status] ?? r.status}</td>
+												<td>{r.recall.toFixed(2)}</td>
+												<td>{r.citationPrecision.toFixed(2)}</td>
+												<td>{r.f1.toFixed(2)}</td>
+												<td>{r.violations.join('; ') || '—'}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						</details>
+					{/if}
+					<form method="POST" action="?/evalBaseline" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+						<input type="hidden" name="id" value={lastEvalRun.id} />
+						<button class="ghost small" title="Deze run wordt de baseline waartegen volgende runs per vraagklasse (2σ) vergeleken worden">Deze run als baseline vastleggen</button>
+					</form>
+				</div>
+			{:else}
+				<p class="meta">Nog geen eval-run — start "Eval-set draaien" bij de jobs zodra er gevallen zijn.</p>
+			{/if}
+			{#if evalCases.length === 0}
+				<p class="meta">Nog geen gevallen. Promoveer een vraag vanuit de vraag-traces of het antwoordgeheugen.</p>
+			{/if}
+			{#each evalCases as c (c.id)}
+				<div class="review-row panel">
+					<div class="review-body">
+						<p class="q">{c.question}</p>
+						<p class="meta">
+							<span class="badge {c.status === 'active' ? 'ok-b' : c.status === 'retired' ? 'warn-b' : ''}">{EVAL_STATUS_LABELS[c.status] ?? c.status}</span>
+							{c.queryType} · verwacht: {c.expectedCitations.join(', ') || '—'} · uit {c.origin ?? '?'}{c.originRef ? ` #${c.originRef}` : ''}
+							· {new Date(c.createdAt).toLocaleDateString('nl-NL')}
+						</p>
+					</div>
+					<div class="review-actions">
+						{#if c.status !== 'active'}
+							<form method="POST" action="?/evalStatus" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+								<input type="hidden" name="id" value={c.id} />
+								<input type="hidden" name="status" value="active" />
+								<button class="cta small">Activeer</button>
+							</form>
+						{/if}
+						{#if c.status === 'active'}
+							<form method="POST" action="?/evalStatus" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+								<input type="hidden" name="id" value={c.id} />
+								<input type="hidden" name="status" value="shadow" />
+								<button class="ghost small">Naar shadow</button>
+							</form>
+						{/if}
+						{#if c.status !== 'retired'}
+							<form method="POST" action="?/evalStatus" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+								<input type="hidden" name="id" value={c.id} />
+								<input type="hidden" name="status" value="retired" />
+								<button class="ghost small">Zet uit</button>
+							</form>
+						{/if}
+						<form method="POST" action="?/deleteEvalCase" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }}>
+							<input type="hidden" name="id" value={c.id} />
+							<button class="ghost small">Verwijder</button>
+						</form>
 					</div>
 				</div>
 			{/each}
@@ -1151,6 +1275,14 @@
 							<div class="chat-q">
 								<span class="chat-label">Vraag</span>
 								<p class="chat-question">{t.question}</p>
+								{#if t.ok && t.sections}
+									<!-- Eval-set (#387): deze vraag + haar citaties als testgeval. -->
+									<form method="POST" action="?/promoteTrace" use:enhance={() => async ({ update }) => { await update(); await invalidateAll(); }} class="inline-form">
+										<input type="hidden" name="id" value={t.id} />
+										<button class="ghost small" title="Vraag + geciteerde secties worden een shadow-geval in de eval-set">Naar eval-set</button>
+										{#if form?.evalPromoted === String(t.id)}<span class="meta">toegevoegd</span>{/if}
+									</form>
+								{/if}
 							</div>
 							{#if t.agentic}
 								<div class="chat-a">
@@ -1794,6 +1926,12 @@
 	}
 
 	/* ── Reviewrijen (correcties, mechanieken, primer) ─────────────── */
+	.eval-run { padding: 12px 16px; margin-bottom: 10px; }
+	.eval-run form { margin-top: 8px; }
+	.eval-table { border-collapse: collapse; font-size: 0.85rem; }
+	.eval-table th, .eval-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+	.table-wrap { overflow-x: auto; }
+	.inline-form { display: inline-flex; gap: 8px; align-items: center; margin-top: 6px; }
 	.memory-toggle {
 		display: flex; gap: 14px; align-items: center; justify-content: space-between;
 		padding: 12px 16px; margin-bottom: 10px;

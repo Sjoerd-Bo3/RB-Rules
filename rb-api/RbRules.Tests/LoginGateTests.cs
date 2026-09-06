@@ -87,6 +87,8 @@ public class LoginGateTests
         services.AddScoped<GraphQueryService>();
         services.AddScoped<BrainService>();
         services.AddScoped<AgenticRelationService>();
+        services.AddScoped<EvalCaseService>(); // #387: parameters van de admin-eval-endpoints
+        services.AddScoped<EvalRunService>();
         services.AddScoped<AnswerMemoryService>(); // #384: parameter van /api/corrections en /admin/status
         services.AddScoped<AskService>();
         services.AddScoped<AskHistoryService>();
