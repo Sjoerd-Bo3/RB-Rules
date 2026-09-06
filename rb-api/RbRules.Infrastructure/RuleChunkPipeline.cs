@@ -135,8 +135,20 @@ public class RuleChunkPipeline(
             // kap is daar een no-op naast. Hij blijft staan omdat de pijplijn moet
             // weten WELKE chunk gekapt is, om dat per rij vast te leggen
             // (RuleChunk.EmbeddingTruncatedAt, #299).
-            var capped = EmbedBatching.CapItems(
-                [.. chunks.Select(c => c.Text)], _settings.BatchChars);
+            // Contextuele invoer (#385): "§ code (bron) — ouder-zin — tekst" in
+            // plaats van de kale sectietekst. De ouders komen uit dezelfde
+            // parse (zelfde document), zodat de index geen tweede query nodig
+            // heeft; c.Text blijft de kale tekst — invoer ≠ opslag.
+            var textByCode = sections
+                .Where(sec => !string.IsNullOrEmpty(sec.Code) && sec.Code != "intro")
+                .GroupBy(sec => sec.Code)
+                .ToDictionary(g => g.Key, g => g.First().Text, StringComparer.Ordinal);
+            var originals = chunks
+                .Select(c => RuleChunkEmbedText.Build(
+                    c.SectionCode, src.Name,
+                    RuleChunkEmbedText.ParentsFor(c.SectionCode, textByCode), c.Text))
+                .ToList();
+            var capped = EmbedBatching.CapItems(originals, _settings.BatchChars);
             var texts = capped.Texts;
             var tally = new EmbedOutcomeTally();
             foreach (var range in EmbedBatching.Split(texts, _settings.BatchSize, _settings.BatchChars))
@@ -161,13 +173,19 @@ public class RuleChunkPipeline(
                 {
                     chunks[offset + k].Embedding = result.Vectors![k];
                     chunks[offset + k].EmbeddingModel = EmbeddingConfig.Model;
+                    // #385: invoervorm + hash van de EXACTE embed-invoer (Ring-A-
+                    // provenance, #233 — tot nu toe nooit geschreven op deze laag).
+                    chunks[offset + k].EmbeddingVariant = RuleChunkEmbedText.Variant;
+                    chunks[offset + k].EmbeddingContentHash =
+                        EmbeddingProvenance.ContentHash(texts[offset + k]);
                     // Provenance op de RIJ (#299) — LET OP: dit is de kaplengte, niet
                     // de tekst. `chunks[i].Text` blijft het volledige origineel; alleen
                     // de vector kijkt naar de eerste N tekens, en dat staat vanaf nu
                     // ook op de rij in plaats van alleen in een verouderende
-                    // run_log-regel.
+                    // run_log-regel. Vergeleken met de contextuele invoer
+                    // (`originals`), niet met c.Text: die is korter dan de invoer.
                     chunks[offset + k].EmbeddingTruncatedAt =
-                        texts[offset + k].Length < chunks[offset + k].Text.Length
+                        texts[offset + k].Length < originals[offset + k].Length
                             ? texts[offset + k].Length
                             : null;
                 }

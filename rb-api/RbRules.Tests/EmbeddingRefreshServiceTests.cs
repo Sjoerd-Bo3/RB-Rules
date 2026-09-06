@@ -23,7 +23,7 @@ public class EmbeddingRefreshServiceTests
         // Regels: één met oude stempel (moet), één actueel (mag niet), één zonder
         // vector (hoort bij zijn eigen pijplijn, moet blijven liggen).
         var oudeChunk = new RuleChunk { SourceId = "core", Text = "Deflect prevents damage.", Embedding = Vec(0.5), EmbeddingModel = Oud };
-        var actueleChunk = new RuleChunk { SourceId = "core", Text = "Tank redirects attacks.", Embedding = Vec(0.5), EmbeddingModel = actueel };
+        var actueleChunk = new RuleChunk { SourceId = "core", Text = "Tank redirects attacks.", Embedding = Vec(0.5), EmbeddingModel = actueel, EmbeddingVariant = RuleChunkEmbedText.Variant };
         var legeChunk = new RuleChunk { SourceId = "core", Text = "No vector yet." };
         db.RuleChunks.AddRange(oudeChunk, actueleChunk, legeChunk);
         // Primer met oude stempel.
@@ -49,10 +49,16 @@ public class EmbeddingRefreshServiceTests
 
         Assert.False(r.HasFailures);
         Assert.Equal(3, r.Embedded);
-        // Precies de drie stale rijen zijn aangeboden, met de tekstvorm van hun laag.
+        // Precies de drie stale rijen zijn aangeboden, met de tekstvorm van hun laag
+        // (regels: de contextuele vorm van #385 — zonder Source-rij valt de
+        // bronnaam terug op het id, zonder sectiecode alleen de bron).
         Assert.Equal(
-            ["Deflect prevents damage.", "Combat\nHow combat works.", "Can I deflect?\nYes."],
+            ["(core) — Deflect prevents damage.", "Combat\nHow combat works.", "Can I deflect?\nYes."],
             aangeboden);
+        Assert.Equal(RuleChunkEmbedText.Variant, oudeChunk.EmbeddingVariant);
+        // Ring-A-provenance (#233): de hash van de exacte invoer staat op de rij.
+        Assert.Equal(EmbeddingProvenance.ContentHash("(core) — Deflect prevents damage."), oudeChunk.EmbeddingContentHash);
+        Assert.Equal(EmbeddingProvenance.ContentHash("Combat\nHow combat works."), primer.EmbeddingContentHash);
 
         Assert.Equal(actueel, oudeChunk.EmbeddingModel);
         Assert.Equal(0.9f, oudeChunk.Embedding!.ToArray()[0]);
@@ -75,7 +81,7 @@ public class EmbeddingRefreshServiceTests
     public async Task RunAsync_ZonderWerk_MeldtAlleLagenActueel()
     {
         using var db = NewDb();
-        db.RuleChunks.Add(new RuleChunk { SourceId = "core", Text = "x", Embedding = Vec(0.5), EmbeddingModel = EmbeddingConfig.Model });
+        db.RuleChunks.Add(new RuleChunk { SourceId = "core", Text = "x", Embedding = Vec(0.5), EmbeddingModel = EmbeddingConfig.Model, EmbeddingVariant = RuleChunkEmbedText.Variant });
         await db.SaveChangesAsync();
         var geraakt = false;
         var svc = Service(db, _ => { geraakt = true; return OkEmbeddings(1, 0.9); });
@@ -86,6 +92,35 @@ public class EmbeddingRefreshServiceTests
         Assert.Equal(0, r.Embedded);
         Assert.Equal("alle lagen actueel", r.Summary);
         Assert.Empty(await db.RunLogs.ToListAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_OudeInvoervorm_WordtContextueelHerembed_MetBronEnOuders()
+    {
+        // #385: een chunk met het actuele model maar zónder variant (kale tekst van
+        // vóór #385) is stale; de nieuwe invoer draagt §-code, bronnaam en de eerste
+        // zin van de ouders uit de bestaande index.
+        using var db = NewDb();
+        db.Sources.Add(new Source
+        {
+            Id = "core", Name = "Core Rules", Url = "https://example.com/core",
+            Type = "official", TrustTier = 1, Rank = 1, Parser = "pdf", Cadence = "weekly",
+        });
+        db.RuleChunks.AddRange(
+            new RuleChunk { SourceId = "core", SectionCode = "466", ChunkIndex = 0, Text = "Combat. Units fight here.", Embedding = Vec(0.5), EmbeddingModel = EmbeddingConfig.Model, EmbeddingVariant = RuleChunkEmbedText.Variant },
+            new RuleChunk { SourceId = "core", SectionCode = "466.2", ChunkIndex = 1, Text = "Blocking. Declare blockers.", Embedding = Vec(0.5), EmbeddingModel = EmbeddingConfig.Model, EmbeddingVariant = RuleChunkEmbedText.Variant });
+        var leaf = new RuleChunk { SourceId = "core", SectionCode = "466.2.c", ChunkIndex = 2, Text = "A blocker must be ready.", Embedding = Vec(0.5), EmbeddingModel = EmbeddingConfig.Model };
+        db.RuleChunks.Add(leaf);
+        await db.SaveChangesAsync();
+        var aangeboden = new List<string>();
+        var svc = Service(db, req => { aangeboden.AddRange(Inputs(req)); return OkEmbeddings(Inputs(req).Count, 0.9); });
+
+        var r = await svc.RunAsync();
+
+        Assert.Equal(1, r.Embedded);
+        Assert.Equal(["§ 466.2.c (Core Rules) — Combat. — Blocking. — A blocker must be ready."], aangeboden);
+        Assert.Equal(RuleChunkEmbedText.Variant, leaf.EmbeddingVariant);
+        Assert.Equal("A blocker must be ready.", leaf.Text); // opslag ongewijzigd
     }
 
     [Fact]

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using RbRules.Infrastructure;
 namespace RbRules.Infrastructure.Migrations
 {
     [DbContext(typeof(RbRulesDbContext))]
-    partial class RbRulesDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260906175608_RuleChunkEmbedVariant385")]
+    partial class RuleChunkEmbedVariant385
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -126,119 +129,6 @@ namespace RbRules.Infrastructure.Migrations
                         .HasDatabaseName("ix_ai_usage_event_user_id_created_at");
 
                     b.ToTable("ai_usage_event", (string)null);
-                });
-
-            modelBuilder.Entity("RbRules.Domain.AnswerMemory", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("Answer")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("answer");
-
-                    b.Property<string>("CitationsJson")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("citations_json");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<Vector>("Embedding")
-                        .HasColumnType("vector(1024)")
-                        .HasColumnName("embedding");
-
-                    b.Property<string>("EmbeddingContentHash")
-                        .HasColumnType("text")
-                        .HasColumnName("embedding_content_hash");
-
-                    b.Property<string>("EmbeddingModel")
-                        .HasColumnType("text")
-                        .HasColumnName("embedding_model");
-
-                    b.Property<int>("HitCount")
-                        .HasColumnType("integer")
-                        .HasColumnName("hit_count");
-
-                    b.Property<DateTimeOffset?>("LastHitAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_hit_at");
-
-                    b.Property<string>("Model")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("model");
-
-                    b.Property<string>("PromptVersion")
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)")
-                        .HasColumnName("prompt_version");
-
-                    b.Property<string>("Question")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("question");
-
-                    b.Property<string>("QuestionNormalized")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("question_normalized");
-
-                    b.Property<string>("QuestionType")
-                        .HasColumnType("text")
-                        .HasColumnName("question_type");
-
-                    b.Property<DateTimeOffset?>("RetractedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("retracted_at");
-
-                    b.Property<string>("RetractedReason")
-                        .HasColumnType("text")
-                        .HasColumnName("retracted_reason");
-
-                    b.Property<string>("RetrievalSet")
-                        .HasColumnType("text")
-                        .HasColumnName("retrieval_set");
-
-                    b.Property<string>("SourceSnapshot")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("source_snapshot");
-
-                    b.Property<string>("Trust")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)")
-                        .HasColumnName("trust");
-
-                    b.Property<long?>("UserId")
-                        .HasColumnType("bigint")
-                        .HasColumnName("user_id");
-
-                    b.HasKey("Id")
-                        .HasName("pk_answer_memory");
-
-                    b.HasIndex("CreatedAt")
-                        .HasDatabaseName("ix_answer_memory_created_at");
-
-                    b.HasIndex("Embedding")
-                        .HasDatabaseName("ix_answer_memory_embedding");
-
-                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("Embedding"), "hnsw");
-                    NpgsqlIndexBuilderExtensions.HasOperators(b.HasIndex("Embedding"), new[] { "vector_cosine_ops" });
-
-                    b.HasIndex("Trust")
-                        .HasDatabaseName("ix_answer_memory_trust");
-
-                    b.ToTable("answer_memory", (string)null);
                 });
 
             modelBuilder.Entity("RbRules.Domain.AppUser", b =>

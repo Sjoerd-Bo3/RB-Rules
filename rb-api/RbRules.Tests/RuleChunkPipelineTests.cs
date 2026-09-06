@@ -46,6 +46,28 @@ public class RuleChunkPipelineTests
     }
 
     [Fact]
+    public async Task Index_EmbedtDeContextueleVorm_EnBewaartDeKaleTekst()
+    {
+        // #385: op de wire gaat "§ code (bron) — ouder-zin — tekst"; de ouders komen
+        // uit dezelfde parse. Bewust op het faalpad gemeten (InMemory kan het
+        // swap-pad niet draaien): de invoer is dan al verstuurd.
+        await using var db = NewDb();
+        db.Sources.Add(Src("core"));
+        db.Documents.Add(DocWith("core", 1, "466. Combat. Units fight here.\n466.2. Blocking. Declare blockers.\n466.2.c. A blocker must be ready."));
+        await db.SaveChangesAsync();
+        var aangeboden = new List<string>();
+
+        await Pipeline(db, req =>
+        {
+            aangeboden.AddRange(Inputs(req));
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        }).RunAsync(force: true);
+
+        Assert.Contains("§ 466.2.c (core) — Combat. — Blocking. — A blocker must be ready.", aangeboden);
+        Assert.Contains("§ 466 (core) — Combat. Units fight here.", aangeboden);
+    }
+
+    [Fact]
     public async Task Index_OllamaValtOm_MeldtHetInRunLog_NietAlleenInDeContainerlog()
     {
         await using var db = NewDb();
@@ -316,6 +338,19 @@ public class RuleChunkPipelineTests
 
     /// <summary>De lengte van elke tekst die daadwerkelijk verstuurd is (#293) — de kap
     /// meten op de wire, niet in de rekensom ernaartoe.</summary>
+    private static Document DocWith(string sourceId, long id, string content) => new()
+    {
+        Id = id, SourceId = sourceId, ContentHash = $"h{id}", Content = content,
+    };
+
+    private static List<string> Inputs(HttpRequestMessage req)
+    {
+        var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+        return [.. System.Text.Json.JsonDocument.Parse(body)
+            .RootElement.GetProperty("input").EnumerateArray()
+            .Select(e => e.GetString()!)];
+    }
+
     private static IEnumerable<int> InputLengths(HttpRequestMessage req)
     {
         var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();

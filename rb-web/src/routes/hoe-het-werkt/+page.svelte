@@ -141,6 +141,13 @@
 			<a href="/rules">regelpagina</a> én naar de bijbehorende pagina in de officiële PDF. Wie
 			het antwoord niet vertrouwt, klikt door naar de bron — dat is het hele punt.
 		</p>
+		<p>
+			Een losse subregel weet zelf niet waar hij over gaat: "the defending player may…" zegt
+			niets over Deflect als je de kop erboven niet ziet. Daarom krijgt elke sectie, vlak
+			voordat ze in een zoekvector wordt omgezet, haar adres en de eerste zin van de
+			bovenliggende secties mee. De tekst zelf blijft ongewijzigd; alleen de vector kent
+			de context.
+		</p>
 	</section>
 
 	<!-- 3 ─────────────────────────────────────────────────────────────── -->

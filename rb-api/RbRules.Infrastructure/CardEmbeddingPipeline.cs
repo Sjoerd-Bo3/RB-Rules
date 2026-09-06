@@ -143,6 +143,10 @@ public class CardEmbeddingPipeline(
                 {
                     todo[offset + k].Embedding = result.Vectors![k];
                     todo[offset + k].EmbeddingModel = EmbeddingConfig.Model;
+                    // Ring-A-provenance (#233): hash van de exacte embed-invoer —
+                    // werd tot #385 op geen enkele laag geschreven.
+                    todo[offset + k].EmbeddingContentHash =
+                        EmbeddingProvenance.ContentHash(texts[offset + k]);
                     // Provenance op de RIJ (#299): deze vector kent alleen de eerste N
                     // tekens, en dat moet over een half jaar nog te zien zijn. Altijd
                     // schrijven, óók null — een kaart die na een budgetverhoging wél

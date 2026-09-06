@@ -387,6 +387,12 @@ public class RuleChunk : IEmbeddable
     public string? EmbeddingModel { get; set; }
     /// <summary>Embedding-provenance (fase 0a, #233): SHA-256 van de geëmbedde tekst.</summary>
     public string? EmbeddingContentHash { get; set; }
+    /// <summary>Versie van de embed-INVOERVORM (#385): null = kale sectietekst
+    /// (vóór #385), <see cref="RuleChunkEmbedText.Variant"/> = contextuele vorm
+    /// (§-code, bron, ouder-zinnen vóór de tekst). De her-embed-job selecteert
+    /// hierop, náást <see cref="EmbeddingModel"/>: twee invoervormen in één
+    /// vectorruimte zijn net zo'n stille mix als twee modellen.</summary>
+    public int? EmbeddingVariant { get; set; }
     /// <summary>Kaplengte van de embed-invoer, of null als de vector de volledige
     /// tekst dekt — zie <see cref="Card.EmbeddingTruncatedAt"/> (#299). Juist hier
     /// nodig: <c>RuleSectionParser.MaxSectionLength</c> (2400) is een streefwaarde,
