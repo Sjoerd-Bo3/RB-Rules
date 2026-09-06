@@ -182,6 +182,20 @@ met quota en rate-limiting.
   zet de bevestigde rijen als regressie-wachters in de tests, zodat een latere
   over-verbreding van zo'n catalogus rood wordt in plaats van stil bevestigde
   kennis te strandden.
+- **Een geldig certificaat vanaf jouw machine is geen geldig certificaat voor de
+  bezoeker** (#379). Let's Encrypt rolde in nov 2025 de "Generation Y"-hiërarchie
+  uit (roots ISRG Root YE/YR, intermediates YE1-3/YR1-3), en die roots zitten nog
+  in géén enkele grote trust store — LE zegt letterlijk dat zulke ketens "are not
+  expected to work with any of the major trust stores". Caddy pakte er op
+  poracle.nl één: `poracle.nl → YE2 → Root YE → Root X2 → Root X1` (www via YE1).
+  Er ís een cross-sign naar het vertrouwde X1, dus `curl` geeft gewoon
+  `SSL certificate verify ok` en `Verify return code: 0` — maar Chrome bij de
+  bezoeker gaf `ERR_CERT_AUTHORITY_INVALID`, want lang niet elke client bouwt dat
+  langere pad. Diagnose dus altijd op de KETEN (`openssl s_client -showcerts`),
+  nooit op de exitcode; een groene curl bewijst alleen dat jóuw trust store het
+  pad vindt. Fix: `preferred_chains { root_common_name "ISRG Root X1" }` op de
+  acme-issuer in het globale Caddy-blok, plus de bestaande certs weggooien (een reload vervangt een nog geldig cert niet). Zie
+  `deploy/server-setup-v2/README.md`.
 - Rules Hub wisselt per request de volgorde van artikellinks →
   flip-flop-suppressie in IngestService (hash-historie + lege-diff-guard).
 - adapter-node: form-POSTs vereisen `ORIGIN`-env lokaal; `BODY_SIZE_LIMIT`

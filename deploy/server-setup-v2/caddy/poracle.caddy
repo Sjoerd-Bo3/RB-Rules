@@ -1,0 +1,60 @@
+# Caddy-siteconfig voor poracle.nl — BEHEERD VANUIT DE REPO (#379).
+#
+# Deze file wordt door .github/workflows/v2-deploy.yml naar
+# ~/compose/caddy/conf.d/poracle.caddy gesynct en daarna gevalideerd en
+# geladen. Bewerk hem hier, niet op de VM: een handmatige wijziging op de VM
+# wordt bij de eerstvolgende deploy overschreven.
+#
+# Eenmalige voorwaarde op de VM — de centrale Caddyfile moet deze map
+# inlezen. Voeg toe (buiten het globale blok, aan het einde volstaat):
+#
+#     import conf.d/*.caddy
+#
+# en haal het oude, met de hand toegevoegde poracle.nl-blok weg. De workflow
+# controleert of die import-regel er staat en slaat de sync met een notice
+# over als dat niet zo is — hij gaat nooit zelf in de hoofd-Caddyfile knippen.
+
+poracle.nl, www.poracle.nl {
+	encode gzip
+
+	# TLS-keten pinnen op ISRG Root X1 (#379).
+	#
+	# Let's Encrypt rolde 24 nov 2025 de "Generation Y"-hiërarchie uit (roots
+	# ISRG Root YE en Root YR, intermediates YE1-YE3 en YR1-YR3). Die roots
+	# zitten nog in géén enkele grote trust store — LE zegt zelf dat ketens
+	# die daarop eindigen "are not expected to work with any of the major
+	# trust stores". Caddy pakte er hier één, en bezoekers kregen
+	# ERR_CERT_AUTHORITY_INVALID terwijl `curl` vrolijk "verify ok" gaf: er
+	# is een cross-sign naar het wél vertrouwde X1, maar lang niet elke
+	# client bouwt dat langere pad.
+	#
+	# Let op de prijs van een expliciete issuer: hiermee vervalt Caddy's
+	# standaard ZeroSSL-fallback. Dat is een bewuste ruil — een keten die de
+	# helft van de bezoekers afwijst is erger dan het verlies van een
+	# tweede CA die we nooit gebruikt hebben.
+	#
+	# Deze pin mag weg zodra Root YE in de trust stores van Apple, Chrome,
+	# Microsoft en Mozilla zit — niet eerder. De verificatiestap in de
+	# deploy-workflow bewaakt intussen dat de keten niet terugvalt.
+	tls {
+		issuer acme {
+			preferred_chains {
+				root_common_name "ISRG Root X1"
+			}
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		# CSP: bewust nog NIET actief. Het testplan staat in
+		# deploy/server-setup-v2/README.md — begin met Report-Only. Nu deze
+		# file in de repo staat, is het aanzetten een gewone PR in plaats van
+		# handwerk op de VM.
+		# Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cmsassets.rgpub.io; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	}
+
+	reverse_proxy rb-v2-web:3000
+}

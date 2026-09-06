@@ -2,7 +2,7 @@ import type { PageServerLoad } from './$types';
 import { api } from '$lib/api';
 import type { PublicStats } from '../+page.server';
 
-// Uitlegpagina (#379): bedoeld om aan anderen te laten zien hoe Poracle van
+// Uitlegpagina (PR #378): bedoeld om aan anderen te laten zien hoe Poracle van
 // bron naar antwoord komt. Twee dingen komen LIVE uit rb-api zodat de uitleg
 // niet naast de werkelijkheid kan gaan staan:
 //   1. de telstanden (hoeveel er echt in zit),
