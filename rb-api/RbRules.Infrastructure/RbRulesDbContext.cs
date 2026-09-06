@@ -137,6 +137,13 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.Property(x => x.Ref).HasColumnName("ref");
             e.Property(x => x.Embedding).HasColumnType(vectorType);
             e.HasIndex(x => x.Status);
+            // ANN-index (#382): het rulings-kanaal van /ask sorteerde tot nu toe
+            // met CosineDistance over ÁLLE geverifieerde rijen — een exacte scan.
+            // Klein zolang het er 37 zijn; de grootste laag zodra RiftJudge-
+            // rulings (#384) binnenkomen.
+            e.HasIndex(x => x.Embedding)
+                .HasMethod("hnsw")
+                .HasOperators("vector_cosine_ops");
         });
 
         b.Entity<CardSet>(e =>
@@ -262,6 +269,12 @@ public class RbRulesDbContext(DbContextOptions<RbRulesDbContext> options) : DbCo
             e.HasIndex(x => new { x.Kind, x.Topic }).IsUnique();
             e.HasIndex(x => x.Status);
             e.Property(x => x.Embedding).HasColumnType(vectorType);
+            // ANN-index (#382): zelfde reden als bij correction — het primer-
+            // kanaal scande de hele verzameling. Hiermee hebben alle vijf de
+            // vectorlagen (BrainQuery §2.3) dezelfde HNSW-toegang.
+            e.HasIndex(x => x.Embedding)
+                .HasMethod("hnsw")
+                .HasOperators("vector_cosine_ops");
         });
 
         b.Entity<Claim>(e =>
