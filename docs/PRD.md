@@ -1260,9 +1260,10 @@ de globale duur-vangrail).
   vragen de Core Rules), en alleen met een citeerbare officiële bron; anders
   het bestaande pad, ongewijzigd. In de duurstatistiek en de vraag-traces
   staat het pad als `template`; in het kostengrootboek komt er géén
-  antwoord-rij (alleen de rewrite). Bekende grens: "mag ik X spelen?" wordt
-  door de vraag-router niet als legaliteit herkend — een router-kwestie, los
-  van het sjabloon.
+  antwoord-rij (alleen de rewrite). Sinds #391 herkent de vraag-router ook
+  "mag ik X spelen?" (alleen als de vraag óp "spelen" eindigt — met een
+  timing-vervolg blijft het een ruling) en "hoeveel kopieën" (de ë-woordgrens
+  van .NET) als legaliteit.
 - **Antwoordgeheugen** (#384, deel 1) — elke beantwoorde eerste-beurt-vraag
   (zonder foto, buiten benchmark/model-sweep) wordt bewaard in `answer_memory`
   met vraag-embedding, antwoord, citaties, de gekozen regelsecties en een
